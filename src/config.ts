@@ -333,7 +333,7 @@ export interface JabbuConfig {
 	 * `integrations/omp/omp-wiki-session-note.py`, `agentDir` the omp agent dir whose `wiki-outbox/` it drains
 	 * (default `~/.omp/agent`), `repos` limits the notes to work in those repositories. Absent = no note is written.
 	 */
-	wikiNotes?: { client: string; agentDir?: string; repos?: string[] };
+	wikiNotes?: { client: string; agentDir?: string; repos?: string[]; turns?: boolean };
 	/**
 	 * Loopback listener for `webhook` monitor triggers (POST /hook/<id> with a bearer token). Absent = no server and
 	 * webhook triggers cannot be created. `bind` must be a loopback address; the default is 127.0.0.1.
@@ -1045,14 +1045,15 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 
 	const wikiNotesRaw = root.wikiNotes;
-	let wikiNotes: { client: string; agentDir?: string; repos?: string[] } | undefined;
+	let wikiNotes: { client: string; agentDir?: string; repos?: string[]; turns?: boolean } | undefined;
 	if (wikiNotesRaw !== undefined) {
 		const record = asRecord(wikiNotesRaw);
 		if (record === undefined) invalid(configPath, "wikiNotes");
 		for (const key of Object.keys(record)) {
-			if (key !== "client" && key !== "agentDir" && key !== "repos") invalid(configPath, `wikiNotes.${key}`);
+			if (!["client", "agentDir", "repos", "turns"].includes(key)) invalid(configPath, `wikiNotes.${key}`);
 		}
-		const { client, agentDir, repos } = record;
+		const { client, agentDir, repos, turns } = record;
+		if (turns !== undefined && typeof turns !== "boolean") invalid(configPath, "wikiNotes.turns");
 		if (typeof client !== "string" || client.trim() === "" || /\p{Cc}/u.test(client)) {
 			invalid(configPath, "wikiNotes.client");
 		}
@@ -1078,6 +1079,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		};
 		wikiNotes = { client: home(client as string, "client") };
 		if (agentDir !== undefined) wikiNotes.agentDir = home(agentDir as string, "agentDir");
+		if (turns !== undefined) wikiNotes.turns = turns as boolean;
 		if (repos !== undefined) {
 			wikiNotes.repos = (repos as string[]).map((repo) => home(repo, "repos"));
 			for (const repo of wikiNotes.repos) requireGitRepo(configPath, repo, "wikiNotes.repos");
