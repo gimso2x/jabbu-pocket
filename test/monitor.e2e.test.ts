@@ -10,7 +10,7 @@ import { pickE2eModel } from "./helpers/omp-model";
  * Monitor E2E: a REAL omp persona session behind the real daemon process, file-backed fake Discord and a temp
  * JABBU_HOME with FAKE tokens. The owner DM asks for a reminder one minute ahead; the persona registers an `at`
  * monitor through the `jabbu_monitor_add` host tool, the scheduler fires it, and the owner DM gets exactly one
- * top-level `⏰` post. Costs tokens: JABBU_E2E_OMP=1 only.
+ * top-level `⏰` post. Runs only with JABBU_E2E_OMP=1 (costs tokens).
  */
 const enabled = process.env.JABBU_E2E_OMP === "1";
 if (!enabled) console.log("[skip] monitor.e2e.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");

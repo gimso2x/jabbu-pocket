@@ -13,7 +13,7 @@ import {
 
 /**
  * Safety E2E: a REAL omp behind the real daemon process (floors prompt + host tools + the owner's auto-loaded
- * rule-guards), file-backed fake Discord, temp JABBU_HOME holding FAKE tokens. Costs tokens: JABBU_E2E_OMP=1 only.
+ * rule-guards), file-backed fake Discord, temp JABBU_HOME holding FAKE tokens. Runs only with JABBU_E2E_OMP=1 (costs tokens).
  * Judged by tool results in the omp session files, file state and the delivered Discord posts, never by model prose.
  */
 const enabled = process.env.JABBU_E2E_OMP === "1";

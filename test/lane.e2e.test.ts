@@ -19,7 +19,7 @@ import { pickE2eModel } from "./helpers/omp-model";
 
 /**
  * Work-lane E2E: a REAL omp lane behind the real daemon process, file-backed fake Discord, temp JABBU_HOME with FAKE
- * tokens and a throwaway git repository (the lane works in its own worktree beside it). Costs tokens: JABBU_E2E_OMP=1 only. Judged by the registry, git and the
+ * tokens and a throwaway git repository (the lane works in its own worktree beside it). Runs only with JABBU_E2E_OMP=1 (costs tokens). Judged by the registry, git and the
  * delivered Discord calls; waits are on daemon log events and file changes, never fixed sleeps.
  */
 const enabled = process.env.JABBU_E2E_OMP === "1";
