@@ -36,6 +36,7 @@ export interface TaskSweepDeps {
 	autoLand: (row: TaskRow, gate?: TaskGateHooks) => Promise<TaskLandOutcome>;
 	landReady: () => boolean;
 	pollTaskPrLand: (row: TaskRow) => Promise<void>;
+	retryPrLand: (row: TaskRow) => Promise<void>;
 }
 
 /** The herdr reachability probe, the local `[check: …]` queue and the [TASK] sweeper of a herdr-on daemon. */
@@ -44,7 +45,7 @@ export function createTaskSweep(
 	deps: TaskSweepDeps,
 ): { herdrHealth: HerdrHealthProbe; checkRunner: TaskCheckRunner; taskSweeper: TaskSweeper } {
 	const { store, config, herdrRun } = deps;
-	const log = ctx.log;
+	const { log } = ctx;
 	/** The herdr call options of a task's host: a dispatch host's ssh target and herdr binary, the local ones otherwise. */
 	const herdrOpts = (row: TaskRow) => {
 		const entry = row.host === null ? undefined : ctx.options.config.dispatchHosts?.[row.host];
@@ -55,13 +56,11 @@ export function createTaskSweep(
 			...(herdrRun === undefined ? {} : { run: herdrRun }),
 		};
 	};
-	/** A read a task was left out of is logged once per `<event>:<task>:<reason>` (memory only). */
-	const skipSeen = new Set<string>();
+	const skipSeen = new Set<string>(); // a read a task was left out of is logged once per `<event>:<task>:<reason>`
 	const skipOnce = (event: string, row: TaskRow, reason: string) => {
 		const key = `${event}:${row.taskId}:${reason}`;
-		if (skipSeen.has(key)) return;
+		if (!skipSeen.has(key)) log.info(event, { task: row.taskId, reason });
 		skipSeen.add(key);
-		log.info(event, { task: row.taskId, reason });
 	};
 	const herdrHealth = new HerdrHealthProbe({
 		homeDir: config.homeDir,
@@ -95,6 +94,7 @@ export function createTaskSweep(
 			return evaluateTask(row, hostOf(row.host), checks, checkRunner, base);
 		},
 		pollTaskPrLand: (row) => deps.pollTaskPrLand(row),
+		retryPrLand: (row) => deps.retryPrLand(row),
 		landsViaPr: (row) => landsViaPr(ctx.options.config, row),
 		remind: async (row, text) => {
 			const sent = await herdrPromptExisting(row.agent, text, herdrOpts(row));
@@ -138,8 +138,8 @@ export function createTaskSweep(
 			skipOnce("task_overlap_skipped", row, changed.reason);
 			return undefined;
 		},
-		// A remote task's worktree is on another machine: its evidence is not collected (spec 범위 밖).
 		progressEvidence: async (row) => {
+			// A remote task's worktree is on another machine: no evidence is collected.
 			if (row.host !== null) return undefined;
 			const evidence = await taskProgressEvidence(row, realProcessRunner);
 			if (evidence.ok) return evidence.key;

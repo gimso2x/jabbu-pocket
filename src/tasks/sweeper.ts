@@ -193,6 +193,8 @@ export interface TaskSweepDeps {
 	autoLand?(row: TaskRow, gate?: TaskGateHooks): Promise<TaskLandOutcome>;
 	/** Reads a review task's open pull request (`row.land` active) and goes on with its landing; never asked for another state. */
 	pollTaskPrLand?(row: TaskRow): Promise<void>;
+	/** Retries a review task's `blocked` PR landing when its branch got a new tip (the tip is the only read otherwise); never throws. */
+	retryPrLand?(row: TaskRow): Promise<void>;
 	/** Whether the task's repository lands through a PR (`lanes.land` pr): the reached card then promises no ff merge or push. */
 	landsViaPr?(row: TaskRow): Promise<boolean>;
 	/** Whether a review task's gate was cut off (a restart) before its receipts: the sweep starts it again. */
@@ -316,13 +318,10 @@ export class TaskSweeper {
 		return results;
 	}
 
-	/**
-	 * A review task is not judged again (no evaluate, no herdr): it only tells the owner once per full day it has waited
-	 * since its last move to review. Not held by a freeze — the notice is for the owner.
-	 */
+	/** A review task is judged no more: it tells the owner once per full day waited since its last move to review (no freeze hold). */
 	async #reviewWaiting(row: TaskRow): Promise<TaskCheckResult> {
 		const { ledger } = this.#deps;
-		// A pull request being waited for is not waiting for the owner: its CI is read, nothing is re-alerted.
+		// A pull request being waited for is not waiting for the owner: its CI is read, nothing re-alerted.
 		if (row.land?.state === "active") {
 			await this.#deps.pollTaskPrLand?.(row);
 			return {
@@ -333,6 +332,7 @@ export class TaskSweeper {
 				actions: ["pr land poll"],
 			};
 		}
+		if (row.land?.state === "blocked") await this.#deps.retryPrLand?.(row);
 		await this.#resumeGate(row);
 		const entry = ledger.history(row.taskId).findLast((item) => item.toStatus === "review");
 		const since = entry?.at ?? row.updatedAt;

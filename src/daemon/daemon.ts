@@ -716,6 +716,7 @@ export class Daemon {
 				autoLand: (row, gate) => this.autoLand(row, gate),
 				landReady: () => this.#landing.landReady(),
 				pollTaskPrLand: (row) => this.#landing.pollPrLand(row),
+				retryPrLand: (row) => this.#landing.retryPrLand(row),
 			});
 			this.#herdrHealth = sweep.herdrHealth;
 			this.#checkRunner = sweep.checkRunner;
@@ -1078,10 +1079,7 @@ export class Daemon {
 		};
 	}
 
-	/**
-	 * `ompbot drain`: hold new turns, steers, monitor fires and skill reviews back so a restart cuts nothing; inbound
-	 * stays `pending`. Memory only — the restart itself ends it. Ending it early dispatches what waited.
-	 */
+	/** `ompbot drain`: hold new turns, steers, monitor fires and skill reviews back so a restart cuts nothing (inbound stays `pending`; memory only, the restart ends it, ending it early dispatches what waited). */
 	setDraining(on: boolean): void {
 		const router = this.#router;
 		if (router === undefined || router.draining === on) return;

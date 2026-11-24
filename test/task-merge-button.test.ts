@@ -34,11 +34,14 @@ let port: DiscordChannel;
 let logs: string[];
 /** What the core landing answers when a test sets it (the real `landTask` otherwise). */
 let landAnswer: TaskLandResult | undefined;
+/** How often the core landing was asked. */
+let landCalls: number;
 
 beforeEach(async () => {
 	home = makeHome("ompbot-merge-button-");
 	logs = [];
 	landAnswer = undefined;
+	landCalls = 0;
 	transport = new WaitingDiscordTransport();
 	transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
 	transport.setChannel({ id: THREAD, type: 11, parentId: CHANNEL, guildId: GUILD });
@@ -50,7 +53,10 @@ beforeEach(async () => {
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
 		ompVersion: "omp-test 0",
 		bootId: "boot",
-		taskLand: async (row, deps) => landAnswer ?? landTask(row, deps),
+		taskLand: async (row, deps) => {
+			landCalls += 1;
+			return landAnswer ?? landTask(row, deps);
+		},
 		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 	});
 	await daemon.start();
@@ -213,6 +219,76 @@ describe("TASK merge button: PR 착지 결과(pr 모드)는 카드 노트만 바
 			expect(cardText(last)).toContain("🔍 머지 대기 · 로그 회전");
 		},
 	);
+});
+
+describe("TASK merge button: 막힌 PR 착지는 다시 시도 버튼을 남긴다", () => {
+	const stopped = (taskId: string, state: "blocked" | "held" | "active" | "rework") =>
+		daemon.store.tasks.setLand(taskId, {
+			mode: "pr",
+			state,
+			requestedBy: "owner",
+			sha: "a".repeat(40),
+			baseBranch: "main",
+			reason: "누출 검사 실패",
+			prLand: { branch: "task/x" },
+		});
+	const buttons = (edit: Update | undefined): string => JSON.stringify(edit?.components ?? []);
+
+	test.each(["blocked", "held"] as const)(
+		"PR %s 기록으로 끝난 클릭: 카드에 머지(다시 시도) 버튼이 남고 두 번째 클릭이 착지를 다시 부른다",
+		async (state) => {
+			landAnswer = { state: "blocked", reason: "누출 검사 실패" };
+			const { taskId, cardTs } = await seedTask("review");
+			stopped(taskId, state);
+			await click(taskId, cardTs);
+			const last = cardEdits(cardTs).at(-1);
+			expect(buttons(last)).toContain(`ompbot:task:merge:${taskId}`);
+			expect(buttons(last)).toContain("다시 시도");
+			expect(cardText(last)).toContain(taskLandNote(landAnswer));
+			expect(landCalls).toBe(1);
+			await click(taskId, cardTs);
+			expect(landCalls).toBe(2);
+			expect(buttons(cardEdits(cardTs).at(-1))).toContain("다시 시도");
+			expect(logs.some((l) => l.includes("event=task_merge_ignored") && l.includes("reason=duplicate"))).toBe(false);
+			expect(markers()).toHaveLength(0);
+		},
+	);
+
+	test("한 번 더 막힌 뒤 landed로 끝나면 버튼이 빠진다", async () => {
+		landAnswer = { state: "blocked", reason: "누출 검사 실패" };
+		const { taskId, cardTs } = await seedTask("review");
+		stopped(taskId, "blocked");
+		await click(taskId, cardTs);
+		landAnswer = { state: "pr-open", url: "https://github.com/acme/widgets/pull/7" };
+		stopped(taskId, "active");
+		await click(taskId, cardTs);
+		expect(landCalls).toBe(2);
+		expect(buttons(cardEdits(cardTs).at(-1))).toBe("[]");
+	});
+
+	test.each([
+		["ff blocked(PR 기록 없음)", { state: "blocked", reason: "dirty" }, undefined],
+		["pr-open", { state: "pr-open", url: "https://github.com/acme/widgets/pull/7" }, "active"],
+		["rework", { state: "rework", reason: "CI 실패" }, "rework"],
+		["handoff", { state: "handoff", reason: "원격" }, undefined],
+		["landed", { state: "landed", baseBranch: "main", sha: "a".repeat(40), notes: [] }, "active"],
+	] as const)("%s: 버튼이 없고 같은 카드를 두 번 누르면 두 번째는 무시된다", async (_name, answer, record) => {
+		landAnswer = answer as TaskLandResult;
+		const { taskId, cardTs } = await seedTask("review");
+		if (record !== undefined) stopped(taskId, record);
+		await click(taskId, cardTs);
+		expect(buttons(cardEdits(cardTs).at(-1))).toBe("[]");
+		await click(taskId, cardTs);
+		expect(landCalls).toBe(1);
+	});
+
+	test("잘못된 상태(working)의 클릭에는 버튼이 없다", async () => {
+		const { taskId, cardTs } = await seedTask("working");
+		stopped(taskId, "blocked");
+		await click(taskId, cardTs);
+		expect(buttons(cardEdits(cardTs).at(-1))).toBe("[]");
+		expect(landCalls).toBe(0);
+	});
 });
 
 describe("blocked card: 추천대로 button", () => {
