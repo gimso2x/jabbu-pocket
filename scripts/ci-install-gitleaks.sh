@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
-# gitleaks를 고정 버전·체크섬으로 내려받아 BIN_DIR에 설치한다(Linux x64 CI 전용).
+# gitleaks를 고정 버전·체크섬으로 내려받아 BIN_DIR에 설치한다(Linux x64·arm64 CI 전용).
 # 태그 설치나 파이프 다운로드 대신, 검증한 바이트만 옮긴다.
 set -euo pipefail
 
 VERSION=8.28.0
-SHA256=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
-URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+
+# 아키텍처마다 자산과 체크섬이 따로다. 목록에 없는 아키텍처는 내려받기 전에 실패한다.
+machine=$(uname -m)
+case "$machine" in
+x86_64 | amd64)
+	ASSET=linux_x64
+	SHA256=a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+	;;
+aarch64 | arm64)
+	ASSET=linux_arm64
+	SHA256=eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356
+	;;
+*)
+	echo "ci-install-gitleaks: unsupported architecture: $machine" >&2
+	exit 3
+	;;
+esac
+URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_${ASSET}.tar.gz"
 
 if [ "$#" -lt 1 ] || [ -z "${1:-}" ]; then
 	echo "usage: ci-install-gitleaks.sh BIN_DIR" >&2
