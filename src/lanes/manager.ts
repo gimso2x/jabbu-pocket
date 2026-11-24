@@ -3397,4 +3397,4 @@ export class LaneManager {
 	#sync(lane: LaneRow, reason: "transition" | "milestone" | "tick"): Promise<LaneRow> {
 		return syncLane(this.#deps, this.#unroutableWarned, lane, reason);
 	}
-		}
+}
