@@ -1,0 +1,26 @@
+version: 2
+# Weekly bumps for the pinned actions and the Bun lockfiles (the omp test host fixture included).
+# No `labels`: the repository has no `dependencies` label, so it would be ignored.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+  - package-ecosystem: bun
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: bun
+    directory: /test/fixtures/omp-host
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

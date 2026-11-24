@@ -58,6 +58,8 @@ for a in "$@"; do [ "$prev" = "-o" ] && out=$a; prev=$a; done
 printf 'tarball-bytes' > "$out"\nexit 0\n`,
 	);
 	shim(dir, "sleep", "exit 0\n");
+	// `uname -m` reports the architecture the test asks for.
+	shim(dir, "uname", `echo "$SHIM_ARCH"\n`);
 	// `sha256sum -c -` reads "<sha>  <file>" from stdin; SHA_OK=0 rejects it like a mismatch.
 	shim(dir, "sha256sum", `cat >> "$SHIM_STATE/stdin"\n[ "\${SHA_OK:-1}" = "1" ]\n`);
 	// `tar -xzf <file> -C <dir> gitleaks`: materialize the member so the installer has something to move.
@@ -72,10 +74,15 @@ printf '#!/bin/sh\\nexit 0\\n' > "$dir/gitleaks"; chmod +x "$dir/gitleaks"\n`,
 };
 
 /** Run the installer with the shims first on PATH. */
-const install = (binDir: string, env: Record<string, string>) => {
+const install = (binDir: string, env: Record<string, string>, arch = "x86_64") => {
 	const shimsDir = shims();
 	const p = Bun.spawnSync(["bash", SCRIPT, binDir], {
-		env: { PATH: `${shimsDir}:${process.env.PATH ?? "/usr/bin:/bin"}`, SHIM_STATE: join(shimsDir, "state"), ...env },
+		env: {
+			PATH: `${shimsDir}:${process.env.PATH ?? "/usr/bin:/bin"}`,
+			SHIM_STATE: join(shimsDir, "state"),
+			SHIM_ARCH: arch,
+			...env,
+		},
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -120,6 +127,31 @@ describe("ci-install-gitleaks", () => {
 		expect(result.log.split("\n").filter((line) => line.startsWith("sleep "))).toEqual(["sleep 20", "sleep 40"]);
 		expect(readFileSync(join(binDir, "gitleaks"), "utf8")).toBe("previous");
 		expect(leftovers(binDir)).toEqual([]);
+	});
+
+	test.each(["aarch64", "arm64"])("arm64 (%s) downloads the arm64 asset and verifies its own checksum", (arch) => {
+		const binDir = tempDir("gitleaks-bin-");
+		const result = install(binDir, {}, arch);
+		expect(result.code).toBe(0);
+		expect(result.log).toContain("gitleaks_8.28.0_linux_arm64.tar.gz");
+		expect(result.log).not.toContain("linux_x64");
+		expect(result.stdin).toContain("eff65261156100e5d94a6b3dec313d532fddfe19ae1590bf7a2b4f2699128356");
+		expect(readFileSync(join(binDir, "gitleaks"), "utf8")).toContain("exit 0");
+	});
+
+	test("x86_64 downloads the x64 asset", () => {
+		const result = install(tempDir("gitleaks-bin-"), {}, "x86_64");
+		expect(result.log).toContain("gitleaks_8.28.0_linux_x64.tar.gz");
+		expect(result.log).not.toContain("linux_arm64");
+	});
+
+	test.each(["armv7l", "riscv64", "i686"])("unsupported architecture %s fails before any download", (arch) => {
+		const binDir = tempDir("gitleaks-bin-");
+		const result = install(binDir, {}, arch);
+		expect(result.code).not.toBe(0);
+		expect(result.err).toContain(arch);
+		expect(result.log).not.toContain("curl ");
+		expect(existsSync(join(binDir, "gitleaks"))).toBe(false);
 	});
 
 	test("checksum rejection preserves the existing binary and cleans the download", () => {
