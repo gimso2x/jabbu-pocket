@@ -11,8 +11,10 @@ import {
 	shownText,
 } from "./agy-acp-client";
 import {
+	buildAgySessionParams,
 	clearAgyPointer,
 	formatQuotaExhaustedError,
+	parseAgySessionStem,
 	parseResetDurationMs,
 	prependRotationContext,
 	QUIET_UPDATES,
@@ -245,8 +247,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	/** Binds the session the pointer names: restarts on it when the live child holds another one. */
 	async #bindPinnedConversation(): Promise<void> {
 		const pointer = readAgyPointer(this.#pointerPath);
-		if (pointer !== undefined && (pointer !== this.#sessionId || !this.#client)) {
-			await this.#spawn(pointer, "conversation rebind");
+		if (pointer !== undefined && (pointer.conversationId !== this.#sessionId || !this.#client)) {
+			await this.#spawn(pointer.conversationId, "conversation rebind", pointer.account);
 			return;
 		}
 		await this.#ensureChild();
@@ -255,17 +257,11 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	/** Resumes the agy session named by `sessionFile` (a session id, or a path ending in one). */
 	async switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
-		const stem =
-			sessionFile
-				.replace(/\.(jsonl?|pb)$/, "")
-				.split(/[/\\]/)
-				.at(-1) ?? "";
-		if (!/^[\w-]{8,}$/.test(stem)) {
-			throw new OmpDriverError("rpc_error", `not an agy conversation id: ${sessionFile}`);
-		}
-		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, stem);
+		const stem = parseAgySessionStem(sessionFile);
+		const account = this.#account?.name ?? this.#options.accounts?.selectAvailable(this.#now())?.name;
+		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, stem, account);
 		this.#switchedBeforePrompt = false;
-		await this.#spawn(stem, "session switch");
+		await this.#spawn(stem, "session switch", account);
 		return { cancelled: false };
 	}
 
@@ -441,7 +437,13 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				return;
 			}
 		}
-		if (!this.#client) await this.#spawn(this.#sessionId, "child restart");
+		if (!this.#client) {
+			await this.#spawn(
+				this.#sessionId,
+				"child restart",
+				this.#account?.name ?? readAgyPointer(this.#pointerPath)?.account,
+			);
+		}
 	}
 
 	/**
@@ -449,7 +451,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	 * a new one on `resume` (or a new session). A turn still running ends `aborted` (`reason` in the error) once the new
 	 * child is up or failed to start, so a prompt sent on that final reaches the new child.
 	 */
-	async #spawn(resume: string | undefined, reason: string): Promise<void> {
+	async #spawn(resume: string | undefined, reason: string, resumeAccount?: string): Promise<void> {
 		// One replacement at a time: a second one started meanwhile would launch beside the first one's new child.
 		while (this.#respawning) await this.#respawning;
 		const env = buildChildEnv(this.#options.env, this.#options.baseEnv);
@@ -468,7 +470,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			}
 			// `stop()` while waiting (a retire or the old child's exit) must not be undone by a child launched after it.
 			if (!this.#started) throw new OmpDriverError("not_started", "driver stopped while agy restarted");
-			await this.#launch(executable, env, resume);
+			await this.#launch(executable, env, resume, resumeAccount);
 		} finally {
 			if (this.#respawning === done.promise) this.#respawning = undefined;
 			done.resolve();
@@ -484,7 +486,12 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	async #launch(executable: string, env: Record<string, string>, resume: string | undefined): Promise<void> {
+	async #launch(
+		executable: string,
+		env: Record<string, string>,
+		resume?: string,
+		resumeAccount?: string,
+	): Promise<void> {
 		const options = this.#options;
 		const picked = selectLaunchAccount(options, this.#now());
 		this.#account = picked.account;
@@ -508,13 +515,25 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#client = client;
 		this.#launching = client;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+		const sessionParams = buildAgySessionParams(options.cwd, options.systemPrompt, options.mcpServers?.());
 		try {
 			await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
+			const accountMismatch = resume !== undefined && resumeAccount !== this.#account?.name;
+			if (accountMismatch) {
+				clearAgyPointer(this.#pointerPath);
+				this.#sessionId = undefined;
+				this.#switchedBeforePrompt = true;
+				options.log?.info("agy.acp.account_pointer_reset", {
+					origin: options.originKey,
+					from: resumeAccount ?? "default",
+					to: this.#account?.name ?? "default",
+				});
+			}
 			let opened: Record<string, unknown> | undefined;
-			if (resume !== undefined) {
+			if (resume !== undefined && !accountMismatch) {
 				try {
 					this.#loading = true;
-					opened = await client.request("session/load", { sessionId: resume, ...this.#sessionParams() }, timeoutMs);
+					opened = await client.request("session/load", { sessionId: resume, ...sessionParams }, timeoutMs);
 					this.#sessionId = resume;
 					this.#resumedCurrent = true;
 				} catch (error) {
@@ -527,12 +546,12 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			}
 			this.#loading = false;
 			if (opened === undefined) {
-				opened = await client.request("session/new", this.#sessionParams(), timeoutMs);
+				opened = await client.request("session/new", sessionParams, timeoutMs);
 				const sessionId = str(opened.sessionId);
 				if (sessionId === undefined) throw new OmpDriverError("rpc_error", "agy session/new without a sessionId");
 				this.#sessionId = sessionId;
 			}
-			writeAgyPointer(options.sessionDir, this.#pointerPath, this.#sessionId ?? "");
+			writeAgyPointer(options.sessionDir, this.#pointerPath, this.#sessionId ?? "", this.#account?.name);
 			this.#configOptions = configOptionsOf(opened.configOptions) ?? [];
 			await this.#applyConfig(client);
 			options.log?.info("agy.acp.started", {
@@ -553,22 +572,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			this.#loading = false;
 			if (this.#launching === client) this.#launching = undefined;
 		}
-	}
-
-	#sessionParams(): Record<string, unknown> {
-		const system = this.#options.systemPrompt;
-		return {
-			cwd: resolve(this.#options.cwd),
-			mcpServers: (this.#options.mcpServers?.() ?? []).map(({ name, command, args, env }) => ({
-				name,
-				command,
-				args,
-				env,
-			})),
-			...(system === undefined || system === ""
-				? {}
-				: { _meta: { antigravity: { systemPrompt: { append: system } } } }),
-		};
 	}
 
 	#option(id: string): AcpConfigOption | undefined {

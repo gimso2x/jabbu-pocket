@@ -1,5 +1,6 @@
 import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { AgyMcpServer } from "../config-agy";
 import {
 	OWN_ANSWER_LINE,
 	ROTATION_CONTEXT_HEADER,
@@ -118,22 +119,60 @@ export function resolveAgyExecutable(executable: string, env: Record<string, str
 	return found;
 }
 
-export function readAgyPointer(pointerPath: string): string | undefined {
+export interface AgyPointer {
+	conversationId: string;
+	account?: string;
+}
+
+export function readAgyPointer(pointerPath: string): AgyPointer | undefined {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(pointerPath, "utf8"));
-		return isRecord(parsed) && typeof parsed.conversationId === "string" ? parsed.conversationId : undefined;
+		if (!isRecord(parsed) || typeof parsed.conversationId !== "string") return undefined;
+		const account = typeof parsed.account === "string" && parsed.account !== "" ? parsed.account : undefined;
+		return account === undefined
+			? { conversationId: parsed.conversationId }
+			: { conversationId: parsed.conversationId, account };
 	} catch {
 		return undefined;
 	}
 }
 
-export function writeAgyPointer(sessionDir: string, pointerPath: string, sessionId: string): void {
+export function writeAgyPointer(sessionDir: string, pointerPath: string, sessionId: string, account?: string): void {
 	mkdirSync(resolve(sessionDir), { recursive: true });
-	writeFileSync(pointerPath, `${JSON.stringify({ conversationId: sessionId })}\n`);
+	const payload = account === undefined ? { conversationId: sessionId } : { conversationId: sessionId, account };
+	writeFileSync(pointerPath, `${JSON.stringify(payload)}\n`);
 }
 
 export function clearAgyPointer(pointerPath: string): void {
 	rmSync(pointerPath, { force: true });
+}
+
+/** Extracts and validates an agy conversation id from a file path or raw id string. */
+export function parseAgySessionStem(sessionFile: string): string {
+	const stem =
+		sessionFile
+			.replace(/\.(jsonl?|pb)$/, "")
+			.split(/[/\\]/)
+			.at(-1) ?? "";
+	if (!/^[\w-]{8,}$/.test(stem)) {
+		throw new OmpDriverError("rpc_error", `not an agy conversation id: ${sessionFile}`);
+	}
+	return stem;
+}
+
+/** Builds ACP `session/new` / `session/load` params (`cwd`, `mcpServers`, optional system prompt appendix). */
+export function buildAgySessionParams(
+	cwd: string,
+	systemPrompt: string | undefined,
+	mcpServers: readonly AgyMcpServer[] | undefined,
+): Record<string, unknown> {
+	return {
+		cwd: resolve(cwd),
+		mcpServers: (mcpServers ?? []).map(({ name, command, args, env }) => ({ name, command, args, env })),
+		...(systemPrompt === undefined || systemPrompt === ""
+			? {}
+			: { _meta: { antigravity: { systemPrompt: { append: systemPrompt } } } }),
+	};
 }
 
 /** Computes final status and error message for a `session/prompt` reply. */
