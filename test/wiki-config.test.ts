@@ -55,7 +55,15 @@ describe("wikiNotes config", () => {
 	});
 
 	test("AC-4: unknown keys and wrong types are config_invalid", () => {
-		for (const bad of [{ client: "" }, { client: "/c", extra: 1 }, { client: "/c", repos: "x" }, "yes"]) {
+		write({ wikiNotes: { client: "/c", turns: false } });
+		expect(loadConfig(home).wikiNotes).toEqual({ client: "/c", turns: false });
+		for (const bad of [
+			{ client: "" },
+			{ client: "/c", extra: 1 },
+			{ client: "/c", repos: "x" },
+			{ client: "/c", turns: "no" },
+			"yes",
+		]) {
 			write({ wikiNotes: bad });
 			try {
 				loadConfig(home);
