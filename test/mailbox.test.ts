@@ -570,6 +570,22 @@ describe("mailbox: prompt vs steer", () => {
 		await untilFinal(mailbox, second, () => second.release());
 	});
 
+	test("a ledger that fails both the dispatch write and the park write still stops the started child; the row stays pending", async () => {
+		driverOptions = { holdTurns: true };
+		const a = msg("first");
+		store.markDispatched = () => {
+			throw new Error("disk full");
+		};
+		store.markUncertain = () => {
+			throw new Error("disk full");
+		};
+		await router.route(a).catch(() => undefined);
+		const first = drivers[0] as SteerFailingDriver;
+		expect(first.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:first"]);
+		await expect(first.prompt("x")).rejects.toThrow("not started");
+		expect(store.getInbound(a.platformMessageId)?.state).toBe("pending");
+	});
+
 	test("the turn ending while a steer's leafId call is in flight: nothing was sent, the message runs as a new turn (#61)", async () => {
 		driverOptions = { holdTurns: true };
 		const mailbox = router.mailbox(ORIGIN);
