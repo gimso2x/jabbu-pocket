@@ -232,3 +232,35 @@ describe("thread archive of a failed start", () => {
 		expect(archives()).toHaveLength(0);
 	});
 });
+
+describe("a start that throws after the lane row is inserted", () => {
+	test("closes the lane and removes its worktree, so a retry cannot leave a second working lane", async () => {
+		const repoB = makeRepo(repos);
+		let fail = false;
+		h = laneHarness(home.dir, {
+			repoMatches: async () => {
+				if (fail) throw new Error("spawn EMFILE");
+				return false;
+			},
+		});
+		await h.manager.start({ title: "first", cwd: repo, channel: CHANNEL, parentOrigin: PARENT });
+		await h.settle();
+		const first = h.store.listLanes().find((lane) => lane.title === "first");
+		fail = true;
+		await expect(
+			h.manager.start({ title: "second", cwd: repoB, channel: CHANNEL, parentOrigin: PARENT }),
+		).rejects.toThrow("spawn EMFILE");
+		await h.settle();
+		const second = h.store.listLanes().find((lane) => lane.title === "second");
+		expect(second?.status).toBe("closed");
+		expect(existsSync(second?.meta.worktree ?? "")).toBe(false);
+		expect(h.prompts(second?.originKey ?? "")).toHaveLength(0);
+		// Nothing unrelated is touched, and the retry opens exactly one new live lane.
+		expect(existsSync(first?.meta.worktree ?? "")).toBe(true);
+		fail = false;
+		const retry = await h.manager.start({ title: "second", cwd: repoB, channel: CHANNEL, parentOrigin: PARENT });
+		await h.settle();
+		const live = h.store.listLanes().filter((lane) => lane.status === "working");
+		expect(live.map((lane) => lane.name).sort()).toEqual([first?.name ?? "", retry.name].sort());
+	});
+});
