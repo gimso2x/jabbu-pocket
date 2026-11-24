@@ -1,6 +1,16 @@
 import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
+import {
+	type AcpConfigOption,
+	AgyAcpClient,
+	acpUsageOf,
+	configOptionsOf,
+	quotaRetryNotice,
+	shownText,
+	toolOutputOf,
+} from "./agy-acp-client";
 import { AgyToolKeepalive, type AgyToolKeepaliveOptions } from "./agy-tool-keepalive";
 import {
 	type OmpCommand,
@@ -15,55 +25,48 @@ import {
 	type OmpSessionDriver,
 	type OmpState,
 	type OmpTurnUsage,
-	type OmpUsage,
 	type TodoPhase,
 } from "./driver";
 import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
 
 /*
- * Boundary between ompbot and one Antigravity CLI child process
- * (`agy --input-format stream-json --output-format stream-json -p '' --dangerously-skip-permissions`).
+ * Boundary between ompbot and one Antigravity CLI ACP child (`agy acp`, see `agy-acp-client.ts`), one per origin.
  *
- * Wire protocol (verified against agy 1.5.4/1.5.5, both directions newline-delimited JSON):
- * - out  `{"event":"user","message":{"role":"user","content":"<text>"}}` — one line, one turn. A line written while a
- *        turn runs is queued by agy and answered as a separate turn afterwards (no mid-turn steering).
- * - in   `{"event":"init","conversation_id",…,"init":{"model","cwd",…}}` ~5s after spawn, input or not.
- * - in   `{"event":"step_update","step_update":{"step_index","state":"ACTIVE|DONE","step_type":"user_input|
- *        agent_response|tool","text_delta"?,"tool_name"?,"tool_info"?:{"name","parameters","output"?},"usage"?}}`
- * - in   `{"event":"result","result":{"conversation_id","status":"SUCCESS|ERROR","response","error"?,"usage"}}` ends
- *        the turn.
- * - SIGINT during a turn: agy writes a `status:"ERROR","error":"interrupted"` result and EXITS. The driver reports
- *   the turn `aborted`, swallows that exit, and the next prompt respawns with `--conversation <id>`.
+ * Start: `initialize`, then `session/load` of the pointer's session (`<sessionDir>/agy-conversation.json`; its replayed
+ * updates are ignored, as omp's host does) or `session/new` when there is none or agy refuses it. Both carry the system
+ * prompt (`_meta.antigravity.systemPrompt.append`) and the configured MCP servers. Then `session/set_config_option`
+ * sets `model` and `thought_level`; a value agy does not take fails the start. A model without a `thought_level`
+ * option (the orchestrators) runs without one, as the `-p` driver ran them without an effort suffix.
  *
- * `-p ''` is required: a bare `-p` would take the next flag as the prompt. Tools run with
- * `--dangerously-skip-permissions`: headless agy auto-denies any tool that needs a permission prompt, and its allow
- * rules match by prefix only (`command(rm -f)` allows every `rm -f`), so no narrow allow-list exists
- *. agy has no `--append-system-prompt`: the system prompt is prepended to the first
- * user message each child process receives.
+ * Turn: `session/prompt`; its `session/update` notifications become omp events (accumulated `message_update`, tool
+ * start/end), its reply (`stopReason`, `usage`) the final. Text steered meanwhile is held and sent as the next
+ * `session/prompt` of the same turn. Abort: `session/cancel`; agy answers the prompt `cancelled` and lives on. With no
+ * answer in `cancelTimeoutMs` the child's process group is killed (no `onExit`), and the next prompt resumes.
  *
- * Session continuity: agy stores conversations itself; ompbot pins the conversation per origin epoch with a pointer
- * file (`<sessionDir>/agy-conversation.json`). An unknown `--conversation` id makes agy warn and start a new one.
- *
- * Rotation: agy cannot compact. Each model call's usage comes in its `agent_response` DONE step (the result's usage
- * is the turn's sum, not the context size), so the last such call's input + cache_read is the conversation's size.
- * A turn that ends with it at or over `AGY_ROTATE_RATIO` of `AGY_CONTEXT_WINDOW` drops the pointer and the child:
- * the next turn starts a new conversation, and its final says `usage.rotated` so the mailbox re-feeds the thread.
+ * Rotation: agy cannot compact here. `usage_update {used, size}` tells the context use; a turn that ends at or over
+ * `AGY_ROTATE_RATIO` of `size` drops the pointer and the child, and its final says `usage.rotated`.
  */
 
 export const AGY_PROVIDER = "agy";
-/** Effort is part of the agy model id (`gemini-3.8-flash-high`); thinking levels swap that suffix. */
-export const AGY_THINKING_LEVELS = ["low", "medium", "high"] as const;
-
-const EFFORT_SUFFIX = /-(low|medium|high)$/;
-const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
-const ABORT_EXIT_TIMEOUT_MS = 5_000;
-const MODELS_TIMEOUT_MS = 30_000;
-const STDERR_TAIL_BYTES = 4_000;
-/** Context window of the agy models ompbot runs (gemini hydrogen: 256k). */
-export const AGY_CONTEXT_WINDOW = 256_000;
-/** Share of the window at which a conversation is rotated after its turn ends. */
+/** `thought_level` values of agy 1.5.16; a model may offer fewer, or none. */
+export const AGY_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+/** Share of the context window at which a conversation is rotated after its turn ends. */
 export const AGY_ROTATE_RATIO = 0.7;
+
+const EFFORT_SUFFIX = /-(low|medium|high|xhigh)$/;
+const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
+const DEFAULT_CANCEL_TIMEOUT_MS = 5_000;
+const KILL_GRACE_MS = 2_000;
+const STOP_GRACE_MS = 5_000;
+/** Updates that only refresh state; any other kind is debug-logged once. */
+const QUIET_UPDATES: Record<string, true> = {
+	available_commands_update: true,
+	session_info_update: true,
+	current_mode_update: true,
+	user_message_chunk: true,
+	plan: true,
+};
 
 export interface AgyOmpDriverOptions {
 	/** Path or name of the agy CLI; names resolve on the child PATH. */
@@ -71,19 +74,23 @@ export interface AgyOmpDriverOptions {
 	cwd: string;
 	/** ompbot-owned per-origin-epoch directory; holds the `agy-conversation.json` resume pointer. */
 	sessionDir: string;
-	/** agy model id without provider prefix (`gemini-3.8-flash-high`); passed as `--model` at spawn. */
+	/** agy model id without provider prefix; an effort suffix agy's options lack is cut and read as the thinking level. */
 	model?: string;
-	/** `low|medium|high` replaces the model id's effort suffix; other values are ignored. */
+	/** `thought_level` to set (`low|medium|high|xhigh`); other values are ignored. */
 	thinking?: string;
 	/** Extra child env; `SLACK_`/`OMPBOT_` keys are rejected like every driver. */
 	env?: Record<string, string>;
-	/** Floors + persona text, prepended to the first user message of every child process. */
+	/** Floors + persona text, appended to agy's system prompt of every session. */
 	systemPrompt?: string;
+	/** MCP servers each `session/new|resume` passes; read at every start (a reload applies from the next one). */
+	mcpServers?: () => readonly AgyMcpServer[] | undefined;
 	/** Parent environment source (tests); default `process.env`. */
 	baseEnv?: Record<string, string | undefined>;
-	/** How long a spawn waits for agy's `init` event. */
+	/** How long each start request (`initialize`, session, config) may take. */
 	startupTimeoutMs?: number;
-	/** Where an unsupported `setTodos` and a conversation rotation are reported; absent → not reported. */
+	/** How long an abort waits for agy's `cancelled` reply before killing the child. */
+	cancelTimeoutMs?: number;
+	/** Where an unsupported `setTodos`, a rotation and the ACP lifecycle are reported; absent → not reported. */
 	log?: Logger;
 	/** Origin the driver serves; named in its log events. */
 	originKey?: string;
@@ -91,67 +98,30 @@ export interface AgyOmpDriverOptions {
 	toolKeepalive?: AgyToolKeepaliveOptions;
 }
 
-interface AgyChild {
-	pid: number;
-	stdin: { write(data: string): unknown };
-	stdout: ReadableStream<Uint8Array>;
-	stderr: ReadableStream<Uint8Array>;
-	kill(signal?: NodeJS.Signals): void;
-	/** Resolves once the exit was handled (stdout drained, turn and listeners settled). */
-	gone: Promise<void>;
-}
-
 interface PendingTurn {
 	opRef: string;
 	abortRequested: boolean;
-	/** Token sums over the turn's model calls (`agent_response` DONE steps), steered follow-ups included. */
+	/** Token sums over the turn's prompts (one model call each), steered follow-ups included. */
 	usage: OmpTurnUsage;
-	/** Model calls seen since the last `result`: a result with usage but none of them counts as one call. */
-	callsSinceResult: number;
+	/** Answer text of the running `session/prompt`. */
+	text: string;
+	/** Resolves when the turn ended (its final went out, or its child died). */
+	settled: PromiseWithResolvers<void>;
+	finished: boolean;
+	/** The running `#cancel`, once one started. */
+	cancelling?: Promise<void>;
+	/** Set when agy's text reported a quota retry: the turn is cancelled and ends as this error (omp: a 429). */
+	rateLimit?: string;
 }
 
 const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
 const recordOf = (value: unknown): Record<string, unknown> | undefined => (isRecord(value) ? value : undefined);
-
-/** agy `usage` → omp `Usage`; agy reports no cost, so `cost` stays unset. */
-function usageOf(value: unknown): OmpUsage | undefined {
-	const usage = recordOf(value);
-	if (usage === undefined) return undefined;
-	const input = num(usage.input_tokens);
-	const output = num(usage.output_tokens);
-	const cacheRead = num(usage.cache_read_tokens);
-	return {
-		...(input === undefined ? {} : { input }),
-		...(output === undefined ? {} : { output }),
-		...(cacheRead === undefined ? {} : { cacheRead }),
-	};
-}
-
-function addCall(sum: OmpTurnUsage, call: OmpUsage): void {
-	sum.calls += 1;
-	sum.input += call.input ?? 0;
-	sum.cacheRead += call.cacheRead ?? 0;
-	sum.output += call.output ?? 0;
-}
+const isThinkingLevel = (level: string): boolean => (AGY_THINKING_LEVELS as readonly string[]).includes(level);
 
 /** The final's `usage`: absent when the turn made no model call. */
 const usageField = (turn: PendingTurn): { usage?: OmpTurnUsage } =>
 	turn.usage.calls === 0 ? {} : { usage: { ...turn.usage } };
-
-/** `agy models` lines are `<id>\t<label>`; the "Fetching…" banner and blank lines carry no tab. */
-export function parseAgyModels(stdout: string): string[] {
-	const ids: string[] = [];
-	for (const line of stdout.split("\n")) {
-		const match = /^([A-Za-z0-9][\w.-]*)\t/.exec(line);
-		if (match?.[1] !== undefined) ids.push(match[1]);
-	}
-	return ids;
-}
-
-/** `gemini-3.8-flash-high` + `low` → `gemini-3.8-flash-low`; an id without an effort suffix gains one. */
-const withEffort = (modelId: string, level: string): string => `${modelId.replace(EFFORT_SUFFIX, "")}-${level}`;
-const isThinkingLevel = (level: string): boolean => (AGY_THINKING_LEVELS as readonly string[]).includes(level);
 
 export class AgyOmpDriver implements OmpSessionDriver {
 	readonly #options: AgyOmpDriverOptions;
@@ -159,30 +129,35 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	readonly #toolKeepalive: AgyToolKeepalive;
 	#started = false;
 	#stopping = false;
-	#child: AgyChild | undefined;
-	/** The child this driver interrupted (SIGINT): its exit is the abort, not a crash. */
-	#interrupted: AgyChild | undefined;
-	#stderrTail = "";
+	#client: AgyAcpClient | undefined;
+	/** The child being started: its death fails the start instead of reaching `onExit`. */
+	#launching: AgyAcpClient | undefined;
+	/** True while `session/load` replays the conversation: its updates are history, not this turn (omp: `#loading`). */
+	#loading = false;
+	/** Children this driver ended on purpose: their exit is no crash. */
+	readonly #ended = new WeakSet<AgyAcpClient>();
 	/** Entries of the CURRENT child only: cleared on every (re)spawn, cursors before it become `unknown_since`. */
 	#entries: OmpEntry[] = [];
 	#entrySeq = 0;
 	#turn: PendingTurn | undefined;
-	/** Steered texts held until the running turn's result; sent together as the turn's next user message. */
+	/** Steered texts held until the running prompt's reply; sent together as the turn's next prompt. */
 	#queued: string[] = [];
-	#conversationId: string | undefined;
-	/** True while the live child resumed the `--conversation` it was given (what `openSession().resumed` reports). */
+	#sessionId: string | undefined;
+	/** True while the live child resumed the session it was asked to (what `openSession().resumed` reports). */
 	#resumedCurrent = false;
-	/** Whether the live child already got the system prompt. */
-	#systemPromptSent = false;
-	/** Model chosen by config or `/model` (`--model` on every spawn); unset = agy's own default. */
-	#modelId: string | undefined;
-	/** Model the live child reported in `init` (what agy actually runs when `#modelId` is unset). */
-	#initModel: string | undefined;
-	#models: string[] | undefined;
+	/** Model chosen by config or `/model`, as given; unset = agy's own default. */
+	#model: string | undefined;
+	/** Thinking level chosen by config or `/thinking` (or read off the model's effort suffix). */
+	#thinking: string | undefined;
+	#configOptions: AcpConfigOption[] = [];
+	/** Latest `usage_update` of the live session. */
+	#context: { used: number; size: number } | undefined;
+	/** Tool calls of the live child: open until their `completed|failed` update. */
+	readonly #tools = new Map<string, "open" | "done">();
+	readonly #unknownUpdates = new Set<string>();
 	readonly #finalListeners = new Set<(final: OmpFinal) => void>();
 	readonly #eventListeners = new Set<(event: OmpEvent) => void>();
 	readonly #exitListeners = new Set<(info: OmpExitInfo) => void>();
-	#initWait: { pending: PromiseWithResolvers<void>; resume: string | undefined } | undefined;
 	/** Set while `#spawn` replaces the child: a prompt meanwhile waits for the new child instead of spawning its own. */
 	#respawning: Promise<void> | undefined;
 
@@ -190,16 +165,16 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#options = options;
 		this.#pointerPath = join(resolve(options.sessionDir), "agy-conversation.json");
 		this.#toolKeepalive = new AgyToolKeepalive((event) => {
-			if (this.#child !== undefined && this.#turn !== undefined) this.#emit(event);
+			if (this.#client !== undefined && this.#turn !== undefined) this.#emit(event);
 		}, options.toolKeepalive);
-		const model = options.model === "" ? undefined : options.model;
-		const t = options.thinking; // effort 접미사가 없는 모델(orchestrator 등)에는 붙이지 않는다.
-		this.#modelId = model && t && isThinkingLevel(t) && EFFORT_SUFFIX.test(model) ? withEffort(model, t) : model;
+		this.#model = options.model === "" ? undefined : options.model;
+		const thinking = options.thinking;
+		this.#thinking = thinking !== undefined && isThinkingLevel(thinking) ? thinking : undefined;
 	}
 
 	/** Pid of the live child (for leftover-process checks); undefined when not running. */
 	get pid(): number | undefined {
-		return this.#child?.pid;
+		return this.#client?.pid;
 	}
 
 	async start(): Promise<void> {
@@ -214,75 +189,97 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async prompt(text: string): Promise<string> {
 		this.#requireStarted();
 		await this.#ensureChild();
+		const client = this.#client;
+		if (client === undefined) throw new OmpDriverError("rpc_error", "agy child is not running");
 		if (this.#turn) throw new OmpDriverError("rpc_error", "a turn is already running");
 		const opRef = `agy-${Date.now().toString(36)}-${++this.#entrySeq}`;
-		this.#turn = {
+		const turn: PendingTurn = {
 			opRef,
 			abortRequested: false,
 			usage: { calls: 0, input: 0, cacheRead: 0, output: 0, rotated: false },
-			callsSinceResult: 0,
+			text: "",
+			settled: Promise.withResolvers<void>(),
+			finished: false,
 		};
-		try {
-			this.#sendUserMessage(text);
-		} catch (error) {
-			this.#turn = undefined;
-			throw error;
-		}
+		this.#turn = turn;
+		this.#sendPrompt(client, turn, text);
 		return opRef;
 	}
 
-	/**
-	 * agy answers a message written mid-turn only after the turn ends, as its own turn. The driver holds steered text
-	 * and sends it when the running turn's result arrives, keeping the same `opRef` open until that answer too.
-	 */
+	/** Text written mid-turn is held and sent as the next `session/prompt` once the running one replies (same opRef). */
 	async steer(text: string): Promise<void> {
 		this.#requireStarted();
 		if (this.#turn === undefined) throw new OmpDriverError("rpc_error", "no turn is running to steer");
 		this.#queued.push(text);
 	}
 
-	/** SIGINT ends the turn with an `interrupted` result and the child exits; the next prompt resumes the conversation. */
+	/** Cancels the running turn (`#cancel`); no turn runs once this returns. */
 	async abort(): Promise<void> {
 		this.#requireStarted();
 		const turn = this.#turn;
-		const child = this.#child;
-		if (!turn || !child) return;
-		this.#toolKeepalive.clear();
+		const client = this.#client;
+		if (!turn || !client) return;
 		turn.abortRequested = true;
-		this.#queued = [];
-		this.#interrupted = child;
-		child.kill("SIGINT");
-		const killer = setTimeout(() => child.kill("SIGKILL"), ABORT_EXIT_TIMEOUT_MS);
-		await child.gone;
-		clearTimeout(killer);
+		await this.#cancel(turn, client);
 	}
 
-	/** `/new`: drop the resume pointer and restart without `--conversation`; the next conversation is fresh. */
+	/**
+	 * `session/cancel`, then the prompt's reply (`cancelled`) ends the turn and agy keeps running. No reply within
+	 * `cancelTimeoutMs` (omp's CANCEL_TIMEOUT_MS): the child's process group gets SIGKILL like omp's `close()`, without
+	 * an `onExit`, and the next prompt restarts it on the same session.
+	 */
+	#cancel(turn: PendingTurn, client: AgyAcpClient): Promise<void> {
+		this.#toolKeepalive.clear();
+		this.#queued = [];
+		turn.cancelling ??= (async () => {
+			try {
+				client.notify("session/cancel", { sessionId: this.#sessionId });
+			} catch {
+				// a closed stdin: the kill below ends the turn
+			}
+			const unanswered = Promise.withResolvers<false>();
+			const ms = this.#options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
+			const timer = setTimeout(() => unanswered.resolve(false), ms);
+			const answered = await Promise.race([turn.settled.promise.then(() => true), unanswered.promise]);
+			clearTimeout(timer);
+			if (answered) return;
+			this.#options.log?.warn("agy.acp.abort_killed", { origin: this.#options.originKey, pid: client.pid });
+			if (this.#client === client) this.#client = undefined;
+			this.#ended.add(client);
+			client.kill("SIGKILL");
+			await client.gone;
+			const error = turn.rateLimit ?? "cancel unanswered; agy killed";
+			this.#finish(turn, { opRef: turn.opRef, status: turn.rateLimit ? "error" : "aborted", text: "", error });
+		})();
+		return turn.cancelling;
+	}
+
+	/** `/new`: drop the resume pointer and restart on a new session. */
 	async newSession(): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
 		this.#clearPointer();
-		this.#conversationId = undefined;
-		if (this.#child) await this.#spawn({}, "new session");
+		this.#sessionId = undefined;
+		if (this.#client) await this.#spawn(undefined, "new session");
 		return { cancelled: false };
 	}
 
 	async openSession(): Promise<OmpOpenResult> {
 		this.#requireStarted();
 		await this.#bindPinnedConversation();
-		return { resumed: this.#resumedCurrent, sessionId: this.#conversationId ?? "" };
+		return { resumed: this.#resumedCurrent, sessionId: this.#sessionId ?? "" };
 	}
 
-	/** Binds the conversation the pointer names: respawns with `--conversation` when the live child is another one. */
+	/** Binds the session the pointer names: restarts on it when the live child holds another one. */
 	async #bindPinnedConversation(): Promise<void> {
 		const pointer = this.#readPointer();
-		if (pointer !== undefined && (pointer !== this.#conversationId || !this.#child)) {
-			await this.#spawn({ resume: pointer }, "conversation rebind");
+		if (pointer !== undefined && (pointer !== this.#sessionId || !this.#client)) {
+			await this.#spawn(pointer, "conversation rebind");
 			return;
 		}
 		await this.#ensureChild();
 	}
 
-	/** Resumes the agy conversation named by `sessionFile` (a conversation id, or a path ending in one). */
+	/** Resumes the agy session named by `sessionFile` (a session id, or a path ending in one). */
 	async switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
 		const stem =
@@ -294,16 +291,17 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			throw new OmpDriverError("rpc_error", `not an agy conversation id: ${sessionFile}`);
 		}
 		this.#writePointer(stem);
-		await this.#spawn({ resume: stem }, "session switch");
+		await this.#spawn(stem, "session switch");
 		return { cancelled: false };
 	}
 
-	/** `agy models`, run once per driver; reported as `agy/<id>`. */
+	/** The live session's `model` option values, as `agy/<id>`. */
 	async availableModels(): Promise<string[]> {
-		if (this.#models === undefined) this.#models = await this.#listModels();
-		return this.#models.map((id) => `${AGY_PROVIDER}/${id}`);
+		if (this.#started) await this.#ensureChild();
+		return (this.#option("model")?.values ?? []).map((id) => `${AGY_PROVIDER}/${id}`);
 	}
 
+	/** `session/set_config_option model` on the live session (no restart); the thinking level is set again after it. */
 	async setModel(model: string): Promise<string> {
 		this.#requireStarted();
 		const slash = model.indexOf("/");
@@ -314,12 +312,16 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			throw new OmpDriverError("rpc_error", `Model not found: ${model}`);
 		}
 		const id = model.slice(slash + 1);
-		await this.#switchModel(id);
+		this.#model = id;
+		const client = this.#client;
+		if (client !== undefined) await this.#applyConfig(client);
 		return `${AGY_PROVIDER}/${id}`;
 	}
 
-	thinkingLevels(): Promise<string[]> {
-		return Promise.resolve([...AGY_THINKING_LEVELS]);
+	/** The levels the live model offers (`thought_level`); none for a model without it. */
+	async thinkingLevels(): Promise<string[]> {
+		if (this.#started) await this.#ensureChild();
+		return [...(this.#option("thought_level")?.values ?? [])];
 	}
 
 	/** An agy conversation has no omp extension commands. */
@@ -332,18 +334,22 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#options.log?.info("set_todos_unsupported", { driver: "agy", phases: phases.length });
 	}
 
+	/** `session/set_config_option thought_level` on the live session (no restart). */
 	async setThinking(level: string): Promise<void> {
 		this.#requireStarted();
 		if (!isThinkingLevel(level)) throw new OmpDriverError("rpc_error", `Model not found: thinking ${level}`);
-		const current = this.#modelId ?? this.#initModel;
-		if (current === undefined) {
-			throw new OmpDriverError("rpc_error", "agy 모델이 정해지지 않아 thinking을 바꿀 수 없습니다 (model을 먼저 지정)");
+		await this.#ensureChild();
+		const client = this.#client;
+		if (client === undefined) throw new OmpDriverError("rpc_error", "agy child is not running");
+		if (!this.#option("thought_level")?.values.includes(level)) {
+			const model = this.#option("model")?.currentValue ?? "?";
+			throw new OmpDriverError(
+				"rpc_error",
+				`Model not found: thinking ${level} (agy model ${model} does not offer it)`,
+			);
 		}
-		const next = withEffort(current, level);
-		if (!(await this.availableModels()).includes(`${AGY_PROVIDER}/${next}`)) {
-			throw new OmpDriverError("rpc_error", `Model not found: ${AGY_PROVIDER}/${next}`);
-		}
-		await this.#switchModel(next);
+		await this.#setOption(client, "thought_level", level);
+		this.#thinking = level;
 	}
 
 	compact(): Promise<OmpCompactResult> {
@@ -351,10 +357,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	}
 
 	async state(): Promise<OmpState> {
-		const model = this.#modelId ?? this.#initModel;
-		const thinking = model === undefined ? undefined : EFFORT_SUFFIX.exec(model)?.[1];
+		const model = this.#option("model")?.currentValue ?? this.#model;
+		const thinking = this.#option("thought_level")?.currentValue;
 		return {
-			sessionId: this.#conversationId ?? "",
+			sessionId: this.#sessionId ?? "",
 			idle: this.#turn === undefined,
 			settled: this.#turn === undefined,
 			queuedMessageCount: this.#queued.length,
@@ -396,20 +402,17 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#toolKeepalive.clear();
 		this.#turn = undefined;
 		this.#queued = [];
-		this.#settleInit(new OmpDriverError("rpc_error", "driver stopped while starting"));
 		await this.#respawning;
-		const child = this.#child;
+		const client = this.#client;
 		this.#stopping = true;
-		this.#child = undefined;
-		if (child) await this.#endChild(child, 5_000);
+		this.#client = undefined;
+		if (client) await this.#endClient(client, STOP_GRACE_MS);
 	}
 
-	/** SIGTERM, then SIGKILL after `graceMs`; resolves once the child is gone. */
-	async #endChild(child: AgyChild, graceMs: number): Promise<void> {
-		child.kill("SIGTERM");
-		const killer = setTimeout(() => child.kill("SIGKILL"), graceMs);
-		await child.gone;
-		clearTimeout(killer);
+	/** Ends a child on purpose (its exit is no crash): SIGTERM to its group, SIGKILL after `graceMs`. */
+	#endClient(client: AgyAcpClient, graceMs: number): Promise<void> {
+		this.#ended.add(client);
+		return client.end(graceMs);
 	}
 
 	// ---- child lifecycle ----
@@ -418,16 +421,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		if (!this.#started) throw new OmpDriverError("not_started", "driver not started");
 	}
 
-	/** Spawns a child when none is live, continuing the current conversation (after an abort or idle exit). */
+	/** Starts a child when none is live, resuming the current session (after an abort kill, a rotation or a crash). */
 	async #ensureChild(): Promise<void> {
 		while (this.#respawning) await this.#respawning;
-		if (!this.#child) await this.#spawn(this.#conversationId ? { resume: this.#conversationId } : {}, "child restart");
-	}
-
-	/** A model change needs a new child (agy has no in-flight model switch); the conversation carries over. */
-	async #switchModel(id: string): Promise<void> {
-		this.#modelId = id;
-		if (this.#child) await this.#spawn(this.#conversationId ? { resume: this.#conversationId } : {}, "model change");
+		if (!this.#client) await this.#spawn(this.#sessionId, "child restart");
 	}
 
 	#resolveExecutable(env: Record<string, string>): string {
@@ -447,46 +444,17 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		return found;
 	}
 
-	async #listModels(): Promise<string[]> {
-		const env = buildChildEnv(this.#options.env, this.#options.baseEnv);
-		const proc = Bun.spawn([this.#resolveExecutable(env), "models"], {
-			cwd: resolve(this.#options.cwd),
-			env,
-			stdin: "ignore",
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const killer = setTimeout(() => proc.kill("SIGKILL"), MODELS_TIMEOUT_MS);
-		try {
-			const [stdout, stderr, code] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-			const ids = parseAgyModels(stdout);
-			if (code !== 0 || ids.length === 0) {
-				throw new OmpDriverError(
-					"rpc_error",
-					`agy models failed (code=${code}): ${(stderr || stdout).trim().slice(0, 400)}`,
-				);
-			}
-			return ids;
-		} finally {
-			clearTimeout(killer);
-		}
-	}
-
 	/**
-	 * Stops the current child (if any) and waits for its exit, so two agy processes never hold one `--conversation`,
-	 * then spawns a new one and waits for its `init` event. A turn still running ends `aborted` (`reason` in the
-	 * error) once the new child is up or failed to start, so a prompt sent on that final reaches the new child.
+	 * Ends the current child (if any) and waits for its exit, so two agy processes never hold one session, then starts
+	 * a new one on `resume` (or a new session). A turn still running ends `aborted` (`reason` in the error) once the new
+	 * child is up or failed to start, so a prompt sent on that final reaches the new child.
 	 */
-	async #spawn(opts: { resume?: string }, reason: string): Promise<void> {
+	async #spawn(resume: string | undefined, reason: string): Promise<void> {
 		// One replacement at a time: a second one started meanwhile would launch beside the first one's new child.
 		while (this.#respawning) await this.#respawning;
 		const env = buildChildEnv(this.#options.env, this.#options.baseEnv);
 		const executable = this.#resolveExecutable(env);
-		const previous = this.#child;
+		const previous = this.#client;
 		const cut = this.#turn;
 		const dropped = this.#queued.length;
 		this.#turn = undefined;
@@ -495,116 +463,163 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#respawning = done.promise;
 		try {
 			if (previous) {
-				// A rebound conversation starts a clean log: cursors of the old child turn `unknown_since`.
-				this.#child = undefined;
-				await this.#endChild(previous, ABORT_EXIT_TIMEOUT_MS);
+				this.#client = undefined;
+				await this.#endClient(previous, KILL_GRACE_MS);
 			}
 			// `stop()` while waiting (a retire or the old child's exit) must not be undone by a child launched after it.
 			if (!this.#started) throw new OmpDriverError("not_started", "driver stopped while agy restarted");
-			await this.#launch(executable, env, opts);
+			await this.#launch(executable, env, resume);
 		} finally {
 			if (this.#respawning === done.promise) this.#respawning = undefined;
 			done.resolve();
 			if (cut !== undefined) {
-				this.#settleFinal({
+				const steer = dropped > 0 ? ` (steer ${dropped}건 미전달)` : "";
+				this.#finish(cut, {
 					opRef: cut.opRef,
 					status: "aborted",
 					text: "",
-					error: `agy restarted (${reason})${dropped > 0 ? ` (steer ${dropped}건 미전달)` : ""}`,
-					...usageField(cut),
+					error: `agy restarted (${reason})${steer}`,
 				});
 			}
 		}
 	}
 
-	async #launch(executable: string, env: Record<string, string>, opts: { resume?: string }): Promise<void> {
+	async #launch(executable: string, env: Record<string, string>, resume: string | undefined): Promise<void> {
 		const options = this.#options;
 		this.#entries = [];
-		this.#stderrTail = "";
-		this.#systemPromptSent = false;
-
-		const args = ["--input-format", "stream-json", "--output-format", "stream-json", "-p", ""];
-		if (opts.resume !== undefined) args.push("--conversation", opts.resume);
-		if (this.#modelId !== undefined) args.push("--model", this.#modelId);
-		args.push("--dangerously-skip-permissions");
-
-		const proc = Bun.spawn([executable, ...args], {
-			cwd: resolve(options.cwd),
-			env,
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
-		});
-		const gone = Promise.withResolvers<void>();
-		const child: AgyChild = {
-			pid: proc.pid,
-			stdin: { write: (data) => proc.stdin.write(data) },
-			stdout: proc.stdout as ReadableStream<Uint8Array>,
-			stderr: proc.stderr as ReadableStream<Uint8Array>,
-			kill: (signal) => {
-				try {
-					proc.kill(signal ?? "SIGTERM");
-				} catch {
-					// already gone
-				}
-			},
-			gone: gone.promise,
-		};
-		this.#stopping = false;
+		this.#tools.clear();
+		this.#configOptions = [];
+		this.#context = undefined;
 		this.#resumedCurrent = false;
-		this.#child = child;
-		// The exit handler must see every frame: drain stdout before judging the death.
-		const stdoutClosed = Promise.withResolvers<void>();
-		this.#pump(child, () => stdoutClosed.resolve());
-
-		const startup = Promise.withResolvers<void>();
-		this.#initWait = { pending: startup, resume: opts.resume };
+		this.#stopping = false;
+		const client: AgyAcpClient = new AgyAcpClient(
+			{ executable, cwd: resolve(options.cwd), env },
+			{
+				onNotification: (method, params) => {
+					if (client === this.#client && method === "session/update") this.#onUpdate(params);
+				},
+				onRequest: (method) => options.log?.info("agy.acp.agent_request", { origin: options.originKey, method }),
+				onExit: (code, stderr) => this.#onChildExit(client, code, stderr),
+			},
+		);
+		this.#client = client;
+		this.#launching = client;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
-		const timer = setTimeout(() => {
-			if (this.#initWait?.pending !== startup) return;
-			this.#settleInit(new OmpDriverError("rpc_error", `agy sent no init within ${timeoutMs}ms`));
-			if (this.#child === child) this.#child = undefined;
-			child.kill("SIGKILL");
-		}, timeoutMs);
-		void Promise.all([proc.exited, stdoutClosed.promise]).then(([code]) => {
-			this.#onChildExit(child, code);
-			gone.resolve();
-		});
 		try {
-			await startup.promise;
+			await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
+			let opened: Record<string, unknown> | undefined;
+			if (resume !== undefined) {
+				try {
+					this.#loading = true;
+					opened = await client.request("session/load", { sessionId: resume, ...this.#sessionParams() }, timeoutMs);
+					this.#sessionId = resume;
+					this.#resumedCurrent = true;
+				} catch (error) {
+					options.log?.warn("agy.acp.load_failed", {
+						origin: options.originKey,
+						sessionId: resume,
+						error: String(error),
+					});
+				}
+			}
+			this.#loading = false;
+			if (opened === undefined) {
+				opened = await client.request("session/new", this.#sessionParams(), timeoutMs);
+				const sessionId = str(opened.sessionId);
+				if (sessionId === undefined) throw new OmpDriverError("rpc_error", "agy session/new without a sessionId");
+				this.#sessionId = sessionId;
+			}
+			this.#writePointer(this.#sessionId ?? "");
+			this.#configOptions = configOptionsOf(opened.configOptions) ?? [];
+			await this.#applyConfig(client);
+			options.log?.info("agy.acp.started", {
+				origin: options.originKey,
+				pid: client.pid,
+				sessionId: this.#sessionId,
+				resumed: this.#resumedCurrent,
+			});
+		} catch (error) {
+			if (this.#client === client) this.#client = undefined;
+			await this.#endClient(client, KILL_GRACE_MS);
+			const stderr = client.stderrTail.trim().slice(-400);
+			throw new OmpDriverError("rpc_error", `agy acp start failed: ${String(error)}${stderr ? ` | ${stderr}` : ""}`, {
+				cause: error,
+			});
 		} finally {
-			clearTimeout(timer);
+			this.#loading = false;
+			if (this.#launching === client) this.#launching = undefined;
 		}
 	}
 
-	#onChildExit(child: AgyChild, code: number): void {
-		const stderr = this.#stderrTail;
-		if (this.#interrupted === child) {
-			// The abort's own exit: the turn ends aborted unless the `interrupted` result already ended it.
-			this.#interrupted = undefined;
-			if (this.#child === child) this.#child = undefined;
-			this.#toolKeepalive.clear();
-			const turn = this.#turn;
-			if (turn !== undefined) {
-				this.#turn = undefined;
-				this.#settleFinal({
-					opRef: turn.opRef,
-					status: "aborted",
-					text: "",
-					error: "interrupted",
-					...usageField(turn),
-				});
+	#sessionParams(): Record<string, unknown> {
+		const system = this.#options.systemPrompt;
+		return {
+			cwd: resolve(this.#options.cwd),
+			mcpServers: (this.#options.mcpServers?.() ?? []).map(({ name, command, args, env }) => ({
+				name,
+				command,
+				args,
+				env,
+			})),
+			...(system === undefined || system === ""
+				? {}
+				: { _meta: { antigravity: { systemPrompt: { append: system } } } }),
+		};
+	}
+
+	#option(id: string): AcpConfigOption | undefined {
+		return this.#configOptions.find((option) => option.id === id);
+	}
+
+	/**
+	 * Sets the chosen model, then the thinking level when the model offers `thought_level`. A configured id that is not
+	 * an option but is one without its effort suffix (`gemini-3.8-flash-high`) runs as that model at that level.
+	 */
+	async #applyConfig(client: AgyAcpClient): Promise<void> {
+		let level = this.#thinking;
+		if (this.#model !== undefined) {
+			let id = this.#model;
+			const values = this.#option("model")?.values ?? [];
+			const bare = id.replace(EFFORT_SUFFIX, "");
+			if (!values.includes(id) && bare !== id && values.includes(bare)) {
+				level ??= EFFORT_SUFFIX.exec(id)?.[1];
+				id = bare;
 			}
+			await this.#setOption(client, "model", id);
+		}
+		if (level === undefined) return;
+		if (this.#option("thought_level") === undefined) {
+			const model = this.#option("model")?.currentValue;
+			this.#options.log?.info("agy.acp.thinking_unsupported", { origin: this.#options.originKey, model, level });
 			return;
 		}
-		if (this.#child !== child) return;
-		this.#child = undefined;
+		await this.#setOption(client, "thought_level", level);
+	}
+
+	/** `session/set_config_option`; a reply whose `currentValue` is not `value` counts as refused. */
+	async #setOption(client: AgyAcpClient, configId: string, value: string): Promise<void> {
+		const result = await client.request(
+			"session/set_config_option",
+			{ sessionId: this.#sessionId, configId, value },
+			this.#options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+		);
+		const options = configOptionsOf(result.configOptions);
+		if (options !== undefined) this.#configOptions = options;
+		const current = this.#option(configId)?.currentValue;
+		if (current !== value) {
+			throw new OmpDriverError("rpc_error", `agy did not apply ${configId}=${value} (now ${current ?? "unset"})`);
+		}
+	}
+
+	#onChildExit(client: AgyAcpClient, code: number, stderr: string): void {
+		if (this.#ended.has(client) || this.#launching === client || this.#client !== client) return;
+		this.#client = undefined;
 		this.#toolKeepalive.clear();
-		if (this.#initWait !== undefined) {
-			this.#settleInit(
-				new OmpDriverError("rpc_error", `agy exited right after spawn (code=${code}): ${stderr.slice(0, 400)}`),
-			);
-			return;
+		// The dead turn gets no final (the mailbox fails it on `onExit`); an abort waiting on it returns.
+		const turn = this.#turn;
+		if (turn !== undefined) {
+			turn.finished = true;
+			turn.settled.resolve();
 		}
 		this.#turn = undefined;
 		this.#queued = [];
@@ -614,103 +629,64 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	#settleInit(error: unknown): void {
-		const init = this.#initWait;
-		if (init === undefined) return;
-		this.#initWait = undefined;
-		error !== undefined ? init.pending.reject(error) : init.pending.resolve();
-	}
+	// ---- session updates ----
 
-	#pump(child: AgyChild, onStdoutClosed: () => void): void {
-		void (async () => {
-			const decoder = new TextDecoder();
-			let buffer = "";
-			try {
-				for await (const chunk of child.stdout) {
-					buffer += decoder.decode(chunk, { stream: true });
-					let newline = buffer.indexOf("\n");
-					while (newline !== -1) {
-						const line = buffer.slice(0, newline);
-						buffer = buffer.slice(newline + 1);
-						newline = buffer.indexOf("\n");
-						this.#handleLine(child, line);
-					}
-				}
-			} catch {
-				// stream closed with the child
-			}
-			if (buffer.trim() !== "") this.#handleLine(child, buffer);
-			onStdoutClosed();
-		})();
-		void (async () => {
-			const decoder = new TextDecoder();
-			try {
-				for await (const chunk of child.stderr) {
-					const text = decoder.decode(chunk, { stream: true });
-					// A replaced child's last words must not land in the tail of the child that followed it.
-					if (child === this.#child) this.#stderrTail = (this.#stderrTail + text).slice(-STDERR_TAIL_BYTES);
-				}
-			} catch {
-				// stream closed with the child
-			}
-		})();
-	}
-
-	// ---- wire frames ----
-
-	#handleLine(child: AgyChild, line: string): void {
-		if (child !== this.#child || line.trim() === "") return;
-		let frame: unknown;
-		try {
-			frame = JSON.parse(line);
-		} catch {
-			return; // agy prints plain warnings (e.g. an unknown --conversation) between frames
-		}
-		if (!isRecord(frame)) return;
-		const event = str(frame.event);
-		if (event === "init") this.#onInit(frame);
-		else if (event === "step_update") this.#onStep(recordOf(frame.step_update) ?? {});
-		else if (event === "result") this.#onResult(recordOf(frame.result) ?? {});
-		this.#emit({ type: event ?? "unknown", ...frame });
-	}
-
-	#onInit(frame: Record<string, unknown>): void {
-		const conversationId = str(frame.conversation_id);
-		if (conversationId === undefined) {
-			this.#settleInit(new OmpDriverError("rpc_error", "agy init without a conversation_id"));
-			return;
-		}
-		// agy answers an unknown `--conversation` with a warning and a brand-new id: that is not a resume.
-		const requested = this.#initWait?.resume;
-		this.#resumedCurrent = requested !== undefined && requested === conversationId;
-		this.#conversationId = conversationId;
-		this.#writePointer(conversationId);
-		const model = str(recordOf(frame.init)?.model);
-		this.#initModel = model === "" ? undefined : model;
-		this.#settleInit(undefined);
-	}
-
-	/** Tool steps become omp-style toolCall/toolResult entries and tool events (the mailbox's status lines). */
-	#onStep(step: Record<string, unknown>): void {
-		if (step.step_type === "agent_response") {
-			this.#toolKeepalive.clear();
-			if (step.state === "DONE") {
+	#onUpdate(params: Record<string, unknown>): void {
+		if (this.#loading || params.sessionId !== this.#sessionId) return;
+		const update = recordOf(params.update) ?? {};
+		const kind = str(update.sessionUpdate) ?? "";
+		switch (kind) {
+			case "agent_message_chunk": {
+				const content = recordOf(update.content);
 				const turn = this.#turn;
-				const usage = usageOf(step.usage);
-				if (turn !== undefined && usage !== undefined) {
-					addCall(turn.usage, usage);
-					turn.usage.contextTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0);
-					turn.callsSinceResult += 1;
+				const client = this.#client;
+				if (!turn || turn.cancelling || !client || content?.type !== "text" || typeof content.text !== "string") return;
+				turn.text += content.text;
+				// agy retrying a quota failure: stop its retry loop and end the turn as a 429 (omp `#rateLimited`).
+				const quota = quotaRetryNotice(turn.text);
+				if (quota !== undefined) {
+					turn.rateLimit = `agy rate limited (429): ${quota}`;
+					void this.#cancel(turn, client);
+					return;
 				}
+				const text = shownText(turn.text);
+				this.#emit({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text }] } });
+				return;
 			}
-			return;
+			case "tool_call":
+			case "tool_call_update":
+				this.#onTool(update);
+				return;
+			case "usage_update": {
+				const used = num(update.used);
+				const size = num(update.size);
+				if (used !== undefined && size !== undefined) this.#context = { used, size };
+				return;
+			}
+			case "config_option_update": {
+				const options = configOptionsOf(update.configOptions);
+				if (options !== undefined) this.#configOptions = options;
+				return;
+			}
+			// The `-p` driver emitted no thinking either.
+			case "agent_thought_chunk":
+				return;
+			default:
+				if (QUIET_UPDATES[kind] || this.#unknownUpdates.has(kind)) return;
+				this.#unknownUpdates.add(kind);
+				this.#options.log?.debug("agy.acp.unknown_update", { origin: this.#options.originKey, kind });
 		}
-		if (step.step_type !== "tool") return;
-		const info = recordOf(step.tool_info);
-		const name = str(step.tool_name) ?? str(info?.name) ?? "tool";
-		const callId = `agy-tool-${String(step.step_index ?? this.#entrySeq)}`;
-		const args = info?.parameters ?? {};
-		if (step.state === "ACTIVE") {
+	}
+
+	/** Tool calls become omp-style toolCall/toolResult entries and tool events (the mailbox's status lines). */
+	#onTool(update: Record<string, unknown>): void {
+		if (this.#turn === undefined) return;
+		const callId = str(update.toolCallId) ?? `agy-tool-${this.#entrySeq}`;
+		const name = str(update.name) ?? str(update.title) ?? "tool";
+		const args = update.rawInput ?? update.args ?? {};
+		const model = this.#option("model")?.currentValue;
+		if (!this.#tools.has(callId)) {
+			this.#tools.set(callId, "open");
 			this.#entries.push({
 				id: `ag-${++this.#entrySeq}`,
 				type: "message",
@@ -719,148 +695,166 @@ export class AgyOmpDriver implements OmpSessionDriver {
 					content: [{ type: "toolCall", id: callId, name, arguments: args }],
 					stopReason: "toolUse",
 					provider: AGY_PROVIDER,
-					...(this.#initModel === undefined ? {} : { model: this.#initModel }),
+					...(model === undefined ? {} : { model }),
 				},
 			});
 			this.#toolKeepalive.start(callId, name);
 			this.#emit({ type: "tool_execution_start", toolCallId: callId, toolName: name, args });
-		} else if (step.state === "DONE") {
-			// agy sends no output for some tools (edit_file: only the path is in `parameters`): the event
-			// then carries no `result`, so the loop detector does not take different edits of one file for a repeat.
-			const output = info?.output === undefined ? undefined : String(info.output);
-			this.#entries.push({
-				id: `ag-${++this.#entrySeq}`,
-				type: "message",
-				toolCallId: callId,
-				toolName: name,
-				message: { role: "toolResult", content: [{ type: "text", text: output ?? "" }] },
-			});
-			this.#toolKeepalive.end(callId);
-			this.#emit({ type: "tool_execution_end", toolCallId: callId, toolName: name, result: output });
 		}
+		const status = update.status;
+		if (this.#tools.get(callId) !== "open" || (status !== "completed" && status !== "failed")) return;
+		this.#tools.set(callId, "done");
+		// A tool without output (edit_file names only its path) ends with no `result`, so the loop detector does not
+		// take different edits of one file for a repeat.
+		const output = toolOutputOf(update);
+		this.#entries.push({
+			id: `ag-${++this.#entrySeq}`,
+			type: "message",
+			toolCallId: callId,
+			toolName: name,
+			message: { role: "toolResult", content: [{ type: "text", text: output ?? "" }] },
+		});
+		this.#toolKeepalive.end(callId);
+		this.#emit({
+			type: "tool_execution_end",
+			toolCallId: callId,
+			toolName: name,
+			result: output,
+			...(status === "failed" ? { isError: true } : {}),
+		});
 	}
 
-	#onResult(result: Record<string, unknown>): void {
-		const turn = this.#turn;
-		if (turn === undefined) return;
+	// ---- prompts ----
+
+	/** Records the user entry and sends one `session/prompt`; its reply continues or ends the turn. */
+	#sendPrompt(client: AgyAcpClient, turn: PendingTurn, text: string): void {
+		turn.text = "";
+		this.#entries.push({ id: `ag-${++this.#entrySeq}`, type: "message", message: { role: "user", content: text } });
+		client.request("session/prompt", { sessionId: this.#sessionId, prompt: [{ type: "text", text }] }).then(
+			(result) => this.#onPromptReply(client, turn, result, undefined),
+			(error: unknown) => this.#onPromptReply(client, turn, undefined, error),
+		);
+	}
+
+	#onPromptReply(
+		client: AgyAcpClient,
+		turn: PendingTurn,
+		result: Record<string, unknown> | undefined,
+		failure: unknown,
+	): void {
+		// A child ended on purpose (abort kill, restart) leaves the turn's end to whoever ended it.
+		if (this.#turn !== turn || this.#ended.has(client)) return;
 		this.#toolKeepalive.clear();
-		const response = str(result.response) ?? "";
-		const usage = usageOf(result.usage);
-		// An agy that sent no per-call usage still spent this result's tokens: one call, context size unknown.
-		if (usage !== undefined && turn.callsSinceResult === 0 && (usage.input ?? 0) + (usage.output ?? 0) > 0) {
-			addCall(turn.usage, usage);
+		const usage = acpUsageOf(result?.usage);
+		if (usage !== undefined) {
+			turn.usage.calls += 1;
+			turn.usage.input += usage.input ?? 0;
+			turn.usage.cacheRead += usage.cacheRead ?? 0;
+			turn.usage.output += usage.output ?? 0;
 		}
-		turn.callsSinceResult = 0;
-		const succeeded = result.status === "SUCCESS";
-		if (response.trim() !== "" || usage !== undefined) {
+		const stopReason = str(result?.stopReason);
+		const succeeded = stopReason === "end_turn";
+		const model = this.#option("model")?.currentValue;
+		if (turn.text.trim() !== "" || usage !== undefined) {
 			this.#entries.push({
 				id: `ag-${++this.#entrySeq}`,
 				type: "message",
 				message: {
 					role: "assistant",
-					content: [{ type: "text", text: response }],
+					content: [{ type: "text", text: turn.text }],
 					stopReason: succeeded ? "stop" : "error",
 					provider: AGY_PROVIDER,
-					...(this.#initModel === undefined ? {} : { model: this.#initModel }),
+					...(model === undefined ? {} : { model }),
 					...(usage === undefined ? {} : { usage }),
 				},
 			});
 		}
 		// Steered text is answered as part of the same turn: the opRef stays open until that answer arrives.
-		let sendFailure: string | undefined;
-		if (succeeded && !turn.abortRequested && this.#queued.length > 0) {
+		if (succeeded && !turn.abortRequested && this.#queued.length > 0 && this.#client === client) {
 			const queued = this.#queued.join("\n\n");
 			this.#queued = [];
-			try {
-				this.#sendUserMessage(queued);
-				return;
-			} catch (cause) {
-				// The steered text never reached agy: the turn did not do what was asked of it.
-				sendFailure = `steer 전송 실패: ${cause instanceof Error ? cause.message : String(cause)}`;
-			}
+			this.#sendPrompt(client, turn, queued);
+			return;
 		}
 		const dropped = this.#queued.length;
-		this.#turn = undefined;
-		this.#queued = [];
-		const status: OmpFinal["status"] = turn.abortRequested
-			? "aborted"
-			: succeeded && sendFailure === undefined
-				? "completed"
-				: "error";
+		const status: OmpFinal["status"] =
+			turn.rateLimit !== undefined
+				? "error"
+				: turn.abortRequested || stopReason === "cancelled"
+					? "aborted"
+					: succeeded
+						? "completed"
+						: "error";
 		let error =
 			status === "completed"
 				? undefined
-				: (sendFailure ?? str(result.error) ?? `agy turn ended with ${String(result.status)}`);
+				: turn.rateLimit !== undefined
+					? turn.rateLimit
+					: failure !== undefined
+						? failure instanceof Error
+							? failure.message
+							: String(failure)
+						: status === "aborted"
+							? "cancelled"
+							: `agy turn ended with stopReason ${stopReason ?? "none"}`;
 		if (error !== undefined && dropped > 0) error = `${error} (steer ${dropped}건 미전달)`;
+		if (this.#context !== undefined) turn.usage.contextTokens = this.#context.used;
 		// Before the final: a prompt sent on it must already find the conversation dropped.
-		turn.usage.rotated = this.#rotateIfFull(turn.usage.contextTokens);
-		this.#settleFinal({
-			opRef: turn.opRef,
-			status,
-			text: response,
-			...(error === undefined ? {} : { error }),
-			...usageField(turn),
-		});
+		turn.usage.rotated = this.#rotateIfFull();
+		this.#finish(turn, { opRef: turn.opRef, status, text: turn.text, ...(error === undefined ? {} : { error }) });
+	}
+
+	/** Ends `turn` once (a turn a restart cut off too): clears it and the queue, sends its final, wakes an abort. */
+	#finish(turn: PendingTurn, final: Omit<OmpFinal, "usage">): void {
+		if (turn.finished) return;
+		turn.finished = true;
+		if (this.#turn === turn) {
+			this.#turn = undefined;
+			this.#queued = [];
+		}
+		for (const listener of this.#finalListeners) listener({ ...final, ...usageField(turn) });
+		turn.settled.resolve();
 	}
 
 	/**
-	 * Between turns only: a conversation at or over the rotation share drops its pointer, its id and its child, so
-	 * `#ensureChild` starts the next turn without `--conversation`.
+	 * Between turns only: a session at or over the rotation share of its window drops its pointer, its id and its
+	 * child, so `#ensureChild` starts the next turn on a new session.
 	 */
-	#rotateIfFull(contextTokens: number | undefined): boolean {
-		if (contextTokens === undefined || contextTokens < AGY_CONTEXT_WINDOW * AGY_ROTATE_RATIO) return false;
-		const conversationId = this.#conversationId;
+	#rotateIfFull(): boolean {
+		const context = this.#context;
+		if (context === undefined || context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
+		const sessionId = this.#sessionId;
 		this.#clearPointer();
-		this.#conversationId = undefined;
+		this.#sessionId = undefined;
 		this.#retireChild();
 		this.#options.log?.info("agy_conversation_rotated", {
 			origin: this.#options.originKey,
-			conversationId,
-			contextTokens,
+			conversationId: sessionId,
+			contextTokens: context.used,
+			window: context.size,
 		});
 		return true;
 	}
 
-	/** Ends the live child without a replacement; a prompt meanwhile waits for its exit, then spawns a new one. */
+	/** Ends the live child without a replacement; a prompt meanwhile waits for its exit, then starts a new one. */
 	#retireChild(): void {
 		this.#toolKeepalive.clear();
-		const child = this.#child;
-		if (!child) return;
-		this.#child = undefined;
-		const retired: Promise<void> = this.#endChild(child, ABORT_EXIT_TIMEOUT_MS).finally(() => {
+		const client = this.#client;
+		if (!client) return;
+		this.#client = undefined;
+		const retired: Promise<void> = this.#endClient(client, KILL_GRACE_MS).finally(() => {
 			if (this.#respawning === retired) this.#respawning = undefined;
 		});
 		this.#respawning = retired;
-	}
-
-	#settleFinal(final: OmpFinal): void {
-		for (const listener of this.#finalListeners) listener(final);
 	}
 
 	#emit(event: OmpEvent): void {
 		for (const listener of this.#eventListeners) listener(event);
 	}
 
-	// ---- stdin writes ----
+	// ---- session pointer ----
 
-	/** Records the user entry and writes one turn line; the first line of each child carries the system prompt. */
-	#sendUserMessage(text: string): void {
-		const child = this.#child;
-		if (!child) throw new OmpDriverError("rpc_error", "agy child is not running");
-		const system = this.#options.systemPrompt;
-		const content =
-			!this.#systemPromptSent && system !== undefined && system !== "" ? `${system}\n\n---\n\n${text}` : text;
-		try {
-			child.stdin.write(`${JSON.stringify({ event: "user", message: { role: "user", content } })}\n`);
-		} catch (cause) {
-			throw new OmpDriverError("rpc_error", "agy stdin is closed", { cause });
-		}
-		this.#systemPromptSent = true;
-		this.#entries.push({ id: `ag-${++this.#entrySeq}`, type: "message", message: { role: "user", content: text } });
-	}
-
-	// ---- conversation pointer ----
-
+	/** The pinned session id; a pointer the `-p` driver left (a conversation id) is tried the same way. */
 	#readPointer(): string | undefined {
 		try {
 			const parsed: unknown = JSON.parse(readFileSync(this.#pointerPath, "utf8"));
@@ -870,9 +864,9 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	#writePointer(conversationId: string): void {
+	#writePointer(sessionId: string): void {
 		mkdirSync(resolve(this.#options.sessionDir), { recursive: true });
-		writeFileSync(this.#pointerPath, `${JSON.stringify({ conversationId })}\n`);
+		writeFileSync(this.#pointerPath, `${JSON.stringify({ conversationId: sessionId })}\n`);
 	}
 
 	#clearPointer(): void {

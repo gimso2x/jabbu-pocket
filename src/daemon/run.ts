@@ -204,7 +204,6 @@ export async function runDaemon(
 	process.on("exit", (code) => lastWords.info("daemon_exit", { code }));
 
 	const model = splitModel(config.model);
-	// agy children take a bare agy model id (`agy/gemini-3.8-flash-high` → `gemini-3.8-flash-high`).
 	const agyModel = model.provider === undefined || model.provider === "agy" ? model.model : undefined;
 	const secretsDir = join(config.homeDir, "secrets");
 	const personaFiles = {
@@ -233,7 +232,7 @@ export async function runDaemon(
 	// What every review, QA and check receipt of this run is recorded on: omp, the kencrew source commit, OS and arch.
 	const runtime = await bootRuntime({ omp: ompVersion, sourceDir: join(import.meta.dir, "..", ".."), log });
 	log.info("runtime_booted", { omp: runtime.omp, kencrew: runtime.kencrew });
-	const daemon = new Daemon({
+	const daemonOptions: ConstructorParameters<typeof Daemon>[0] = {
 		config,
 		bootConfigText,
 		log,
@@ -272,8 +271,8 @@ export async function runDaemon(
 						sessionDir,
 						...(agyModel === undefined ? {} : { model: agyModel }),
 						...(config.thinking === undefined ? {} : { thinking: config.thinking }),
-						// No --append-system-prompt in agy: the driver prepends this to the first message of each child.
 						systemPrompt,
+						mcpServers: () => daemonOptions.config.agyMcpServers,
 						log,
 						originKey: origin,
 					})
@@ -291,9 +290,10 @@ export async function runDaemon(
 						log,
 					});
 		},
-	});
-	// The daemon stops its children and settles the ledger before it exits. SIGHUP re-reads config.json (`ompbot
-	// reload` does the same over the socket) instead of stopping the daemon.
+	};
+	const daemon = new Daemon(daemonOptions);
+	// The daemon stops its children and settles the ledger before it exits. SIGHUP re-reads config.json (`ompbot reload`
+	// too) and swaps `daemonOptions.config`, which the agy MCP getter above reads at each session start.
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 		process.removeAllListeners(signal);
 		process.on(signal, () => {

@@ -1,6 +1,6 @@
 import { OmpDriverError } from "./driver";
 
-const STRIPPED_PREFIXES = ["SLACK_", "OMPBOT_", "LD_", "DYLD_"] as const;
+export const RESERVED_ENV_PREFIXES = ["SLACK_", "OMPBOT_", "LD_", "DYLD_"] as const;
 
 /**
  * Environment for the omp child: parent env minus keys starting with `SLACK_`,
@@ -14,11 +14,11 @@ export function buildChildEnv(
 	const env: Record<string, string> = {};
 	for (const [key, value] of Object.entries(base)) {
 		if (value === undefined) continue;
-		if (STRIPPED_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+		if (RESERVED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
 		env[key] = value;
 	}
 	for (const [key, value] of Object.entries(extras)) {
-		if (STRIPPED_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+		if (RESERVED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
 			throw new OmpDriverError("invalid_env", `child env extra "${key}" uses a reserved prefix`);
 		}
 		env[key] = value;

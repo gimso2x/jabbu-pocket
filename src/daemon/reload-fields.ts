@@ -12,6 +12,8 @@ export const LIVE_FIELDS = [
 	"workerOmpArgs",
 	// Each new [TASK] and each agy resume reads it (`DispatchToolDeps.workerAgy`).
 	"workerAgy",
+	// Each new agy session and each resume passes them (`AgyOmpDriverOptions.mcpServers`); a live conversation keeps its own.
+	"agyMcpServers",
 	"herdrBoard",
 	"taskAutoLand",
 	"restartNotice",
