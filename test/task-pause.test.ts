@@ -512,7 +512,8 @@ describe("pause from the task thread and the CLI (AC-2)", () => {
 		// A running lane elsewhere is left alone.
 		const repo = makeRepo(repos);
 		await ownerMessage(`작업: side-lane @${repo}`, M0, T3);
-		await transport.waitForPosts((text: string) => text.includes("작업 레인 `side-lane`을 시작했습니다"));
+		// Its thread T3 had no lane yet: the lane borrows it.
+		await transport.waitForPosts((text: string) => text.includes("이 스레드에서 레인 `side-lane`을 시작했습니다"));
 
 		await ownerMessage("멈춰", M1, T1);
 		await transport.waitForPosts((text: string) => text.includes("멈췄습니다") && text.includes(mine.taskId));

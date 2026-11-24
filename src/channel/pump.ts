@@ -47,18 +47,19 @@ export interface DeliverySender {
 	afterUndelivered(delivery: DeliveryItem): Promise<void>;
 }
 
-/** An adapter's status finish (`finishStatus`), and whether it tracks a running status in a thread. */
+/** An adapter's status finish (`finishStatus`), and whether it tracks a running status of an origin in a thread. */
 export interface StatusFinisher {
-	finishStatus(threadRef: string, outcome: FinalOutcome, action: "delete" | "update"): Promise<void>;
+	finishStatus(threadRef: string, originKey: string, outcome: FinalOutcome, action: "delete" | "update"): Promise<void>;
 	/** Absent: every thread of the delivery is finished, tracked or not. */
-	tracks?(threadRef: string): boolean;
+	tracks?(threadRef: string, originKey: string): boolean;
 }
 
 /**
  * The status finish every adapter's `afterSent`/`afterUndelivered` runs: the answer's thread and every thread its op
  * closed (steered messages sit in their own threads) end ✅/⚠️ (`sent`) or `⚠️ 답을 보내지 못했습니다` (`undelivered`);
  * threads of rows the op discarded end 🚫 취소됨. Only the thread holding a sent answer (and its footer) drops the status
- * message; the others keep the label. An interim delivery leaves the running status alone.
+ * message; the others keep the label. An interim delivery leaves the running status alone. Only the delivery's own
+ * origin's status is finished: another origin's turn in the same thread (a borrowed lane thread) keeps its own.
  */
 export async function finishDeliveryStatus(
 	delivery: DeliveryItem,
@@ -70,10 +71,10 @@ export async function finishDeliveryStatus(
 		result === "undelivered" ? "undelivered" : delivery.body.startsWith("[turn failed]") ? "failed" : "done";
 	const cancelled = new Set(delivery.cancelThreadRefs ?? []);
 	for (const threadRef of new Set([delivery.threadRef, ...(delivery.finishThreadRefs ?? [])])) {
-		if (delivery.finishUntracked === false && finisher.tracks?.(threadRef) === false) continue;
+		if (delivery.finishUntracked === false && finisher.tracks?.(threadRef, delivery.originKey) === false) continue;
 		const final = cancelled.has(threadRef) ? "cancelled" : outcome;
 		const holdsAnswer = threadRef === delivery.threadRef && (final === "done" || final === "failed");
-		await finisher.finishStatus(threadRef, final, holdsAnswer ? "delete" : "update");
+		await finisher.finishStatus(threadRef, delivery.originKey, final, holdsAnswer ? "delete" : "update");
 	}
 }
 
@@ -108,10 +109,14 @@ export function deliverySender(options: {
  */
 export function answerFooter(
 	delivery: DeliveryItem,
-	footerOf: (threadRef: string, outcome: "done" | "failed") => string | undefined,
+	footerOf: (threadRef: string, originKey: string, outcome: "done" | "failed") => string | undefined,
 ): string | undefined {
 	if (delivery.keepStatus === true || (delivery.cancelThreadRefs ?? []).includes(delivery.threadRef)) return undefined;
-	return footerOf(delivery.threadRef, delivery.body.startsWith("[turn failed]") ? "failed" : "done");
+	return footerOf(
+		delivery.threadRef,
+		delivery.originKey,
+		delivery.body.startsWith("[turn failed]") ? "failed" : "done",
+	);
 }
 
 export interface DeliveryPumpOptions {

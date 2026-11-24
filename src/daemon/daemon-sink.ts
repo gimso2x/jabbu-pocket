@@ -13,6 +13,7 @@ import { parseReservationActionId, type ReservationAction } from "../lanes/reser
 import { isLaneOrigin, isTaskOrigin, type LaneRow, taskOriginKey } from "../lanes/status";
 import {
 	buildClosedLaneQuestion,
+	type ClosedLaneMessage,
 	classifyClosedLaneMessage,
 	DISCORD_LANE_CHANNEL_MISSING,
 	isOwnerAcceptText,
@@ -55,6 +56,16 @@ export interface CoreSinkDeps {
 }
 
 /**
+ * Whether an owner message in a closed lane's borrowed thread (classified as `closedAs`) is the lane's own: `!reopen`,
+ * and while its landing waits `머지해`/`폐기해`/`!pr`. Everything else there belongs to the conversation again.
+ */
+function borrowedLaneCommand(lane: LaneRow, closedAs: ClosedLaneMessage): boolean {
+	if (closedAs === "reopen") return true;
+	const waiting = lane.meta.land?.state === "pending" || lane.meta.land?.state === "blocked";
+	return waiting && (closedAs === "land" || closedAs === "discard" || closedAs === "pr");
+}
+
+/**
  * The inbound side of the daemon: the core sink every chat adapter feeds, and the lane and [TASK] commands, controls
  * and buttons the core settles itself instead of sending them to an omp session.
  */
@@ -78,15 +89,24 @@ export class DaemonInbound {
 		const core: CoreSink = {
 			onInbound: (message) => {
 				// A message in a work lane's thread belongs to that lane's origin, not to the DM conversation.
-				const lane = store.getLaneByThread(message.threadRef);
-				const originKey = lane?.originKey ?? message.originKey;
-				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
+				const threadLane = store.getLaneByThread(message.threadRef);
 				// A closed lane stays closed for anything but `!reopen`: a question (or a `!followup` payload) reaches its
 				// session behind the answer-only notice; control commands stay as typed — the mailbox reads the recorded text.
 				// `머지해`/`폐기해` (the whole message, while the landing waits) are the card's buttons in words.
 				const closedAs =
-					lane?.status === "closed" ? classifyClosedLaneMessage(message.text, lane.meta.land?.state) : undefined;
-				const question = closedAs === "question";
+					threadLane?.status === "closed"
+						? classifyClosedLaneMessage(message.text, threadLane.meta.land?.state)
+						: undefined;
+				// A borrowed thread is the conversation's again once its lane closed: only the lane's own commands reach it.
+				const lane =
+					threadLane?.meta.borrowedThread === true &&
+					closedAs !== undefined &&
+					!borrowedLaneCommand(threadLane, closedAs)
+						? undefined
+						: threadLane;
+				const originKey = lane?.originKey ?? message.originKey;
+				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
+				const question = lane !== undefined && closedAs === "question";
 				const { inserted, row } = store.recordInbound({
 					originKey,
 					platformMessageId: message.platformMessageId,
@@ -188,10 +208,12 @@ export class DaemonInbound {
 				return {};
 			},
 			onPeerInbound: (message, hop) => {
-				// Never the owner paths: no lane routing, no `!reopen`, no lane trigger, no command. A work lane's thread
-				// belongs to the owner and its worker; a peer there is dropped before any row exists.
+				// Never the owner paths: no lane routing, no `!reopen`, no lane trigger, no command. A work lane's own thread
+				// belongs to the owner and its worker; a peer there is dropped before any row exists. A borrowed thread is
+				// still the conversation's: a peer there reaches the conversation, open lane or closed.
 				if (store.getInbound(message.platformMessageId) !== undefined) return { duplicate: true };
-				if (store.getLaneByThread(message.threadRef) !== undefined) return { dropped: "peer_in_lane_thread" };
+				const lane = store.getLaneByThread(message.threadRef);
+				if (lane !== undefined && lane.meta.borrowedThread !== true) return { dropped: "peer_in_lane_thread" };
 				const resetAt = store.getCursor(`${PEER_HOP_RESET_CURSOR}${message.threadRef}`);
 				const since = Math.max(ctx.clock.now() - hop.windowMs, resetAt === undefined ? 0 : Number(resetAt) + 1);
 				if (store.countPeerInboundSince(message.threadRef, since) >= hop.turns) {
@@ -244,6 +266,7 @@ export class DaemonInbound {
 			knowsThread: (threadRef) => store.getLaneByThread(threadRef) !== undefined || store.hasInboundThread(threadRef),
 			hasInbound: (platformMessageId) => store.getInbound(platformMessageId) !== undefined,
 			inboundText: (platformMessageId) => store.getInbound(platformMessageId)?.textRef,
+			inboundOrigin: (platformMessageId) => store.getInbound(platformMessageId)?.originKey,
 			isDraining: () => ctx.router?.draining === true,
 			// The thread of an approval card is `<card channel>:<card ts>` — the ledger's approval id.
 			onCardReply: ({ threadRef, platformMessageId, text, injected }) => {
@@ -281,13 +304,23 @@ export class DaemonInbound {
 				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
+				// The thread the trigger was written in (a channel root's is the reply thread the adapter opened).
+				const threadId = parseChatOrigin(row.originKey)?.threadId;
 				const lane = await this.#lanes.start({
 					...trigger,
 					...(called === undefined ? {} : { brief: called.brief, workflow: called.choice }),
 					channel,
 					parentOrigin: row.originKey,
 					reuseOpen: true,
+					...(threadId === undefined ? {} : { borrowThread: { threadId } }),
 				});
+				if (lane.meta.borrowedThread === true) {
+					const said =
+						lane.reused === true
+							? `↪ 이 스레드의 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다`
+							: `🔄 이 스레드에서 레인 \`${lane.name}\`을 시작했습니다`;
+					return lane.startNote === undefined ? said : `${said}\n${lane.startNote}`;
+				}
 				const link = await this.#lanes.threadLink(lane);
 				if (lane.reused === true) {
 					return `↪ 같은 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다${link === undefined ? "" : `: ${link}`}`;

@@ -13,10 +13,10 @@ export function closedTexts(lane: LaneRow): { root: string; status: string } {
 	return { root: `${mark} ${title}`, status: `${mark} ${title}${waiting === "" ? "" : ` · ${waiting}`}` };
 }
 
-/** Whether the chat shows `lane` (closed) as it is now: root and status both drawn. */
+/** Whether the chat shows `lane` (closed) as it is now: root and status both drawn (a borrowed thread: the status). */
 export function closedDrawn(lane: LaneRow): boolean {
 	const { root, status } = closedTexts(lane);
-	return lane.meta.renderedRoot === root && lane.meta.renderedStatus === status;
+	return (lane.meta.borrowedThread === true || lane.meta.renderedRoot === root) && lane.meta.renderedStatus === status;
 }
 
 /**
@@ -82,7 +82,8 @@ export async function syncLane(
 	const patch: Partial<LaneMeta> = {};
 	try {
 		const port = channels.portFor(channel);
-		if (lane.meta.renderedRoot !== rootText) {
+		// A borrowed thread's first message is the owner's: there is no root to draw, only the status.
+		if (lane.meta.borrowedThread !== true && lane.meta.renderedRoot !== rootText) {
 			await port.edit({ platform: port.platform, conversationId: channel, messageId: rootTs }, { text: rootText });
 			patch.renderedRoot = rootText;
 		}

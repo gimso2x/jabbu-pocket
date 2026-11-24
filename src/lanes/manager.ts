@@ -3,7 +3,8 @@ import { isAbsolute, join } from "node:path";
 import type { ActionButton, MessageRef } from "../channel/port";
 import { escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
-import { parseThreadRef, platformOfThreadRef } from "../core/normalize";
+import { parseThreadRef, platformOfThreadRef, threadRefOf } from "../core/normalize";
+import { parseChatOrigin } from "../core/origin-key";
 import { pidAlive } from "../daemon/lock";
 import { LANE_MODEL_TIERS, type LaneModelTier } from "../model-tiers";
 import type { OmpSessionDriver, TodoPhase } from "../omp/driver";
@@ -169,6 +170,8 @@ export class LaneManager {
 	readonly #startingReservations = new Set<number>();
 	/** Keys (parentOrigin, title, cwd) of the starts in flight: a second start of the same key is refused. */
 	readonly #startingKeys = new Set<string>();
+	/** Conversation threads (`<channel>:<threadId>`) a start in flight is borrowing: a second start opens a sibling. */
+	readonly #borrowingThreads = new Set<string>();
 	readonly #settling = new Set<string>();
 	/** Lanes that claimed again while their verdict ran: judged again as soon as it ends. */
 	readonly #resettle = new Set<string>();
@@ -373,6 +376,11 @@ export class LaneManager {
 		force?: boolean;
 		/** An open lane of the same conversation, title and path is returned (`reused`) instead of starting another. */
 		reuseOpen?: boolean;
+		/**
+		 * The conversation thread (`parentOrigin`'s own) the lane may borrow instead of opening a sibling: taken when no
+		 * lane row ever used it and no other start is borrowing it; otherwise the lane opens its own thread as before.
+		 */
+		borrowThread?: { threadId: string };
 	}): Promise<LaneRow & { startNote?: string; reused?: boolean }> {
 		const { store, channels, clock, log } = this.#deps;
 		const frozen = this.#deps.frozen?.();
@@ -437,6 +445,9 @@ export class LaneManager {
 		const startKey = `${input.parentOrigin ?? crypto.randomUUID()}\0${title}\0${cwd}`;
 		if (this.#startingKeys.has(startKey)) throw new LaneInputError("같은 레인을 시작하는 중입니다");
 		this.#startingKeys.add(startKey);
+		// Decided before the first await like the key above: of two starts borrowing one thread, the second opens a sibling.
+		const borrowed = this.#borrowableThread(input);
+		if (borrowed !== undefined) this.#borrowingThreads.add(borrowed.threadRef);
 		try {
 			const found = await resolveLaneRepo(cwd);
 			if (!found.ok) throw new LaneInputError(found.problem);
@@ -469,6 +480,8 @@ export class LaneManager {
 			// Set once the root is up: a later failure turns it into ❌ so no 🔄 root is left behind.
 			let rootRef: MessageRef | undefined;
 			let threadOpened = false;
+			// A borrowed thread's failed start turns its status into ❌ instead (no root of its own).
+			let statusRef: MessageRef | undefined;
 			let lane: LaneRow | undefined;
 			let externalPr: LaneExternalPr | undefined;
 			try {
@@ -490,12 +503,18 @@ export class LaneManager {
 				// An untracked sub directory of the repository is not in the worktree; an empty one changes no git status.
 				mkdirSync(laneCwd, { recursive: true });
 				const port = channels.portFor(input.channel);
-				const root = await port.post({ conversationId: input.channel }, { text: `🔄 ${shown}` });
-				rootRef = { platform: port.platform, conversationId: input.channel, messageId: root.messageId };
-				// Discord: the lane thread is started from the root (its id is the root's), so the status goes inside it.
-				if (port.openThread !== undefined) {
-					await port.openThread(rootRef, title);
-					threadOpened = true;
+				// A borrowed thread is the conversation itself: no root, no new thread; its first message is the owner's.
+				let threadId: string;
+				if (borrowed !== undefined) threadId = borrowed.threadId;
+				else {
+					const root = await port.post({ conversationId: input.channel }, { text: `🔄 ${shown}` });
+					rootRef = { platform: port.platform, conversationId: input.channel, messageId: root.messageId };
+					// Discord: the lane thread is started from the root (its id is the root's), so the status goes inside it.
+					if (port.openThread !== undefined) {
+						await port.openThread(rootRef, title);
+						threadOpened = true;
+					}
+					threadId = root.messageId;
 				}
 				// No await between picking the name and reserving it (like the lane id above).
 				const name = this.#uniqueName(slugify(title));
@@ -503,15 +522,16 @@ export class LaneManager {
 				reservedName = name;
 				// The status message carries the ⏸ button from the very first draw; `#sync` keeps it on every edit.
 				const status = await port.post(
-					{ conversationId: input.channel, threadId: root.messageId },
+					{ conversationId: input.channel, threadId },
 					{ text: `⏳ ${shown} · ${formatElapsed(0)}`, buttons: [pauseButton(name)] },
 				);
+				statusRef = { platform: port.platform, conversationId: input.channel, messageId: status.messageId, threadId };
 				const originKey = laneOriginKey(name);
 				const now = clock.now();
 				lane = store.insertLane({
 					name,
 					title,
-					threadRef: `${input.channel}:${root.messageId}`,
+					threadRef: threadRefOf(input.channel, threadId),
 					originKey,
 					cwd: laneCwd,
 					sessionDir: this.#deps.sessionDirFor(originKey),
@@ -519,7 +539,7 @@ export class LaneManager {
 						statusTs: status.messageId,
 						startedAt: now,
 						lastProgressAt: now,
-						renderedRoot: `🔄 ${shown}`,
+						...(borrowed === undefined ? { renderedRoot: `🔄 ${shown}` } : { borrowedThread: true }),
 						renderedStatus: `⏳ ${shown} · ${formatElapsed(0)}`,
 						steerSeq: 0,
 						baseSha,
@@ -579,6 +599,8 @@ export class LaneManager {
 					await this.failLaunch(lane.originKey, oneLine(String(error)).slice(0, 200)).catch(() => undefined);
 					throw error;
 				}
+				// The borrowed thread is the conversation: its status (when it was posted) says ❌, nothing is archived.
+				if (borrowed !== undefined && statusRef !== undefined) await this.#failBorrowedStatus(statusRef, shown);
 				// The root stays in the channel and says the lane never started.
 				if (rootRef !== undefined) {
 					await channels
@@ -611,6 +633,43 @@ export class LaneManager {
 			return notes.length === 0 ? lane : { ...lane, startNote: notes.join("\n") };
 		} finally {
 			this.#startingKeys.delete(startKey);
+			if (borrowed !== undefined) this.#borrowingThreads.delete(borrowed.threadRef);
+		}
+	}
+
+	/**
+	 * The thread `start` may borrow (`borrowThread`): the starting conversation's own thread in `input.channel`, never
+	 * used by any lane row (the thread ref is unique) and not being borrowed by another start in flight. Synchronous.
+	 */
+	#borrowableThread(input: {
+		channel: string;
+		parentOrigin?: string;
+		borrowThread?: { threadId: string };
+	}): { threadId: string; threadRef: string } | undefined {
+		const threadId = input.borrowThread?.threadId;
+		if (threadId === undefined || input.parentOrigin === undefined) return undefined;
+		const origin = parseChatOrigin(input.parentOrigin);
+		if (origin?.kind !== "ch" || origin.conversationId !== input.channel || origin.threadId !== threadId)
+			return undefined;
+		const threadRef = threadRefOf(input.channel, threadId);
+		if (this.#borrowingThreads.has(threadRef) || this.#deps.store.getLaneByThread(threadRef) !== undefined)
+			return undefined;
+		return { threadId, threadRef };
+	}
+
+	/** A borrowed start failed after its status was posted: the status becomes ❌ (no button); a new ❌ only if that fails. */
+	async #failBorrowedStatus(statusRef: MessageRef, shown: string): Promise<void> {
+		const { channels, log } = this.#deps;
+		const port = channels.portFor(statusRef.conversationId);
+		try {
+			await port.edit(statusRef, { text: `❌ ${shown}`, buttons: [] });
+		} catch (editError) {
+			log.warn("lane_status_edit_failed", { channel: statusRef.conversationId, error: String(editError) });
+			await port
+				.post({ conversationId: statusRef.conversationId, threadId: statusRef.threadId }, { text: `❌ ${shown}` })
+				.catch((postError: unknown) =>
+					log.warn("lane_thread_post_failed", { channel: statusRef.conversationId, error: String(postError) }),
+				);
 		}
 	}
 
@@ -1130,8 +1189,9 @@ export class LaneManager {
 		);
 		const synced = await this.#sync(closed, "transition");
 		// Archive only a thread whose ❌ root and status were drawn: a failed edit would be retried inside an archived thread.
+		// A borrowed thread is the conversation the lane started from: it stays open.
 		const parsed = parseThreadRef(synced.threadRef);
-		if (parsed !== undefined && closedDrawn(synced)) {
+		if (parsed !== undefined && synced.meta.borrowedThread !== true && closedDrawn(synced)) {
 			const platform = this.#deps.channels.portFor(parsed.channel).platform;
 			await this.#archiveThreadOf({ platform, conversationId: parsed.channel, messageId: parsed.threadTs }, lane.name);
 		}
@@ -2806,7 +2866,8 @@ export class LaneManager {
 	 * (a reservation never freezes an override: ▶ is judged by the host at click time).
 	 */
 	async reserve(input: {
-		args: Omit<Parameters<LaneManager["start"]>[0], "force">;
+		/** No `borrowThread`: a reserved lane starts after the conversation moved on, always in a thread of its own. */
+		args: Omit<Parameters<LaneManager["start"]>[0], "force" | "borrowThread">;
 		after: unknown;
 		originKey: string;
 		threadRef: string | undefined;

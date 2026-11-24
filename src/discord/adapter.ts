@@ -752,8 +752,8 @@ export class DiscordAdapter implements ChannelAdapter {
 			inbound = { ...final.inbound, originKey: inbound.originKey };
 		}
 		const recorded = injected ? { ...inbound, injected } : inbound;
-		return recordInbound(this.#core, this.#log, recorded, (thread, showStatus) =>
-			this.#beginStatus(recorded.threadRef, thread.channel, thread.threadTs, spot, recorded.originKey, {
+		return recordInbound(this.#core, this.#log, recorded, (thread, showStatus, originKey) =>
+			this.#beginStatus(recorded.threadRef, thread.channel, thread.threadTs, spot, originKey, {
 				showStatus,
 				typing: showStatus,
 			}),
@@ -797,8 +797,8 @@ export class DiscordAdapter implements ChannelAdapter {
 			platformMessageId: `${gate.inbound.platformMessageId}#edit:${editedAt}`,
 			text: `${EDIT_MARKER}\n${gate.inbound.text}`,
 		};
-		return recordInbound(this.#core, this.#log, recorded, (thread, showStatus) =>
-			this.#beginStatus(recorded.threadRef, thread.channel, thread.threadTs, spot, recorded.originKey, {
+		return recordInbound(this.#core, this.#log, recorded, (thread, showStatus, originKey) =>
+			this.#beginStatus(recorded.threadRef, thread.channel, thread.threadTs, spot, originKey, {
 				showStatus,
 				typing: showStatus,
 			}),
@@ -1023,7 +1023,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		options: { showStatus: boolean; typing?: boolean },
 	): Promise<void> {
 		const typing = options.typing === true ? this.#startTyping(threadRef, conversationId, root) : undefined;
-		const setup = this.#status.begin(threadRef, {
+		const setup = this.#status.begin(threadRef, originKey, {
 			channel: conversationId,
 			root,
 			reaction: spot,
@@ -1127,12 +1127,12 @@ export class DiscordAdapter implements ChannelAdapter {
 		await this.#status.tick();
 	}
 
-	async setStalled(threadRef: string, stalled: boolean): Promise<void> {
-		await this.#status.setStalled(threadRef, stalled);
+	async setStalled(threadRef: string, originKey: string, stalled: boolean): Promise<void> {
+		await this.#status.setStalled(threadRef, originKey, stalled);
 	}
 
-	async setProgress(threadRef: string, progress: TurnProgress): Promise<void> {
-		await this.#status.setProgress(threadRef, progress);
+	async setProgress(threadRef: string, originKey: string, progress: TurnProgress): Promise<void> {
+		await this.#status.setProgress(threadRef, originKey, progress);
 	}
 
 	/** `true`: rate limited, the tracker retries on a later tick. A refusal is one warn line and `false`. */
@@ -1168,11 +1168,17 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	/**
 	 * Marks the turn finished: the status message is deleted (`delete`: the answer carries the footer) or becomes
-	 * ✅/⚠️ (`update`), 👀 is removed and the result mark added. Retried by tick() under a rate limit.
+	 * ✅/⚠️ (`update`), 👀 is removed and the result mark added. Retried by tick() under a rate limit. Only `originKey`'s
+	 * turn in the thread ends; the typing indicator is the thread's and stops with it.
 	 */
-	async finishStatus(threadRef: string, outcome: FinalOutcome, action: "delete" | "update" = "update"): Promise<void> {
+	async finishStatus(
+		threadRef: string,
+		originKey: string,
+		outcome: FinalOutcome,
+		action: "delete" | "update" = "update",
+	): Promise<void> {
 		this.#stopTyping(threadRef, true);
-		await this.#status.finish(threadRef, outcome, action);
+		await this.#status.finish(threadRef, originKey, outcome, action);
 	}
 
 	/** True when the step must be retried later (rate limited); other errors (unknown reaction) are final. */
@@ -1196,7 +1202,9 @@ export class DiscordAdapter implements ChannelAdapter {
 			return { kind: "failed", error: `invalid thread_ref ${delivery.threadRef}`, outcome: "definitive", sentParts: 0 };
 		}
 		const topLevel = target.threadTs === TOP_LEVEL_TS;
-		const footer = answerFooter(delivery, (threadRef, outcome) => this.#status.footer(threadRef, outcome));
+		const footer = answerFooter(delivery, (threadRef, originKey, outcome) =>
+			this.#status.footer(threadRef, originKey, outcome),
+		);
 		let sent = delivery.sentParts ?? 0;
 		// A top-level answer is one message: parts 2+ reply to part 1 instead of standing alone.
 		let replyTo = topLevel && sent > 0 ? (delivery.replyTs ?? undefined) : undefined;
@@ -1270,8 +1278,8 @@ export class DiscordAdapter implements ChannelAdapter {
 	/** After the confirm or once the answer is given up: the shared status finish over this adapter's statuses. */
 	#finishDelivered(delivery: DeliveryItem, result: "sent" | "undelivered"): Promise<void> {
 		return finishDeliveryStatus(delivery, result, {
-			finishStatus: (threadRef, outcome, action) => this.finishStatus(threadRef, outcome, action),
-			tracks: (threadRef) => this.#status.tracks(threadRef),
+			finishStatus: (threadRef, originKey, outcome, action) => this.finishStatus(threadRef, originKey, outcome, action),
+			tracks: (threadRef, originKey) => this.#status.tracks(threadRef, originKey),
 		});
 	}
 }

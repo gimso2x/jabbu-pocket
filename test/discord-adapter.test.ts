@@ -215,8 +215,8 @@ describe("message edits carry no mentions", () => {
 		const dm = message("todo @everyone", { channel_id: DM, guild_id: undefined });
 		await transport.emitMessage(dm);
 		const threadRef = `${DM}:${dm.id}`;
-		await made.setStalled(threadRef, true);
-		await made.finishStatus(threadRef, "done", "update");
+		await made.setStalled(threadRef, `discord/dm/${DM}`, true);
+		await made.finishStatus(threadRef, `discord/dm/${DM}`, "done", "update");
 		const edits = calls("editMessage");
 		expect(edits).toHaveLength(2);
 		for (const edit of edits) expect(edit.allowedMentions).toEqual({ parse: [] });
@@ -733,7 +733,7 @@ describe("typing indicator", () => {
 		now += 8_000;
 		await timers.fire();
 		expect(transport.typing).toEqual([DM, DM, DM]);
-		await made.finishStatus(`${DM}:${dm.id}`, "done", "update");
+		await made.finishStatus(`${DM}:${dm.id}`, `discord/dm/${DM}`, "done", "update");
 		expect(timers.handles.size).toBe(0);
 		await timers.fire();
 		expect(transport.typing).toHaveLength(3);
@@ -917,7 +917,7 @@ describe("typing indicator", () => {
 		made.resumeTyping(ref);
 		expect(timers.handles.size).toBe(0);
 		draining = false;
-		await made.finishStatus(ref, "done", "update");
+		await made.finishStatus(ref, `discord/dm/${DM}`, "done", "update");
 		made.resumeTyping(ref);
 		made.resumeTyping(`${DM}:unknown`);
 		await timers.fire();
@@ -1206,18 +1206,23 @@ describe("a new turn in a thread whose previous turn is still finishing", () => 
 	const noTyping = { set: () => undefined, clear: () => {} };
 	const deleted = () => calls("deleteMessage").map((c) => c.messageId);
 
-	async function threadAdapter(): Promise<{ made: DiscordAdapter; root: DiscordMessageEvent; ref: string }> {
+	async function threadAdapter(): Promise<{
+		made: DiscordAdapter;
+		root: DiscordMessageEvent;
+		ref: string;
+		origin: string;
+	}> {
 		now = 1_800_000_000_000;
 		const made = await adapter({ clock: { now: () => now }, typingTimers: noTyping });
 		const root = message(`<@${BOT}> 시작`);
 		await transport.emitMessage(root);
-		return { made, root, ref: `${CH}:${root.id}` };
+		return { made, root, ref: `${CH}:${root.id}`, origin: `discord/ch/${CH}/t/${root.id}` };
 	}
 
 	const statusIds = () => calls("createMessage").flatMap((c) => (c.content?.startsWith("⏳") ? [c.id] : []));
 
 	test("IMP-28: the old finish completing after the new message arrived leaves the new turn's status tracked", async () => {
-		const { made, root, ref } = await threadAdapter();
+		const { made, root, ref, origin } = await threadAdapter();
 		const reached = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const deleteMessage = transport.deleteMessage.bind(transport);
@@ -1226,29 +1231,29 @@ describe("a new turn in a thread whose previous turn is still finishing", () => 
 			await release.promise;
 			return deleteMessage(args);
 		};
-		const finishing = made.finishStatus(ref, "done", "delete");
+		const finishing = made.finishStatus(ref, origin, "done", "delete");
 		await reached.promise;
 		const reply = message(`<@${BOT}> 하나 더`, { channel_id: root.id });
 		await transport.emitMessage(reply);
 		release.resolve();
 		await finishing;
-		await made.finishStatus(ref, "done", "delete");
+		await made.finishStatus(ref, origin, "done", "delete");
 		expect(deleted()).toEqual(statusIds());
 		expect(statusIds()).toHaveLength(2);
 		expect(calls("removeReaction").map((c) => c.messageId)).toEqual([root.id, reply.id]);
 	});
 
 	test("IMP-105: the old turn's rate-limited ⏳ delete is retried after a new turn took the thread", async () => {
-		const { made, root, ref } = await threadAdapter();
+		const { made, root, ref, origin } = await threadAdapter();
 		transport.failNext.deleteMessage = [new DiscordRateLimitedError(5_000)];
-		await made.finishStatus(ref, "done", "delete");
+		await made.finishStatus(ref, origin, "done", "delete");
 		await transport.emitMessage(message(`<@${BOT}> 하나 더`, { channel_id: root.id }));
 		const [oldStatus = "", newStatus = ""] = statusIds();
 		now += 5_000;
 		await made.tick();
 		expect(deleted()).toEqual([oldStatus, oldStatus]);
 		// The new turn is still the thread's running status.
-		await made.finishStatus(ref, "done", "delete");
+		await made.finishStatus(ref, origin, "done", "delete");
 		expect(deleted()).toEqual([oldStatus, oldStatus, newStatus]);
 		await made.tick();
 		expect(deleted()).toHaveLength(3);
@@ -1404,5 +1409,51 @@ describe("owner edits", () => {
 		expect(cardReplies).toHaveLength(repliesBefore);
 		expect(calls("startThread")).toHaveLength(1);
 		expect(failures).toBe(0);
+	});
+});
+
+describe("a borrowed lane thread: the conversation's and the lane's turn side by side", () => {
+	test("6a: one origin's delivered answer finishes only its own 👀 and ⏳; the other's status runs on", async () => {
+		const root = message(`<@${BOT}> 시작`);
+		const thread = `${CH}:${root.id}`;
+		const conversation = `discord/ch/${CH}/t/${root.id}`;
+		const lane = "jabbu/work/borrowed";
+		const reply = message("레인에게", { channel_id: root.id });
+		let due: Array<{ deliveryId: number; originKey: string; threadRef: string; body: string; redelivered: boolean }> =
+			[];
+		const made = await adapter({
+			// The core records the reply under the lane's origin (it is in the lane's thread).
+			core: { ...core(), inboundOrigin: (id) => (id === `${CH}:${reply.id}` ? lane : undefined) },
+			deliveries: {
+				...noDeliveries,
+				claimDue: () => {
+					const out = due;
+					due = [];
+					return out;
+				},
+			},
+		});
+		await transport.emitMessage(root);
+		await transport.emitMessage(reply);
+		const statuses = calls("createMessage").filter((c) => c.content?.startsWith("⏳"));
+		expect(statuses).toHaveLength(2);
+		const [conversationStatus = "", laneStatus = ""] = statuses.map((c) => c.id);
+
+		// The conversation's answer: its ⏳ goes, 👀 leaves the root only.
+		due = [{ deliveryId: 1, originKey: conversation, threadRef: thread, body: "대화 답", redelivered: false }];
+		await made.pumpDeliveries();
+		expect(calls("deleteMessage").map((c) => c.messageId)).toEqual([conversationStatus]);
+		expect(calls("removeReaction").map((c) => c.messageId)).toEqual([root.id]);
+
+		// The lane's turn still shows its stall in its own ⏳; the finished conversation has none to show.
+		await made.setStalled(thread, lane, true);
+		expect(calls("editMessage").map((c) => c.messageId)).toEqual([laneStatus]);
+		await made.setStalled(thread, conversation, true);
+		expect(calls("editMessage")).toHaveLength(1);
+
+		due = [{ deliveryId: 2, originKey: lane, threadRef: thread, body: "레인 답", redelivered: false }];
+		await made.pumpDeliveries();
+		expect(calls("deleteMessage").map((c) => c.messageId)).toEqual([conversationStatus, laneStatus]);
+		expect(calls("removeReaction").map((c) => c.messageId)).toEqual([root.id, reply.id]);
 	});
 });

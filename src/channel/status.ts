@@ -138,13 +138,20 @@ export async function swapStatusReaction(step: StatusStep, method?: string): Pro
 	}
 }
 
+/**
+ * A tracked status is one origin's turn in one thread. A thread mostly serves one origin; a borrowed lane thread serves
+ * its conversation and its lane at once, and one turn's end must not finish the other's 👀 and status.
+ */
+const statusKey = (threadRef: string, originKey: string): string => `${threadRef}\n${originKey}`;
+
 export class StatusTracker {
 	readonly #platform: StatusPlatform;
 	readonly #clock: AdapterClock;
 	readonly #intervalMs: number;
+	/** By `statusKey(threadRef, originKey)`. */
 	readonly #statuses = new Map<string, StatusEntry>();
-	/** Entries a newer turn in the same thread displaced while their rate-limited cleanup was still pending. */
-	readonly #retiring: Array<{ threadRef: string; entry: StatusEntry }> = [];
+	/** Entries a newer turn of the same thread and origin displaced while their rate-limited cleanup was still pending. */
+	readonly #retiring: Array<{ key: string; entry: StatusEntry }> = [];
 
 	constructor(options: { platform: StatusPlatform; clock: AdapterClock; intervalMs: number }) {
 		this.#platform = options.platform;
@@ -159,15 +166,17 @@ export class StatusTracker {
 	 */
 	begin(
 		threadRef: string,
+		originKey: string,
 		input: { channel: string; root: string; reaction: StatusTarget; showStatus: boolean; setup: Promise<void> },
 	): Promise<void> {
-		const existing = this.#statuses.get(threadRef);
+		const key = statusKey(threadRef, originKey);
+		const existing = this.#statuses.get(key);
 		if (existing !== undefined && existing.final === undefined) {
 			existing.reactions.set(input.reaction.messageId, input.reaction.channelId);
 			existing.setup = Promise.all([existing.setup, input.setup]).then(() => undefined);
 			return existing.setup;
 		}
-		if (existing !== undefined) this.#retiring.push({ threadRef, entry: existing });
+		if (existing !== undefined) this.#retiring.push({ key, entry: existing });
 		const now = this.#clock.now();
 		const entry: StatusEntry = {
 			channel: input.channel,
@@ -186,7 +195,7 @@ export class StatusTracker {
 			statusDone: false,
 			reactionsDone: false,
 		};
-		this.#statuses.set(threadRef, entry);
+		this.#statuses.set(key, entry);
 		const created = input.showStatus
 			? this.#platform.create(entry, `⏳ 작업 중 · ${formatElapsed(0)}`)
 			: Promise.resolve();
@@ -196,16 +205,16 @@ export class StatusTracker {
 
 	/** Called by the daemon on a timer. Updates each running status at most once per interval; finishes pending finals. */
 	async tick(): Promise<void> {
-		for (const [threadRef, entry] of [...this.#statuses]) {
-			if (entry.final !== undefined) await this.#flushFinal(threadRef, entry);
+		for (const [key, entry] of [...this.#statuses]) {
+			if (entry.final !== undefined) await this.#flushFinal(key, entry);
 			else if (this.#clock.now() - entry.lastUpdateAt >= this.#intervalMs) await this.#updateRunning(entry);
 		}
-		for (const { threadRef, entry } of [...this.#retiring]) await this.#flushFinal(threadRef, entry);
+		for (const { key, entry } of [...this.#retiring]) await this.#flushFinal(key, entry);
 	}
 
 	/** The daemon reports a silent (or resumed) turn: the running status text switches at once, outside the cadence. */
-	async setStalled(threadRef: string, stalled: boolean): Promise<void> {
-		const entry = this.#statuses.get(threadRef);
+	async setStalled(threadRef: string, originKey: string, stalled: boolean): Promise<void> {
+		const entry = this.#statuses.get(statusKey(threadRef, originKey));
 		if (entry === undefined || entry.final !== undefined) return;
 		entry.stalled = stalled;
 		await entry.setup;
@@ -216,8 +225,8 @@ export class StatusTracker {
 	 * The daemon reports the turn's progress (tool calls, to-do list, steers, retries). It is stored at once (the next
 	 * cadence update shows it); an extra update is coaxed out only when the cadence already allows one.
 	 */
-	async setProgress(threadRef: string, progress: TurnProgress): Promise<void> {
-		const entry = this.#statuses.get(threadRef);
+	async setProgress(threadRef: string, originKey: string, progress: TurnProgress): Promise<void> {
+		const entry = this.#statuses.get(statusKey(threadRef, originKey));
 		if (entry === undefined || entry.final !== undefined) return;
 		entry.progress = progress;
 		await entry.setup;
@@ -230,8 +239,14 @@ export class StatusTracker {
 	 * Marks the turn finished: the status message is deleted (`delete`: the answer carries the footer) or becomes
 	 * ✅/⚠️ (`update`), 👀 is removed, the result mark added. Retried by tick() under a rate limit.
 	 */
-	async finish(threadRef: string, outcome: FinalOutcome, action: "delete" | "update" = "update"): Promise<void> {
-		let entry = this.#statuses.get(threadRef);
+	async finish(
+		threadRef: string,
+		originKey: string,
+		outcome: FinalOutcome,
+		action: "delete" | "update" = "update",
+	): Promise<void> {
+		const key = statusKey(threadRef, originKey);
+		let entry = this.#statuses.get(key);
 		if (entry === undefined) {
 			const parsed = parseThreadRef(threadRef);
 			if (parsed === undefined) return;
@@ -254,24 +269,24 @@ export class StatusTracker {
 				statusDone: false,
 				reactionsDone: false,
 			};
-			this.#statuses.set(threadRef, entry);
+			this.#statuses.set(key, entry);
 		}
 		entry.final = outcome;
 		entry.finalAction = action;
-		await this.#flushFinal(threadRef, entry);
+		await this.#flushFinal(key, entry);
 	}
 
 	/** `✅ 00:42 · 도구 6회` for a thread whose running status this answer replaces; none without a running status
 	 * (monitor, post-restart) or for a command thread, which never showed a `⏳` message. */
-	footer(threadRef: string, outcome: "done" | "failed"): string | undefined {
-		const entry = this.#statuses.get(threadRef);
+	footer(threadRef: string, originKey: string, outcome: "done" | "failed"): string | undefined {
+		const entry = this.#statuses.get(statusKey(threadRef, originKey));
 		if (entry === undefined || entry.final !== undefined || !entry.showStatus) return undefined;
 		return formatFooter(outcome, this.#clock.now() - entry.startedAt, entry.progress?.tools ?? 0);
 	}
 
-	/** Whether a running (or finishing) status is tracked for the thread (`finishDeliveryStatus`'s `tracks`). */
-	tracks(threadRef: string): boolean {
-		return this.#statuses.has(threadRef);
+	/** Whether a running (or finishing) status of `originKey` is tracked in the thread (`finishDeliveryStatus`'s `tracks`). */
+	tracks(threadRef: string, originKey: string): boolean {
+		return this.#statuses.has(statusKey(threadRef, originKey));
 	}
 
 	async #updateRunning(entry: StatusEntry): Promise<void> {
@@ -280,7 +295,7 @@ export class StatusTracker {
 		if (!(await this.#platform.edit(entry, text, false))) entry.lastUpdateAt = this.#clock.now();
 	}
 
-	async #flushFinal(threadRef: string, entry: StatusEntry): Promise<void> {
+	async #flushFinal(key: string, entry: StatusEntry): Promise<void> {
 		const outcome = entry.final;
 		if (outcome === undefined) return;
 		await entry.setup;
@@ -310,7 +325,7 @@ export class StatusTracker {
 		}
 		if (entry.statusDone && entry.reactionsDone) {
 			// A newer turn may already own the key; only our own entry leaves.
-			if (this.#statuses.get(threadRef) === entry) this.#statuses.delete(threadRef);
+			if (this.#statuses.get(key) === entry) this.#statuses.delete(key);
 			const retiring = this.#retiring.findIndex((r) => r.entry === entry);
 			if (retiring >= 0) this.#retiring.splice(retiring, 1);
 		}

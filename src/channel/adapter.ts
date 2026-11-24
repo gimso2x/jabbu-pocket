@@ -43,8 +43,10 @@ export interface ChannelAdapter {
 	pumpDeliveries(): Promise<number>;
 	/** Status message upkeep (running updates, pending finals). */
 	tick(): Promise<void>;
-	setStalled(threadRef: string, stalled: boolean): Promise<void>;
-	setProgress(threadRef: string, progress: TurnProgress): Promise<void>;
+	/** The running turn of `originKey` in the thread went silent (or resumed). */
+	setStalled(threadRef: string, originKey: string, stalled: boolean): Promise<void>;
+	/** The running turn of `originKey` in the thread made progress. */
+	setProgress(threadRef: string, originKey: string, progress: TurnProgress): Promise<void>;
 	/** Best-effort notice (root, or a reply when `threadId` is given); never throws. */
 	postNotice(conversationId: string, text: string, threadId?: string): Promise<void>;
 	/** Takes `input` as if the owner wrote it, through the adapter's own message path. */

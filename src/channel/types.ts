@@ -92,6 +92,11 @@ export interface CoreSink {
 	hasInbound?(platformMessageId: string): boolean;
 	/** The text the inbound row of this platform message id was recorded with (`undefined`: no such row). */
 	inboundText?(platformMessageId: string): string | undefined;
+	/**
+	 * The origin the inbound row of this platform message id was recorded under (a lane thread's message goes to the
+	 * lane, not to the origin the adapter read): the status the adapter starts for it is that origin's turn.
+	 */
+	inboundOrigin?(platformMessageId: string): string | undefined;
 	/** True while a restart drain holds dispatch: a message taken now waits for the next process (no typing shown). */
 	isDraining?(): boolean;
 }

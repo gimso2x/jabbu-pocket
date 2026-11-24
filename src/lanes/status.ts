@@ -264,8 +264,13 @@ export interface LaneMeta {
 	integrityApproval?: { sha: string; fingerprint: string; at: number };
 	/** Full sha recorded when the claim was verified and the lane closed. */
 	sha?: string;
-	/** What the root / status messages currently show (reconciled on every tick). */
+	/** What the root / status messages currently show (reconciled on every tick); a borrowed thread has no root. */
 	renderedRoot?: string;
+	/**
+	 * The lane runs in the conversation thread it was started from (`threadRef` is that thread): no root message of its
+	 * own, the thread is never archived, and once closed the thread goes back to the conversation.
+	 */
+	borrowedThread?: true;
 	renderedStatus?: string;
 	/** Counter for synthetic inbound ids of messages the core steers into the lane. */
 	steerSeq: number;
