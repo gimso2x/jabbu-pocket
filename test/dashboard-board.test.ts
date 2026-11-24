@@ -13,6 +13,7 @@ import {
 	deepLink,
 } from "../src/dashboard/board";
 import { renderConversation, renderDetailHead, renderDetailTabs, renderPlan } from "../src/dashboard/detail";
+import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { renderMarkdown } from "../src/dashboard/markdown";
 import { type DashboardBoardOptions, startDashboardServer } from "../src/dashboard/server";
@@ -906,9 +907,8 @@ describe("detail rendering", () => {
 
 	test("the page's inline script ships the same renderers the server uses", async () => {
 		const { base } = await setup({ herdrWebUrl: "https://herdr.example.test/" });
-		const html = await (await fetch(`${base}/?card=w1:p1`)).text();
 		const view = (await (await fetch(`${base}/api/board`)).json()) as BoardView;
-		const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "";
+		const script = SCRIPT;
 		const client = new Function(
 			"document",
 			"setInterval",

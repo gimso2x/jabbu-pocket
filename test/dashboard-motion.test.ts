@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import {
 	expireStack,
 	freshCards,
@@ -164,7 +164,7 @@ describe("state pill and live steps", () => {
 });
 
 describe("reduced motion", () => {
-	const script = /<script>([\s\S]*?)<\/script>/.exec(renderDashboardPage(EMPTY))?.[1] ?? "";
+	const script = SCRIPT;
 
 	test("AC-3: the global reduced-motion rule stops animations and transitions, and the new keyframes sit outside it", () => {
 		const block = STYLE.slice(STYLE.indexOf("@media (prefers-reduced-motion: reduce)"));

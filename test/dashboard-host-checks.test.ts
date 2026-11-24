@@ -13,7 +13,7 @@ import {
 	type HostChecksInfo,
 	readHostChecks,
 } from "../src/dashboard/host-checks";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import {
 	buildSnapshot,
@@ -224,7 +224,7 @@ describe("AC-2: three hosts, counts only, no repository name anywhere", () => {
 
 	test("the page script draws the same card (helpers shipped)", async () => {
 		const snapshot = await buildSnapshot(deps({ config: withOps() }));
-		const script = /<script>([\s\S]*)<\/script>/.exec(renderDashboardPage(snapshot))?.[1] ?? "";
+		const script = SCRIPT;
 		const client = new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 			{ getElementById: () => ({}) },
 			() => 0,

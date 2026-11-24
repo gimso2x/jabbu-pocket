@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderConversation, renderItemDetail } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { renderMarkdown } from "../src/dashboard/markdown";
 import { resolvePeers } from "../src/dashboard/peers";
@@ -432,8 +432,7 @@ describe("turn board page", () => {
 		const server = startDashboardServer({ port: 0, hostname: "127.0.0.1", snapshot: async () => snapshot });
 		stop = () => server.stop(true);
 		const base = `http://127.0.0.1:${server.port}`;
-		const page = async (query: string): Promise<string> =>
-			(await (await fetch(`${base}/${query}`)).text()).replace(/<script>[\s\S]*<\/script>/, "");
+		const page = async (query: string): Promise<string> => await (await fetch(`${base}/${query}`)).text();
 
 		const board = await page("?view=turns");
 		for (const label of ["확인 필요", "진행 중", "완료"]) {
@@ -772,7 +771,7 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 		expect(ran.some((argv) => argv.some((word) => word === "lanes" || word.endsWith("main.ts")))).toBe(false);
 
 		// The shipped client renderer draws the same panels.
-		const script = /<script>([\s\S]*)<\/script>/.exec(renderDashboardPage(snapshot))?.[1] ?? "";
+		const script = SCRIPT;
 		const client = new Function("document", "setInterval", `${script}\nreturn { renderItemDetail };`)(
 			{ getElementById: () => ({}) },
 			() => 0,

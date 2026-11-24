@@ -6,7 +6,7 @@ import { SWEEP_HEARTBEAT_FILE } from "../src/daemon/heartbeat";
 import { callDaemon } from "../src/daemon/ipc";
 import type { StatusReport } from "../src/daemon/status";
 import { renderItemDetail } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { startDashboardServer } from "../src/dashboard/server";
 import {
@@ -789,8 +789,7 @@ describe("dashboard turn context", () => {
 		expect(frozen).toContain(">동결 중<");
 
 		// The shipped client renderer draws the same turn view.
-		const page = renderDashboardPage(draining);
-		const script = /<script>([\s\S]*)<\/script>/.exec(page)?.[1] ?? "";
+		const script = SCRIPT;
 		const clientRender = new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 			{ getElementById: () => ({}) },
 			() => 0,
@@ -921,10 +920,10 @@ describe("dashboard server", () => {
 		const html = await (await fetch(`${base}/`)).text();
 		expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
 		expect(html).not.toContain(XSS_TITLE);
-		expect(html).toContain('fetch("api/snapshot"');
+		expect(SCRIPT).toContain('fetch("api/snapshot?view="');
 		expect(html).toBe(renderDashboardPage(snapshot));
 		// The shipped inline script must parse as served and its renderer must draw what the server drew.
-		const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "";
+		const script = SCRIPT;
 		const fakeDocument = { getElementById: () => ({}) };
 		const clientRender = new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 			fakeDocument,
@@ -1131,8 +1130,7 @@ describe("dashboard review fixes", () => {
 		const source = await Bun.file(join(import.meta.dir, "..", "src", "dashboard", "html.ts")).text();
 		expect(source).not.toContain("STALL_MS");
 
-		const page = renderDashboardPage(snapshot);
-		const script = /<script>([\s\S]*)<\/script>/.exec(page)?.[1] ?? "";
+		const script = SCRIPT;
 		const copy = /const copyText = async[\s\S]*?\n\t};/.exec(script)?.[0] ?? "";
 		expect(copy).toContain("복사 실패");
 		const refresh = /async function refresh\(\) \{([\s\S]*?)\} catch/.exec(script)?.[1] ?? "";

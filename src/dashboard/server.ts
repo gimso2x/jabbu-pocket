@@ -1,5 +1,6 @@
 import type { Server } from "bun";
 import type { LiveView } from "../core/live-turn";
+import { appAssets, PAGE_CSS, serveAsset, WEB_MANIFEST, withGzip } from "./assets";
 import {
 	type BoardCard,
 	type BoardPanel,
@@ -10,7 +11,7 @@ import {
 } from "./board";
 import type { DiffAnswer, DiffSubject } from "./diff";
 import { guardRequest, hostAllowlist } from "./host-guard";
-import { renderDashboardPage } from "./html";
+import { renderDashboardPage, SCRIPT } from "./html";
 import type { MonitorDetail } from "./monitor-detail";
 import { proxyPaneGet } from "./proxy";
 import * as route from "./routes";
@@ -44,7 +45,7 @@ export interface DashboardServerOptions {
 	onError?: (error: unknown) => void;
 	/**
 	 * Hears one owner-opened request: `page` (detail = the `view` query), `trace`, `conversation`, `monitor_detail`, `diff` and
-	 * `board_pane`. Polls and streams (health, snapshot, board, live, board events) are not heard. A throw is ignored.
+	 * `board_pane`, and the snapshot poll (`snapshot`, or `snapshot_hidden` from a hidden tab; detail = the tab's `view`). Health, board, live and the event streams are not heard. A throw is ignored.
 	 */
 	onRequest?: (kind: string, detail?: string) => void;
 	/** Absent when config has no `herdrBoard`: the board routes answer 404 `board_disabled`. */
@@ -82,29 +83,8 @@ export interface DashboardServerOptions {
 	now?: () => number;
 }
 
-/**
- * A tunnel may mount the dashboard under a prefix (`/task/…`); every API route matches with or without one. The page
- * itself is `/` or a one-segment prefix only, and never `/api/` or `/healthz/`: any other path ending in `/` is a 404.
- */
 const KEEP_ALIVE_MS = 15_000;
 
-/** Web app manifest for "install as app" in Chrome/Edge; URLs are relative so any tunnel prefix keeps working. */
-const WEB_MANIFEST = JSON.stringify({
-	id: "./",
-	name: "jabbu 현황판",
-	short_name: "jabbu",
-	start_url: "./",
-	scope: "./",
-	display: "standalone",
-	background_color: "#0D0F12",
-	theme_color: "#15181D",
-	lang: "ko",
-	icons: [
-		{ src: "icons/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
-		{ src: "icons/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
-		{ src: "icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
-	],
-});
 const DEBOUNCE_MS = 200;
 const LIVE_INTERVAL_MS = 1000;
 
@@ -114,7 +94,7 @@ const COMMON_HEADERS = {
 	"referrer-policy": "no-referrer",
 };
 const PAGE_CSP =
-	"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+	"default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 const jsonReply = (body: unknown, status: number, head: boolean): Response =>
 	new Response(head ? null : JSON.stringify(body), {
@@ -339,219 +319,226 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			// The request log is a usage count; failing to write it must not change the answer.
 		}
 	};
+	const assets = appAssets(SCRIPT, PAGE_CSS);
+	const handle = async (request: Request): Promise<Response> => {
+		const head = request.method === "HEAD";
+		const refused = guardRequest(request, allowedHosts, COMMON_HEADERS);
+		if (refused !== undefined) return refused;
+		if (request.method !== "GET" && !head) {
+			return new Response("method not allowed\n", {
+				status: 405,
+				headers: { ...COMMON_HEADERS, allow: "GET, HEAD", "content-type": "text/plain; charset=utf-8" },
+			});
+		}
+		const reply = (body: string, contentType: string, extra: Record<string, string> = {}) =>
+			new Response(head ? null : body, {
+				headers: { ...COMMON_HEADERS, ...extra, "content-type": contentType },
+			});
+		const url = new URL(request.url);
+		const { pathname } = url;
+		if (route.HEALTH.test(pathname)) return reply("ok", "text/plain; charset=utf-8");
+		if (route.MANIFEST.test(pathname)) return reply(WEB_MANIFEST, "application/manifest+json; charset=utf-8");
+		const served = serveAsset(request, pathname, assets, COMMON_HEADERS);
+		if (served !== undefined) return served;
+		const icon = route.ICON.exec(pathname);
+		if (icon !== null) {
+			const file = Bun.file(new URL(`./icons/${icon[1]}.png`, import.meta.url));
+			return new Response(head ? null : file, {
+				headers: { ...COMMON_HEADERS, "content-type": "image/png", "cache-control": "max-age=86400" },
+			});
+		}
+		const trace = route.TRACE.exec(pathname);
+		if (trace !== null) {
+			heard("trace");
+			if (options.trace === undefined) return jsonReply({ error: "trace_disabled" }, 404, head);
+			let answer: TurnTrace;
+			try {
+				answer = options.trace(Number(trace[1]));
+			} catch (error) {
+				options.onError?.(error);
+				return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
+			}
+			return jsonReply(answer, answer.ok ? 200 : 404, head);
+		}
+		if (route.JOB_TRACE.test(pathname)) {
+			heard("trace");
+			if (options.jobTrace === undefined) return jsonReply({ error: "trace_disabled" }, 404, head);
+			const name = url.searchParams.get("name") ?? "";
+			if (!JOB_NAME.test(name)) return jsonReply({ error: "invalid_name" }, 400, head);
+			let answer: TurnTrace;
+			try {
+				answer = options.jobTrace(name);
+			} catch (error) {
+				options.onError?.(error);
+				return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
+			}
+			return jsonReply(answer, answer.ok ? 200 : 404, head);
+		}
+		const liveEvents = route.THREAD_LIVE_EVENTS.test(pathname);
+		if (liveEvents || route.THREAD_LIVE.test(pathname)) {
+			if (options.live === undefined || live === undefined) return jsonReply({ error: "live_disabled" }, 404, head);
+			const origin = (url.searchParams.get("origin") ?? "").trim();
+			if (origin === "") return jsonReply({ error: "invalid_origin" }, 400, head);
+			if (liveEvents) {
+				return head
+					? new Response(null, {
+							headers: { ...COMMON_HEADERS, "content-type": "text/event-stream; charset=utf-8" },
+						})
+					: eventStream(request, KEEP_ALIVE_MS, (send) => {
+							// A first line at once: the response (and its headers) goes out before the first read ends.
+							send(": live\n\n");
+							return live.add(origin, send);
+						});
+			}
+			try {
+				return jsonReply({ live: await options.live(origin) }, 200, head);
+			} catch {
+				return jsonReply({ error: "daemon_unreachable" }, 503, head);
+			}
+		}
+		if (route.THREAD_CONVERSATION.test(pathname)) {
+			heard("conversation");
+			if (options.conversation === undefined) return jsonReply({ error: "conversation_disabled" }, 404, head);
+			let answer: ThreadConversation;
+			try {
+				answer = options.conversation(
+					url.searchParams.get("origin") ?? "",
+					url.searchParams.get("before") || undefined,
+				);
+			} catch (error) {
+				options.onError?.(error);
+				return jsonReply({ error: "conversation_failed" }, 500, head);
+			}
+			return answer.ok
+				? jsonReply(
+						{ turns: answer.turns, ...(answer.cursor === undefined ? {} : { cursor: answer.cursor }) },
+						200,
+						head,
+					)
+				: jsonReply({ error: answer.error }, 404, head);
+		}
+		if (route.MONITOR_DETAIL.test(pathname)) {
+			heard("monitor_detail");
+			if (options.monitorDetail === undefined) return jsonReply({ error: "monitor_detail_disabled" }, 404, head);
+			const id = (url.searchParams.get("id") ?? "").trim();
+			if (id === "") return jsonReply({ error: "invalid_id" }, 400, head);
+			let answer: MonitorDetail;
+			try {
+				answer = options.monitorDetail(id);
+			} catch (error) {
+				options.onError?.(error);
+				return jsonReply({ error: "monitor_detail_failed" }, 500, head);
+			}
+			return answer.ok ? jsonReply(answer, 200, head) : jsonReply({ error: answer.error }, 404, head);
+		}
+		if (route.DIFF.test(pathname)) {
+			heard("diff");
+			if (options.diff === undefined) return jsonReply({ error: "diff_disabled" }, 404, head);
+			const lane = url.searchParams.get("lane") ?? "";
+			const task = url.searchParams.get("task") ?? "";
+			if ((lane === "") === (task === "")) return jsonReply({ error: "invalid_subject" }, 400, head);
+			let answer: DiffAnswer;
+			try {
+				answer = await options.diff(lane === "" ? { task } : { lane });
+			} catch (error) {
+				options.onError?.(error);
+				return jsonReply({ ok: false, error: "diff_failed" }, 500, head);
+			}
+			return answer.ok ? jsonReply(answer, 200, head) : jsonReply({ error: answer.error }, 404, head);
+		}
+		const pane = route.PANE.exec(pathname);
+		if (route.BOARD.test(pathname) || route.BOARD_EVENTS.test(pathname) || pane !== null) {
+			if (board === undefined || fanout === undefined) return jsonReply({ error: "board_disabled" }, 404, head);
+			if (route.BOARD.test(pathname)) {
+				// Built per request, never cached: a new TASK shows on its card at once.
+				const current = boardPanel();
+				return current.ok ? jsonReply(current, 200, head) : jsonReply({ error: current.error }, 503, head);
+			}
+			if (route.BOARD_EVENTS.test(pathname)) {
+				return head
+					? new Response(null, {
+							headers: { ...COMMON_HEADERS, "content-type": "text/event-stream; charset=utf-8" },
+						})
+					: boardEvents(request, board, fanout, boardPanel);
+			}
+			heard(pane?.[1] === "trace" ? "trace" : "board_pane");
+			// The pane proxy needs only the live card, not the TASK-matched board view (no database read).
+			if (pane?.[1] === "trace" && options.cardTrace === undefined) {
+				return jsonReply({ error: "trace_disabled" }, 404, head);
+			}
+			const card = board.source.card(url.searchParams.get("card") ?? "");
+			if (card === undefined) return jsonReply({ error: "unknown_pane" }, 404, head);
+			if (pane?.[1] === "trace" && options.cardTrace !== undefined) {
+				let answer: TurnTrace;
+				try {
+					answer = options.cardTrace(card);
+				} catch (error) {
+					options.onError?.(error);
+					return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
+				}
+				return jsonReply(answer, answer.ok ? 200 : 404, head);
+			}
+			const proxied = await proxyPaneGet(
+				pane?.[1] === "plan" ? "plan" : "conversation",
+				board.source.origin,
+				card,
+				url.searchParams,
+			);
+			return head ? new Response(null, { status: proxied.status, headers: proxied.headers }) : proxied;
+		}
+		const isPage = route.PAGE.test(pathname);
+		if (!isPage && !route.SNAPSHOT.test(pathname)) {
+			return new Response("not found\n", {
+				status: 404,
+				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
+			});
+		}
+		heard(
+			isPage ? "page" : url.searchParams.get("hidden") === "1" ? "snapshot_hidden" : "snapshot",
+			url.searchParams.get("view") || undefined,
+		);
+		let snapshot: DashboardSnapshot;
+		try {
+			snapshot = await options.snapshot();
+		} catch (error) {
+			options.onError?.(error);
+			return new Response("snapshot failed\n", {
+				status: 500,
+				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
+			});
+		}
+		const param = (name: string): string | undefined => url.searchParams.get(name) || undefined;
+		const [view, card, task, item, diff, layout, stale] = [
+			"view",
+			"card",
+			"task",
+			"item",
+			"diff",
+			"layout",
+			"stale",
+		].map(param);
+		return isPage
+			? reply(
+					renderDashboardPage(snapshot, {
+						...(board === undefined ? {} : { board: panel() }),
+						...(view === undefined ? {} : { view }),
+						...(card === undefined ? {} : { card }),
+						...(task === undefined ? {} : { task }),
+						...(item === undefined ? {} : { item }),
+						...(diff === undefined ? {} : { diff }),
+						...(layout === undefined ? {} : { layout }),
+						...(stale === undefined ? {} : { stale }),
+					}),
+					"text/html; charset=utf-8",
+					{ "content-security-policy": PAGE_CSP },
+				)
+			: reply(JSON.stringify(snapshot), "application/json; charset=utf-8");
+	};
 	return Bun.serve({
 		port: options.port,
 		hostname: options.hostname,
 		// `api/board/events` stays open; its keep-alive line comes well inside this.
 		idleTimeout: 60,
-		async fetch(request) {
-			const head = request.method === "HEAD";
-			const refused = guardRequest(request, allowedHosts, COMMON_HEADERS);
-			if (refused !== undefined) return refused;
-			if (request.method !== "GET" && !head) {
-				return new Response("method not allowed\n", {
-					status: 405,
-					headers: { ...COMMON_HEADERS, allow: "GET, HEAD", "content-type": "text/plain; charset=utf-8" },
-				});
-			}
-			const reply = (body: string, contentType: string, extra: Record<string, string> = {}) =>
-				new Response(head ? null : body, {
-					headers: { ...COMMON_HEADERS, ...extra, "content-type": contentType },
-				});
-			const url = new URL(request.url);
-			const { pathname } = url;
-			if (route.HEALTH.test(pathname)) return reply("ok", "text/plain; charset=utf-8");
-			if (route.MANIFEST.test(pathname)) return reply(WEB_MANIFEST, "application/manifest+json; charset=utf-8");
-			const icon = route.ICON.exec(pathname);
-			if (icon !== null) {
-				const file = Bun.file(new URL(`./icons/${icon[1]}.png`, import.meta.url));
-				return new Response(head ? null : file, {
-					headers: { ...COMMON_HEADERS, "content-type": "image/png", "cache-control": "max-age=86400" },
-				});
-			}
-			const trace = route.TRACE.exec(pathname);
-			if (trace !== null) {
-				heard("trace");
-				if (options.trace === undefined) return jsonReply({ error: "trace_disabled" }, 404, head);
-				let answer: TurnTrace;
-				try {
-					answer = options.trace(Number(trace[1]));
-				} catch (error) {
-					options.onError?.(error);
-					return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
-				}
-				return jsonReply(answer, answer.ok ? 200 : 404, head);
-			}
-			if (route.JOB_TRACE.test(pathname)) {
-				heard("trace");
-				if (options.jobTrace === undefined) return jsonReply({ error: "trace_disabled" }, 404, head);
-				const name = url.searchParams.get("name") ?? "";
-				if (!JOB_NAME.test(name)) return jsonReply({ error: "invalid_name" }, 400, head);
-				let answer: TurnTrace;
-				try {
-					answer = options.jobTrace(name);
-				} catch (error) {
-					options.onError?.(error);
-					return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
-				}
-				return jsonReply(answer, answer.ok ? 200 : 404, head);
-			}
-			const liveEvents = route.THREAD_LIVE_EVENTS.test(pathname);
-			if (liveEvents || route.THREAD_LIVE.test(pathname)) {
-				if (options.live === undefined || live === undefined) return jsonReply({ error: "live_disabled" }, 404, head);
-				const origin = (url.searchParams.get("origin") ?? "").trim();
-				if (origin === "") return jsonReply({ error: "invalid_origin" }, 400, head);
-				if (liveEvents) {
-					return head
-						? new Response(null, {
-								headers: { ...COMMON_HEADERS, "content-type": "text/event-stream; charset=utf-8" },
-							})
-						: eventStream(request, KEEP_ALIVE_MS, (send) => {
-								// A first line at once: the response (and its headers) goes out before the first read ends.
-								send(": live\n\n");
-								return live.add(origin, send);
-							});
-				}
-				try {
-					return jsonReply({ live: await options.live(origin) }, 200, head);
-				} catch {
-					return jsonReply({ error: "daemon_unreachable" }, 503, head);
-				}
-			}
-			if (route.THREAD_CONVERSATION.test(pathname)) {
-				heard("conversation");
-				if (options.conversation === undefined) return jsonReply({ error: "conversation_disabled" }, 404, head);
-				let answer: ThreadConversation;
-				try {
-					answer = options.conversation(
-						url.searchParams.get("origin") ?? "",
-						url.searchParams.get("before") || undefined,
-					);
-				} catch (error) {
-					options.onError?.(error);
-					return jsonReply({ error: "conversation_failed" }, 500, head);
-				}
-				return answer.ok
-					? jsonReply(
-							{ turns: answer.turns, ...(answer.cursor === undefined ? {} : { cursor: answer.cursor }) },
-							200,
-							head,
-						)
-					: jsonReply({ error: answer.error }, 404, head);
-			}
-			if (route.MONITOR_DETAIL.test(pathname)) {
-				heard("monitor_detail");
-				if (options.monitorDetail === undefined) return jsonReply({ error: "monitor_detail_disabled" }, 404, head);
-				const id = (url.searchParams.get("id") ?? "").trim();
-				if (id === "") return jsonReply({ error: "invalid_id" }, 400, head);
-				let answer: MonitorDetail;
-				try {
-					answer = options.monitorDetail(id);
-				} catch (error) {
-					options.onError?.(error);
-					return jsonReply({ error: "monitor_detail_failed" }, 500, head);
-				}
-				return answer.ok ? jsonReply(answer, 200, head) : jsonReply({ error: answer.error }, 404, head);
-			}
-			if (route.DIFF.test(pathname)) {
-				heard("diff");
-				if (options.diff === undefined) return jsonReply({ error: "diff_disabled" }, 404, head);
-				const lane = url.searchParams.get("lane") ?? "";
-				const task = url.searchParams.get("task") ?? "";
-				if ((lane === "") === (task === "")) return jsonReply({ error: "invalid_subject" }, 400, head);
-				let answer: DiffAnswer;
-				try {
-					answer = await options.diff(lane === "" ? { task } : { lane });
-				} catch (error) {
-					options.onError?.(error);
-					return jsonReply({ ok: false, error: "diff_failed" }, 500, head);
-				}
-				return answer.ok ? jsonReply(answer, 200, head) : jsonReply({ error: answer.error }, 404, head);
-			}
-			const pane = route.PANE.exec(pathname);
-			if (route.BOARD.test(pathname) || route.BOARD_EVENTS.test(pathname) || pane !== null) {
-				if (board === undefined || fanout === undefined) return jsonReply({ error: "board_disabled" }, 404, head);
-				if (route.BOARD.test(pathname)) {
-					// Built per request, never cached: a new TASK shows on its card at once.
-					const current = boardPanel();
-					return current.ok ? jsonReply(current, 200, head) : jsonReply({ error: current.error }, 503, head);
-				}
-				if (route.BOARD_EVENTS.test(pathname)) {
-					return head
-						? new Response(null, {
-								headers: { ...COMMON_HEADERS, "content-type": "text/event-stream; charset=utf-8" },
-							})
-						: boardEvents(request, board, fanout, boardPanel);
-				}
-				heard(pane?.[1] === "trace" ? "trace" : "board_pane");
-				// The pane proxy needs only the live card, not the TASK-matched board view (no database read).
-				if (pane?.[1] === "trace" && options.cardTrace === undefined) {
-					return jsonReply({ error: "trace_disabled" }, 404, head);
-				}
-				const card = board.source.card(url.searchParams.get("card") ?? "");
-				if (card === undefined) return jsonReply({ error: "unknown_pane" }, 404, head);
-				if (pane?.[1] === "trace" && options.cardTrace !== undefined) {
-					let answer: TurnTrace;
-					try {
-						answer = options.cardTrace(card);
-					} catch (error) {
-						options.onError?.(error);
-						return jsonReply({ ok: false, error: "trace_failed" }, 500, head);
-					}
-					return jsonReply(answer, answer.ok ? 200 : 404, head);
-				}
-				const proxied = await proxyPaneGet(
-					pane?.[1] === "plan" ? "plan" : "conversation",
-					board.source.origin,
-					card,
-					url.searchParams,
-				);
-				return head ? new Response(null, { status: proxied.status, headers: proxied.headers }) : proxied;
-			}
-			const isPage = route.PAGE.test(pathname);
-			if (!isPage && !route.SNAPSHOT.test(pathname)) {
-				return new Response("not found\n", {
-					status: 404,
-					headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
-				});
-			}
-			if (isPage) heard("page", url.searchParams.get("view") || undefined);
-			let snapshot: DashboardSnapshot;
-			try {
-				snapshot = await options.snapshot();
-			} catch (error) {
-				options.onError?.(error);
-				return new Response("snapshot failed\n", {
-					status: 500,
-					headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
-				});
-			}
-			const param = (name: string): string | undefined => url.searchParams.get(name) || undefined;
-			const [view, card, task, item, diff, layout, stale] = [
-				"view",
-				"card",
-				"task",
-				"item",
-				"diff",
-				"layout",
-				"stale",
-			].map(param);
-			return isPage
-				? reply(
-						renderDashboardPage(snapshot, {
-							...(board === undefined ? {} : { board: panel() }),
-							...(view === undefined ? {} : { view }),
-							...(card === undefined ? {} : { card }),
-							...(task === undefined ? {} : { task }),
-							...(item === undefined ? {} : { item }),
-							...(diff === undefined ? {} : { diff }),
-							...(layout === undefined ? {} : { layout }),
-							...(stale === undefined ? {} : { stale }),
-						}),
-						"text/html; charset=utf-8",
-						{ "content-security-policy": PAGE_CSP },
-					)
-				: reply(JSON.stringify(snapshot), "application/json; charset=utf-8");
-		},
+		fetch: async (request) => withGzip(request, await handle(request)),
 	});
 }

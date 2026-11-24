@@ -184,7 +184,7 @@ export async function runScript(
  * the hash state instead of a pending string, so a huge whitespace run costs no memory; text that follows it adopts
  * the fork, text that never comes leaves `sha` as it was.
  */
-function trimmedHash(): { update(chunk: string): void; digest(): string } {
+export function trimmedHash(): { update(chunk: string): void; digest(): string } {
 	let sha = createHash("sha256");
 	let started = false;
 	/** `sha` plus the whitespace seen since the last non-whitespace character; undefined when there is none. */

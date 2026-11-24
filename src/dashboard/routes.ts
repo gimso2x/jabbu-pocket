@@ -1,4 +1,8 @@
-// Path patterns of the dashboard server (moved out of server.ts unchanged).
+/**
+ * Path patterns of the dashboard server. A tunnel may mount the dashboard under a prefix (`/task/…`); every API route
+ * matches with or without one. The page itself is `/` or a one-segment prefix only, and never `/api/` or `/healthz/`:
+ * any other path ending in `/` is a 404.
+ */
 export const PAGE = /^\/(?:(?!(?:api|healthz)\/)[^/]+\/)?$/;
 export const SNAPSHOT = /^\/(?:.*\/)?api\/snapshot$/;
 export const HEALTH = /^\/(?:.*\/)?healthz$/;
