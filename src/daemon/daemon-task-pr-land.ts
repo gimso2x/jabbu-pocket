@@ -21,7 +21,7 @@ import type { TaskRow } from "../tasks/ledger";
 import type { TaskLandRecord } from "../tasks/ledger-schema";
 import { taskLandNote } from "../tasks/notify";
 import { postPrLandStop, prLandNoticeKey } from "../tasks/pr-land-retry";
-import { prepareLocal, reworkPrompt, summaryOf } from "../tasks/pr-land-task";
+import { openPrAtTip, prepareLocal, reworkPrompt, summaryOf } from "../tasks/pr-land-task";
 import { type DaemonContext, postThreadNotices } from "./daemon-context";
 import { taskResumeDeps } from "./daemon-task-resume";
 
@@ -132,6 +132,11 @@ export class DaemonTaskPrLand {
 		let latest: LanePrLand | undefined;
 		const record = tasks.get(row.taskId)?.land ?? undefined;
 		try {
+			const open =
+				mode === "button" && !isRemoteMode(landMode)
+					? await openPrAtTip(row, record, deps.git ?? defaultGit)
+					: undefined;
+			if (open !== undefined) return { state: "pr-open", url: open };
 			await deps.stopChecks?.(row.taskId);
 			const prepared = isRemoteMode(landMode)
 				? await prepareRemote(this.#remoteEnv(deps.git ?? defaultGit), row, landMode, deps)

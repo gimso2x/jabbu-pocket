@@ -3,11 +3,12 @@ import { landModeOf } from "../lanes/manager-pr-land";
 import { defaultPrTools, type PrTools } from "../lanes/pr";
 import { failureOf } from "../lanes/pr-land-steps";
 import type { LanePrLand } from "../lanes/pr-land-types";
-import { defaultGit } from "../lanes/verify";
+import { defaultGit, type GitRunner } from "../lanes/verify";
 import { redact } from "../redact";
 import { baseBranchOf, isAncestor, precondition, rejudge, type TaskLandDeps } from "./land";
 import { landModeOfRow, type Prepared, type RemoteLandEnv, remoteIntegrityBase } from "./land-remote";
 import type { TaskRow } from "./ledger";
+import type { TaskLandRecord } from "./ledger-schema";
 
 /** Steered into a worker sent back to work: it stacks new commits on the same branch. */
 export const reworkPrompt = (branch: string, reason: string, notice: string): string =>
@@ -33,6 +34,19 @@ export async function landsViaPr(
 	row: TaskRow,
 ): Promise<boolean> {
 	return (await landModeOfRow(config, row))?.config.mode === "pr";
+}
+
+/** The URL of the PR an `active` landing already opened for the task branch's current tip (`undefined`: land again). Another card's button on it runs and tells nothing again: the CI poll owns it. */
+export async function openPrAtTip(
+	row: TaskRow,
+	record: TaskLandRecord | undefined,
+	git: GitRunner,
+): Promise<string | undefined> {
+	const open = record?.state === "active" ? record.prLand : undefined;
+	if (open?.url === undefined) return undefined;
+	const tip = (await git(["-C", row.repo, "rev-parse", "--verify", "-q", `refs/heads/${row.branch}^{commit}`])).stdout;
+	const known = open.pushedSha ?? record?.sha;
+	return known !== undefined && tip.trim() === known ? open.url : undefined;
 }
 
 /**
