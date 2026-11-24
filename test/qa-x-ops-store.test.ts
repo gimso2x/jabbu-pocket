@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
 import { openMonitorLedger } from "../src/monitors/ledger";
 import { exportMonitors } from "../src/monitors/portable";
+import { runScript, trimmedHash } from "../src/monitors/script";
 import { parseMonitorSpec } from "../src/monitors/spec";
 import { writeFreeze } from "../src/ops/freeze";
 import { gcSessions } from "../src/ops/gc";
@@ -186,7 +187,25 @@ describe("qa-x #75: monitors export --dir keeps non-spec json", () => {
 });
 
 describe("qa-x #78: trailing whitespace output stays bounded", () => {
-	test("a long whitespace tail hashes like the trimmed text and does not pile up in memory", () => {
+	test("a long whitespace tail held by the output hash costs no heap", () => {
+		// Measured on the heap the hash keeps, not on the process RSS: a loaded machine lets the pipe reader run ahead of
+		// the "data" handler and RSS then reflects that queue (1 GB seen under a parallel run), not the hash.
+		const heapMb = () => {
+			Bun.gc(true);
+			return process.memoryUsage().heapUsed / 2 ** 20;
+		};
+		const hash = trimmedHash();
+		const before = heapMb();
+		hash.update("a");
+		// A fresh chunk each time: a pending string would keep all 256 MB of them alive.
+		for (let i = 0; i < 256; i++) hash.update(" ".repeat(1 << 20));
+		const grown = heapMb() - before;
+		// The tail is trimmed away; the runScript test below covers text that follows a whitespace run.
+		expect(hash.digest()).toBe(new Bun.CryptoHasher("sha256").update("a").digest("hex"));
+		expect(grown).toBeLessThan(64);
+	}, 60_000);
+
+	test("a long whitespace tail through runScript hashes like the trimmed text", async () => {
 		const dir = tempDir("qa-x-script-");
 		const scripts = join(dir, "scripts");
 		mkdirSync(scripts);
@@ -198,20 +217,13 @@ const chunk = " ".repeat(1 << 20);
 process.stdout.write("a");
 for (let i = 0; i < 8; i++) process.stdout.write(chunk);
 process.stdout.write("b");
-for (let i = 0; i < 400; i++) process.stdout.write(chunk);
+for (let i = 0; i < 32; i++) process.stdout.write(chunk);
 `,
 			{ mode: 0o755 },
 		);
-		const runner = `import { runScript } from ${JSON.stringify(join(import.meta.dir, "../src/monitors/script.ts"))};
-const r = await runScript([${JSON.stringify(script)}], { scriptsRoot: ${JSON.stringify(scripts)}, cwd: ${JSON.stringify(dir)}, timeoutMs: 60000 });
-console.log(JSON.stringify({ hash: r.outputHash, rssMb: process.resourceUsage().maxRSS / 1024 }));`;
-		const child = Bun.spawnSync(["bun", "-e", runner], { timeout: 90_000, killSignal: "SIGKILL" });
-		expect(child.exitCode).toBe(0);
-		const { hash, rssMb } = JSON.parse(child.stdout.toString()) as { hash: string; rssMb: number };
+		const result = await runScript([script], { scriptsRoot: scripts, cwd: dir, timeoutMs: 60_000 });
 		const want = new Bun.CryptoHasher("sha256");
 		want.update(`a${" ".repeat(8 << 20)}b`);
-		expect(hash).toBe(want.digest("hex"));
-		// 400 MB of trailing spaces held as pending text would put the peak far above this.
-		expect(rssMb).toBeLessThan(300);
-	}, 120_000);
+		expect(result.outputHash).toBe(want.digest("hex"));
+	}, 90_000);
 });
