@@ -258,10 +258,9 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
 		const stem = parseAgySessionStem(sessionFile);
-		const account = this.#account?.name ?? this.#options.accounts?.selectAvailable(this.#now())?.name;
-		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, stem, account);
+		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, stem);
 		this.#switchedBeforePrompt = false;
-		await this.#spawn(stem, "session switch", account);
+		await this.#spawn(stem, "session switch");
 		return { cancelled: false };
 	}
 
@@ -470,7 +469,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			}
 			// `stop()` while waiting (a retire or the old child's exit) must not be undone by a child launched after it.
 			if (!this.#started) throw new OmpDriverError("not_started", "driver stopped while agy restarted");
-			await this.#launch(executable, env, resume, resumeAccount);
+			await this.#launch(executable, env, resume, resumeAccount, reason !== "session switch");
 		} finally {
 			if (this.#respawning === done.promise) this.#respawning = undefined;
 			done.resolve();
@@ -491,6 +490,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		env: Record<string, string>,
 		resume?: string,
 		resumeAccount?: string,
+		verifyAccount = true,
 	): Promise<void> {
 		const options = this.#options;
 		const picked = selectLaunchAccount(options, this.#now());
@@ -518,7 +518,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const sessionParams = buildAgySessionParams(options.cwd, options.systemPrompt, options.mcpServers?.());
 		try {
 			await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
-			const accountMismatch = resume !== undefined && resumeAccount !== this.#account?.name;
+			const accountMismatch = resume !== undefined && verifyAccount && resumeAccount !== this.#account?.name;
 			if (accountMismatch) {
 				clearAgyPointer(this.#pointerPath);
 				this.#sessionId = undefined;
