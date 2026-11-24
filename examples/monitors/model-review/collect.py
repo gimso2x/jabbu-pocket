@@ -76,9 +76,14 @@ def bot_timezone(home: Path) -> dt.tzinfo:
     return ZoneInfo(name) if name else dt.datetime.now().astimezone().tzinfo
 
 
+def parse_iso(value: str) -> dt.datetime:
+    """ISO8601 시각을 읽는다. 끝의 'Z'는 fromisoformat이 3.11부터 받으니 그 아래 판을 위해 '+00:00'으로 바꾼다."""
+    return dt.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+
+
 def parse_now(value: str) -> dt.datetime:
     try:
-        return dt.datetime.fromisoformat(value)
+        return parse_iso(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(f"ISO8601 시각이 아님: {value}") from error
 
@@ -215,7 +220,7 @@ def read_session(
             if message.get("role") != "assistant":
                 continue
             try:
-                at = dt.datetime.fromisoformat(str(record.get("timestamp", "")))
+                at = parse_iso(str(record.get("timestamp", "")))
             except ValueError:
                 continue
             if at.tzinfo is None or not start <= at < end:
@@ -360,7 +365,7 @@ def scan_log(home: Path, start: dt.datetime, end: dt.datetime) -> tuple[str, dic
                 if fields.get("event") != "retry_fallback_applied":
                     continue
                 try:
-                    at = dt.datetime.fromisoformat(fields.get("ts", ""))
+                    at = parse_iso(fields.get("ts", ""))
                 except ValueError:
                     continue
                 if at.tzinfo is None or not start <= at < end:
