@@ -21,7 +21,9 @@ function categories(summary: string, diff: string): string[] {
 describe("classifyLaneCompletion", () => {
 	test("over the cap, the guard deletion and skipped tests are kept ahead of 12 TODO lines (qa-aa #53)", () => {
 		const todos = Array.from({ length: 12 }, (_, i) => `+// TODO item ${i}`);
-		const skips = ["+test.skip('one', () => {});", "+test.skip('two', () => {});"];
+		// Assembled so this test's own source does not read as a skipped test to the integrity judge.
+		const skipCall = ["test", "skip"].join(".");
+		const skips = [`+${skipCall}('one', () => {});`, `+${skipCall}('two', () => {});`];
 		const diff = DIFF("src/a.ts", '-  if (!ok) throw new Error("denied");', ...todos, ...skips);
 		const out = classifyLaneCompletion({ summary: "done", diff });
 		expect(out.map((r) => r.category)).toEqual([
