@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AutoLandPolicy } from "../src/tasks/auto-land-policy";
+import type { TaskJudgement } from "../src/tasks/checker";
 import { acceptanceItems } from "../src/tasks/docs";
 import type { TaskLandOutcome } from "../src/tasks/land";
 import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
 import type { TaskLandRecord } from "../src/tasks/ledger-schema";
-import { buildMergeSettledCard } from "../src/tasks/notify";
+import { buildMergeSettledCard, buildReachedCard } from "../src/tasks/notify";
 import {
 	isPrRetryable,
 	PrLandRetry,
@@ -141,12 +142,12 @@ beforeEach(() => {
 });
 
 describe("retry card (AC-1)", () => {
-	test("the card has the 머지 action id with the 다시 시도 label and the settled card's header and note", () => {
+	test("the card has the 머지 action id with the PR 다시 올리기 label and the settled card's header and note", () => {
 		const row = rig().row();
 		const card = prLandRetryCard(row, "⛔ PR 착지 멈춤: x");
 		const settled = buildMergeSettledCard(row, "⛔ PR 착지 멈춤: x");
 		expect(card.buttons).toEqual([
-			{ actionId: `jabbu:task:merge:${row.taskId}`, label: "다시 시도", value: row.taskId, style: "primary" },
+			{ actionId: `jabbu:task:merge:${row.taskId}`, label: "PR 다시 올리기", value: row.taskId, style: "primary" },
 		]);
 		expect({ ...card, buttons: undefined }).toEqual({ ...settled, buttons: undefined });
 		expect(card.note).toContain("PR 착지 멈춤");
@@ -164,6 +165,25 @@ describe("retry card (AC-1)", () => {
 		expect(prLandNoticeKey("blocked", OLD, "x")).not.toBe(prLandNoticeKey("blocked", NEW, "x"));
 		expect(prLandNoticeKey("blocked", OLD, "x")).toBe(prLandNoticeKey("blocked", OLD, "x"));
 		expect(prLandNoticeKey("held", OLD, "x")).not.toBe(prLandNoticeKey("blocked", OLD, "x"));
+	});
+
+	test("the reached card labels the same merge action PR 올리기 when the repository lands through a PR", () => {
+		const row = rig().row();
+		const judgement = { summary: [], problems: [], integrityWarnings: [], checks: [], evidence: {} };
+		const reached = (prMode: boolean) =>
+			buildReachedCard(
+				row,
+				judgement as Partial<TaskJudgement> as TaskJudgement,
+				"U1",
+				undefined,
+				undefined,
+				undefined,
+				prMode,
+			);
+		const pr = reached(true);
+		expect(pr.buttons?.map((b) => [b.actionId, b.label])).toEqual([[`jabbu:task:merge:${row.taskId}`, "PR 올리기"]]);
+		expect(pr.note).toStartWith("PR 올리기 = ");
+		expect(reached(false).buttons?.map((b) => b.label)).toEqual(["머지"]);
 	});
 
 	test("the stop line keeps the words the 3b tests look for", () => {

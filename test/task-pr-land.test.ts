@@ -229,7 +229,7 @@ describe("머지 고정: 검사한 sha에만, 머지 직전 재검사", () => {
 		expect(w.fake.callsOf("gh", "merge")).toHaveLength(0);
 		expect(w.row(row.taskId).status).toBe("review");
 		expect(w.posts().some((text) => text.includes("PR 착지 보류"))).toBe(true);
-		// The stop card carries the `머지` button labelled "다시 시도" (a retry is the same click).
+		// The stop card carries the `머지` button labelled "PR 다시 올리기" (a retry is the same click).
 		const card = w.transport.calls.find(
 			(call) => call.method === "createMessage" && JSON.stringify(call.embeds ?? "").includes("PR 착지 보류"),
 		);

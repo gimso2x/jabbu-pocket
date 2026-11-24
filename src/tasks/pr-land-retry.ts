@@ -12,12 +12,14 @@ const REMOTE_HEAD_MS = 5 * 60_000;
 export const isPrRetryable = (row: TaskRow | undefined): boolean =>
 	row?.land?.state === "blocked" || row?.land?.state === "held";
 
-/** The merge-wait card of a stopped PR landing: `note` as the result line and the `머지` button (same action id) labelled "다시 시도". */
+/** The merge-wait card of a stopped PR landing: `note` as the result line and the `PR 올리기` button (same action id) labelled "PR 다시 올리기". */
 export function prLandRetryCard(row: TaskRow, note: string): TaskCard {
 	const card = buildMergeSettledCard(row, note);
 	return {
 		...card,
-		buttons: [{ actionId: taskMergeActionId(row.taskId), label: "다시 시도", value: row.taskId, style: "primary" }],
+		buttons: [
+			{ actionId: taskMergeActionId(row.taskId), label: "PR 다시 올리기", value: row.taskId, style: "primary" },
+		],
 	};
 }
 
