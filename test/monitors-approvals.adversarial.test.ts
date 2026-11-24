@@ -295,6 +295,22 @@ describe("suppressUnchanged (ledger)", () => {
 		expect(checkStatus(check("met", 3))).toBe("admitted");
 	});
 
+	test("a changed output skipped by overlap is not marked seen: the same output on the next check fires", () => {
+		const ledger = store.monitors;
+		const monitor = ledger.addMonitor({ ...scriptSpec("overlap-hash", { suppressUnchanged: true }), overlap: "skip" });
+		const check = (slotAt: number, hash: string) =>
+			ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt, hash });
+		const first = check(1, "H1");
+		expect(checkStatus(first)).toBe("admitted");
+		// H2 arrives while H1's run still owes an answer: skipped by overlap, never shown to the agent.
+		expect(checkStatus(check(2, "H2"))).toBe("skipped_overlap");
+		expect(ledger.getMonitor(monitor.id)?.lastOutputHash).toBe("H1");
+		if (first?.status !== "admitted") throw new Error("first check was not admitted");
+		ledger.markDispatched(first.event.eventId, "in-1");
+		ledger.settleAnswered(first.event.eventId, "NO_REPORT");
+		expect(checkStatus(check(3, "H2"))).toBe("admitted");
+	});
+
 	test("every + suppress without the flag set never suppresses identical output", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("no-flag", { suppressUnchanged: false }));

@@ -8,6 +8,7 @@ import { DiscordSocketTransport } from "../discord/socket-transport";
 import { FileFakeDiscordTransport } from "../discord/test-transport";
 import type { DiscordTransport } from "../discord/transport";
 import { bootRuntime } from "../lanes/runtime";
+import { isTaskOrigin } from "../lanes/status";
 import { createLogger, type Logger } from "../log";
 import { AgyOmpDriver } from "../omp/agy-driver";
 import { withOmpProfile } from "../omp/env";
@@ -34,12 +35,11 @@ export function splitModel(model: string | undefined): { provider?: string; mode
 }
 
 /**
- * `env` and `baseEnv` of every bot RPC child (chat, lane and monitor turns share the daemon's driver factory). With
- * `ompProfile` the parent env loses `PI_CODING_AGENT_DIR` and gains `OMP_PROFILE`; without it `baseEnv` stays
- * unset, so the driver reads `process.env` exactly as before. `PI_INTENT_TRACING=1`: omp 19 leaves tool-call intents
- * off in RPC sessions unless configured, and the live progress line shows each tool call by its intent.
- * `OMP_HOST_DRIVER=jabbu-pocket`: the owner's rule-guards extension judges only what reaches the chat (turn answers and
- * notes next to `wait`/`ask`), not text before ordinary tool calls.
+ * `env` and `baseEnv` of every bot RPC child (chat, lane, monitor and [TASK] worker turns share it). With `ompProfile`
+ * the parent env loses `PI_CODING_AGENT_DIR` and gains `OMP_PROFILE`; without it `baseEnv` stays unset, so the driver
+ * reads `process.env` as before. `PI_INTENT_TRACING=1`: omp 19 leaves tool-call intents off in RPC sessions unless
+ * configured, and the live progress line shows each tool call by its intent. `OMP_HOST_DRIVER=jabbu-pocket`: the
+ * owner's rule-guards extension judges only what reaches the chat (answers, notes next to `wait`/`ask`), not other text.
  */
 export function botRpcEnv(
 	ompProfile: string | undefined,
@@ -50,8 +50,8 @@ export function botRpcEnv(
 }
 
 /**
- * The Discord binding when `channels.discord` is set: the real gateway + REST, or the file-logging fake for test
- * runs (`JABBU_TEST_DISCORD_TRANSPORT`). A non-retryable gateway close stops Discord alone and is logged.
+ * The Discord binding when `channels.discord` is set: the real gateway, or the file-logging fake for test runs
+ * (`JABBU_TEST_DISCORD_TRANSPORT`). A non-retryable gateway close stops Discord alone and is logged.
  */
 function discordBindings(config: JabbuConfig, env: Record<string, string | undefined>, log: Logger): ChannelBinding[] {
 	const discord = config.channels.discord;
@@ -244,6 +244,7 @@ export async function runDaemon(
 		...(hostLoad === undefined ? {} : { hostLoad }),
 		sweepMs: env.JABBU_TEST_HOOKS === "1" && env.JABBU_SWEEP_MS ? Number(env.JABBU_SWEEP_MS) : undefined,
 		driverFactory: (origin, sessionDir) => {
+			if (isTaskOrigin(origin)) return daemon.taskDriver(origin, sessionDir, botRpcEnv(config.ompProfile)); // never agy
 			// Only the omp driver answers dialogs and narrows host tools for a peer-touched conversation.
 			const omp = config.agent !== "agy";
 			const overlayConfig = config.ompConfigOverlay;
@@ -292,8 +293,7 @@ export async function runDaemon(
 		},
 	};
 	const daemon = new Daemon(daemonOptions);
-	// The daemon stops its children and settles the ledger before it exits. SIGHUP re-reads config.json (`jabbu-pocket reload`
-	// too) and swaps `daemonOptions.config`, which the agy MCP getter above reads at each session start.
+	// The daemon stops its children and settles the ledger before it exits. SIGHUP (and `jabbu-pocket reload`) re-reads config.json.
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 		process.removeAllListeners(signal);
 		process.on(signal, () => {

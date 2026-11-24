@@ -229,7 +229,7 @@ describe("머지 고정: 검사한 sha에만, 머지 직전 재검사", () => {
 		expect(w.fake.callsOf("gh", "merge")).toHaveLength(0);
 		expect(w.row(row.taskId).status).toBe("review");
 		expect(w.posts().some((text) => text.includes("PR 착지 보류"))).toBe(true);
-		// The stop card carries the `머지` button labelled "다시 시도" (a retry is the same click).
+		// The stop card carries the `머지` button labelled "PR 다시 올리기" (a retry is the same click).
 		const card = w.transport.calls.find(
 			(call) => call.method === "createMessage" && JSON.stringify(call.embeds ?? "").includes("PR 착지 보류"),
 		);
@@ -727,5 +727,22 @@ describe("레코드 상태: blocked·held·rework는 스위퍼가 만지지 않�
 		expect(w.record(row.taskId)?.prLand.pushedAt).toBe(w.clock.now());
 		expect(w.record(row.taskId)?.prLand.pushedAt).toBeGreaterThan(startedAt);
 		expect(w.fake.callsOf("gh", "pr", "create")).toHaveLength(1);
+	});
+
+	test("레코드 상태: 같은 tip의 PR이 이미 열려 있으면 다른 카드의 머지 버튼은 다시 착지하지도 알리지도 않는다", async () => {
+		const { row } = await open();
+		const record = w.record(row.taskId);
+		const opened = () => w.posts().filter((text) => text.includes("PR을 열었습니다")).length;
+		const before = { judged: w.judgeCalls.length, calls: w.fake.calls.length, opened: opened() };
+		await w.clickMerge(row.taskId);
+		expect(w.judgeCalls).toHaveLength(before.judged);
+		expect(w.fake.calls).toHaveLength(before.calls);
+		expect(opened()).toBe(before.opened);
+		expect(w.record(row.taskId)).toEqual(record);
+		// A new commit on the branch is landed again by the same button.
+		w.commit(row.worktree, ["b.txt"]);
+		await w.clickMerge(row.taskId);
+		expect(w.judgeCalls).toHaveLength(before.judged + 1);
+		expect(w.record(row.taskId)?.sha).toBe(tipOf(row));
 	});
 });

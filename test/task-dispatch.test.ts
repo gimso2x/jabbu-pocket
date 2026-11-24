@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import type { WorkerAgyConfig } from "../src/config";
 import { DiscordChannel } from "../src/discord/channel";
@@ -17,11 +18,13 @@ import { acceptanceItems, docsDirOf, docsDirUnder, type TaskRisk } from "../src/
 import type { HostResult, ProgressLag, TaskHostOps, TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
 import { buildAcceptedCard, buildAutoLandCard, buildReachedCard } from "../src/tasks/notify";
+import type { TaskMailboxPort } from "../src/tasks/runtime";
 import { agySecretsDirs, agySettings, resolveWorkerTier } from "../src/tasks/worker-tier";
 import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
 import { makeRepo } from "./helpers/git-fixtures";
+import { fakeMailbox } from "./helpers/local-task";
 
 const NOW = Date.parse("2026-10-26T06:00:00Z");
 /** The worktree's HEAD right after creation: what a start stores as the row's `baseSha`. */
@@ -164,6 +167,10 @@ function harness(
 		agy?: WorkerAgyConfig;
 		/** Config `recordsRepo`: the documents are kept outside the worktree (records mode). */
 		recordsRepo?: string;
+		/** The daemon's Mailbox port: a new local non-agy task runs headless. */
+		headless?: TaskMailboxPort;
+		/** Config without `herdr`; the fake runner then throws on any herdr command. */
+		noHerdr?: boolean;
 	} = {},
 ): Harness {
 	const db = new Database(":memory:", { strict: true });
@@ -180,6 +187,9 @@ function harness(
 	const promptStalled = { value: false };
 	const prompts: HerdrPromptInput[] = [];
 	const run: ProcessRunner = async (cmd) => {
+		if (options.noHerdr === true && cmd.some((word) => word.endsWith("herdr"))) {
+			throw new Error(`herdr must not run: ${cmd.join(" ")}`);
+		}
 		// Over ssh every remote word is single-quoted (or a bare `~`); record the words the remote shell would see.
 		const sshAt = cmd[0] === "ssh" ? cmd.indexOf("--") + 1 : -1;
 		const args = sshAt >= 0 ? cmd.slice(sshAt + 1).map(unquoteRemote) : cmd;
@@ -214,7 +224,7 @@ function harness(
 		ompExecutable: "omp",
 		homeDir: "/home",
 		workspaceDir: "/ws",
-		herdr: {},
+		...(options.noHerdr === true ? {} : { herdr: {} }),
 		dispatchHosts: () => ({
 			wsl: {
 				ssh: "wsl-ssh",
@@ -248,6 +258,7 @@ function harness(
 						channels: registryOf(new DiscordChannel(transport, { ownerUserId: OWNER })),
 						now: () => NOW,
 						hostOps: () => host,
+						...(options.headless === undefined ? {} : { headless: options.headless }),
 						...(options.recordsRepo === undefined ? {} : { recordsRepo: options.recordsRepo }),
 						hostLoad: options.hostLoad ?? IDLE_HOST_LOAD,
 						...(options.disk === undefined
@@ -340,7 +351,7 @@ describe("jabbu_dispatch taskSpec: new task", () => {
 			messageReference: { messageId: "222222222222222222" },
 		});
 		const card = contentOf(post).split("\n");
-		expect(card[0]).toStartWith("`local`에서 `t-20261026-01`(로그 회전)가 맡았습니다.");
+		expect(card[0]).toStartWith(`\`${hostname()}\`에서 \`t-20261026-01\`(로그 회전)가 맡았습니다.`);
 		expect(card).toContain("[목표] 로그 회전을 넣는다");
 		expect(card).toContain("[가정] 없음");
 		expect(card.some((line) => line.startsWith("진행 보기"))).toBe(false); // no board configured
@@ -496,16 +507,18 @@ describe("jabbu_dispatch taskSpec: new task", () => {
 		expect(h.herdr).toEqual([]);
 	});
 
-	test("without taskSpec nothing task-related happens", async () => {
+	test("AC-7: without taskSpec a local worker is not started: a name with no [TASK] row is refused, nothing happens", async () => {
 		const h = harness();
 		h.agents.add("plain");
-		const out = await call(h, { mode: "herdr", name: "plain", task: "후속" });
-		expect(out).toContain("후속 지시를 plain에 전달했습니다");
+		await expect(call(h, { mode: "worker", name: "plain", task: "후속" })).rejects.toThrow(
+			"등록된 로컬 작업이 아닙니다",
+		);
+		await expect(call(h, { mode: "worker", name: "plain" })).rejects.toThrow("등록된 로컬 작업이 아닙니다");
+		await expect(call(h, { mode: "worker", name: "plain-new", task: "시작" })).rejects.toThrow("taskSpec으로 등록");
 		expect(h.ledger.list()).toEqual([]);
 		expect(h.host.calls).toEqual([]);
 		expect(h.transport.calls).toEqual([]);
-		const read = await call(h, { mode: "herdr", name: "plain" });
-		expect(read).toBe("▸ plain 최근 출력:\n{}");
+		expect(h.herdr).toEqual([]);
 	});
 });
 
@@ -662,11 +675,10 @@ describe("jabbu_dispatch taskSpec: resume and read", () => {
 	});
 
 	test("an unconfirmed follow-up (local or remote) says it was delivered without a seen start", async () => {
-		const h = harness();
+		const h = await started();
 		h.promptStalled.value = true;
-		h.agents.add("plain");
-		expect(await call(h, { mode: "herdr", name: "plain", task: "후속" })).toBe(
-			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: jabbu_dispatch {mode:"herdr", name:"plain"}',
+		expect(await call(h, { mode: "worker", name: "t-20261026-01", task: "후속" })).toBe(
+			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: jabbu_dispatch {mode:"worker", name:"t-20261026-01"}',
 		);
 		h.agents.add("remote1");
 		expect(await call(h, { host: "wsl", name: "remote1", task: "후속" })).toBe(
@@ -826,7 +838,7 @@ describe("jabbu_dispatch taskSpec: resume and read", () => {
 
 	test("reading an agent bound to a task appends the judgement summary line", async () => {
 		const h = await started();
-		const out = await call(h, { mode: "herdr", name: "t-20261026-01" });
+		const out = await call(h, { mode: "worker", name: "t-20261026-01" });
 		expect(out).toContain("▸ T-20261026-01 AC 0/2 · 단계 0/1 · working · 2026-10-26T15:00:00+09:00");
 	});
 });
@@ -854,13 +866,14 @@ describe("jabbu_dispatch handoff risk scan", () => {
 		},
 		{ name: "host remote start", params: (task) => ({ host: "wsl", name: "remote-x", task }) },
 		{
-			name: "herdr follow-up",
+			name: "worker follow-up",
 			setup: async (h) => {
-				h.agents.add("plain");
+				await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+				h.herdr.length = 0;
+				h.transport.calls.length = 0;
 			},
-			params: (task) => ({ mode: "herdr", name: "plain", task }),
+			params: (task) => ({ mode: "worker", name: "t-20261026-01", task }),
 		},
-		{ name: "herdr local start", params: (task) => ({ mode: "herdr", name: "plain-new", task }) },
 	];
 	const REFUSALS: Array<[string, ApprovalResult | undefined, string]> = [
 		["denied", "denied", "denied"],
@@ -936,17 +949,20 @@ describe("jabbu_dispatch handoff risk scan", () => {
 
 	test("clear briefs never ask and return the unchanged result", async () => {
 		const h = harness({ approval: "denied" });
-		h.agents.add("plain");
-		const out = await call(h, { mode: "herdr", name: "plain", task: "로그 회전을 구현해" });
-		expect(out).toBe('후속 지시를 plain에 전달했습니다. 진행 확인: jabbu_dispatch {mode:"herdr", name:"plain"}');
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		const out = await call(h, { mode: "worker", name: "t-20261026-01", task: "로그 회전을 구현해" });
+		expect(out).toBe(
+			'후속 지시를 t-20261026-01에 전달했습니다. 진행 확인: jabbu_dispatch {mode:"worker", name:"t-20261026-01"}',
+		);
 		expect(h.approvals).toEqual([]);
 	});
 
 	test("advisory briefs go out without asking and end with the advisory line", async () => {
 		const h = harness({ approval: "denied" });
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
 		const out = await call(h, {
-			mode: "herdr",
-			name: "plain",
+			mode: "worker",
+			name: "t-20261026-01",
 			task: "bun install 뒤 테스트를 돌린다\n머지·push·데몬 재시작(systemctl --user restart jabbu)는 하지 않는다",
 		});
 		expect(delivered(h, "하지 않는다")).toBe(true);
@@ -1437,9 +1453,9 @@ describe("wiki session notes of TASK workers", () => {
 		expect(creates(agy)[0]).toEqual(expect.arrayContaining(ENV));
 	});
 
-	test("AC-5: a plain herdr dispatch (no taskSpec) keeps its pane environment as before", async () => {
+	test("AC-5: a plain remote herdr dispatch (no taskSpec) keeps its pane environment as before", async () => {
 		const h = harness();
-		await call(h, { name: "plain-1", task: "go" });
+		await call(h, { host: "wsl", name: "plain-1", task: "go" });
 		expect(creates(h)).toHaveLength(1);
 		expect(creates(h)[0]).not.toContain("--env");
 	});
@@ -1537,5 +1553,122 @@ describe("[TASK] 프롬프트: 비기록 모드와 기록 모드(recordsRepo)", 
 		const resume = h.herdr.find((cmd) => cmd[1] === "agent" && cmd[2] === "prompt")?.[4] ?? "";
 		expect(resume).toContain(`기준 문서는 ${recordsRepo}/docs/tasks/${TASK}/ (저장소 밖 기록 디렉터리)다.`);
 		expect(resume).toContain("문서를 커밋하지 말고 저장만 한다");
+	});
+});
+
+describe("headless [TASK] runtime (no herdr): registration", () => {
+	const ORIGIN = "jabbu/task/t-20261026-01";
+
+	test("AC-1: with no herdr config a local taskSpec registers a headless row, opens the task origin and sends the start prompt once — herdr never runs", async () => {
+		const mailbox = fakeMailbox();
+		const h = harness({ noHerdr: true, headless: mailbox.port });
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "회전을 구현해" });
+		expect(out).toContain("T-20261026-01 등록·시작했습니다");
+		expect(out).toContain('jabbu_dispatch {mode:"worker", name:"t-20261026-01"}');
+		const row = h.ledger.require("T-20261026-01");
+		expect(row.runtime).toBe("headless");
+		expect(mailbox.calls.ensured).toEqual([[ORIGIN, `/sessions/${ORIGIN}`]]);
+		expect(mailbox.calls.routed).toHaveLength(1);
+		const sent = mailbox.calls.routed[0];
+		expect(sent).toMatchObject({ originKey: ORIGIN, ownerVerified: true, threadRef: "task:T-20261026-01" });
+		expect(sent?.platformMessageId).toStartWith("task:t-20261026-01:start:");
+		expect(sent?.text).toContain("너는 T-20261026-01 담당이다");
+		expect(sent?.text).toContain("회전을 구현해");
+		// No pane, no board link, the start prompt kept for the dashboard like a herdr one.
+		expect(h.herdr).toEqual([]);
+		expect(h.prompts.map((p) => [p.kind, p.agent])).toEqual([["start", "t-20261026-01"]]);
+		expect(h.transport.calls.some((c) => c.method === "createMessage")).toBe(true);
+	});
+
+	test("AC-3: an agy request keeps runtime herdr when herdr is on, and falls back to a headless omp worker when it is off", async () => {
+		const agyModel = "gemini-4-hydrogen-high";
+		const spec = { taskSpec: { ...GOOD_SPEC, risk: "L1", worker: "agy" }, task: "go" };
+		const on = fakeMailbox();
+		const withHerdr = harness({ agy: { model: agyModel }, headless: on.port });
+		await call(withHerdr, spec);
+		expect(withHerdr.ledger.require("T-20261026-01")).toMatchObject({
+			runtime: "herdr",
+			workerModel: `agy:${agyModel}`,
+		});
+		expect(withHerdr.herdr.map((cmd) => cmd.join(" ")).some((line) => line.includes("agy"))).toBe(true);
+		expect(on.calls.ensured).toEqual([]);
+
+		const off = fakeMailbox();
+		const noHerdr = harness({ agy: { model: agyModel }, headless: off.port, noHerdr: true });
+		const out = await call(noHerdr, spec);
+		const row = noHerdr.ledger.require("T-20261026-01");
+		expect(row.runtime).toBe("headless");
+		expect(row.workerModel ?? "").not.toContain("agy");
+		expect(out).toContain("herdr 없음");
+		expect(off.calls.routed).toHaveLength(1);
+		expect(noHerdr.herdr).toEqual([]);
+	});
+
+	test("AC-5: a host task stays on herdr over ssh even when a headless port is given", async () => {
+		const mailbox = fakeMailbox();
+		const h = harness({ headless: mailbox.port });
+		await call(h, { taskSpec: GOOD_SPEC, task: "go", host: "wsl" });
+		expect(h.ledger.require("T-20261026-01")).toMatchObject({ runtime: "herdr", host: "wsl" });
+		expect(h.herdr.some((cmd) => cmd[0] === "ssh")).toBe(true);
+		expect(mailbox.calls.ensured).toEqual([]);
+		expect(mailbox.calls.routed).toEqual([]);
+	});
+
+	test("without a headless port a local task is the herdr one as before (unit-test deps)", async () => {
+		const h = harness();
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		expect(h.ledger.require("T-20261026-01").runtime).toBe("herdr");
+		expect(h.herdr.some((cmd) => cmd[1] === "agent" && cmd[2] === "start")).toBe(true);
+	});
+
+	test("AC-6: a headless local start is refused by the start-capacity gate with the same words and sends nothing", async () => {
+		const mailbox = fakeMailbox();
+		const h = harness({
+			noHerdr: true,
+			headless: mailbox.port,
+			disk: { freeBytes: 1024, totalBytes: 100 * 1024 ** 3, asked: [] },
+		});
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
+		expect(h.ledger.list()).toEqual([]);
+		expect(mailbox.calls.ensured).toEqual([]);
+		expect(mailbox.calls.routed).toEqual([]);
+	});
+
+	test("resume of a headless task: a live origin gets the resume prompt after the hold is lifted; a missing one is opened again", async () => {
+		const mailbox = fakeMailbox();
+		const h = harness({ noHerdr: true, headless: mailbox.port });
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		mailbox.calls.routed.length = 0;
+		h.ledger.pauseTask("T-20261026-01");
+		const live = await call(h, { taskSpec: { id: "T-20261026-01" }, task: "이어서" });
+		expect(live).toContain("살아 있는 에이전트에 재개 프롬프트를 보냈습니다");
+		expect(mailbox.calls.routed).toHaveLength(1);
+		expect(mailbox.calls.routed[0]?.text).toContain("이어서");
+		expect(mailbox.calls.routed[0]?.platformMessageId).toStartWith("task:t-20261026-01:followup:");
+		expect(h.ledger.isPaused(h.ledger.require("T-20261026-01"))).toBe(false);
+
+		mailbox.origins.clear();
+		mailbox.calls.routed.length = 0;
+		const gone = await call(h, { taskSpec: { id: "T-20261026-01" } });
+		expect(gone).toContain("같은 워크트리에서 새 에이전트를 시작했습니다");
+		expect(mailbox.calls.routed.map((r) => r.platformMessageId.split(":")[2])).toEqual(["start"]);
+		expect(h.herdr).toEqual([]);
+	});
+
+	test("a headless row: follow-up by name goes to the origin and lifts the owner's hold first; the read reads the session file", async () => {
+		const mailbox = fakeMailbox();
+		const h = harness({ noHerdr: true, headless: mailbox.port });
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		mailbox.calls.routed.length = 0;
+		h.ledger.pauseTask("T-20261026-01");
+		const out = await call(h, { mode: "worker", name: "t-20261026-01", task: "다음 단계" });
+		expect(out).toContain("후속 지시를 t-20261026-01에 전달했습니다");
+		expect(mailbox.calls.routed.map((r) => [r.originKey, r.text])).toEqual([[ORIGIN, "다음 단계"]]);
+		expect(h.ledger.isPaused(h.ledger.require("T-20261026-01"))).toBe(false);
+		const read = await call(h, { mode: "worker", name: "t-20261026-01" });
+		expect(read).toStartWith("▸ t-20261026-01 최근 출력:\n");
+		expect(read).toContain("▸ T-20261026-01 AC 0/2");
+		expect(h.herdr).toEqual([]);
 	});
 });

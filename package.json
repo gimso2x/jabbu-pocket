@@ -19,13 +19,13 @@
 		"test:omp-mock": "JABBU_E2E_OMP_MOCK=1 bun test test/omp-mock.e2e.test.ts"
 	},
 	"dependencies": {
-		"@json-render/chat": "0.22.0",
+		"@json-render/chat": "0.23.2",
 		"zod": "^4.3.6"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.6.8",
-		"@types/bun": "^1.4.3",
-		"chat": "^4.44.0",
+		"@types/bun": "^1.4.5",
+		"chat": "^4.45.0",
 		"knip": "^6.47.0",
 		"typescript": "^7.0.2"
 	}

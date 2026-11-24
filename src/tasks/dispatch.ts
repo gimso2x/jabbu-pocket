@@ -3,16 +3,7 @@ import type { ChannelRegistry } from "../channel/registry";
 import type { DispatchHostConfig } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import type { BoardLinkResolver } from "../dispatch/board";
-import {
-	type HerdrRunnerOptions,
-	herdrAgentExists,
-	herdrCloseTaskAgent,
-	herdrPromptExisting,
-	herdrReadAgent,
-	herdrRemoteStart,
-	herdrStartAgent,
-	type ProcessRunner,
-} from "../dispatch/omp";
+import { type HerdrRunnerOptions, herdrRemoteStart, herdrStartAgent, type ProcessRunner } from "../dispatch/omp";
 import { type DiskView, diskHeadroom, type HostLoadReader } from "../ops/host-resources";
 import type { SessionCeilingGate } from "../ops/host-sessions";
 import { type StartCapacity, startCapacity } from "../ops/start-capacity";
@@ -24,8 +15,6 @@ import {
 	acceptanceItems,
 	docsDirOf,
 	type NewTaskSpec,
-	type ParsedProgress,
-	parseProgress,
 	renderContext,
 	renderOutcome,
 	renderProgress,
@@ -34,12 +23,21 @@ import {
 } from "./docs";
 import { evaluateTask } from "./evaluate";
 import { buildHandoffBrief } from "./handoff";
-import { type HostResult, resolveTaskHost, type TaskHostOps, type TaskResumeOps } from "./host";
+import { resolveTaskHost, type TaskHostOps, type TaskResumeOps } from "./host";
 import type { TaskLedger, TaskRow } from "./ledger";
 import { buildAcceptedCard, postToThread, setStatusReaction, type TaskChatLog } from "./notify";
 import { buildTaskPrompt, resumeCheckLines } from "./prompt";
-import { agyWorkspacesOf, promptDocsOf, recordsRootFor, rollbackRecords, writeTaskDocs } from "./records";
-import { checkResume, type ResumeCheck, restatedHash } from "./resume-check";
+import {
+	agyWorkspacesOf,
+	promptDocsOf,
+	readResumeCheck,
+	recordsRootFor,
+	rollbackRecords,
+	settled,
+	writeTaskDocs,
+} from "./records";
+import { restatedHash } from "./resume-check";
+import { releaseHold, runtimeFor, type TaskMailboxPort, type TaskRuntime, type TaskStartResult } from "./runtime";
 import { agyModelOf, agySecretsDirs, agyWorkerArgs, type WorkerTier, withWorkerModel, workerLine } from "./worker-tier";
 
 type HostEntry = DispatchHostConfig;
@@ -72,6 +70,8 @@ export interface TaskDispatchDeps {
 	hostLoad?: Partial<HostLoadReader>;
 	/** The host-wide omp session ceiling the start gate judges (`hostSessionCeiling`); local starts only. */
 	hostSessions?: SessionCeilingGate;
+	/** The daemon's Mailbox port: present → a new local non-agy task runs headless (`runtime='headless'`), else on herdr. */
+	headless?: TaskMailboxPort;
 	/** herdr board card link of a started agent (`config.herdrBoard`); absent → the card carries no link. */
 	boardLink?: BoardLinkResolver;
 	/** Keeps a prompt herdr took for the dashboard's 마지막 지시 (`Store.recordHerdrPrompt`); absent → nothing kept. */
@@ -119,16 +119,39 @@ function herdrOptionsFor(deps: TaskDispatchDeps, entry: HostEntry | undefined): 
 	};
 }
 
-/**
- * Starts the task's herdr agent in its worktree (local herdr, or the host's over ssh) with `prompt`.
- * `closeOnPromptFailure`: a new task's caller removes the worktree on failure, so the agent must not outlive it.
- */
+/** The worker of a row by its recorded runtime (herdr: the row host's options; headless: the daemon's port). */
+function runtimeOf(deps: TaskDispatchDeps, row: TaskRow): TaskRuntime {
+	return runtimeFor(row, {
+		herdr: (r) => herdrOptionsFor(deps, hostEntryOf(deps, r.host)),
+		startHerdr: (r, prompt, close) => startHerdrAgent(deps, r, prompt, close),
+		headless: deps.headless,
+		warn: (event, fields) => deps.log.warn(event, fields),
+	});
+}
+
+/** Starts the task's worker in its worktree with `prompt` (a herdr start keeps its prompt itself; a headless one here). */
 async function startAgent(
 	deps: TaskDispatchDeps,
 	row: TaskRow,
 	prompt: string,
 	closeOnPromptFailure = false,
-): Promise<{ ok: true; paneId: string } | { ok: false; error: string }> {
+): Promise<TaskStartResult> {
+	const started = await runtimeOf(deps, row).start(row, prompt, closeOnPromptFailure);
+	if (started.ok && row.runtime === "headless")
+		notePrompt(deps, { host: row.host, agent: row.agent, kind: "start", text: prompt, originKey: deps.originKey });
+	return started;
+}
+
+/**
+ * Starts the task's herdr agent in its worktree (local herdr, or the host's over ssh) with `prompt`.
+ * `closeOnPromptFailure`: a new task's caller removes the worktree on failure, so the agent must not outlive it.
+ */
+async function startHerdrAgent(
+	deps: TaskDispatchDeps,
+	row: TaskRow,
+	prompt: string,
+	closeOnPromptFailure: boolean,
+): Promise<TaskStartResult> {
 	const entry = hostEntryOf(deps, row.host);
 	const options = herdrOptionsFor(deps, entry);
 	// An agy worker is local only (the trial's bound, `resolveAgyWorker`). agy takes no system prompt flag: its floors go
@@ -166,7 +189,9 @@ export function agyOccupant(ledger: TaskLedger, except?: string): string | undef
 
 /** The board card of a just-started agent; `undefined` when no board is configured. */
 async function cardLink(deps: TaskDispatchDeps, row: TaskRow, paneId: string): Promise<string | undefined> {
-	return deps.boardLink === undefined ? undefined : await deps.boardLink(row.host, paneId);
+	return deps.boardLink === undefined || row.runtime === "headless"
+		? undefined
+		: await deps.boardLink(row.host, paneId);
 }
 
 /** Permalink of the task thread root; the bare thread ref when the platform cannot resolve it. */
@@ -208,10 +233,8 @@ export async function startTask(
 	hostEntryOf(deps, host); // unknown host fails before anything is reserved
 	let capacity: StartCapacity | undefined;
 	if (host === null) {
-		// A worktree, a docs commit and an agent on a nearly full disk or tight memory fail half-way; refuse before
-		// reserving anything. Memory·disk·host-wide omp sessions refuse with the measured numbers
-		//, load only warns, and the owner's
-		// explicit `force` passes.
+		// A worktree, a docs commit and a worker on a full disk or tight memory fail half-way: refuse before reserving
+		// anything (memory·disk·host omp sessions, with the measured numbers); load only warns; the owner's `force` passes.
 		const disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
 		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
 		if (capacity.refusals.length > 0 && input.force !== true) {
@@ -235,6 +258,9 @@ export async function startTask(
 		threadRef,
 		host,
 		repo: spec.repo,
+		// Local non-agy tasks run headless on the daemon's Mailbox; remote and agy ones stay on herdr.
+		runtime:
+			host === null && agyModelOf(worker.model) === undefined && deps.headless !== undefined ? "headless" : "herdr",
 		acceptance: acceptanceItems(spec.acceptance),
 		worker: {
 			tier: worker.tier,
@@ -319,36 +345,8 @@ export async function startTask(
 		posted
 			? "접수 카드(맡았습니다·진행 보기·[목표]·[가정])를 이 스레드에 이미 올렸습니다. 답에서 카드 내용을 되풀이하지 말고, 카드에 없는 것(오너가 지금 알아야 할 위험·확인 못 한 것)만 한두 줄로 씁니다."
 			: "접수 카드를 스레드에 올리지 못했습니다. 답 첫 줄에 '`<호스트>`에서 `<에이전트>`(<제목>)가 맡았습니다', 다음 줄에 진행 보기 링크, 그 아래 [목표]·[가정] 두 줄을 직접 씁니다.",
-		`진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}. 재개·오너 결정 전달: jabbu_dispatch {taskSpec:{id:"${row.taskId}"}, task:<오너 답 원문>}. 완료 처리는 오너만 합니다.`,
+		`진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"worker"' : `{host:"${row.host}"`}, name:"${row.agent}"}. 재개·오너 결정 전달: jabbu_dispatch {taskSpec:{id:"${row.taskId}"}, task:<오너 답 원문>}. 완료 처리는 오너만 합니다.`,
 	].join("\n");
-}
-
-/** A host read that throws (unsafe input, ssh spawn) is a failed read like any other. */
-async function settled<T>(read: () => Promise<HostResult<T>>): Promise<HostResult<T>> {
-	try {
-		return await read();
-	} catch (error) {
-		return { ok: false, error: error instanceof Error ? error.message : String(error) };
-	}
-}
-
-/**
- * The pre-resume check (`checkResume` over PROGRESS.md and `progressLag`) and the `restated` value PROGRESS.md had
- * at this resume (`undefined` when it could not be read). Never throws: a failed read becomes a note.
- */
-async function readResumeCheck(
-	ops: TaskHostOps & TaskResumeOps,
-	row: TaskRow,
-): Promise<{ check: ResumeCheck; restated: string | undefined }> {
-	const file = await settled(() => ops.readFile(`${docsDirOf(row)}/PROGRESS.md`));
-	const progress: HostResult<ParsedProgress> = !file.ok
-		? file
-		: file.value === undefined
-			? { ok: false, error: "PROGRESS.md 없음" }
-			: { ok: true, value: parseProgress(file.value) };
-	const progressFile = `${docsDirOf(row)}/PROGRESS.md`;
-	const lag = await settled(() => ops.progressLag({ worktree: row.worktree, taskId: row.taskId, progressFile }));
-	return { check: checkResume(progress, lag), restated: progress.ok ? progress.value.restated : undefined };
 }
 
 /**
@@ -372,12 +370,11 @@ export async function resumeTask(
 	if (input.host !== undefined && input.host !== row.host) {
 		throw new Error(`${row.taskId}는 ${row.host ?? "로컬"}에서 실행되는 작업입니다(host 불일치)`);
 	}
-	const entry = hostEntryOf(deps, row.host);
-	const options = herdrOptionsFor(deps, entry);
+	const runtime = runtimeOf(deps, row);
 	const ops = opsFor(deps, row.host);
 	const { check, restated } = await readResumeCheck(ops, row);
 	deps.log.info("task_resume_check", { task: row.taskId, findings: check.findings.length, notes: check.notes.length });
-	const alive = await herdrAgentExists(row.agent, options);
+	const alive = await runtime.exists(row);
 	if (!alive.ok) return `재개 실패: ${alive.error}`;
 	const switchTo =
 		input.switchTo !== undefined && (input.switchTo.model !== row.workerModel || input.switchTo.tier !== row.tier)
@@ -397,16 +394,17 @@ export async function resumeTask(
 			timezone: deps.timezone,
 			now: deps.now(),
 		});
+	releaseHold(deps.ledger, row); // a headless task the owner stopped takes the follow-up (herdr rows have no hold)
 	let how: string;
 	let link: string | undefined;
 	let switched: string | undefined;
 	if (switchTo !== undefined) {
-		const outcome = await resumeOnOtherWorker(deps, { row, ops, options, alive: alive.exists, switchTo, promptFor });
+		const outcome = await resumeOnOtherWorker(deps, { row, ops, runtime, alive: alive.exists, switchTo, promptFor });
 		if (typeof outcome === "string") return outcome;
 		({ how, link, switched } = outcome);
 	} else if (alive.exists) {
 		const prompt = promptFor();
-		const sent = await herdrPromptExisting(row.agent, prompt, options);
+		const sent = await runtime.prompt(row, prompt);
 		// Unconfirmed: herdr took the text but saw no start; the resume goes on (the sweep watches what follows).
 		if (!sent.ok && sent.unconfirmed !== true) return `재개 실패: ${sent.error ?? "unknown"}`;
 		notePrompt(deps, { host: row.host, agent: row.agent, kind: "followup", text: prompt, originKey: deps.originKey });
@@ -439,7 +437,7 @@ export async function resumeTask(
 	if (restated !== undefined) deps.ledger.recordNotice(row.taskId, `restated-before:${now}:${restatedHash(restated)}`);
 	deps.log.info("task_resumed", { task: row.taskId, alive: alive.exists });
 	return [
-		`${row.taskId}: ${how} (${row.status} → working).${link === undefined ? "" : ` 진행 보기: ${link}.`} 진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}`,
+		`${row.taskId}: ${how} (${row.status} → working).${link === undefined ? "" : ` 진행 보기: ${link}.`} 진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"worker"' : `{host:"${row.host}"`}, name:"${row.agent}"}`,
 		...(switched === undefined ? [] : [switched]),
 		...resumeCheckLines(check.findings, check.notes),
 	].join("\n");
@@ -456,13 +454,13 @@ async function resumeOnOtherWorker(
 	input: {
 		row: TaskRow;
 		ops: TaskHostOps & TaskResumeOps;
-		options: HerdrRunnerOptions;
+		runtime: TaskRuntime;
 		alive: boolean;
 		switchTo: WorkerTier;
 		promptFor(handoff: string): string;
 	},
 ): Promise<string | { how: string; link: string | undefined; switched: string }> {
-	const { row, ops, options, switchTo } = input;
+	const { row, ops, runtime, switchTo } = input;
 	if (agyModelOf(switchTo.model) !== undefined) {
 		const busy = agyOccupant(deps.ledger, row.taskId);
 		if (busy !== undefined) return `재개 안 함: agy 워커는 동시 1개만 — ${busy}가 점유 중입니다(working·blocked).`;
@@ -472,7 +470,7 @@ async function resumeOnOtherWorker(
 	if (!present.value) return `재개 실패: 워크트리가 없습니다: ${row.worktree}`;
 	const docsDir = docsDirOf(row);
 	const progress = await settled(() => ops.readFile(`${docsDir}/PROGRESS.md`));
-	const screen = input.alive ? await herdrReadAgent(row.agent, options) : undefined;
+	const screen = input.alive ? await runtime.read(row) : undefined;
 	const label = (worker: { tier: string | null; model: string | null }): string =>
 		`${worker.tier ?? "?"}(${worker.model ?? "기본 모델"})`;
 	const from = label({ tier: row.tier, model: row.workerModel });
@@ -485,7 +483,7 @@ async function resumeOnOtherWorker(
 		screen: screen?.ok === true ? screen.output : undefined,
 	});
 	if (input.alive) {
-		const closed = await herdrCloseTaskAgent(row.agent, options);
+		const closed = await runtime.close(row);
 		if (!closed.ok) return `재개 실패: 이전 워커를 닫지 못했습니다: ${closed.error}`;
 	}
 	const before = {

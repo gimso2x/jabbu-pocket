@@ -1,10 +1,9 @@
-import type { ActionButton } from "../channel/port";
-import { mentionToken } from "../channel/port";
+import { type ActionButton, mentionToken } from "../channel/port";
 import { escapeMrkdwn } from "../channel/text";
 import { diffViewLink } from "../dispatch/board";
 import { redact } from "../redact";
 import { formatTypicalRange, type TypicalDuration } from "../store/turn-duration";
-import type { TaskCard } from "../tasks/notify";
+import { PR_MERGE_LABEL, type TaskCard } from "../tasks/notify";
 import { CHECK_TIMEOUT_MS } from "../tasks/signals";
 import { workerLine } from "../tasks/worker-tier";
 import { overlapLine, PR_MERGE_STEPS, prOpenLines, topLine } from "./card-parts";
@@ -128,10 +127,8 @@ function buttonsOf(lane: LaneRow, hold = true): ActionButton[] {
 		];
 	}
 	if ((lane.meta.leftovers ?? []).some((item) => item.blocking)) return [discardButton(lane)];
-	return [
-		{ actionId: laneMergeActionId(lane.name), label: "머지", value: lane.name, style: "primary" },
-		discardButton(lane),
-	];
+	const label = lane.meta.land?.mode === "pr" ? PR_MERGE_LABEL : "머지";
+	return [{ actionId: laneMergeActionId(lane.name), label, value: lane.name, style: "primary" }, discardButton(lane)];
 }
 
 /** What the buttons do, as the grey line of a card that has them. */
@@ -144,7 +141,7 @@ function buttonNote(lane: LaneRow): string {
 		return '폐기 = worktree·브랜치 삭제 · 남은 일은 `!reopen <지시>` · 그대로 머지는 "머지해"';
 	}
 	if (lane.meta.land?.mode === "pr")
-		return `머지 = ${PR_MERGE_STEPS} → worktree 정리 · 폐기 = worktree·브랜치 삭제 · 재시작은 포함 안 됨`;
+		return `${PR_MERGE_LABEL} = ${PR_MERGE_STEPS} → worktree 정리 · 폐기 = worktree·브랜치 삭제 · 재시작은 포함 안 됨`;
 	return `머지 = ff 머지 → push origin/${lane.meta.baseBranch ?? "?"} → worktree 정리 · 폐기 = worktree·브랜치 삭제 · 재시작은 포함 안 됨`;
 }
 

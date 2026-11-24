@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { herdrReadAgent, type ProcessRunner, realProcessRunner } from "../src/dispatch/omp";
 import { buildDispatchTool, type DispatchToolDeps } from "../src/dispatch/tool";
+import { localTask } from "./helpers/local-task";
 
 const AKIA = `AKIA${"QWERTYUIOPASDFGH"}`;
 const SIGNAL = { signal: new AbortController().signal };
@@ -47,10 +48,12 @@ describe("dispatch tool (qa-j)", () => {
 		});
 		expect(read.ok).toBe(false);
 		expect(read.error).not.toContain(AKIA);
+		const { row, tasks } = localTask();
 		const tool = toolWith(async () => ({ code: 1, stdout: "", stderr: `boom ${AKIA}`, timedOut: false }), {
 			herdr: {},
+			tasks,
 		});
-		const text = await tool.execute({ mode: "herdr", name: "w" }, SIGNAL);
+		const text = await tool.execute({ mode: "worker", name: row.agent }, SIGNAL);
 		expect(text).toContain("읽기 실패");
 		expect(text).not.toContain(AKIA);
 	});
@@ -65,21 +68,22 @@ describe("dispatch tool (qa-j)", () => {
 			},
 			{ herdr: {} },
 		);
-		await expect(tool.execute({ mode: "herdr", name: "w", task: "--help" }, SIGNAL)).rejects.toThrow("`-`로 시작");
+		await expect(tool.execute({ mode: "worker", name: "w", task: "--help" }, SIGNAL)).rejects.toThrow("`-`로 시작");
 		expect(runs).toEqual([]);
 	});
 
 	// qa-j n110: name without mode must not fall into `omp -p` and lose the name.
-	test("with herdr on, a name without mode goes to herdr; mode simple with a name is refused", async () => {
+	test("with herdr on, a name without mode goes to the worker; mode simple with a name is refused", async () => {
 		const runs: string[][] = [];
+		const { row, tasks } = localTask();
 		const tool = toolWith(
 			async (cmd) => {
 				runs.push(cmd);
 				return { code: 1, stdout: "", stderr: "no herdr", timedOut: false };
 			},
-			{ herdr: {} },
+			{ herdr: {}, tasks },
 		);
-		await tool.execute({ name: "w", task: "빌드 상태 요약" }, SIGNAL);
+		await tool.execute({ name: row.agent, task: "빌드 상태 요약" }, SIGNAL);
 		expect(runs[0]?.[0]).toBe("herdr");
 		expect(runs.some((cmd) => cmd.includes("-p"))).toBe(false);
 		await expect(tool.execute({ mode: "simple", name: "w", task: "x" }, SIGNAL)).rejects.toThrow("simple 모드");

@@ -543,6 +543,49 @@ describe("mailbox: prompt vs steer", () => {
 		expect(store.getInbound(b.platformMessageId)?.state).toBe("uncertain");
 	});
 
+	test("a failed ledger write after a started turn's prompt stops the child and parks the row: no untracked run, never re-sent", async () => {
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(ORIGIN);
+		const a = msg("first");
+		const b = msg("second");
+		const markDispatched = store.markDispatched.bind(store);
+		store.markDispatched = (id, input) => {
+			if (id === a.platformMessageId) throw new Error("disk full");
+			return markDispatched(id, input);
+		};
+		await router.route(a);
+		const first = drivers[0] as SteerFailingDriver;
+		expect(first.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:first"]);
+		expect(store.getInbound(a.platformMessageId)).toMatchObject({
+			state: "uncertain",
+			uncertainReason: "dispatch_record_failed",
+		});
+		// The child that took the prompt is stopped: nothing runs on after the turn went untracked.
+		await expect(first.prompt("x")).rejects.toThrow("not started");
+		await router.route(b);
+		const second = drivers[1] as SteerFailingDriver;
+		expect(second).toBeDefined();
+		expect(second.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:second"]);
+		expect(store.getInbound(a.platformMessageId)?.state).toBe("uncertain");
+		await untilFinal(mailbox, second, () => second.release());
+	});
+
+	test("a ledger that fails both the dispatch write and the park write still stops the started child; the row stays pending", async () => {
+		driverOptions = { holdTurns: true };
+		const a = msg("first");
+		store.markDispatched = () => {
+			throw new Error("disk full");
+		};
+		store.markUncertain = () => {
+			throw new Error("disk full");
+		};
+		await router.route(a).catch(() => undefined);
+		const first = drivers[0] as SteerFailingDriver;
+		expect(first.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:first"]);
+		await expect(first.prompt("x")).rejects.toThrow("not started");
+		expect(store.getInbound(a.platformMessageId)?.state).toBe("pending");
+	});
+
 	test("the turn ending while a steer's leafId call is in flight: nothing was sent, the message runs as a new turn (#61)", async () => {
 		driverOptions = { holdTurns: true };
 		const mailbox = router.mailbox(ORIGIN);

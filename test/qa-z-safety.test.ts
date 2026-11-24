@@ -202,17 +202,19 @@ describe("dispatch tool (#45 repo, #46 name, #97 symlink tail, #98 remote TASKID
 	test("#97 a cwd below a symlink to secrets that does not exist yet is refused before any process", async () => {
 		for (const cwd of [join(home, "work", "link", "newsub"), join(home, "work", "link", "a", "b")]) {
 			const { built, calls } = tool();
-			await expect(built.execute({ mode: "herdr", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
+			await expect(built.execute({ mode: "worker", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
 				"비밀 디렉터리",
 			);
 			expect(calls).toEqual([]);
 		}
 	});
 
-	test("#97 a not-yet-existing cwd beside the links still starts", async () => {
+	test("#97 a not-yet-existing cwd beside the links passes the secrets check (a local worker then takes no cwd)", async () => {
 		const { built, calls } = tool();
-		await built.execute({ mode: "herdr", name: "x", task: "t", cwd: join(home, "work", "new") }, { signal });
-		expect(calls.length).toBeGreaterThan(0);
+		await expect(
+			built.execute({ mode: "worker", name: "x", task: "t", cwd: join(home, "work", "new") }, { signal }),
+		).rejects.toThrow("cwd는 원격");
+		expect(calls).toEqual([]);
 	});
 
 	test("#45 a taskSpec.repo inside secrets (directly, below it, or through a symlink) is refused before any process", async () => {
@@ -235,7 +237,7 @@ describe("dispatch tool (#45 repo, #46 name, #97 symlink tail, #98 remote TASKID
 	test("#46 a malformed name is refused for a local read and a local follow-up, not only a new start", async () => {
 		for (const task of [undefined, "다음 단계"]) {
 			const { built, calls } = tool(["Bad Name"]);
-			await expect(built.execute({ mode: "herdr", name: "Bad Name", task }, { signal })).rejects.toThrow(
+			await expect(built.execute({ mode: "worker", name: "Bad Name", task }, { signal })).rejects.toThrow(
 				"name은 소문자",
 			);
 			expect(calls).toEqual([]);

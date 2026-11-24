@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStore, type Store, StoreError } from "../src/store/db";
-import { readSchemaVersion } from "../src/store/schema-version";
+import { readSchemaVersion, SCHEMA_VERSION } from "../src/store/schema-version";
 import {
 	BACKOFF_CAP_MS,
 	backoffMs,
@@ -327,7 +327,7 @@ describe("schema 7: the removed Teams channel's tables", () => {
 		expect(names).not.toContain(qaIndex);
 		const check = new Database(dbPath, { readonly: true });
 		try {
-			expect(readSchemaVersion(check)).toBe(9);
+			expect(readSchemaVersion(check)).toBe(SCHEMA_VERSION);
 		} finally {
 			check.close();
 		}

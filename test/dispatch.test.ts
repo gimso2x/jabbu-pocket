@@ -22,6 +22,7 @@ import {
 import { buildDispatchTool, type DispatchToolDeps } from "../src/dispatch/tool";
 import type { ApprovalResult } from "../src/safety/approval";
 import { openStore } from "../src/store/db";
+import { localTask } from "./helpers/local-task";
 
 function runner(routes: Array<{ match: (cmd: string[]) => boolean; respond: (cmd: string[]) => RunProcessResult }>) {
 	return async (cmd: string[]): Promise<RunProcessResult> => {
@@ -931,7 +932,7 @@ describe("herdr optional (config herdr)", () => {
 			tasks: {} as NonNullable<DispatchToolDeps["tasks"]>,
 		});
 		for (const params of [
-			{ mode: "herdr", name: "x", task: "t" },
+			{ mode: "worker", name: "x", task: "t" },
 			{ taskSpec: { id: "T-1" } },
 			{ host: "wsl", task: "t" },
 		]) {
@@ -951,8 +952,9 @@ describe("herdr optional (config herdr)", () => {
 	test("local herdr bin (config herdr.bin, set at daemon start): local calls run it, remote ones keep the host's", async () => {
 		setLocalHerdrBin("/opt/herdr/bin/herdr");
 		try {
-			const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: () => ({ wsl: { ssh: "wsl" } }) });
-			await built.execute({ mode: "herdr", name: "x" }, { signal });
+			const { row, tasks } = localTask();
+			const { built, calls } = dispatchTool({ herdr: {}, tasks, dispatchHosts: () => ({ wsl: { ssh: "wsl" } }) });
+			await built.execute({ mode: "worker", name: row.agent }, { signal });
 			expect(calls[0]?.[0]).toBe("/opt/herdr/bin/herdr");
 			await built.execute({ host: "wsl", name: "x" }, { signal });
 			expect(calls[1]?.[0]).toBe("ssh");
@@ -960,8 +962,9 @@ describe("herdr optional (config herdr)", () => {
 		} finally {
 			setLocalHerdrBin(undefined);
 		}
-		const { built, calls } = dispatchTool({ herdr: {} });
-		await built.execute({ mode: "herdr", name: "x" }, { signal });
+		const { row, tasks } = localTask();
+		const { built, calls } = dispatchTool({ herdr: {}, tasks });
+		await built.execute({ mode: "worker", name: row.agent }, { signal });
 		expect(calls[0]?.[0]).toBe("herdr");
 	});
 
@@ -1082,10 +1085,10 @@ describe("worker omp arguments (agentArgs)", () => {
 	});
 });
 
-describe("qa50b lane H: local herdr start and pipe-holding children", () => {
+describe("qa50b lane H: local worker follow-up and pipe-holding children", () => {
 	const signal = new AbortController().signal;
 	/** A fake local herdr: `agent list` shows `agents`, a start adds one, a prompt to an unknown name fails. */
-	function fakeHerdr(agents: string[]) {
+	function fakeHerdr(agents: string[], tasks?: DispatchToolDeps["tasks"]) {
 		const calls: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
 			calls.push(cmd);
@@ -1124,6 +1127,7 @@ describe("qa50b lane H: local herdr start and pipe-holding children", () => {
 			homeDir: "/h",
 			workspaceDir: "/h/workspace",
 			herdr: {},
+			...(tasks === undefined ? {} : { tasks }),
 			log: { info() {}, warn() {} },
 			run,
 		});
@@ -1131,57 +1135,28 @@ describe("qa50b lane H: local herdr start and pipe-holding children", () => {
 	}
 	const verbs = (calls: string[][]) => calls.map((cmd) => cmd.slice(1, 3).join(" "));
 
-	test("H-3 a name local herdr does not run is started in the main workspace, with the notice", async () => {
-		const { built, calls } = fakeHerdr([]);
-		const text = String(
-			await built.execute({ mode: "herdr", name: "brand-new", task: "긴 작업을 시작하라" }, { signal }),
-		);
-		expect(text).toContain("brand-new 에이전트를 시작했습니다 (cwd /h/workspace, pane P9)");
-		expect(text).toContain("메인 작업 디렉터리에서 작업합니다 — 저장소 작업은 taskSpec이나 cwd를 주세요");
-		expect(text).toContain('jabbu_dispatch {mode:"herdr", name:"brand-new"}');
-		expect(text).not.toContain("전달 실패");
-		expect(verbs(calls)).toEqual(["agent list", "workspace create", "agent start", "agent prompt"]);
-		expect(calls[1]).toContain("/h/workspace");
-		expect(calls[3]?.slice(1, 5)).toEqual(["agent", "prompt", "brand-new", "긴 작업을 시작하라"]);
+	test("H-3 a name local herdr already runs gets the task as a follow-up", async () => {
+		const { row, tasks } = localTask();
+		const { built, calls } = fakeHerdr([row.agent], tasks);
+		const text = String(await built.execute({ mode: "worker", name: row.agent, task: "다음 단계 진행" }, { signal }));
+		expect(text).toContain(`후속 지시를 ${row.agent}에 전달했습니다`);
+		expect(verbs(calls)).toEqual(["agent list", "agent prompt"]);
 	});
 
-	test("H-3 a given cwd is where the new agent works, without the main-workspace notice", async () => {
-		const { built, calls } = fakeHerdr([]);
-		const text = String(
-			await built.execute({ mode: "herdr", name: "repo-work", task: "작업", cwd: "/h/work/repo" }, { signal }),
-		);
-		expect(text).toContain("repo-work 에이전트를 시작했습니다 (cwd /h/work/repo, pane P9)");
-		expect(text).not.toContain("메인 작업 디렉터리");
-		expect(calls[1]?.slice(1)).toEqual([
-			"workspace",
-			"create",
-			"--cwd",
-			"/h/work/repo",
-			"--label",
-			"jabbu · repo-work",
-			"--no-focus",
-		]);
-	});
-
-	test("H-3 a name local herdr already runs gets the task as a follow-up, TASKID names included", async () => {
-		for (const name of ["worker-1", "t-20261112-01"]) {
-			const { built, calls } = fakeHerdr([name]);
-			const text = String(await built.execute({ mode: "herdr", name, task: "다음 단계 진행" }, { signal }));
-			expect(text).toContain(`후속 지시를 ${name}에 전달했습니다`);
-			expect(verbs(calls)).toEqual(["agent list", "agent prompt"]);
-		}
-	});
-
-	test("H-3 a TASKID-shaped or malformed new name is refused before anything starts", async () => {
+	test("H-3 a local name with no [TASK] row (any shape) or a malformed one is refused before any herdr call", async () => {
 		for (const [name, message] of [
-			["t-20261112-01", "TASKID"],
-			["T-20261112-01", "TASKID"],
+			["worker-1", "등록된 로컬 작업이 아닙니다"],
+			["t-20261112-01", "등록된 로컬 작업이 아닙니다"],
 			["Bad Name", "name은 소문자"],
 		] as const) {
-			const { built, calls } = fakeHerdr([]);
-			await expect(built.execute({ mode: "herdr", name, task: "시작" }, { signal })).rejects.toThrow(message);
-			// 잘못된 이름은 진입 직후(qa-z #46), TASKID 꼴은 존재 확인 뒤에 거부한다.
-			expect(verbs(calls)).toEqual(message === "TASKID" ? ["agent list"] : []);
+			const { built, calls } = fakeHerdr([], localTask().tasks);
+			await expect(
+				built.execute(
+					{ mode: "worker", name: name === "t-20261112-01" ? "t-20261112-09" : name, task: "시작" },
+					{ signal },
+				),
+			).rejects.toThrow(message);
+			expect(calls).toEqual([]);
 		}
 	});
 
@@ -1211,6 +1186,7 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 	const TOKEN = ["xox" + "b", "TEST", "0", "fakefake"].join("-");
 	/** A tool on fake herdr whose prompts go into a real store; `agents` already run, `promptFails` refuses prompts. */
 	function recorded(agents: string[], options: { promptFails?: boolean; host?: boolean } = {}) {
+		const { row: task, tasks } = localTask();
 		const dir = mkdtempSync(join(tmpdir(), "jabbu-herdr-prompts-"));
 		const path = join(dir, "jabbu.db");
 		const store = openStore({ timezone: "Asia/Seoul", path, clock: { now: () => 1_000 }, redact: (text) => text });
@@ -1219,7 +1195,9 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 			if (words.includes("agent") && words.includes("list")) {
 				return {
 					code: 0,
-					stdout: JSON.stringify({ result: { agents: agents.map((name) => ({ name })) } }),
+					stdout: JSON.stringify({
+						result: { agents: agents.map((name) => ({ name: name === "task" ? task.agent : name })) },
+					}),
 					timedOut: false,
 				};
 			}
@@ -1246,6 +1224,7 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 			workspaceDir: dir,
 			herdr: {},
 			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
+			tasks,
 			log: { info() {}, warn() {} },
 			run,
 			recordPrompt: (input) => store.recordHerdrPrompt(input),
@@ -1264,17 +1243,17 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 			store.close();
 			rmSync(dir, { recursive: true, force: true });
 		};
-		return { built, rows, done };
+		return { built, rows, done, agent: task.agent };
 	}
 
-	test("AC-4: a local follow-up keeps a masked followup row; a failed one keeps none; a new start is start", async () => {
-		const ok = recorded(["worker-1"]);
-		await ok.built.execute({ mode: "herdr", name: "worker-1", task: `토큰 ${TOKEN} 로 다음 단계 진행` }, { signal });
+	test("AC-4: a local follow-up keeps a masked followup row; a failed one keeps none", async () => {
+		const ok = recorded(["task"]);
+		await ok.built.execute({ mode: "worker", name: ok.agent, task: `토큰 ${TOKEN} 로 다음 단계 진행` }, { signal });
 		const [row] = ok.rows() as Array<{ preview: string }>;
 		expect(ok.rows()).toEqual([
 			{
 				host: "",
-				agent: "worker-1",
+				agent: ok.agent,
 				kind: "followup",
 				preview: row?.preview ?? "",
 				originKey: "discord/dm/200000000000000001",
@@ -1284,25 +1263,12 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 		expect(row?.preview).not.toContain(TOKEN);
 		ok.done();
 
-		const failed = recorded(["worker-1"], { promptFails: true });
-		expect(String(await failed.built.execute({ mode: "herdr", name: "worker-1", task: "진행" }, { signal }))).toContain(
-			"전달 실패",
-		);
+		const failed = recorded(["task"], { promptFails: true });
+		expect(
+			String(await failed.built.execute({ mode: "worker", name: failed.agent, task: "진행" }, { signal })),
+		).toContain("전달 실패");
 		expect(failed.rows()).toEqual([]);
 		failed.done();
-
-		const fresh = recorded([]);
-		await fresh.built.execute({ mode: "herdr", name: "brand-new", task: "새 일 시작" }, { signal });
-		expect(fresh.rows()).toEqual([
-			{
-				host: "",
-				agent: "brand-new",
-				kind: "start",
-				preview: "새 일 시작",
-				originKey: "discord/dm/200000000000000001",
-			},
-		]);
-		fresh.done();
 	});
 
 	test("AC-5: a remote new start and a remote follow-up are kept under the host", async () => {
@@ -1366,24 +1332,26 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 		rmSync(dir, { recursive: true, force: true });
 
 		const warned: string[] = [];
+		const held = localTask();
 		const built = buildDispatchTool({
 			originKey: "discord/dm/200000000000000001",
 			ompExecutable: "omp",
 			homeDir: "/h",
 			workspaceDir: "/h/workspace",
 			herdr: {},
+			tasks: held.tasks,
 			log: { info() {}, warn: (event) => warned.push(event) },
 			run: async (cmd) => ({
 				code: 0,
-				stdout: cmd.includes("list") ? JSON.stringify({ result: { agents: [{ name: "w" }] } }) : "{}",
+				stdout: cmd.includes("list") ? JSON.stringify({ result: { agents: [{ name: held.row.agent }] } }) : "{}",
 				timedOut: false,
 			}),
 			recordPrompt: () => {
 				throw new Error("disk full");
 			},
 		});
-		expect(String(await built.execute({ mode: "herdr", name: "w", task: "진행" }, { signal }))).toContain(
-			"후속 지시를 w에 전달했습니다",
+		expect(String(await built.execute({ mode: "worker", name: held.row.agent, task: "진행" }, { signal }))).toContain(
+			`후속 지시를 ${held.row.agent}에 전달했습니다`,
 		);
 		expect(warned).toEqual(["herdr_prompt_record_failed"]);
 	});
@@ -1477,19 +1445,18 @@ describe("herdr start guards and agent list shape (qa-l low B)", () => {
 			homeDir: "/h",
 			workspaceDir: "/h/workspace",
 			herdr: {},
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			log: { info() {}, warn() {} },
 			run: async (cmd) => {
 				seen.push(cmd);
-				if (cmd.includes("list")) {
+				if (cmd.some((word) => word.includes("list"))) {
 					controller.abort();
 					return ok(JSON.stringify({ result: { agents: [] } }));
 				}
 				return ok(created);
 			},
 		});
-		const text = String(
-			await built.execute({ mode: "herdr", name: "w-1", task: "작업" }, { signal: controller.signal }),
-		);
+		const text = String(await built.execute({ host: "wsl", name: "w-1", task: "작업" }, { signal: controller.signal }));
 		expect(text).toContain("시작 실패");
 		expect(seen.some((cmd) => cmd.includes("create"))).toBe(false);
 	});

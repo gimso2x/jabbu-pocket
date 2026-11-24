@@ -8,11 +8,14 @@ import type { WorkflowChoice } from "./workflow";
 /** Work lane states: `closed` only via a verified done claim; `paused` is the owner's hold (turn aborted, autonomous actions wait). */
 export type LaneStatus = "working" | "done-claimed" | "not-done" | "paused" | "closed";
 
-/** Origin keys of lane sessions; the key is built here and never parsed afterwards. */
+/** Origin keys of lane sessions and of [TASK] worker sessions (`jabbu/task/<agent>`); a key is built here, never parsed. */
 export const LANE_ORIGIN_PREFIX = "jabbu/work/";
 
 export const laneOriginKey = (name: string): string => `${LANE_ORIGIN_PREFIX}${name}`;
 export const isLaneOrigin = (originKey: string): boolean => originKey.startsWith(LANE_ORIGIN_PREFIX);
+export const TASK_ORIGIN_PREFIX = "jabbu/task/";
+export const taskOriginKey = (agent: string): string => `${TASK_ORIGIN_PREFIX}${agent}`;
+export const isTaskOrigin = (originKey: string): boolean => originKey.startsWith(TASK_ORIGIN_PREFIX);
 
 export interface LaneHistoryEntry {
 	at: number;
@@ -36,13 +39,10 @@ export interface LaneClaim {
  */
 export type LaneLandState = "pending" | "pr-open" | "landed" | "merged-not-pushed" | "blocked" | "discarded";
 
-/** `autoLandHeld` of a lane closed past an integrity refusal: auto-merge skips it, the owner's `머지` does not. */
+/** `autoLandHeld` values: auto-merge skips the lane, the owner's `머지` still lands it (integrity refusal, checks timed out twice, failed checks closed by `닫아`, owner pause). */
 export const INTEGRITY_APPROVED = "무결성 승인";
-/** `autoLandHeld` of a lane the owner closed past checks that timed out twice: auto-merge skips it, `머지` does not. */
 export const INCONCLUSIVE_APPROVED = "확인 불가 승인";
-/** `autoLandHeld` of a `not-done` lane the owner closed past failed checks (`닫아`): auto-merge skips it, `머지` does not. */
 export const OWNER_ACCEPTED = "오너 수락";
-/** `autoLandHeld` of a closed lane whose auto-merge the owner's pause holds: `머지해`/`머지` still lands it. */
 export const OWNER_PAUSE_HELD = "오너 멈춤";
 
 export interface LaneLand {

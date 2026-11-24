@@ -15,6 +15,7 @@ import { previewLine } from "../dashboard/preview-line";
 import type { LaneReservation, ReservationState } from "../lanes/reservations";
 import {
 	assertLaneTransition,
+	isTaskOrigin,
 	LANE_ORIGIN_PREFIX,
 	type LaneHistoryEntry,
 	type LaneMeta,
@@ -178,14 +179,11 @@ export interface StoreOptions {
 	 */
 	logChannel?: LogChannels | undefined;
 	hooks?: {
-		/** Runs inside the answer transaction after inbound rows became `answered`, before delivery rows exist. */
-		afterInboundAnswered?: () => void;
+		afterInboundAnswered?: () => void; // inside the answer transaction after inbound rows became `answered`, before delivery rows exist
 		/** Observes every delivery state change (`from` is "new" for a freshly inserted row). Must not throw. */
 		onDeliveryState?: (change: { deliveryId: number; from: DeliveryState | "new"; to: DeliveryState }) => void;
-		/** A message id came again with other content (`recordInbound`; the first row stays). Must not throw. */
-		onInboundConflict?: (info: InboundConflict) => void;
-		/** A notice for the owner had no destination (`ownerHome()` undefined) and was not recorded. Must not throw. */
-		onOwnerNoticeUnroutable?: (info: { originKey: string; opRef: string }) => void;
+		onInboundConflict?: (info: InboundConflict) => void; // a message id came again with other content (the first row stays); must not throw
+		onOwnerNoticeUnroutable?: (info: { originKey: string; opRef: string }) => void; // an owner notice had no destination and was not recorded; must not throw
 	};
 }
 
@@ -903,7 +901,7 @@ export class Store {
 	 * One transaction: every dispatched inbound row of the op becomes `answered` and the delivery rows are created.
 	 * Any throw in between rolls both back. Re-recording the same (origin, op_ref, part) is a no-op. `answer` is the
 	 * turn's whole answer when `parts` leave out what interim deliveries already sent: the log-channel copy and the
-	 * steered-thread pointers are judged on it (default: `parts`).
+	 * steered-thread pointers are judged on it (default: `parts`). A [TASK] origin's turn makes no delivery.
 	 */
 	recordAnswer(input: {
 		originKey: string;
@@ -918,7 +916,9 @@ export class Store {
 			const steered = this.steeredThreads(input);
 			this.closeDispatched(input.originKey, input.opRef, "answered");
 			this.hooks.afterInboundAnswered?.();
-			const rows = input.parts.map((body, part) => this.insertDelivery(input, part, body));
+			const rows = isTaskOrigin(input.originKey)
+				? []
+				: input.parts.map((b, part) => this.insertDelivery(input, part, b));
 			const whole = input.answer ?? input.parts.join("\n");
 			this.notifySteeredThreads(input, steered, whole);
 			this.copyCompletion(input, whole);
@@ -1044,7 +1044,7 @@ export class Store {
 		return this.db.transaction(() => {
 			const steered = this.steeredThreads(input);
 			this.closeDispatched(input.originKey, input.opRef, "failed_notified");
-			const row = this.insertDelivery(input, 0, input.notice);
+			const row = isTaskOrigin(input.originKey) ? undefined : this.insertDelivery(input, 0, input.notice);
 			this.notifySteeredThreads(input, steered, input.notice);
 			return row;
 		})();
