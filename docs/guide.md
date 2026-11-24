@@ -356,7 +356,7 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 
 ### agy 에이전트
 
-`"agent": "agy"`를 넣으면 대화를 Antigravity CLI 자식 프로세스(`agy --input-format stream-json --output-format stream-json -p '' --dangerously-skip-permissions`)로 구동합니다. 모델은 `"model": "agy/<id>"`로 정합니다(`agy models`가 보여 주는 id, 예: `agy/gemini-3.8-flash-high`).
+`"agent": "agy"`를 넣으면 대화를 Antigravity CLI의 ACP 자식 프로세스(`agy acp --disable-telemetry --dangerously-skip-permissions`, 표준 입출력 JSON-RPC)로 구동합니다. 대화(오리진)마다 자식 하나입니다. 모델은 `"model": "agy/<id>"`로 정합니다(`agy models`가 보여 주는 id). config의 `model`에는 effort 접미사가 붙은 id(예: `agy/gemini-3.8-flash-high`)도 됩니다. agy의 모델 목록에 그 id가 없고 접미사를 뗀 id가 있으면, 뗀 모델을 그 thinking 수준으로 씁니다.
 
 ```json
 {
@@ -371,11 +371,12 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 omp 에이전트와의 차이:
 
 - **권한**: 헤드리스 agy는 확인이 필요한 도구를 자동 거부하고 허용 규칙이 접두 매칭뿐이라, 자식을 `--dangerously-skip-permissions`로 띄웁니다. 승인 카드 연동은 없고, 바닥 규칙은 시스템 프롬프트로만 전달됩니다.
-- **시스템 프롬프트**: agy에 `--append-system-prompt`가 없어 바닥 규칙·페르소나를 자식 프로세스마다 첫 메시지 앞에 붙여 보냅니다.
-- **세션 이어가기**: agy 대화 id를 `<세션 디렉터리>/agy-conversation.json`에 저장하고 다시 띄울 때 `--conversation`으로 잇습니다. `!new`은 포인터를 지우고 새로 시작합니다.
-- **모델·thinking**: `!model`은 `agy/<id>`를 받고 자식을 같은 대화로 다시 띄웁니다. `!thinking`은 `low|medium|high`를 받아 모델 id 끝의 effort(`-low`/`-medium`/`-high`)를 바꿉니다.
-- **끼워넣기·중단**: 작업 중 보낸 메시지는 현재 답이 끝난 뒤 같은 턴에서 이어 처리합니다. 그 메시지를 agy에 보내지 못하면 턴은 실패(`steer 전송 실패: …`)로 끝나고, 첫 답이 실패해 쌓인 메시지를 보내지 못하면 실패 알림에 `steer N건 미전달`이 붙습니다. 중단은 자식을 끊고 다음 메시지에서 같은 대화로 다시 띄웁니다.
-- **자식 교체**: `!new`·`!model`·`!thinking`·`!resume`처럼 자식을 다시 띄우는 명령은 이전 agy 프로세스가 끝나기를 기다린 뒤 새로 띄워, 두 프로세스가 같은 대화를 동시에 열지 않습니다. 그때 돌던 턴은 중단(`agy restarted (<사유>)`)으로 마감됩니다.
+- **시스템 프롬프트**: 바닥 규칙·페르소나는 세션을 열 때(`session/new`·`session/load`) `_meta.antigravity.systemPrompt.append`로 agy 시스템 프롬프트 뒤에 붙습니다. 대화 메시지에는 섞이지 않습니다.
+- **세션 이어가기**: agy 세션 id를 `<세션 디렉터리>/agy-conversation.json`에 저장하고, 다시 띄울 때 `session/load`로 잇습니다(다시 재생되는 이전 기록은 무시). 포인터가 없거나 agy가 거절하면 `session/new`로 새로 엽니다. `!new`은 포인터를 지우고 새 세션으로 띄웁니다.
+- **모델·thinking**: 자식을 다시 띄우지 않고 지금 세션에 `session/set_config_option`으로 바꿉니다. `!model`은 지금 세션이 내놓는 `model` 값 그대로의 `agy/<id>`만 받습니다(접미사 붙은 id는 config에서만 풀어 줌). `!thinking`은 `low|medium|high|xhigh` 가운데 그 모델의 `thought_level`이 내놓는 값만 받습니다. `thought_level`이 없는 모델(오케스트레이터 등)은 thinking 없이 돌고, config의 thinking은 무시하며 로그 `agy.acp.thinking_unsupported`를 남깁니다. config의 모델·thinking을 agy가 받지 않으면 자식 시작이 실패합니다.
+- **끼워넣기·중단**: 작업 중 보낸 메시지는 현재 답이 끝난 뒤 같은 턴의 다음 `session/prompt`로 보냅니다. 그 메시지를 agy에 보내지 못하면 턴은 실패(`steer 전송 실패: …`)로 끝나고, 첫 답이 실패해 쌓인 메시지를 보내지 못하면 실패 알림에 `steer N건 미전달`이 붙습니다. 중단은 `session/cancel`을 보내고, agy가 그 답을 `cancelled`로 마감하면 자식은 그대로 삽니다. 5초 안에 답이 없으면 자식 프로세스 그룹을 끊고, 다음 메시지에서 같은 세션으로 다시 띄웁니다.
+- **자식 교체**: `!new`·`!resume`처럼 자식을 다시 띄우는 명령은 이전 agy 프로세스가 끝나기를 기다린 뒤 새로 띄워, 두 프로세스가 같은 세션을 동시에 열지 않습니다. 그때 돌던 턴은 중단(`agy restarted (<사유>)`)으로 마감됩니다.
+- **세션 교체(로테이션)**: agy 세션은 압축할 수 없습니다. 턴이 끝났을 때 컨텍스트 사용량이 창의 70% 이상이면 포인터와 자식을 내려 다음 턴을 새 세션으로 시작합니다(로그 `agy_conversation_rotated`).
 - **설정 오버레이**: `ompConfigOverlay`는 agy 대화·모니터 턴(agy 자식)에는 적용되지 않고 omp RPC 자식(`jabbu_dispatch` 단순 위임·레인 리뷰·omp 모니터)에만 붙습니다.
 - **미지원**: `!compact`(거절 안내), 사용량 집계(`!usage`), 곁질문(`!btw`), 호스트 도구(`discord_send_file`·`jabbu_dispatch`·모니터·`ask`). 그래서 agy 세션의 시스템 프롬프트에는 호스트 도구(파일 업로드·승인 카드·모니터·위임·레인) 안내 대신 "호스트 도구 없음" 한 줄과 도구 없는 승인 바닥글(하기 전에 답으로 묻기)이 들어갑니다.
 

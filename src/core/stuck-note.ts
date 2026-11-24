@@ -7,28 +7,20 @@
 const OMP_REPEAT_MARK = "[You have received this identical output";
 const OMP_REPEAT_COUNT = /^ \d+ times/;
 
-/** Linear: a regex with a leading `\n*` and a trailing `[\s\S]*` is quadratic on long input without the mark. */
+/**
+ * Linear: a regex with a leading `\n*` and a trailing `[\s\S]*` is quadratic on long input without the mark, and so was
+ * scanning to the line end from every mark (qa-aa #41). omp appends the note on a line of its own at the very end, so
+ * only the last line of the trimmed text can hold it: a mark mid-line or followed by more lines is result text.
+ */
 export function stripOmpRepeatNote(text: string): string {
 	const body = text.trimEnd();
 	if (!body.endsWith("]")) return text;
-	let at = text.indexOf(OMP_REPEAT_MARK);
-	while (at !== -1) {
-		const afterMark = at + OMP_REPEAT_MARK.length;
-		const count = OMP_REPEAT_COUNT.exec(text.slice(afterMark, afterMark + 24));
-		// omp appends the note on lines of its own at the very end: a mark mid-line or followed by more lines is result text.
-		const onOwnLine = at === 0 || text[at - 1] === "\n";
-		const lineEnd = text.indexOf("\n", at);
-		if (
-			count !== null &&
-			onOwnLine &&
-			afterMark + count[0].length <= body.length - 1 &&
-			(lineEnd === -1 || lineEnd >= body.length)
-		) {
-			let start = at;
-			while (start > 0 && text[start - 1] === "\n") start -= 1;
-			return text.slice(0, start);
-		}
-		at = text.indexOf(OMP_REPEAT_MARK, at + 1);
-	}
-	return text;
+	const at = body.lastIndexOf("\n") + 1;
+	if (!body.startsWith(OMP_REPEAT_MARK, at)) return text;
+	const afterMark = at + OMP_REPEAT_MARK.length;
+	const count = OMP_REPEAT_COUNT.exec(body.slice(afterMark, afterMark + 24));
+	if (count === null || afterMark + count[0].length > body.length - 1) return text;
+	let start = at;
+	while (start > 0 && text[start - 1] === "\n") start -= 1;
+	return text.slice(0, start);
 }
