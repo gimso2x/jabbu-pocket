@@ -998,6 +998,16 @@ export class OriginMailbox {
 		return true;
 	}
 
+	/** Records a delivered row as dispatched; a failed ledger write parks it as `uncertain` (never re-sent): false. */
+	#markOrPark(row: InboundRow, input: { opRef: string; entryCursor: string | null }): boolean {
+		try {
+			this.#deps.store.markDispatched(row.platformMessageId, input);
+			return true;
+		} catch (error) {
+			return !this.#parkUncertain(row, "dispatch_record_failed", error);
+		}
+	}
+
 	/** Returns false when the row was left pending (nothing was sent). */
 	async #dispatch(row: InboundRow, text: string = row.textRef): Promise<boolean> {
 		const { store, log, originKey } = this.#deps;
@@ -1053,11 +1063,7 @@ export class OriginMailbox {
 				return this.#parkUncertain(row, "steer_threw", error);
 			}
 			if (ended() !== undefined) return this.#parkUncertain(row, "turn_ended_after_steer");
-			try {
-				store.markDispatched(row.platformMessageId, { opRef: turn.opRef, entryCursor });
-			} catch (error) {
-				return this.#parkUncertain(row, "dispatch_record_failed", error);
-			}
+			if (!this.#markOrPark(row, { opRef: turn.opRef, entryCursor })) return true;
 			log.info("steer_delivered", {
 				origin: originKey,
 				id: row.platformMessageId,
@@ -1245,7 +1251,8 @@ export class OriginMailbox {
 		// Only once the prompt went through: a failed one leaves the notices for the next turn.
 		if (peerNotice) this.#skipPeerNotice = true;
 		board?.commit();
-		store.markDispatched(row.platformMessageId, { opRef, entryCursor });
+		// The child already runs this turn: a failed ledger write stops it, so no run goes on untracked.
+		if (!this.#markOrPark(row, { opRef, entryCursor })) return this.#stopDriver().catch(() => undefined);
 		this.#turnGeneration += 1;
 		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, undoBefore, headsBefore });
 		this.#lastEventAt = this.#deps.clock.now();
@@ -1921,4 +1928,4 @@ export class OriginMailbox {
 		this.#deps.log.info("epoch_new", { origin: originKey, epoch });
 		store.recordAnswer({ originKey, opRef, threadRef, parts: ["🆕 새 대화를 시작했습니다."] });
 	}
-}
+			}
