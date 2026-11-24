@@ -327,7 +327,7 @@ describe("schema 7: the removed Teams channel's tables", () => {
 		expect(names).not.toContain(qaIndex);
 		const check = new Database(dbPath, { readonly: true });
 		try {
-			expect(readSchemaVersion(check)).toBe(8);
+			expect(readSchemaVersion(check)).toBe(9);
 		} finally {
 			check.close();
 		}

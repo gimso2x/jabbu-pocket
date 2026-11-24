@@ -77,6 +77,7 @@ import {
 	SCHEMA,
 } from "./db-schema";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
+import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
 import {
 	assertInboundTransition,
@@ -2207,8 +2208,7 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
-		// Schema 7: the removed Teams channel's ledger tables (conversations, qa) go with their index; their rows were
-		// only Teams state. Matched by the channel's table namespace, `teams` + `_`.
+		// Schema 7: the removed Teams channel's tables (namespace `teams_`) go with their index; rows were only Teams state.
 		const teamsTables = this.db
 			.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'teams[_]*'")
 			.all() as Array<{ name: string }>;
@@ -2226,10 +2226,10 @@ export class Store {
 				this.db.run(`ALTER TABLE approvals ADD COLUMN ${column} TEXT`);
 			}
 		}
-		// The approvals status index lives here, not in SCHEMA: the rebuild above drops whatever index the old
-		// table carried (a RENAME follows the table, the DROP kills it), so a pre-'replied' ledger would end this
-		// open without it. This runs after every open, so the sweep's status = 'pending' scan stays indexed.
+		// The approvals status index lives here, not in SCHEMA: the rebuild above drops the old table's indexes, so a
+		// pre-'replied' ledger would end this open without it; run on every open, the 'pending' scan stays indexed.
 		this.db.run("CREATE INDEX IF NOT EXISTS approvals_status ON approvals(status)");
+		migrateOldNames(this.db);
 	}
 
 	/**
