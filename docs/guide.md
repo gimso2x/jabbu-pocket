@@ -662,7 +662,7 @@ bun src/main.ts inject --origin discord/dm/<ID>|discord/ch/<ID> --as-owner --tex
                                   # 승인·질문 카드 스레드(대기 중·결정 끝 모두)에는 넣지 못함(inject_rejected, 표식만 남음): 카드는 오너가 직접 답함
 bun src/main.ts deliveries list    # 붙잡아 둔(failed_ambiguous) 전달: id·스레드·시각·60자 미리보기
 bun src/main.ts deliveries ack <id>     # 도착했으면: confirmed로 닫음(되돌릴 수 없음)
-bun src/main.ts deliveries resend <id>  # 안 왔으면: 지금 다시 큐에 넣음(이미 올라간 파트는 다시 안 올림, 중복 가능 머리말)
+bun src/main.ts deliveries resend <id>  # 안 왔으면: 지금 다시 큐에 넣음(이미 올라간 파트는 다시 안 올림, 중복 가능 머리말; 24시간 지난 행은 거절)
 bun src/main.ts tasks …           # [TASK] 상태 문서
 bun src/main.ts monitors …        # 모니터
 bun src/main.ts dashboard [--port N] [--bind 127.0.0.1|::1]   # 읽기 전용 현황판(루프백 HTTP)
@@ -877,7 +877,7 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 | `inbound_starved` | omp 이벤트 없이 10분 넘은 dispatched 턴(오래 걸려도 이벤트가 이어지면 닫힘, 만료 전 승인 카드(`expires_at`이 지나지 않은 pending)를 기다리는 대화면 제외) |
 | `origin_silent` | omp에 넘어가지 못한 채 `pending`으로 15분 넘은 오너 메시지. 이벤트가 이어지는 턴 뒤에 줄 선 메시지·만료 전 승인 카드를 기다리는 대화·drain 중에는 닫힘. 열리면 다른 게이트처럼 `🚨 [자가진단]` DM이 갑니다 |
 | `deliveries_overdue` | 다음 전송 시각이 10분 넘게 지난 pending·inflight 배달(멈춘 `failed_ambiguous`는 제외). 답 하나를 보내다 예외가 나면 그 답은 '보냈는지 모름'(`failed_ambiguous`)으로 기록하고 같은 묶음의 다음 답은 계속 보냅니다 |
-| `deliveries_ambiguous_stuck` | 24시간(`FRESHNESS_MS`, 부팅 때 자동으로 다시 큐에 넣는 창) 넘게 붙잡혀 있는 `failed_ambiguous` 배달. 그 나이를 넘으면 재시작으로도 풀리지 않고 `jabbu-pocket deliveries ack\|resend`만이 정리하므로 게이트가 엽니다. 그보다 새것은 오너가 볼 때까지 기다리는 정상 상태라 게이트를 열지 않습니다 |
+| `deliveries_ambiguous_stuck` | 24시간(`FRESHNESS_MS`, 부팅 때 자동으로 다시 큐에 넣는 창) 넘게 붙잡혀 있는 `failed_ambiguous` 배달. 그 나이를 넘으면 재시작으로도 풀리지 않고 `jabbu-pocket deliveries ack`만이 정리하므로 게이트가 엽니다(24시간 지난 행의 `resend`는 거절됩니다. 보내도 다음 스윕이 보내기 전에 만료시키기 때문입니다). 그보다 새것은 오너가 볼 때까지 기다리는 정상 상태라 게이트를 열지 않습니다 |
 | `lanes_stuck` | 마지막 레인 활동(생성·진행 보고·오너 답글·완료 주장·재개 등 history 항목)이 24시간 넘은 working 레인 중 실행 중인 턴(그 24시간 안에 dispatched된 레인 대화 메시지 — 그보다 먼저 시작해 이벤트만 내는 턴은 치지 않음)도 만료 전 승인 카드(`expires_at`이 지나지 않은 pending)도 없는 고아 레인. 15분마다 상태 메시지를 다시 그리는 것은 활동으로 치지 않습니다. detail은 `working_old=<고아> running=<실행 중> approval_wait=<승인 대기>`이고 실행 중·승인 대기는 게이트를 열지 않습니다 |
 | `discord_disconnected` | `channels.discord`가 있을 때만 존재. Discord 게이트웨이가 10분 넘게 끊겨 있음(`discord_since`가 미래 시각이면 `ts_in_future`로 열림). 하트비트 스탬프가 없거나 스탬프에 `discord` 필드가 없으면 판정불가(`stamp=missing`·`discord=missing`) |
 | `frozen` | `~/.jabbu/FROZEN`이 있음(`jabbu-pocket freeze` 상태). detail은 `since=… reason=…` |
