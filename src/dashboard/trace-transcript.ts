@@ -1,8 +1,4 @@
 import { existsSync, readdirSync } from "node:fs";
-import { iterJsonlRecords, readJsonlRecords } from "./jsonl";
-
-export { iterJsonlRecords, readJsonlRecords };
-
 import { join } from "node:path";
 import { PURPOSE_HEADER, ROTATION_CONTEXT_HEADER, THREAD_CONTEXT_HEADER } from "../core/mailbox-thread-context";
 import { QUOTED_HEADER } from "../core/normalize";
@@ -13,7 +9,10 @@ import { isRecord } from "../omp/type-guards";
 import { byteLength, maskPersonal, redact } from "../redact";
 import { INJECTION_WARNING_HEAD } from "../safety/injection";
 import { PEER_NOTICE_HEAD } from "../safety/prompt";
+import { iterJsonlRecords, readJsonlRecords } from "./jsonl";
 import type { TraceInput, TraceSpan } from "./trace";
+
+export { iterJsonlRecords, readJsonlRecords };
 
 /**
  * An omp session transcript (`<session>.jsonl`, sub-agents in `<session>/<name>.jsonl`) as spans on a turn's clock.
@@ -344,4 +343,4 @@ function subAgents(dir: string, window: TranscriptWindow, parent: Scope): TraceS
 		});
 	}
 	return out;
-}
+		 }
