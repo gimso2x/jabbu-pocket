@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { laneLandBlockers } from "../src/lanes/land";
@@ -254,5 +254,21 @@ describe("host assertBranch accepts lane branches (AC-7)", () => {
 			await expect(ops.createWorktree(input(bad))).rejects.toThrow("unsafe branch");
 			await expect(ops.removeWorktree(input(bad))).rejects.toThrow("unsafe branch");
 		}
+	});
+
+	test("a worktree holding a read-only directory is removed whole, branch included", async () => {
+		const repo = makeRepo(repos);
+		const worktree = `${repo}-l-20261110-01`;
+		const branch = "lane/L-20261110-01";
+		const ops = createTaskHostOps();
+		expect(await ops.createWorktree({ repo, worktree, branch })).toEqual({ ok: true, value: null });
+		const frozen = join(worktree, ".upstream", "package");
+		mkdirSync(frozen, { recursive: true });
+		writeFileSync(join(frozen, "index.ts"), "export {};\n");
+		chmodSync(frozen, 0o555);
+		await ops.removeWorktree({ repo, worktree, branch });
+		expect(existsSync(worktree)).toBe(false);
+		expect(laneWorktrees(repo)).toEqual([]);
+		expect(git(repo, "branch", "--list", branch)).toBe("");
 	});
 });

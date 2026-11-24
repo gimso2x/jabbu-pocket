@@ -507,8 +507,9 @@ describe("host ops (fake runner)", () => {
 			`mkdir -p /r/repo-t-20261026-01/docs/tasks/T && test ! -e /r/repo-t-20261026-01/docs/tasks/T/spec.md && echo ${Buffer.from("안녕").toString("base64")} | base64 -d > /r/repo-t-20261026-01/docs/tasks/T/spec.md`,
 		);
 		expect(commands[3]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
-		expect(commands[4]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
-		expect(commands[5]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
+		expect(commands[4]?.slice(7)).toEqual(["chmod", "-R", "u+w", "--", "/r/wt", "2>&1"]);
+		expect(commands[5]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
+		expect(commands[6]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
 	});
 
 	test("remote: the docs commit quotes its fixed message for the remote shell", async () => {
