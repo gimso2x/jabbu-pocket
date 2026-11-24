@@ -1252,7 +1252,13 @@ export class OriginMailbox {
 		if (peerNotice) this.#skipPeerNotice = true;
 		board?.commit();
 		// The child already runs this turn: a failed ledger write stops it, so no run goes on untracked.
-		if (!this.#markOrPark(row, { opRef, entryCursor })) return this.#stopDriver().catch(() => undefined);
+		let recorded = false;
+		try {
+			recorded = this.#markOrPark(row, { opRef, entryCursor });
+		} finally {
+			if (!recorded) await this.#stopDriver().catch(() => undefined);
+		}
+		if (!recorded) return;
 		this.#turnGeneration += 1;
 		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, undoBefore, headsBefore });
 		this.#lastEventAt = this.#deps.clock.now();
@@ -1927,5 +1933,4 @@ export class OriginMailbox {
 		}
 		this.#deps.log.info("epoch_new", { origin: originKey, epoch });
 		store.recordAnswer({ originKey, opRef, threadRef, parts: ["🆕 새 대화를 시작했습니다."] });
-	}
-}
+	}}
