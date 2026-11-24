@@ -148,7 +148,7 @@ export function readSessionConversation(file: string, before?: string): Extract<
 		}
 	});
 	const end = before === undefined ? dialogs.length : dialogs.findIndex((dialog) => dialog.firstId === before);
-	const stop = end < 0 ? 0 : end;
+	const stop = Math.max(0, end);
 	const startAt = Math.max(0, stop - CONVERSATION_PAGE);
 	const page = dialogs.slice(startAt, stop);
 	const pageCalls = new Set(
