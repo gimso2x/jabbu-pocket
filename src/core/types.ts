@@ -1,0 +1,219 @@
+/** Already-normalized inbound message handed to the core (the channel adapters and `ompbot inject` produce the same shape). */
+export interface InboundRecord {
+	platformMessageId: string;
+	originKey: string;
+	ownerVerified: true;
+	text: string;
+	/** Where replies go (the platform's thread id). */
+	threadRef: string;
+	/** Put in by `ompbot inject` (`OwnerIngest.injected`): recorded as such, it never answers an ask card. */
+	injected?: boolean | undefined;
+}
+
+/** `platformMessageId` prefix of a resume row (`cut-<original id>`); a turn of such a row is never resumed again. */
+export const CONTINUE_ID_PREFIX = "cut-";
+
+export type CommandKind =
+	| "new"
+	| "status"
+	| "model"
+	| "thinking"
+	| "compact"
+	| "resume"
+	| "queue"
+	| "followup"
+	| "usage"
+	| "distill"
+	| "btw"
+	| "undo"
+	| "budget"
+	| "brief"
+	| "stop"
+	| "restart";
+
+/**
+ * Slash command name of each kind (`-ompbot` suffix: several bots share the workspace). `distill` and `btw` are typed
+ * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `undo` restores the newest
+ * conversation turn's files, so its slash name is registered. `stop`
+ * is typed as `!stop` only too, so it works without re-applying the manifests. `restart`
+ * is typed as `!restart` only as well: the daemon restarts without a model turn.
+ */
+export const COMMAND_TEXT: Record<CommandKind, string> = {
+	new: "/new-ompbot",
+	status: "/status-ompbot",
+	model: "/model-ompbot",
+	thinking: "/thinking-ompbot",
+	compact: "/compact-ompbot",
+	resume: "/resume-ompbot",
+	queue: "/queue-ompbot",
+	followup: "/followup-ompbot",
+	usage: "/usage-ompbot",
+	distill: "/distill-ompbot",
+	btw: "/btw-ompbot",
+	undo: "/undo-ompbot",
+	budget: "/budget-ompbot",
+	brief: "/brief-ompbot",
+	stop: "/stop-ompbot",
+	restart: "/restart-ompbot",
+};
+
+/**
+ * The one extra word a kind answers to besides its `!<kind>` form. `!브리핑` is how the owner asks for the picture when
+ * typing Korean; no other kind gets an alias, so the command set stays one list (`COMMAND_TEXT`).
+ */
+export const COMMAND_ALIAS: Readonly<Partial<Record<CommandKind, string>>> = { brief: "!브리핑" };
+
+/**
+ * First half of a peer failure notice (`failedNotice` in the mailbox): a peer turn opened by it never mentions back,
+ * and a post carrying it is never recorded as a call the peer must answer (`peer_calls`).
+ */
+export const PEER_FAILURE_MARK = "응답 실패(";
+
+/** Ledger op refs of chat commands, bookkeeping answers and refused launches: not a prompt that reached omp. */
+export const COMMAND_OP_REF = new RegExp(
+	`^(failed|lane|task|home|purpose|notify|refused|${(Object.keys(COMMAND_TEXT) as CommandKind[]).join("|")}):`,
+);
+
+/**
+ * `!home`: makes the conversation it is typed in the owner's notice home (`Store.ownerHome()`). Typed text only: it has
+ * no slash name, so the Discord command set stays as it is. Only the bare word counts.
+ */
+export const HOME_COMMAND = "!home";
+
+export function isHomeCommand(text: string): boolean {
+	return text.trim() === HOME_COMMAND;
+}
+
+/**
+ * `!용도 <글>` sets the purpose memo of the channel (or, typed inside a thread, of that thread), `!용도` shows it,
+ * `!용도 지우기` clears it. Typed text only, like `!home`; a memo is background for
+ * new turns, never an instruction, and answered without a model turn.
+ */
+export const PURPOSE_COMMAND = "!용도";
+export const PURPOSE_CLEAR_ARG = "지우기";
+export const PURPOSE_MAX_CHARS = 500;
+
+/** The argument of a `!용도` message (`""` when bare); undefined when the text is no such command. */
+export function parsePurposeCommand(text: string): { arg: string } | undefined {
+	const match = /^!용도(?:\s+([\s\S]*))?$/.exec(text.trim());
+	return match ? { arg: (match[1] ?? "").trim() } : undefined;
+}
+
+/** Why `memo` cannot be stored as a purpose memo; null when it can (one line of 1..500 chars, no control characters). */
+export function purposeMemoError(memo: string): string | null {
+	if (memo === "" || [...memo].length > PURPOSE_MAX_CHARS) {
+		return `⚠️ 용도 메모는 1~${PURPOSE_MAX_CHARS}자여야 합니다.`;
+	}
+	return /\p{Cc}/u.test(memo) ? "⚠️ 용도 메모는 제어문자 없이 한 줄로 적어 주세요." : null;
+}
+
+/** Kinds that take an argument after the command word; the others only count when they are the whole message. */
+export const TAKES_ARG: ReadonlySet<CommandKind> = new Set([
+	"model",
+	"thinking",
+	"compact",
+	"resume",
+	"queue",
+	"followup",
+	"btw",
+]);
+
+export interface ParsedCommand {
+	kind: CommandKind;
+	/** Trimmed text after the command word; `""` when none. */
+	arg: string;
+}
+
+/**
+ * A message is a command when it starts with `/<name>-ompbot` or `!<name>` (`!model` works typed
+ * as text in a DM or channel without a registered slash command).
+ */
+export function parseCommand(text: string): ParsedCommand | undefined {
+	const trimmed = text.trim();
+	const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+	if (!match) return undefined;
+	const word = match[1] ?? "";
+	const arg = (match[2] ?? "").trim();
+	for (const kind of Object.keys(COMMAND_TEXT) as CommandKind[]) {
+		if (word !== COMMAND_TEXT[kind] && word !== `!${kind}` && word !== COMMAND_ALIAS[kind]) continue;
+		if (arg !== "" && !TAKES_ARG.has(kind)) return undefined;
+		return { kind, arg };
+	}
+	return undefined;
+}
+
+/**
+ * Text omp receives for a ledger row: the argument of a `followup` command or of a `btw` that started a turn (no turn
+ * was running), the message itself otherwise.
+ */
+export function promptTextOf(text: string): string {
+	const command = parseCommand(text);
+	return command?.kind === "followup" || command?.kind === "btw" ? command.arg : text;
+}
+
+/** Where the request itself starts in a turn prompt that carries context blocks (thread context, recall). */
+export const CURRENT_REQUEST_MARKER = "[현재 요청]";
+
+/** A new turn's prompt: the context blocks, then the marker and the request; the request as is without blocks. */
+export function composeTurnPrompt(blocks: readonly string[], text: string): string {
+	return blocks.length === 0 ? text : `${blocks.join("\n\n")}\n\n${CURRENT_REQUEST_MARKER}\n${text}`;
+}
+
+/** Whether a session's user entry is the prompt `composeTurnPrompt` built for `promptText`, with or without blocks. */
+export function isTurnPromptFor(entryText: string, promptText: string): boolean {
+	return entryText === promptText || entryText.endsWith(`\n\n${CURRENT_REQUEST_MARKER}\n${promptText}`);
+}
+
+/** Response-only provider behind `/status-ompbot`; the mailbox only stores its text as a delivery. */
+export type StatusProvider = (originKey: string) => string | Promise<string>;
+
+/**
+ * `!restart`: the daemon starts the detached apply for the asking conversation and
+ * thread, or says why not; the mailbox only stores the line as the command's answer. No model turn is involved.
+ */
+export type RestartProvider = (originKey: string, threadRef: string) => Promise<string>;
+
+/** `!restart` while a restart drain already runs: answered at once, never held for the next process. */
+export const RESTART_DRAINING_TEXT = "이미 재시작 중입니다";
+
+/** `!restart` from a monitor origin or any other non-Discord origin. */
+export const RESTART_REFUSED_TEXT = "이 대화에서는 쓸 수 없습니다";
+
+export interface MailboxClock {
+	now(): number;
+}
+
+/** Idle omp children are stopped after this long without a turn or inbound message (session kept; 0 disables). */
+export const IDLE_STOP_MS = 30 * 60 * 1000;
+
+/**
+ * A monitor origin's child is stopped this soon after its work (its next run is usually hours away; a finished
+ * self-retro child held 2.6 GiB for 30 minutes). Runs arriving in a burst within it still reuse the child.
+ */
+export const MONITOR_IDLE_STOP_MS = 2 * 60 * 1000;
+
+/** A running turn that emits no omp event for this long is reported as stalled (log `stall_alert` + status text). */
+export const STALL_MS = 120_000;
+
+/**
+ * Repeated stalls of one turn are merged: the status text of the first stall stays until the turn has run this long
+ * past its last stall-clearing event without a new stall. Observed 2026-10-30: silence (2 min) → one event at the
+ * 10-minute tool timeout → silence again 3 min later, 5 times — each flip of the status text was noise. 5 min is more
+ * than the 3 min gap seen between such stalls and still releases a turn that is really streaming again.
+ */
+export const STALL_RELEASE_MS = 5 * 60 * 1000;
+
+/** Conversation origin: a turn with this many stalls asks the owner (one DM per turn); the turn is never cut. */
+export const STALL_NOTIFY_COUNT = 3;
+
+/** Conversation origin: a turn whose accumulated silence reaches this asks the owner (one DM per turn). */
+export const STALL_NOTIFY_MS = 30 * 60 * 1000;
+
+/** Monitor origin (unattended): accumulated silence of one turn that aborts it and fails the monitor event. */
+export const MONITOR_STALL_ABORT_MS = 20 * 60 * 1000;
+
+/**
+ * A running turn's latest omp event is written to `inbound.last_event_at` at most this often, so the read-only
+ * `ompbot gates` can tell a long but working turn from a hung one.
+ */
+export const EVENT_PERSIST_MS = 60_000;

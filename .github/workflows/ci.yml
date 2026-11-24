@@ -1,0 +1,57 @@
+name: ci
+
+# CI runs on every PR and every main push (no path filter: a required check must always report, or a
+# docs-only PR would wait forever for it). test/ci-workflow.test.ts pins the hardening below.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Every main push keeps its own run (its result is the record for that commit); a new PR push
+# replaces the PR's previous run.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup
+      # The release leak scanner tests run the real gitleaks; without it they skip.
+      - name: Install gitleaks 8.28.0
+        run: |
+          bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
+          echo "OMPBOT_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+      - run: bun run check
+      - run: bun run knip
+      - run: bun test --parallel=3
+
+  # Real `omp --mode rpc` answered by the scripted mock model: an omp release that breaks the RPC
+  # contract fails here. The prerequisite check fails the job instead of letting the e2e skip.
+  e2e-omp-mock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup
+      - name: Install gitleaks 8.28.0
+        run: |
+          bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
+          echo "OMPBOT_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+      - name: Install pinned omp test host
+        run: |
+          cd test/fixtures/omp-host && bun install --frozen-lockfile
+          echo "OMPBOT_OMP_EXECUTABLE=$GITHUB_WORKSPACE/test/fixtures/omp-host/node_modules/.bin/omp" >> "$GITHUB_ENV"
+      - name: Check test fixtures
+        run: bun src/dev/check-test-fixtures.ts
+      - name: omp mock e2e
+        env:
+          OMPBOT_E2E_OMP_MOCK: "1"
+        run: bun test test/omp-mock.e2e.test.ts test/omp-rpc.contract.test.ts

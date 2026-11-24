@@ -1,0 +1,508 @@
+// Discord missed-message recovery: `recover()` reads every Discord conversation's
+// channel after its `dc:<channel>` watermark, 100 messages a page, feeds the owner's messages through the live ingest
+// path (the ledger's duplicate check stops replays) and moves the watermark to the newest handled id.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import type { CoreSink, DeliverySource } from "../src/channel/types";
+import type { OmpbotConfig } from "../src/config";
+import { Daemon } from "../src/daemon/daemon";
+import type { DiscordAdapter } from "../src/discord/adapter";
+import { snowflakeAt } from "../src/discord/backfill";
+import { DiscordBinding } from "../src/discord/binding";
+import { DiscordChannel } from "../src/discord/channel";
+import { DiscordCallError, type DiscordMessageEvent, DiscordRateLimitedError } from "../src/discord/transport";
+import { laneOriginKey } from "../src/lanes/status";
+import { createLogger } from "../src/log";
+import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
+import { redact } from "../src/redact";
+import { openStore, type Store } from "../src/store/db";
+import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
+
+const STRANGER = "100000000000000002";
+const BOT = "500000000000000000";
+const GUILD = "300000000000000001";
+const DM = "123456789012345678";
+const CH = "111111111111111111";
+const LOCKED = "111111111111111119";
+/** 17 digits: a string compare would rank it above every 18-digit id below. */
+const WATERMARK = "99999999999999999";
+
+let home: TestHome;
+let config: OmpbotConfig;
+let store: Store;
+let transport: FakeDiscordTransport;
+let inbound: string[];
+let logs: string[];
+/** Errors onInbound throws, one per call, before it starts taking messages. */
+let inboundFailures: unknown[];
+
+const noDeliveries: DeliverySource = { claimDue: () => [], confirm: () => {}, fail: () => {}, defer: () => {} };
+
+function core(): CoreSink {
+	const seen = new Set<string>();
+	return {
+		onInbound: (message) => {
+			const failure = inboundFailures.shift();
+			if (failure !== undefined) throw failure;
+			if (seen.has(message.platformMessageId)) return { duplicate: true };
+			seen.add(message.platformMessageId);
+			inbound.push(message.platformMessageId);
+			return undefined;
+		},
+		onCommand: () => undefined,
+		onAction: () => {},
+	};
+}
+
+/** The adapter the binding builds (store-backed targets and watermarks), started. */
+async function boot(options: { maxPages?: number } = {}): Promise<DiscordAdapter> {
+	const binding = new DiscordBinding(
+		new DiscordChannel(transport, { ownerUserId: OWNER }),
+		options.maxPages === undefined ? {} : { backfillMaxPages: options.maxPages },
+	);
+	const adapter = binding.createAdapter({
+		core: core(),
+		deliveries: noDeliveries,
+		clock: { now: () => Date.now() },
+		log: createLogger({ sink: (line) => logs.push(line), clock: { now: () => 0 }, redact }),
+		config,
+		store,
+		detach: () => {},
+	}) as DiscordAdapter;
+	await adapter.start();
+	return adapter;
+}
+
+async function recover(adapter: DiscordAdapter): Promise<void> {
+	adapter.recover();
+	await adapter.recoveryIdle();
+}
+
+function dm(id: string, author = OWNER, content = `메시지 ${id}`): DiscordMessageEvent {
+	return { id, channel_id: DM, author: { id: author }, content, type: 0 };
+}
+
+const calls = <M extends FakeDiscordCall["method"]>(method: M) =>
+	transport.calls.filter((c): c is FakeDiscordCall & { method: M } => c.method === method);
+const eyes = () => calls("addReaction").filter((c) => c.emoji === "👀");
+
+beforeEach(() => {
+	home = makeHome("ompbot-discord-backfill-");
+	config = home.config;
+	store = openStore({
+		timezone: "Asia/Seoul",
+		path: join(home.dir, "test.db"),
+		clock: { now: () => Date.now() },
+		redact,
+	});
+	transport = new FakeDiscordTransport({ botUserId: BOT });
+	transport.setChannel({ id: CH, type: 0, guildId: GUILD });
+	inbound = [];
+	logs = [];
+	inboundFailures = [];
+});
+
+afterEach(() => {
+	store.close();
+	home.remove();
+});
+
+describe("recover()", () => {
+	test("the owner's messages after the watermark are taken; the watermark moves to the largest id by BigInt", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [
+			dm("100000000000000005"),
+			dm("100000000000000003", STRANGER),
+			dm("100000000000000001"),
+			dm("99999999999999990"),
+		]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(inbound).toEqual([`${DM}:100000000000000001`, `${DM}:100000000000000005`]);
+		expect(calls("listMessages")[0]).toMatchObject({ channelId: DM, after: WATERMARK, limit: 100 });
+		expect(store.getCursor(`dc:${DM}`)).toBe("100000000000000005");
+		expect(eyes()).toHaveLength(2);
+	});
+
+	test("a rescan of the same messages is a duplicate: one inbound and one 👀 per message", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001"), dm("100000000000000002")]);
+		const adapter = await boot();
+		await recover(adapter);
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		await recover(adapter);
+		expect(calls("listMessages")).toHaveLength(2);
+		expect(inbound).toHaveLength(2);
+		expect(eyes()).toHaveLength(2);
+		expect(store.getCursor(`dc:${DM}`)).toBe("100000000000000002");
+	});
+
+	test("pages of 100 follow `after`; a pass stops at maxPages and the next pass goes on from its watermark", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		const ids = Array.from({ length: 250 }, (_, i) => String(100_000_000_000_000_000n + BigInt(i + 1)));
+		transport.history.set(
+			DM,
+			ids.map((id) => dm(id)),
+		);
+		const adapter = await boot({ maxPages: 2 });
+		await recover(adapter);
+		expect(calls("listMessages").map((c) => [c.after, c.limit])).toEqual([
+			[WATERMARK, 100],
+			[ids[99], 100],
+		]);
+		expect(inbound).toHaveLength(200);
+		expect(store.getCursor(`dc:${DM}`)).toBe(ids[199]);
+		await recover(adapter);
+		expect(calls("listMessages").map((c) => c.after)).toEqual([WATERMARK, ids[99], ids[199]]);
+		expect(inbound).toHaveLength(250);
+		expect(store.getCursor(`dc:${DM}`)).toBe(ids[249]);
+	});
+
+	test("an unreadable channel (50001) is quarantined: the next pass skips it, the others go on", async () => {
+		transport.setChannel({ id: LOCKED, type: 0, guildId: GUILD });
+		store.ensureOrigin(`discord/ch/${LOCKED}`, join(home.dir, "s1"));
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s2"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		store.setCursor(`dc:${LOCKED}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		const adapter = await boot();
+		const realList = transport.listMessages.bind(transport);
+		transport.listMessages = async (args) => {
+			if (args.channelId === LOCKED) {
+				transport.calls.push({ method: "listMessages", ...args });
+				throw new DiscordCallError("definitive", "discord_http_403:50001 Missing Access", 403, 50001);
+			}
+			return realList(args);
+		};
+		await recover(adapter);
+		expect(logs.some((line) => line.includes("event=backfill_quarantined") && line.includes(LOCKED))).toBe(true);
+		expect(inbound).toEqual([`${DM}:100000000000000001`]);
+		await recover(adapter);
+		expect(calls("listMessages").filter((c) => c.channelId === LOCKED)).toHaveLength(1);
+		expect(calls("listMessages").filter((c) => c.channelId === DM)).toHaveLength(2);
+		expect(store.getCursor(`dc:${LOCKED}`)).toBe(WATERMARK);
+	});
+
+	test("after a restart (empty channel cache) a 403 on the channel lookup quarantines it too", async () => {
+		store.ensureOrigin(`discord/ch/${LOCKED}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${LOCKED}`, WATERMARK);
+		const adapter = await boot();
+		transport.failNext.getChannel = [
+			new DiscordCallError("definitive", "discord_http_403:50001 Missing Access", 403, 50001),
+		];
+		await recover(adapter);
+		expect(logs.some((line) => line.includes("event=backfill_quarantined") && line.includes(LOCKED))).toBe(true);
+		await recover(adapter);
+		expect(calls("getChannel").filter((c) => c.channelId === LOCKED)).toHaveLength(1);
+		expect(calls("listMessages").filter((c) => c.channelId === LOCKED)).toHaveLength(0);
+	});
+
+	test("the quarantine survives a restart for a day, then the channel is read again and the mark is cleared", async () => {
+		store.ensureOrigin(`discord/ch/${LOCKED}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${LOCKED}`, WATERMARK);
+		const first = await boot();
+		transport.failNext.getChannel = [
+			new DiscordCallError("definitive", "discord_http_404:10003 Unknown Channel", 404, 10003),
+		];
+		await recover(first);
+		expect(Number(store.getCursor(`bfq:dc:${LOCKED}`))).toBeGreaterThan(0);
+
+		// A restart within the day: a new adapter skips the channel without a Discord call or a warning.
+		logs = [];
+		const restarted = await boot();
+		await recover(restarted);
+		expect(calls("getChannel").filter((c) => c.channelId === LOCKED)).toHaveLength(1);
+		expect(logs.some((line) => line.includes("event=backfill_quarantined"))).toBe(false);
+
+		// A day later still gone: read once more, re-marked, logged as info and not warned again.
+		store.setCursor(`bfq:dc:${LOCKED}`, String(Date.now() - 24 * 60 * 60 * 1000));
+		transport.failNext.getChannel = [
+			new DiscordCallError("definitive", "discord_http_404:10003 Unknown Channel", 404, 10003),
+		];
+		logs = [];
+		await recover(await boot());
+		expect(logs.some((line) => line.includes("event=backfill_requarantined") && line.includes("level=info"))).toBe(
+			true,
+		);
+		expect(logs.some((line) => line.includes("event=backfill_quarantined"))).toBe(false);
+
+		// A day later the channel is back: it is read and the quarantine row is gone.
+		store.setCursor(`bfq:dc:${LOCKED}`, String(Date.now() - 24 * 60 * 60 * 1000));
+		transport.setChannel({ id: LOCKED, type: 0, guildId: GUILD });
+		const later = await boot();
+		await recover(later);
+		expect(calls("listMessages").filter((c) => c.channelId === LOCKED)).toHaveLength(1);
+		expect(store.getCursor(`bfq:dc:${LOCKED}`)).toBeUndefined();
+	});
+
+	test("transient ingest failures (rate limit, 5xx, busy ledger) never count toward the dead letter", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		const adapter = await boot();
+		inboundFailures = [
+			new DiscordRateLimitedError(1000),
+			new DiscordCallError("ambiguous", "discord_http_502"),
+			new Error("SQLITE_BUSY: database is locked"),
+		];
+		for (let pass = 0; pass < 3; pass++) await recover(adapter);
+		expect(inbound).toEqual([]);
+		expect(logs.some((line) => line.includes("event=backfill_dead_letter"))).toBe(false);
+		expect(logs.filter((line) => line.includes("event=backfill_message_retryable"))).toHaveLength(3);
+		expect(store.getCursor(`dc:${DM}`)).toBe(WATERMARK);
+		await recover(adapter);
+		expect(inbound).toEqual([`${DM}:100000000000000001`]);
+		expect(store.getCursor(`dc:${DM}`)).toBe("100000000000000001");
+	});
+
+	test("a leftover slack/ origin row (the removed channel) is no Discord target; Discord keeps dc:<id> only", async () => {
+		store.ensureOrigin("slack/dm/D0SLACK001", join(home.dir, "s0"));
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(calls("listMessages").map((c) => c.channelId)).toEqual([DM]);
+		expect(store.listCursorKeys("dc:")).toEqual([`dc:${DM}`]);
+	});
+
+	test("a server thread origin scans the parent channel and the thread channel", async () => {
+		const thread = "222222222222222222";
+		transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
+		store.ensureOrigin(`discord/ch/${CH}/t/${thread}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${thread}`, WATERMARK);
+		transport.history.set(thread, [
+			{
+				id: "100000000000000001",
+				channel_id: thread,
+				author: { id: OWNER },
+				content: `<@${BOT}> 스레드 답`,
+				type: 0,
+			},
+		]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(
+			calls("listMessages")
+				.map((c) => c.channelId)
+				.sort(),
+		).toEqual([CH, thread].sort());
+		expect(inbound).toEqual([`${CH}:100000000000000001`]);
+	});
+
+	test("an open work lane's thread is scanned though its origin is ompbot/work/<name> (qa-z #31)", async () => {
+		const thread = "222222222222222222";
+		const closedThread = "222222222222222223";
+		for (const [name, id] of [
+			["fix-it", thread],
+			["old-one", closedThread],
+		] as const) {
+			store.insertLane({
+				name,
+				title: name,
+				threadRef: `${CH}:${id}`,
+				originKey: laneOriginKey(name),
+				cwd: home.dir,
+				sessionDir: join(home.dir, "sessions", name),
+				meta: { startedAt: 0, lastProgressAt: 0, steerSeq: 0 },
+			});
+		}
+		store.transitionLane("old-one", "done-claimed", { event: "claim" });
+		store.transitionLane("old-one", "closed", { event: "closed" });
+		// No watermark yet: the first scan reads the bootstrap window, so the message must be recent.
+		const recent = snowflakeAt(Date.now() - 60_000);
+		transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
+		transport.history.set(thread, [
+			{
+				id: recent,
+				channel_id: thread,
+				author: { id: OWNER },
+				content: `<@${BOT}> 다운 중 steer`,
+				type: 0,
+			},
+		]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(calls("listMessages").map((c) => c.channelId)).toEqual([thread]);
+		expect(inbound).toEqual([`${CH}:${recent}`]);
+	});
+});
+
+// T-20261112-36 AC-3: the `⏬ … N건을 처리합니다` recovery notice, placed where the answers show up.
+describe("recovery notice", () => {
+	const notices = () => calls("createMessage").filter((c) => c.content?.startsWith("⏬") === true);
+	const root = (id: string, content = `<@${BOT}> 질문 ${id}`): DiscordMessageEvent => ({
+		id,
+		channel_id: CH,
+		author: { id: OWNER },
+		content,
+		type: 0,
+	});
+
+	test("two DM messages recovered: one notice, a reply to the oldest of them, naming 2건", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000005"), dm("100000000000000003")]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(notices()).toHaveLength(1);
+		expect(notices()[0]).toMatchObject({
+			channelId: DM,
+			content: "⏬ 봇이 응답하지 못한 동안 도착한 메시지 2건을 처리합니다",
+			messageReference: { messageId: "100000000000000003" },
+		});
+	});
+
+	test("a server root: the notice goes into the thread of the oldest recovered message that opened one", async () => {
+		store.ensureOrigin(`discord/ch/${CH}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${CH}`, WATERMARK);
+		// The oldest one is a command: it opens no thread, so the notice goes to the next one's thread.
+		transport.history.set(CH, [
+			root("100000000000000001", `<@${BOT}> !status`),
+			root("100000000000000002"),
+			root("100000000000000003"),
+		]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(calls("startThread").map((c) => c.messageId)).toEqual(["100000000000000002", "100000000000000003"]);
+		expect(notices()).toHaveLength(1);
+		expect(notices()[0]?.channelId).toBe("100000000000000002");
+		expect(notices()[0]?.content).toContain("3건");
+	});
+
+	test("commands only (no thread opened): no notice and no reply at the channel root", async () => {
+		store.ensureOrigin(`discord/ch/${CH}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${CH}`, WATERMARK);
+		transport.history.set(CH, [root("100000000000000001", `<@${BOT}> !status`)]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(inbound).toEqual([`${CH}:100000000000000001`]);
+		expect(notices()).toHaveLength(0);
+		expect(calls("createMessage").filter((c) => c.channelId === CH)).toHaveLength(0);
+	});
+
+	test("a thread channel target: no notice, the answers show in the thread itself", async () => {
+		const thread = "222222222222222222";
+		transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
+		store.ensureOrigin(`discord/ch/${CH}/t/${thread}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${thread}`, WATERMARK);
+		transport.history.set(thread, [{ ...root("100000000000000001"), channel_id: thread }]);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(inbound).toEqual([`${CH}:100000000000000001`]);
+		expect(notices()).toHaveLength(0);
+	});
+
+	test("nothing recovered and a rescan of the same messages: no notice beyond the first", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		const adapter = await boot();
+		await recover(adapter);
+		expect(notices()).toHaveLength(0);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		await recover(adapter);
+		expect(notices()).toHaveLength(1);
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		await recover(adapter);
+		expect(inbound).toHaveLength(1);
+		expect(notices()).toHaveLength(1);
+	});
+
+	test("a failed notice is a warning; the watermark still moves", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		const adapter = await boot();
+		const realCreate = transport.createMessage.bind(transport);
+		transport.createMessage = async (args) => {
+			if (args.content?.startsWith("⏬") === true) throw new DiscordCallError("definitive", "discord_http_403:50013");
+			return realCreate(args);
+		};
+		await recover(adapter);
+		expect(logs.some((line) => line.includes("event=backfill_notice_failed"))).toBe(true);
+		expect(store.getCursor(`dc:${DM}`)).toBe("100000000000000001");
+		expect(inbound).toEqual([`${DM}:100000000000000001`]);
+	});
+});
+
+describe("recovery triggers", () => {
+	beforeEach(() => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+	});
+
+	test("a new gateway session (Ready) runs a pass; a resumed one does not", async () => {
+		const adapter = await boot();
+		transport.emitReady({ resumed: true });
+		await adapter.recoveryIdle();
+		expect(calls("listMessages")).toHaveLength(0);
+		transport.emitReady({ resumed: false });
+		await adapter.recoveryIdle();
+		expect(calls("listMessages").map((c) => c.channelId)).toEqual([DM]);
+	});
+
+	test("a live message that fails as inbound_failed runs a pass", async () => {
+		const adapter = await boot();
+		transport.failNext.getChannel = [new Error("network down")];
+		await transport.emitMessage({
+			id: "100000000000000009",
+			channel_id: "111111111111111112",
+			guild_id: GUILD,
+			author: { id: OWNER },
+			content: `<@${BOT}> 질문`,
+			type: 0,
+		});
+		expect(logs.some((line) => line.includes("event=inbound_failed"))).toBe(true);
+		await adapter.recoveryIdle();
+		expect(calls("listMessages").map((c) => c.channelId)).toEqual([DM]);
+	});
+});
+
+describe("daemon start", () => {
+	let daemon: Daemon | undefined;
+	afterEach(async () => {
+		await daemon?.stop();
+		daemon = undefined;
+	});
+
+	test("a DM sent while the daemon was down is answered after the start", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.close();
+		const ledger = openStore({
+			timezone: "Asia/Seoul",
+			path: join(home.dir, "ompbot.db"),
+			clock: { now: () => Date.now() },
+			redact,
+		});
+		ledger.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "sessions", "dm"));
+		ledger.setCursor(`dc:${DM}`, WATERMARK);
+		ledger.close();
+		store = openStore({
+			timezone: "Asia/Seoul",
+			path: join(home.dir, "test.db"),
+			clock: { now: () => Date.now() },
+			redact,
+		});
+
+		const discord = new WaitingDiscordTransport();
+		discord.history.set(DM, [dm("100000000000000001", OWNER, "자는 동안 보낸 질문")]);
+		const sessions = new FakeSessionStore();
+		const clock = { now: () => Date.now() };
+		daemon = new Daemon({
+			config,
+			channels: [new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER }))],
+			clock,
+			log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: "boot-backfill",
+			driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+		});
+		await daemon.start();
+		await discord.waitForPosts((text) => text.includes("ECHO 자는 동안 보낸 질문"));
+		expect(daemon.store.getCursor(`dc:${DM}`)).toBe("100000000000000001");
+	});
+});

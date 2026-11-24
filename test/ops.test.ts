@@ -1,0 +1,2486 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+	chmodSync,
+	existsSync,
+	lutimesSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	unlinkSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { STALL_STATUS_TEXT } from "../src/channel/text";
+import { doctorCommand } from "../src/cli/index";
+import { isProviderLimit, type ProviderLimitInfo, type StallEscalation, type TurnProgress } from "../src/core/mailbox";
+import { toolActivityText } from "../src/core/mailbox-helpers";
+import { TOP_LEVEL_TS, threadRefOf } from "../src/core/normalize";
+import { OriginRouter, openBotStore, sessionDirFor } from "../src/core/origin";
+import type { InboundRecord } from "../src/core/types";
+import {
+	MONITOR_STALL_ABORT_MS,
+	STALL_MS,
+	STALL_NOTIFY_COUNT,
+	STALL_NOTIFY_MS,
+	STALL_RELEASE_MS,
+} from "../src/core/types";
+import { Daemon } from "../src/daemon/daemon";
+import { GATE_RESOLVE_CLOSED_SWEEPS } from "../src/daemon/daemon-constants";
+import type { DaemonOptions } from "../src/daemon/daemon-types";
+import { checkBackupBundle, runDoctor } from "../src/daemon/doctor";
+import { SWEEP_HEARTBEAT_FILE } from "../src/daemon/heartbeat";
+import { renderStatusText } from "../src/daemon/status-render";
+import type { EditMessageArgs } from "../src/discord/transport";
+import { herdrSshArgv, type ProcessRunner, type RunProcessResult } from "../src/dispatch/omp";
+import { createLogger } from "../src/log";
+import { MONITOR_SCHEMA } from "../src/monitors/ledger";
+import { OmpDriverError, type OmpEvent, type OmpState } from "../src/omp/driver";
+import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
+import { readStamp, runBackup, STAMP_FILE } from "../src/ops/backup";
+import { BackupError } from "../src/ops/backup-error";
+import { collectGates, INBOUND_STARVATION_MS, SWEEP_STALLED_MS, TURNS_FAILING_WINDOW_MS } from "../src/ops/gates";
+import { gcSessions } from "../src/ops/gc";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { LOG_FILES, LOG_MAX_BYTES, LogDirError, openLogSink, rotatingFileSink } from "../src/ops/logfile";
+import { redact } from "../src/redact";
+import { ALERT_INCIDENT_REPEAT_MS, type Store } from "../src/store/db";
+import {
+	BOT,
+	CHANNEL,
+	discordBinding,
+	GUILD,
+	makeHome,
+	OWNER,
+	OWNER_DM,
+	ownerMessage,
+	type TestHome,
+	WaitingDiscordTransport,
+} from "./helpers/bot-home";
+import { killSpawned, runMain, spawnDaemon } from "./helpers/daemon-process";
+import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
+import { isRoot } from "./helpers/privileges";
+
+const T = (text: string) => expect.objectContaining({ text, state: "running" });
+const ORIGIN = `discord/dm/${OWNER_DM}`;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+class FakeClock {
+	t = 1_000_000;
+	now(): number {
+		return this.t;
+	}
+	advance(ms: number): void {
+		this.t += ms;
+	}
+}
+
+/** Fake driver whose events, steer failures and prompt failures the test controls. */
+class OpsDriver extends FakeOmpDriver {
+	/** Rejects the next cursor reads: nothing was sent yet, so the mailbox leaves the row pending. */
+	failLeafIds = 0;
+	failPrompts = 0;
+	readonly #listeners = new Set<(event: OmpEvent) => void>();
+
+	override async leafId(): Promise<string | null> {
+		if (this.failLeafIds > 0) {
+			this.failLeafIds--;
+			throw new Error("steer refused");
+		}
+		return super.leafId();
+	}
+
+	override async prompt(text: string): Promise<string> {
+		if (this.failPrompts > 0) {
+			this.failPrompts--;
+			throw new OmpDriverError("rpc_error", "Could not restore model: fake/alpha");
+		}
+		return super.prompt(text);
+	}
+
+	/** Make `state()` fail like a child that does not answer `get_state`. */
+	failState = false;
+	override async state(): Promise<OmpState> {
+		if (this.failState) throw new OmpDriverError("rpc_error", "get_state timed out");
+		return super.state();
+	}
+
+	override onEvent(listener: (event: OmpEvent) => void): () => void {
+		this.#listeners.add(listener);
+		const off = super.onEvent(listener);
+		return () => {
+			this.#listeners.delete(listener);
+			off();
+		};
+	}
+
+	/** An omp event arriving from the child. */
+	fire(event: OmpEvent): void {
+		for (const listener of this.#listeners) listener(event);
+	}
+}
+
+let counter = 0;
+function msg(text: string): InboundRecord {
+	const id = `m${++counter}`;
+	return { platformMessageId: id, originKey: ORIGIN, ownerVerified: true, text, threadRef: id };
+}
+
+/** Dispatch is fire-and-forget behind the 👀 ack, so a test simulating turn silence waits for `turn_start` first. */
+async function untilLine(predicate: () => boolean): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (!predicate()) {
+		if (Date.now() > deadline) throw new Error("timed out waiting for a log line");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+describe("event log lines and stall detection (mailbox, fake clock)", () => {
+	let dir: string;
+	let clock: FakeClock;
+	let store: Store;
+	let router: OriginRouter;
+	let drivers: OpsDriver[];
+	let lines: string[];
+	let stalls: Array<{ originKey: string; threadRef: string; stalled: boolean; silentMs: number }>;
+	let escalations: StallEscalation[];
+	let providerLimits: ProviderLimitInfo[];
+	let activities: Array<{ originKey: string; threadRef: string; progress: TurnProgress }>;
+	let driverOptions: FakeOmpDriverOptions;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ompbot-ops-"));
+		clock = new FakeClock();
+		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		drivers = [];
+		lines = [];
+		stalls = [];
+		escalations = [];
+		providerLimits = [];
+		activities = [];
+		driverOptions = { holdTurns: true };
+		const sessions = new FakeSessionStore();
+		router = new OriginRouter({
+			timezone: "Asia/Seoul",
+			store,
+			clock,
+			sessionsRoot: join(dir, "sessions"),
+			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
+			statusProvider: () => "status",
+			onStall: (info) => stalls.push(info),
+			onStallEscalate: (info) => escalations.push(info),
+			onProviderLimit: (info) => providerLimits.push(info),
+			onProgress: (info) => activities.push(info),
+			driverFactory: (_origin, sessionDir) => {
+				const driver = new OpsDriver({ ...driverOptions, sessionDir, store: sessions });
+				drivers.push(driver);
+				return driver;
+			},
+		});
+	});
+
+	afterEach(async () => {
+		await router.close();
+		store.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("turn_start, steer_delivered, steer_failed action=defer and omp_exit are key=value lines", async () => {
+		await router.route(msg("first"));
+		await router.route(msg("second"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		driver.failLeafIds = 1;
+		await router.route(msg("third"));
+		driver.crash(137);
+		await router.mailbox(ORIGIN).sweepIdle(); // runs behind the exit handler on the actor's chain
+
+		expect(lines.find((l) => l.includes("event=turn_start"))).toMatch(
+			/ level=info event=turn_start origin=discord\/dm\/200000000000000001 epoch=1 opRef=\S+$/,
+		);
+		expect(lines.find((l) => l.includes("event=steer_delivered"))).toMatch(
+			/ level=info event=steer_delivered origin=discord\/dm\/200000000000000001 id=m\d+ opRef=\S+$/,
+		);
+		expect(lines.find((l) => l.includes("event=steer_failed"))).toMatch(
+			/ level=warn event=steer_failed origin=discord\/dm\/200000000000000001 id=m\d+ action=defer error=/,
+		);
+		expect(lines.find((l) => l.includes("event=omp_exit"))).toMatch(
+			/ level=warn event=omp_exit origin=discord\/dm\/200000000000000001 code=137 expected=false stderr="fake crash"$/,
+		);
+	});
+
+	test("a turn with no event for 120 s raises one stall_alert; an event clears it and re-arms the detector", async () => {
+		await router.route(msg("long task"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		const turn = store.listInbound({ originKey: ORIGIN })[0];
+
+		clock.advance(STALL_MS - 1);
+		expect(router.sweepStalls()).toBe(0);
+		expect(lines.some((l) => l.includes("stall_alert"))).toBe(false);
+
+		clock.advance(1);
+		expect(router.sweepStalls()).toBe(1);
+		const alert = lines.filter((l) => l.includes("event=stall_alert"));
+		expect(alert).toHaveLength(1);
+		expect(alert[0]).toMatch(
+			/ level=warn event=stall_alert origin=discord\/dm\/200000000000000001 silentMs=120000 opRef=\S+$/,
+		);
+		expect(stalls).toEqual([
+			{ originKey: ORIGIN, threadRef: turn?.threadRef ?? "missing", stalled: true, silentMs: STALL_MS },
+		]);
+
+		clock.advance(STALL_MS); // still silent: no second alert for the same silence
+		expect(router.sweepStalls()).toBe(0);
+		expect(lines.filter((l) => l.includes("event=stall_alert"))).toHaveLength(1);
+
+		driver.fire({ type: "tool_execution_update" });
+		expect(lines.some((l) => l.includes("event=stall_cleared"))).toBe(true);
+
+		clock.advance(STALL_MS - 1);
+		expect(router.sweepStalls()).toBe(0);
+		clock.advance(1);
+		expect(router.sweepStalls()).toBe(1); // a new silence of the same turn is a new stall, merged into the alert
+		expect(lines.filter((l) => l.includes("event=stall_alert"))).toHaveLength(1);
+		expect(lines.filter((l) => l.includes("event=stall_repeat"))).toHaveLength(1);
+	});
+
+	test("repeated stalls of one turn log stall_alert once then stall_repeat; the status text does not flip", async () => {
+		await router.route(msg("long task"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		// The 2026-10-30 pattern: 2 min silence, one event, 3 min calm... silence again.
+		for (let round = 0; round < 3; round++) {
+			clock.advance(STALL_MS);
+			expect(router.sweepStalls()).toBe(1);
+			clock.advance(8 * 60_000);
+			driver.fire({ type: "tool_execution_update" });
+			clock.advance(3 * 60_000 - STALL_MS); // below the release window: the next stall comes first
+		}
+		expect(lines.filter((l) => l.includes("event=stall_alert"))).toHaveLength(1);
+		const repeats = lines.filter((l) => l.includes("event=stall_repeat"));
+		expect(repeats).toHaveLength(2);
+		expect(repeats[1]).toMatch(/ count=3 totalSilentMs=\d+$/);
+		expect(stalls.map((s) => s.stalled)).toEqual([true]);
+	});
+
+	test("the stalled status text is released once the turn runs past the release window without stalling", async () => {
+		await router.route(msg("long task"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		clock.advance(STALL_MS);
+		router.sweepStalls();
+		driver.fire({ type: "tool_execution_update" });
+		clock.advance(STALL_RELEASE_MS - 1);
+		driver.fire({ type: "tool_execution_update" }); // keeps the turn lively but is not a reason to release yet
+		router.sweepStalls();
+		expect(stalls.map((s) => s.stalled)).toEqual([true]);
+		clock.advance(1);
+		router.sweepStalls();
+		expect(stalls.map((s) => s.stalled)).toEqual([true, false]);
+		expect(lines.some((l) => l.includes("event=stall_released"))).toBe(true);
+	});
+
+	test("conversation origin: the third stall of a turn asks the owner once and never aborts the turn", async () => {
+		await router.route(msg("long task"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		for (let round = 0; round < STALL_NOTIFY_COUNT; round++) {
+			expect(escalations).toHaveLength(0);
+			clock.advance(STALL_MS);
+			router.sweepStalls();
+			clock.advance(60_000);
+			driver.fire({ type: "tool_execution_update" });
+		}
+		expect(escalations).toHaveLength(1);
+		expect(escalations[0]).toMatchObject({ originKey: ORIGIN, kind: "notify", count: STALL_NOTIFY_COUNT });
+		clock.advance(STALL_MS);
+		router.sweepStalls(); // a fourth stall of the same turn: no second DM
+		clock.advance(60 * 60_000);
+		router.sweepStalls();
+		expect(escalations).toHaveLength(1);
+		expect(driver.calls).not.toContain("abort");
+		expect(lines.filter((l) => l.includes("event=stall_escalated"))).toHaveLength(1);
+	});
+
+	test("conversation origin: one long silence past the time threshold asks the owner once", async () => {
+		await router.route(msg("stuck forever"));
+		clock.advance(STALL_MS);
+		router.sweepStalls();
+		clock.advance(STALL_NOTIFY_MS - STALL_MS - 1);
+		router.sweepStalls();
+		expect(escalations).toHaveLength(0);
+		clock.advance(1);
+		router.sweepStalls();
+		clock.advance(5 * 60_000);
+		router.sweepStalls();
+		expect(escalations).toHaveLength(1);
+		expect(escalations[0]).toMatchObject({ kind: "notify", count: 1, totalSilentMs: STALL_NOTIFY_MS });
+		expect(store.listInbound({ originKey: ORIGIN })[0]?.state).toBe("dispatched");
+	});
+
+	test("a new turn of the same origin counts its stalls from zero", async () => {
+		await router.route(msg("first"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		for (let round = 0; round < 2; round++) {
+			clock.advance(STALL_MS);
+			router.sweepStalls();
+			driver.fire({ type: "tool_execution_update" });
+		}
+		driver.release();
+		await untilLine(() => store.listInbound({ originKey: ORIGIN }).every((r) => r.state !== "dispatched"));
+		await router.route(msg("second"));
+		clock.advance(STALL_MS);
+		router.sweepStalls();
+		expect(lines.filter((l) => l.includes("event=stall_alert"))).toHaveLength(2);
+		expect(escalations).toHaveLength(0);
+	});
+
+	test("monitor origin: silence past the abort threshold aborts the turn, fails the monitor event and tells the owner once", async () => {
+		const monitor = store.monitors.addMonitor({
+			name: "watch",
+			trigger: { kind: "cron", schedule: "0 0 1 1 *", timezone: "UTC" },
+			instruction: "check",
+			overlap: "queue",
+			enabled: true,
+		});
+		const event = store.monitors.admitManual(monitor.id);
+		const origin = `monitor/${monitor.id}`;
+		expect(store.monitors.markDispatched(event.eventId, `monitor:${monitor.id}:${event.eventId}:1`)).toBe(true);
+		await router.route({
+			platformMessageId: `monitor:${monitor.id}:${event.eventId}:1`,
+			originKey: origin,
+			ownerVerified: true,
+			text: "check",
+			threadRef: threadRefOf(OWNER_DM, TOP_LEVEL_TS),
+		});
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+
+		clock.advance(STALL_MS);
+		router.sweepStalls();
+		clock.advance(MONITOR_STALL_ABORT_MS - STALL_MS - 1);
+		router.sweepStalls();
+		expect(escalations).toHaveLength(0);
+		expect(driver.calls).not.toContain("abort");
+
+		clock.advance(1);
+		router.sweepStalls();
+		await untilLine(() => store.monitors.getEvent(event.eventId)?.stage === "failed");
+		expect(driver.calls).toContain("abort");
+		expect(escalations).toHaveLength(1);
+		expect(escalations[0]).toMatchObject({ originKey: origin, kind: "abort", totalSilentMs: MONITOR_STALL_ABORT_MS });
+		expect(store.monitors.getEvent(event.eventId)?.error).toContain("stall_abort");
+		expect(router.mailbox(origin).state.busy).toBe(false);
+		router.sweepStalls();
+		expect(escalations).toHaveLength(1);
+	});
+
+	test("monitor origin: a failure while settling the aborted turn is logged as stall_abort_settle_failed", async () => {
+		const monitor = store.monitors.addMonitor({
+			name: "watch",
+			trigger: { kind: "cron", schedule: "0 0 1 1 *", timezone: "UTC" },
+			instruction: "check",
+			overlap: "queue",
+			enabled: true,
+		});
+		const event = store.monitors.admitManual(monitor.id);
+		const origin = `monitor/${monitor.id}`;
+		expect(store.monitors.markDispatched(event.eventId, `monitor:${monitor.id}:${event.eventId}:1`)).toBe(true);
+		await router.route({
+			platformMessageId: `monitor:${monitor.id}:${event.eventId}:1`,
+			originKey: origin,
+			ownerVerified: true,
+			text: "check",
+			threadRef: threadRefOf(OWNER_DM, TOP_LEVEL_TS),
+		});
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		store.recordTurnFailure = () => {
+			throw new Error("ledger write failed");
+		};
+		clock.advance(MONITOR_STALL_ABORT_MS);
+		router.sweepStalls();
+		await untilLine(() => lines.some((l) => l.includes("event=stall_abort_settle_failed")));
+		expect(lines.some((l) => l.includes("event=stall_abort_settle_failed") && l.includes("ledger write failed"))).toBe(
+			true,
+		);
+		expect(lines.some((l) => l.includes("event=stall_abort_failed"))).toBe(false);
+	});
+
+	test("monitor origin: a fire queued behind the stalled turn runs on a fresh child after the abort", async () => {
+		const monitor = store.monitors.addMonitor({
+			name: "watch",
+			trigger: { kind: "cron", schedule: "0 0 1 1 *", timezone: "UTC" },
+			instruction: "check",
+			overlap: "queue",
+			enabled: true,
+		});
+		const origin = `monitor/${monitor.id}`;
+		const fire = async (): Promise<void> => {
+			const event = store.monitors.admitManual(monitor.id);
+			const id = `monitor:${monitor.id}:${event.eventId}:1`;
+			expect(store.monitors.markDispatched(event.eventId, id)).toBe(true);
+			await router.route({
+				platformMessageId: id,
+				originKey: origin,
+				ownerVerified: true,
+				text: "check",
+				threadRef: threadRefOf(OWNER_DM, TOP_LEVEL_TS),
+			});
+		};
+		await fire();
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const first = drivers[0];
+		if (!first) throw new Error("no driver was started");
+		first.failLeafIds = 1; // the steer cannot start: the row stays pending behind the running turn
+		await fire();
+
+		clock.advance(MONITOR_STALL_ABORT_MS);
+		router.sweepStalls();
+		await untilLine(() => drivers.length === 2);
+		expect(first.calls).toContain("abort");
+		await untilLine(() => drivers[1]?.calls.some((c) => c.startsWith("prompt:")) === true);
+		expect(first.calls.filter((c) => c.startsWith("prompt:"))).toHaveLength(1);
+	});
+
+	test("no stall_alert while a host tool (approval wait) runs; silence after it returns alerts as before", async () => {
+		await router.route(msg("deploy"));
+		const mailbox = router.mailbox(ORIGIN);
+		const click = Promise.withResolvers<string>();
+		const approval = mailbox.trackHostTool(() => click.promise);
+		expect(router.hostToolsRunning()).toBe(1);
+
+		clock.advance(3 * STALL_MS); // the owner takes minutes to click
+		expect(router.sweepStalls()).toBe(0);
+		clock.advance(2 * STALL_NOTIFY_MS);
+		expect(router.sweepStalls()).toBe(0);
+		expect(escalations).toHaveLength(0);
+		expect(lines.some((l) => l.includes("event=stall_alert"))).toBe(false);
+
+		click.resolve("approved");
+		expect(await approval).toBe("approved");
+		expect(router.hostToolsRunning()).toBe(0);
+		// The silence is measured from the tool's return, not from the turn's last omp event.
+		clock.advance(STALL_MS - 1);
+		expect(router.sweepStalls()).toBe(0);
+		clock.advance(1);
+		expect(router.sweepStalls()).toBe(1);
+		expect(lines.filter((l) => l.includes("event=stall_alert"))).toHaveLength(1);
+	});
+
+	test("a failing host tool still ends its rest from stall detection", async () => {
+		await router.route(msg("upload"));
+		const mailbox = router.mailbox(ORIGIN);
+		await expect(mailbox.trackHostTool(() => Promise.reject(new Error("upload refused")))).rejects.toThrow(
+			"upload refused",
+		);
+		expect(mailbox.hostToolsRunning).toBe(0);
+		clock.advance(STALL_MS);
+		expect(router.sweepStalls()).toBe(1);
+	});
+
+	test("an idle origin never raises a stall", async () => {
+		await router.route(msg("quick"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		const settled = new Promise<void>((resolve) => driver.onFinal(() => resolve()));
+		driver.release();
+		await settled;
+		await router.mailbox(ORIGIN).sweepIdle(); // runs behind the final handler on the actor's chain
+		clock.advance(10 * STALL_MS);
+		expect(router.sweepStalls()).toBe(0);
+	});
+
+	test("a long turn that keeps emitting events keeps inbound_starved closed; silence opens it", async () => {
+		await router.route(msg("long task"));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		const starved = () => collectGates({ homeDir: dir, now: clock.t }).find((g) => g.name === "inbound_starved");
+
+		for (let i = 0; i < 4; i++) {
+			clock.advance(INBOUND_STARVATION_MS - 60_000);
+			driver.fire({ type: "tool_execution_update" });
+		}
+		expect(starved()?.state).toBe("closed");
+
+		clock.advance(INBOUND_STARVATION_MS);
+		expect(starved()?.state).toBe("open");
+	});
+
+	test("tool_execution_start reaches onProgress: the tool count and one line per call (tool name plus short args)", async () => {
+		driverOptions.toolCalls = [
+			{ name: "bash", args: { command: "git status", cwd: "/tmp" } },
+			{ name: "read", args: { file_path: "a.ts" } },
+		];
+		const record = msg("job");
+		await router.route(record);
+		// The fake driver reports tool calls from a macrotask (socket delivery), after the turn is recorded.
+		await untilLine(() => activities.length >= 2);
+		const base = { steers: 0, retries: 0 };
+		expect(activities).toEqual([
+			{
+				originKey: ORIGIN,
+				threadRef: record.threadRef,
+				progress: { ...base, tools: 1, recentTools: [T("bash command=git status")] },
+			},
+			{
+				originKey: ORIGIN,
+				threadRef: record.threadRef,
+				progress: { ...base, tools: 2, recentTools: [T("bash command=git status"), T("read file_path=a.ts")] },
+			},
+		]);
+		// The events still count as turn events: no stall is raised while tools keep starting.
+		expect(lines.some((l) => l.includes("event=stall_alert"))).toBe(false);
+	});
+
+	test("progress: todo results, steered messages and model retries reach onProgress; view reads and errors do not", async () => {
+		const record = msg("job");
+		await router.route(record);
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		const phases = [
+			{
+				name: "구현",
+				tasks: [
+					{ content: "드라이버", status: "completed" },
+					{ content: "카드", status: "in_progress" },
+					{ content: "버린 일", status: "abandoned" },
+					{ content: "문서", status: "pending" },
+				],
+			},
+		];
+		const todoEnd = (op: string, isError = false): OmpEvent => ({
+			type: "tool_execution_end",
+			toolName: "todo",
+			isError,
+			result: { content: [], details: { op, phases } },
+		});
+		driver.fire(todoEnd("view"));
+		driver.fire(todoEnd("done", true));
+		expect(activities).toEqual([]);
+		driver.fire(todoEnd("start"));
+		driver.fire({ type: "auto_retry_start", attempt: 2, maxAttempts: 5, delayMs: 1, errorMessage: "timeout" });
+		await router.route(msg("추가 지시"));
+		const todo = { done: 1, total: 3, current: "카드" };
+		expect(activities.map((a) => a.progress)).toEqual([
+			{ tools: 0, recentTools: [], steers: 0, retries: 0, todo },
+			{ tools: 0, recentTools: [], steers: 0, retries: 2, todo },
+			{ tools: 0, recentTools: [], steers: 1, retries: 2, todo },
+		]);
+		expect(activities.every((a) => a.threadRef === record.threadRef)).toBe(true);
+	});
+
+	const ZAI_LIMIT_ERROR =
+		'429 {"type":"error","error":{"type":"rate_limit_error","code":"1310","message":"[1310][Weekly/Monthly Limit Exhausted]"}}';
+	const TIMEOUT_ERROR = "OpenAI completions stream timed out while waiting for the first event";
+	const retryStart = (errorMessage: unknown): OmpEvent => ({
+		type: "auto_retry_start",
+		attempt: 1,
+		maxAttempts: 10,
+		delayMs: 500,
+		errorMessage,
+	});
+
+	test("provider limit: the fake driver's scripted auto_retry_start calls onProviderLimit once, even when repeated", async () => {
+		driverOptions.events = [retryStart(ZAI_LIMIT_ERROR)];
+		const record = msg("job");
+		await router.route(record);
+		await untilLine(() => providerLimits.length >= 1);
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		driver.fire(retryStart(ZAI_LIMIT_ERROR));
+		driver.fire({ ...retryStart(ZAI_LIMIT_ERROR), attempt: 2 });
+		expect(providerLimits).toEqual([
+			{ originKey: ORIGIN, threadRef: record.threadRef, attempt: 1, maxAttempts: 10, errorMessage: ZAI_LIMIT_ERROR },
+		]);
+		expect(lines.filter((l) => l.includes("event=provider_limit_hit"))).toHaveLength(1);
+		expect(lines.some((l) => l.includes("event=provider_limit_hit") && l.includes("Limit Exhausted"))).toBe(true);
+	});
+
+	test("provider limit: a first-event timeout, malformed errorMessage values and malformed auto_retry_end events do not call the hook", async () => {
+		await router.route(msg("job"));
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		driver.fire(retryStart(TIMEOUT_ERROR));
+		driver.fire(retryStart(undefined));
+		driver.fire(retryStart(429));
+		driver.fire({ type: "auto_retry_start", attempt: 1 });
+		driver.fire({ type: "auto_retry_end", success: false, attempt: 3 }); // no finalError
+		driver.fire({ type: "auto_retry_end", success: false, attempt: 3, finalError: 429 });
+		driver.fire({ type: "auto_retry_end", success: true, attempt: 2, finalError: "429 rate_limit_error" });
+		expect(providerLimits).toEqual([]);
+		expect(lines.some((l) => l.includes("event=provider_limit_hit"))).toBe(false);
+		driver.release();
+	});
+
+	test("provider limit: auto_retry_end with finalError alone (retry.maxDelayMs path) calls the hook with maxAttempts 0, once per turn with a later retry start", async () => {
+		const record = msg("job");
+		await router.route(record);
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		driver.fire({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 3,
+			finalError: "exceeds retry.maxDelayMs … Original error: 429 rate_limit_error",
+		});
+		driver.fire(retryStart(ZAI_LIMIT_ERROR));
+		expect(providerLimits).toEqual([
+			{
+				originKey: ORIGIN,
+				threadRef: record.threadRef,
+				attempt: 3,
+				maxAttempts: 0,
+				errorMessage: "exceeds retry.maxDelayMs … Original error: 429 rate_limit_error",
+			},
+		]);
+		driver.release();
+	});
+
+	test("provider limit: retry and fallback events do not refresh the stall clock", async () => {
+		await router.route(msg("job"));
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+		clock.advance(STALL_MS);
+		expect(router.sweepStalls()).toBe(1);
+		expect(lines.some((l) => l.includes("event=stall_alert"))).toBe(true);
+		driver.fire(retryStart(ZAI_LIMIT_ERROR));
+		driver.fire({ type: "retry_fallback_applied", from: "zai/a", to: "zai/b", role: "default", reason: "429" });
+		expect(lines.some((l) => l.includes("event=stall_cleared"))).toBe(false);
+		expect(lines.some((l) => l.includes("event=retry_fallback_applied") && l.includes("to=zai/b"))).toBe(true);
+		driver.fire({ type: "message_update" }); // a real event still clears it
+		expect(lines.some((l) => l.includes("event=stall_cleared"))).toBe(true);
+		driver.release();
+	});
+
+	test("provider limit: isProviderLimit separates usage limits from other retry causes", () => {
+		for (const message of [
+			ZAI_LIMIT_ERROR,
+			"429 Too Many Requests",
+			"Too Many Requests",
+			"rate-limit exceeded",
+			"You exceeded your quota",
+			"Usage limit reached",
+			"rate_limit",
+		]) {
+			expect(isProviderLimit(message)).toBe(true);
+		}
+		for (const message of [TIMEOUT_ERROR, "connection reset", "overloaded_error 529", "", "error 14290"]) {
+			expect(isProviderLimit(message)).toBe(false);
+		}
+	});
+
+	test("toolActivityText prefers naming keys, keeps at most two scalars and degrades to the tool name", () => {
+		expect(toolActivityText("bash", { command: "git status", cwd: "/tmp" })).toBe("bash command=git status");
+		expect(toolActivityText("web", { q: "omp discord", depth: 2 })).toBe("web q=omp discord depth=2"); // no naming key: first two
+		expect(toolActivityText("mcp", { payload: { nested: true } })).toBe("mcp"); // non-scalar args are not shown
+		expect(toolActivityText("bash", "git push --force")).toBe("bash git push --force");
+		expect(toolActivityText("bash", undefined)).toBe("bash");
+		// omp's intent (or an `i` left in the args) names the call better than a heredoc's first characters.
+		expect(toolActivityText("bash", { command: "cat > /tmp/a.js <<'EOF'" }, "Reading  Discord\nthread")).toBe(
+			"bash · Reading Discord thread",
+		);
+		expect(toolActivityText("read", { path: "a.ts", i: "Reading config" })).toBe("read · Reading config");
+		expect(toolActivityText("bash", { command: "git status" }, "  ")).toBe("bash command=git status");
+	});
+});
+
+/** Records every message edit's text so a test can await the one it expects. */
+class UpdateWatchingTransport extends WaitingDiscordTransport {
+	readonly updates: string[] = [];
+	readonly #waiters = new Set<() => void>();
+
+	override async editMessage(args: EditMessageArgs): Promise<void> {
+		await super.editMessage(args);
+		this.updates.push(args.content ?? "");
+		for (const waiter of [...this.#waiters]) waiter();
+	}
+
+	/** Resolves on the first update at or after index `from` whose text satisfies `match` (bounded wait). */
+	waitForUpdate(match: (text: string) => boolean, from = 0, timeoutMs = 10_000): Promise<void> {
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		const check = () => {
+			if (!this.updates.slice(from).some(match)) return;
+			clearTimeout(timer);
+			this.#waiters.delete(check);
+			resolve();
+		};
+		const timer = setTimeout(() => {
+			this.#waiters.delete(check);
+			reject(new Error(`timed out waiting for a status update; saw ${JSON.stringify(this.updates)}`));
+		}, timeoutMs);
+		this.#waiters.add(check);
+		check();
+		return promise;
+	}
+}
+
+describe("daemon surface: status text, stall status, delivery_state", () => {
+	let home: TestHome;
+	let clock: FakeClock;
+	let transport: UpdateWatchingTransport;
+	let daemon: Daemon;
+	let drivers: OpsDriver[];
+	let lines: string[];
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-daemon-");
+		clock = new FakeClock();
+		clock.t = Date.now();
+		transport = new UpdateWatchingTransport();
+		drivers = [];
+		lines = [];
+	});
+
+	afterEach(async () => {
+		await daemon?.stop();
+		killSpawned();
+		home.remove();
+	});
+
+	async function startDaemon(
+		holdTurns: boolean,
+		toolCalls?: FakeOmpDriverOptions["toolCalls"],
+		context?: FakeOmpDriverOptions["context"],
+	): Promise<void> {
+		const sessions = new FakeSessionStore();
+		daemon = new Daemon({
+			config: home.config,
+			channels: [discordBinding(transport)],
+			clock,
+			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: "boot",
+			hostLoad: IDLE_HOST_LOAD, // status is read twice (slash, CLI): live load would differ between the readings
+			driverFactory: (_origin, sessionDir) => {
+				const driver = new OpsDriver({
+					sessionDir,
+					store: sessions,
+					holdTurns,
+					...(toolCalls ? { toolCalls } : {}),
+					...(context ? { context } : {}),
+				});
+				drivers.push(driver);
+				return driver;
+			},
+		});
+		await daemon.start();
+	}
+
+	test("the status message shows '⏸ 응답 없음 2분' after 120 s of silence and returns to '⏳' when events resume", async () => {
+		await startDaemon(true);
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "long task" });
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+
+		clock.advance(STALL_MS);
+		const stalled = transport.waitForUpdate((text) => text.startsWith(STALL_STATUS_TEXT));
+		await daemon.sweep();
+		await stalled;
+		expect(lines.some((l) => l.includes("event=stall_alert"))).toBe(true);
+
+		// Events resuming do not flip the text back at once (stalls of one turn are merged)...
+		driver.fire({ type: "message_update" });
+		await daemon.sweep();
+		expect(transport.updates.at(-1)?.startsWith(STALL_STATUS_TEXT)).toBe(true);
+		// ...only a calm stretch of STALL_RELEASE_MS after the clearing event releases it.
+		const before = transport.updates.length;
+		clock.advance(STALL_RELEASE_MS);
+		driver.fire({ type: "message_update" });
+		const released = transport.waitForUpdate((text) => text.startsWith("⏳ 작업 중"), before);
+		await daemon.sweep();
+		await released;
+
+		driver.release();
+		await transport.waitForPosts((text) => text.includes("ECHO long task"));
+	});
+
+	test("the running status shows '⏳ 작업 중 · mm:ss · 도구 N회' plus the tool lines, and the stall text takes the first line", async () => {
+		await startDaemon(true, [{ name: "bash", args: { command: "git status" } }]);
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "long task" });
+		await untilLine(() => lines.some((l) => l.includes("event=turn_start")));
+		const driver = drivers[0];
+		if (!driver) throw new Error("no driver was started");
+
+		// Tool activity is stored as it happens and rendered on the regular 15 s cadence. The fake reports the tool call
+		// a macrotask after `turn_start`: a sweep before it lands renders the bare status and spends the cadence slot, so
+		// the activity would wait for a next sweep that never comes. `tool_start` is logged in the step that stores it.
+		await untilLine(() => lines.some((l) => l.includes("event=tool_start")));
+		clock.advance(16_000);
+		const withActivity = transport.waitForUpdate((text) => text.includes("bash command=git status"));
+		await daemon.sweep();
+		await withActivity;
+		expect(transport.updates.at(-1)).toMatch(/^⏳ 작업 중 · \d{2}:\d{2} · 도구 1회\n▸ bash command=git status$/);
+
+		// Silence puts the stall text on the first line; the progress lines stay under it.
+		clock.advance(STALL_MS);
+		await daemon.sweep();
+		const stalled = transport.updates.at(-1)?.split("\n") ?? [];
+		expect(stalled[0]?.startsWith(`${STALL_STATUS_TEXT} · `)).toBe(true);
+		expect(stalled.slice(1)).toEqual(["▸ bash command=git status"]);
+
+		// Events resume: back to ⏳ with the last known activity.
+		driver.fire({ type: "message_update" });
+		await transport.waitForUpdate((text) => text.startsWith("⏳ 작업 중") && text.includes("bash"));
+		driver.release();
+		await transport.waitForPosts((text) => text.includes("ECHO long task"));
+	});
+
+	test("delivery rows log from=new -> pending -> inflight -> confirmed", async () => {
+		await startDaemon(false);
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "hello" });
+		await transport.waitForPosts((text) => text.includes("ECHO hello"));
+		await daemon.pump(); // the confirm of the delivery runs behind the post
+		const states = lines
+			.filter((l) => l.includes("event=delivery_state"))
+			.map((l) => /from=(\S+) to=(\S+)/.exec(l)?.slice(1));
+		expect(states).toEqual([
+			["new", "pending"],
+			["pending", "inflight"],
+			["inflight", "confirmed"],
+		]);
+		expect(lines.find((l) => l.includes("event=delivery_state"))).toMatch(
+			/ event=delivery_state id=1 from=new to=pending$/,
+		);
+	});
+
+	test("!status answers this conversation's context line, then exactly what `ompbot status` prints", async () => {
+		await startDaemon(false);
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "hello" });
+		await transport.waitForPosts((text) => text.includes("ECHO hello"));
+		await daemon.pump();
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "!status" });
+		await transport.waitForPosts((text) => text.startsWith("이 대화 컨텍스트:"));
+		const ack = transport.posts((text) => text.startsWith("이 대화 컨텍스트:"))[0];
+		const cli = await runMain(home.dir, ["status"]);
+		expect(cli.code, cli.stderr).toBe(0);
+		const [first, ...rest] = (ack?.content ?? "").split("\n");
+		// The fake child reports no context use: the line says so instead of a made-up 0.
+		expect(first).toBe("이 대화 컨텍스트: 알 수 없음 · 모델 fake/alpha");
+		const body = rest.join("\n");
+		expect(body).toContain("데몬 실행 중");
+		// host_pressure reads this machine's live load and memory at each call: its numbers may move between the reads.
+		// The typed `!status` is itself a ledger row, so the reply was cut while it was still dispatched: only the two
+		// ledger lines differ from the CLI read taken after it was answered.
+		const steady = (text: string | undefined) =>
+			text
+				?.replace(/host_pressure .*/, "host_pressure <live>")
+				.split("\n")
+				.filter((line) => !line.startsWith("장부 ") && !line.startsWith("입수 "))
+				.join("\n");
+		expect(steady(cli.stdout)).toBe(`${steady(body)}\n`);
+		expect(steady(renderStatusText(daemon.status()))).toBe(steady(body));
+	});
+
+	test("!status starts with the asking conversation's context: use, idle session, unreadable child", async () => {
+		await startDaemon(false, undefined, { tokens: 123000, window: 1000000, percent: 12.3 });
+		const failing = "discord/dm/200000000000000003";
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "hello" });
+		await daemon.inject({ origin: failing, asOwner: true, text: "hi" });
+		await transport.waitForPosts((text) => text.startsWith("ECHO"), 2);
+		const [, broken] = drivers;
+		if (!broken) throw new Error("no driver for the failing origin");
+		broken.failState = true;
+		const used = "이 대화 컨텍스트: 123k / 1,000k (12%) · 모델 fake/alpha";
+
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "!status" });
+		await transport.waitForPosts((text) => text.startsWith("이 대화 컨텍스트:"));
+		const typed = transport.posts((text) => text.startsWith("이 대화 컨텍스트:"));
+		expect(typed.map((post) => [post.channelId, post.content?.split("\n")[0]])).toEqual([[OWNER_DM, used]]);
+		expect(typed[0]?.content).toContain("데몬 실행 중");
+
+		const firstLine = async (origin: string) => {
+			const isContext = (text: string) => text.startsWith("이 대화 컨텍스트:");
+			const known = transport.posts(isContext).length;
+			await daemon.inject({ origin, asOwner: true, text: "!status" });
+			await transport.waitForPosts(isContext, known + 1);
+			return transport.posts(isContext).at(-1)?.content?.split("\n")[0];
+		};
+		expect(await firstLine(ORIGIN)).toBe(used);
+		expect(await firstLine("discord/dm/200000000000000002")).toBe(
+			"이 대화 컨텍스트: 세션 쉬는 중(다음 메시지 때 다시 읽음)",
+		);
+		expect(await firstLine(failing)).toBe("이 대화 컨텍스트: 알 수 없음");
+		expect(lines.some((line) => line.includes("event=status_context_failed"))).toBe(true);
+	});
+
+	test("!model typed in a DM and in a channel answers in the conversation where it was typed: no thread, no placeholder root post", async () => {
+		await startDaemon(false);
+		transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
+		const typedInDm = ownerMessage("700000000000000001", "!model");
+		const typedInChannel = ownerMessage("700000000000000002", `<@${BOT}> !model`, {
+			channel_id: CHANNEL,
+			guild_id: GUILD,
+		});
+		for (const [i, event] of [typedInDm, typedInChannel].entries()) {
+			await transport.emitMessage(event);
+			await transport.waitForPosts((text) => text.includes("현재 모델:"), i + 1);
+		}
+		const answers = transport.posts((text) => text.includes("현재 모델:"));
+		expect(answers.map((post) => [post.channelId, post.messageReference?.messageId])).toEqual([
+			[OWNER_DM, typedInDm.id],
+			[CHANNEL, typedInChannel.id],
+		]);
+		expect(transport.calls.filter((call) => call.method === "startThread")).toEqual([]);
+		expect(transport.posts((text) => text.startsWith("🧪 inject"))).toEqual([]);
+	});
+});
+
+describe("alert incidents: owner-notice repeat suppression (store)", () => {
+	test("first occurrence notifies, the same sign stays quiet 24h, then re-alerts; resolve re-arms", () => {
+		const dir = mkdtempSync(join(tmpdir(), "ompbot-incidents-"));
+		const clock = new FakeClock();
+		const store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		try {
+			const scope = "turns:discord/dm/200000000000000001";
+			expect(store.recordAlertIncident(scope, "Could not restore model: x", clock.now())).toMatchObject({
+				notify: true,
+				count: 1,
+			});
+			clock.advance(60_000);
+			expect(store.recordAlertIncident(scope, "Could not restore model: x", clock.now())).toMatchObject({
+				notify: false,
+				count: 2,
+			});
+			clock.advance(ALERT_INCIDENT_REPEAT_MS);
+			expect(store.recordAlertIncident(scope, "Could not restore model: x", clock.now())).toMatchObject({
+				notify: true,
+				count: 3,
+			});
+			store.resolveAlertIncidents(scope);
+			clock.advance(60_000);
+			expect(store.recordAlertIncident(scope, "Could not restore model: x", clock.now())).toMatchObject({
+				notify: true,
+				count: 1,
+			});
+		} finally {
+			store.close();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+/** Writes a backup stamp dated now, so the backup_age gate closes. */
+function writeBackupStamp(homeDir: string): void {
+	mkdirSync(join(homeDir, "backups"), { recursive: true });
+	writeFileSync(
+		join(homeDir, "backups", STAMP_FILE),
+		`ts=${new Date().toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
+	);
+}
+
+describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () => {
+	let home: TestHome;
+	let clock: FakeClock;
+	let transport: WaitingDiscordTransport;
+	let daemon: Daemon;
+	let drivers: OpsDriver[];
+	let lines: string[];
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-selfdiag-");
+		clock = new FakeClock();
+		clock.t = Date.now();
+		transport = new WaitingDiscordTransport();
+		drivers = [];
+		lines = [];
+	});
+
+	afterEach(async () => {
+		await daemon?.stop();
+		killSpawned();
+		home.remove();
+	});
+
+	/**
+	 * `bootBackup` defaults to one that fails, so `backup_age` stays open from boot: most tests here use it as the
+	 * gate they open and close. The boot backup itself is tested with `runBackup`.
+	 */
+	async function startDaemon(
+		options: { gateSweepMs?: number; failPrompts?: number; bootBackup?: DaemonOptions["bootBackup"] } = {},
+	): Promise<void> {
+		const sessions = new FakeSessionStore();
+		const failPrompts = options.failPrompts ?? 0;
+		daemon = new Daemon({
+			config: home.config,
+			channels: [discordBinding(transport)],
+			clock,
+			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: "boot",
+			bootBackup:
+				options.bootBackup ??
+				(() => {
+					throw new BackupError("vacuum_failed", "boot backup off in this test");
+				}),
+			...(options.gateSweepMs === undefined ? {} : { gateSweepMs: options.gateSweepMs }),
+			driverFactory: (_origin, sessionDir) => {
+				const driver = new OpsDriver({ sessionDir, store: sessions });
+				driver.failPrompts = failPrompts;
+				drivers.push(driver);
+				return driver;
+			},
+		});
+		await daemon.start();
+		// Discord has no owner DM known from the config: the notices go to the home the owner has set.
+		daemon.store.setOwnerHome({ platform: "discord", conversationId: OWNER_DM });
+	}
+
+	test("a gate opening DMs the owner once, recovery reports, a quick re-open stays quiet (24h suppression)", async () => {
+		await startDaemon({ gateSweepMs: 5_000 }); // no backup stamp -> backup_age is open from boot
+		const opened = transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+		await daemon.sweep();
+		await opened;
+		expect(transport.posts((text) => text.includes("[자가진단] 게이트 backup_age"))).toHaveLength(1);
+
+		writeBackupStamp(home.dir);
+		clock.advance(6_000);
+		const recovered = transport.waitForPosts((text) => text.includes("게이트 backup_age 회복"));
+		await daemon.sweep();
+		await recovered;
+
+		rmSync(join(home.dir, "backups", STAMP_FILE)); // flaps open again within 24h
+		clock.advance(6_000);
+		await daemon.sweep();
+		expect(transport.posts((text) => text.includes("게이트 backup_age 열림"))).toHaveLength(1);
+	});
+
+	// a first start makes the first backup before the first gate check.
+	test("boot without a stamp: the daemon backs up before the first gate check, so backup_age never opens", async () => {
+		expect(readStamp(join(home.dir, "backups"))).toBeUndefined();
+		await startDaemon({ gateSweepMs: 5_000, bootBackup: runBackup });
+		expect(readStamp(join(home.dir, "backups"))).toBeDefined();
+		await daemon.sweep();
+		expect(gateIncidentStatus("backup_age")).toBeUndefined();
+		expect(daemon.status().openGates.map((gate) => gate.name)).not.toContain("backup_age");
+		expect(transport.posts((text) => text.includes("backup_age"))).toHaveLength(0);
+		expect(lines.some((line) => line.includes("event=boot_backup_done"))).toBe(true);
+	});
+
+	test("a failed boot backup is logged and backup_age still opens and DMs the owner", async () => {
+		await startDaemon({ gateSweepMs: 5_000 }); // the helper's boot backup fails
+		expect(lines.some((line) => line.includes("event=boot_backup_failed"))).toBe(true);
+		const opened = transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+		await daemon.sweep();
+		await opened;
+		expect(gateIncidentStatus("backup_age")).toBe("alerted");
+	});
+
+	test("three failed turns DM the owner once, further failures stay quiet, /status lists the open gate", async () => {
+		await startDaemon({ failPrompts: 99 }); // every prompt fails with the stale-model sign
+		const dm = transport.waitForPosts((text) => text.includes("연속 실패"));
+		for (let i = 0; i < 3; i++) {
+			await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		}
+		await dm;
+		const posted = transport.posts((text) => text.includes("연속 실패"));
+		expect(posted).toHaveLength(1);
+		expect(posted[0]?.content).toContain(ORIGIN);
+		expect(posted[0]?.content).toContain("3번 연속 실패");
+		expect(posted[0]?.channelId).toBe(OWNER_DM); // the owner DM, not the failing thread
+		expect(lines.some((line) => line.includes("event=turn_failures_notified"))).toBe(true);
+
+		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "job 3" });
+		await transport.waitForPosts((text) => text.startsWith("[turn failed]"), 4);
+		expect(transport.posts((text) => text.includes("연속 실패"))).toHaveLength(1); // same sign, still one DM
+
+		const status = renderStatusText(daemon.status());
+		expect(status).toContain("자가진단 게이트");
+		expect(status).toContain("turns_failing recent=4");
+	});
+
+	test("turns_failing (a window gate) closes silently when its evidence ages out: no false '회복' DM", async () => {
+		await startDaemon({ gateSweepMs: 5_000, failPrompts: 99 }); // every prompt fails with the stale-model sign
+		const dm = transport.waitForPosts((text) => text.includes("연속 실패"));
+		for (let i = 0; i < 3; i++) {
+			await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		}
+		await dm;
+		const gateOpen = transport.waitForPosts((text) => text.includes("게이트 turns_failing 열림"));
+		clock.advance(6_000); // past the gate sweep interval, still deep inside the 1h evidence window
+		await daemon.sweep();
+		await gateOpen;
+
+		// The bot is still broken; only the 1h evidence window elapsed. A "이전 문제가 해결되었습니다" DM would be a lie.
+		clock.advance(TURNS_FAILING_WINDOW_MS + 60_000);
+		await daemon.sweep();
+		expect(daemon.status().openGates.map((gate) => gate.name)).not.toContain("turns_failing");
+		expect(transport.posts((text) => text.includes("게이트 turns_failing 회복"))).toHaveLength(0);
+		// The recovery notice is the only ✅ [자가진단] text (the open notice says "회복되면 다시 알립니다").
+		expect(transport.posts((text) => text.startsWith("✅ [자가진단]"))).toHaveLength(0);
+	});
+
+	test("a restart does not forget an alerted gate: the recovery DM still fires when the gate closes", async () => {
+		await startDaemon({ gateSweepMs: 5_000 }); // no backup stamp -> backup_age is open from boot
+		const opened = transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+		await daemon.sweep();
+		await opened;
+		await daemon.stop();
+
+		// A new incarnation on the same ledger: the 24h suppression keeps the still-open gate quiet, but the
+		// standing incident re-seeds "the owner was alerted", so the recovery DM must not be skipped.
+		await startDaemon({ gateSweepMs: 5_000 });
+		await daemon.sweep();
+		expect(transport.posts((text) => text.includes("게이트 backup_age 열림"))).toHaveLength(1);
+
+		writeBackupStamp(home.dir);
+		clock.advance(6_000);
+		const recovered = transport.waitForPosts((text) => text.includes("게이트 backup_age 회복"));
+		await daemon.sweep();
+		await recovered;
+		expect(transport.posts((text) => text.includes("게이트 backup_age 회복"))).toHaveLength(1);
+	});
+
+	/** Status of a gate's alert incident row read straight from the ledger (WAL-safe readonly open). */
+	function gateIncidentStatus(gate: string): string | undefined {
+		const db = new Database(join(home.dir, "ompbot.db"), { readonly: true });
+		try {
+			const row = db.query("select status from alert_incidents where scope = ?").get(`gate:${gate}`) as {
+				status: string;
+			} | null;
+			return row?.status;
+		} finally {
+			db.close();
+		}
+	}
+
+	/** Advances one gate-sweep interval and runs the sweep chain. */
+	async function sweepOnce(): Promise<void> {
+		clock.advance(6_000);
+		await daemon.sweep();
+	}
+
+	test("an alerted gate that stayed closed for 3 sweeps re-alerts when it opens again", async () => {
+		await startDaemon({ gateSweepMs: 5_000 }); // no stamp -> open from boot
+		await daemon.sweep();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+
+		writeBackupStamp(home.dir);
+		await sweepOnce(); // close: recovery DM, closedSweeps=1
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 회복"));
+		await sweepOnce(); // closedSweeps=2
+		expect(gateIncidentStatus("backup_age")).toBe("alerted");
+		await sweepOnce(); // closedSweeps=3 -> incident resolved
+		expect(gateIncidentStatus("backup_age")).toBe("resolved");
+
+		rmSync(join(home.dir, "backups", STAMP_FILE));
+		await sweepOnce();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"), 2);
+		expect(transport.posts((text) => text.includes("게이트 backup_age 열림"))).toHaveLength(2);
+	});
+
+	test("a re-open one sweep after the recovery stays quiet (flap suppression, incident not resolved)", async () => {
+		await startDaemon({ gateSweepMs: 5_000 });
+		await daemon.sweep();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+
+		writeBackupStamp(home.dir);
+		await sweepOnce();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 회복"));
+		rmSync(join(home.dir, "backups", STAMP_FILE));
+		await sweepOnce(); // open again before the 3rd closed sweep
+		await sweepOnce();
+		expect(transport.posts((text) => text.includes("게이트 backup_age 열림"))).toHaveLength(1);
+		expect(gateIncidentStatus("backup_age")).toBe("alerted");
+
+		// A pending resolve must not survive an interruption: close again, then it needs a fresh run of 3 sweeps.
+		writeBackupStamp(home.dir);
+		await sweepOnce(); // closedSweeps=1 (recovery DM)
+		await sweepOnce(); // 2
+		expect(gateIncidentStatus("backup_age")).toBe("alerted");
+		await sweepOnce(); // 3
+		expect(gateIncidentStatus("backup_age")).toBe("resolved");
+	});
+
+	test("a gate already closed at boot clears its leftover alerted incident, so the next open alerts", async () => {
+		await startDaemon({ gateSweepMs: 5_000 });
+		await daemon.sweep();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"));
+		await daemon.stop();
+		expect(gateIncidentStatus("backup_age")).toBe("alerted");
+
+		writeBackupStamp(home.dir); // closed by the time the new incarnation looks
+		await startDaemon({ gateSweepMs: 5_000 });
+		await daemon.sweep(); // first observation: closed -> stale row resolved
+		expect(gateIncidentStatus("backup_age")).toBe("resolved");
+		expect(transport.posts((text) => text.includes("게이트 backup_age 회복"))).toHaveLength(0);
+
+		rmSync(join(home.dir, "backups", STAMP_FILE));
+		await sweepOnce();
+		await transport.waitForPosts((text) => text.includes("게이트 backup_age 열림"), 2);
+		expect(transport.posts((text) => text.includes("게이트 backup_age 열림"))).toHaveLength(2);
+	});
+
+	/** Fails three more owner turns (every prompt fails) and sweeps once, so turns_failing opens; waits for its DM. */
+	async function openTurnsFailing(round: number): Promise<void> {
+		for (let i = 0; i < 3; i++) {
+			await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${round}-${i}` });
+		}
+		await transport.waitForPosts((text) => text.startsWith("[turn failed]"), 3 * round);
+		await sweepOnce();
+		await transport.waitForPosts((text) => text.includes("게이트 turns_failing 열림"), round);
+	}
+
+	test("a window gate's incident resolves silently after the closed sweeps, so a recurrence alerts again", async () => {
+		await startDaemon({ gateSweepMs: 5_000, failPrompts: 99 }); // every prompt fails with the stale-model sign
+		await openTurnsFailing(1);
+		expect(gateIncidentStatus("turns_failing")).toBe("alerted");
+
+		clock.advance(TURNS_FAILING_WINDOW_MS); // the evidence ages out: the next sweep sees the gate closed
+		for (let sweep = 1; sweep < GATE_RESOLVE_CLOSED_SWEEPS; sweep++) {
+			await sweepOnce();
+			expect(gateIncidentStatus("turns_failing")).toBe("alerted");
+		}
+		await sweepOnce();
+		expect(gateIncidentStatus("turns_failing")).toBe("resolved");
+		// Resolving is bookkeeping only: an aged-out window is not a fix, so no recovery DM.
+		expect(transport.posts((text) => text.includes("게이트 turns_failing 회복"))).toHaveLength(0);
+
+		await openTurnsFailing(2); // well inside 24h of the first alert: only the resolve lets it notify again
+		expect(transport.posts((text) => text.includes("게이트 turns_failing 열림"))).toHaveLength(2);
+		expect(gateIncidentStatus("turns_failing")).toBe("alerted");
+	});
+
+	test("a window gate already closed at boot resolves its leftover alerted incident without a recovery DM", async () => {
+		await startDaemon({ gateSweepMs: 5_000, failPrompts: 99 });
+		await openTurnsFailing(1);
+		await daemon.stop();
+		expect(gateIncidentStatus("turns_failing")).toBe("alerted");
+
+		clock.advance(TURNS_FAILING_WINDOW_MS); // aged out by the time the new incarnation looks
+		await startDaemon({ gateSweepMs: 5_000 });
+		await daemon.sweep(); // first observation: closed -> stale row resolved
+		expect(gateIncidentStatus("turns_failing")).toBe("resolved");
+		expect(transport.posts((text) => text.includes("게이트 turns_failing 회복"))).toHaveLength(0);
+	});
+
+	test("an unknown gate (nothing to judge) keeps its previous state: no notice, no resolve, recovery only on a real close", async () => {
+		await startDaemon({ gateSweepMs: 5_000 });
+		writeBackupStamp(home.dir);
+		await daemon.sweep(); // first observation: sweep_stalled closed
+		const heartbeat = join(home.dir, SWEEP_HEARTBEAT_FILE);
+		const notices = (gate: string) => transport.posts((text) => text.includes(`[자가진단] 게이트 ${gate}`));
+
+		// (a) closed -> unknown: the stamp is gone, so the heartbeat gate cannot be judged; nothing is said.
+		rmSync(heartbeat);
+		// (d) unknown is not an open gate for status.
+		expect(daemon.status().openGates.map((gate) => gate.name)).not.toContain("sweep_stalled");
+		await sweepOnce();
+		expect(notices("sweep_stalled")).toHaveLength(0);
+
+		// sweep_stalled opens: the stamp written by the last sweep is older than three sweeps.
+		clock.advance(SWEEP_STALLED_MS + 6_000);
+		const opened = transport.waitForPosts((text) => text.includes("게이트 sweep_stalled 열림"));
+		await daemon.sweep();
+		await opened;
+		expect(gateIncidentStatus("sweep_stalled")).toBe("alerted");
+
+		// (b) open -> unknown for longer than the resolve run: no "회복", the alerted row stays.
+		for (let sweep = 0; sweep < GATE_RESOLVE_CLOSED_SWEEPS + 1; sweep++) {
+			rmSync(heartbeat);
+			await sweepOnce();
+		}
+		expect(transport.posts((text) => text.includes("게이트 sweep_stalled 회복"))).toHaveLength(0);
+		expect(gateIncidentStatus("sweep_stalled")).toBe("alerted");
+
+		// (c) a real close (fresh stamp from the last sweep) reports the recovery once.
+		const recovered = transport.waitForPosts((text) => text.includes("게이트 sweep_stalled 회복"));
+		await sweepOnce();
+		await recovered;
+		expect(transport.posts((text) => text.includes("게이트 sweep_stalled 회복"))).toHaveLength(1);
+	});
+
+	test("gateSweepMs=0 disables gate reporting entirely: an open gate never DMs, status still lists it", async () => {
+		await startDaemon({ gateSweepMs: 0 }); // no backup stamp -> backup_age is open from boot
+		await daemon.sweep();
+		expect(transport.posts((text) => text.includes("[자가진단]"))).toHaveLength(0);
+		expect(daemon.status().openGates.map((gate) => gate.name)).toContain("backup_age");
+	});
+});
+
+describe("ompbot doctor agy agent", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-agy-"));
+		chmodSync(dir, 0o700);
+		mkdirSync(join(dir, "secrets"), { recursive: true });
+		writeFileSync(join(dir, "secrets", "discord-bot-token"), "TEST-discord-0\n", { mode: 0o600 });
+		const fakeAgy = join(dir, "agy");
+		writeFileSync(fakeAgy, "#!/bin/sh\necho '1.0.0'\n", { mode: 0o755 });
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				channels: {
+					discord: {
+						ownerUserId: OWNER,
+						applicationId: "600000000000000000",
+						botTokenFile: "secrets/discord-bot-token",
+					},
+				},
+				ompExecutable: process.execPath,
+				workspaceDir: "workspace",
+				agent: "agy",
+				agyExecutable: fakeAgy,
+			}),
+			{ mode: 0o600 },
+		);
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	test("agent agy never spawns omp: no omp runtime line (its ompExecutable here is a standalone binary)", async () => {
+		const lines: string[] = [];
+		await runDoctor(dir, (line) => lines.push(line), undefined, OFFLINE_DOCTOR);
+		expect(lines.filter((line) => line.includes("omp runtime"))).toEqual([]);
+		// The rest of the report still runs: the offline network fails the Discord bot lookup.
+		expect(lines.find((line) => line.includes("discord users/@me"))).toStartWith("fail discord users/@me: ");
+	}, 30_000);
+});
+
+describe("ompbot doctor omp runtime check", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-runtime-"));
+		mkdirSync(join(dir, "secrets"));
+		writeFileSync(join(dir, "secrets", "discord-bot-token"), "TEST-discord-0\n", { mode: 0o600 });
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	async function runtimeLine(ompExecutable: string): Promise<string | undefined> {
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				channels: {
+					discord: {
+						ownerUserId: OWNER,
+						applicationId: "600000000000000000",
+						botTokenFile: "secrets/discord-bot-token",
+					},
+				},
+				ompExecutable,
+				workspaceDir: "workspace",
+			}),
+			{ mode: 0o600 },
+		);
+		const lines: string[] = [];
+		await runDoctor(dir, (line) => lines.push(line), undefined, OFFLINE_DOCTOR);
+		return lines.find((line) => line.includes("omp runtime"));
+	}
+
+	function executable(version: string): string {
+		const root = mkdtempSync(join(dir, "bin-"));
+		writeFileSync(join(root, "omp"), `#!/bin/sh\necho ${version}\n`, { mode: 0o755 });
+		return join(root, "omp");
+	}
+
+	test("an executable that does not answer omp/<x.y.z> fails; one that does (cli.js or a standalone binary) passes", async () => {
+		expect(await runtimeLine(executable("1.4.4"))).toStartWith("fail omp runtime: omp_executable_missing ");
+		const ok = executable("omp/19.0.0");
+		expect(await runtimeLine(ok)).toBe(`ok omp runtime: executable=${ok}`);
+	}, 30_000);
+
+	test("an ompExecutable that is a directory is a failed line, and the rest of the report still runs", async () => {
+		const folder = mkdtempSync(join(dir, "omp-dir-"));
+		writeFileSync(
+			join(dir, "config.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				channels: {
+					discord: {
+						ownerUserId: OWNER,
+						applicationId: "600000000000000000",
+						botTokenFile: "secrets/discord-bot-token",
+					},
+				},
+				ompExecutable: folder,
+				workspaceDir: "workspace",
+			}),
+			{ mode: 0o600 },
+		);
+		const lines: string[] = [];
+		await runDoctor(dir, (line) => lines.push(line), undefined, OFFLINE_DOCTOR);
+		// checkOmpRuntime reports the directory as a problem (the same code the gate and the RPC driver give).
+		expect(lines.find((line) => line.includes("omp runtime"))).toStartWith(
+			`fail omp runtime: omp_executable_missing ${folder} cannot be run`,
+		);
+		expect(lines.some((line) => line.includes("backup bundle"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("fail discord users/@me: "))).toBe(true);
+	}, 30_000);
+
+	test("token file problems get one line each with the fix, and every later check still runs", async () => {
+		chmodSync(join(dir, "secrets", "discord-bot-token"), 0o644);
+		await runtimeLine(process.execPath);
+		const lines: string[] = [];
+		await runDoctor(dir, (line) => lines.push(line), undefined, OFFLINE_DOCTOR);
+		expect(lines).toContain(`ok config: ${join(dir, "config.json")}`);
+		expect(lines).toContain("fail discord token: mode=0644 expected=0600");
+		expect(lines.some((line) => line.includes("discord users/@me"))).toBe(false); // no request with a loose token file
+		expect(lines.some((line) => /^(ok|fail) omp: /.test(line))).toBe(true);
+		expect(lines).toContain(FIRST_INSTALL_LINE);
+	});
+});
+
+describe("ompbot doctor backup bundle check", () => {
+	let dir: string;
+
+	/** A ledger-only home: a stamp from a backup that had no bundle sources, and none since. */
+	function writeBundlessStamp(): void {
+		mkdirSync(join(dir, "backups"), { recursive: true });
+		writeFileSync(
+			join(dir, "backups", STAMP_FILE),
+			`ts=${new Date().toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
+		);
+	}
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-"));
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	/** Only the `backup bundle` line matters here, so the rest of doctor (config, secrets, Discord) is out of scope. */
+	async function bundleLine(): Promise<string | undefined> {
+		const lines: string[] = [];
+		await runDoctor(dir, (line) => lines.push(line), undefined, OFFLINE_DOCTOR);
+		return lines.find((line) => line.includes("backup bundle"));
+	}
+
+	test("a ledger-only home passes without a bundle; a home with sources must name one", async () => {
+		writeBundlessStamp();
+		expect(await bundleLine()).toBe("ok backup bundle: sources=none (ledger-only home)");
+
+		mkdirSync(join(dir, "sessions"), { recursive: true });
+		expect(await bundleLine()).toBe("fail backup bundle: bundle=none (run ompbot backup again)");
+	});
+
+	// before the daemon's first start there is no DB to back up.
+	test("first install (no ompbot.db, no stamp): a warning that never counts as a failure", async () => {
+		const lines: string[] = [];
+		let failures = 0;
+		checkBackupBundle(
+			dir,
+			(ok, name, detail) => {
+				if (!ok) failures += 1;
+				lines.push(`${ok ? "ok" : "fail"} ${name}: ${detail}`);
+			},
+			(name, detail) => lines.push(`warn ${name}: ${detail}`),
+		);
+		expect(failures).toBe(0);
+		expect(lines).toEqual([FIRST_INSTALL_LINE]);
+		expect(await bundleLine()).toBe(FIRST_INSTALL_LINE);
+	});
+
+	test("an apply backup (skipBundle) after a bundled backup keeps the bundle line passing", async () => {
+		new Database(join(dir, "ompbot.db")).close();
+		mkdirSync(join(dir, "sessions"), { recursive: true });
+		writeFileSync(join(dir, "sessions", "s.jsonl"), "{}\n");
+		runBackup({ homeDir: dir, now: new Date(Date.now() - 60_000) });
+		const skipped = runBackup({ homeDir: dir, skipBundle: true });
+		expect(skipped.bundle).toBeUndefined();
+		const lines: string[] = [];
+		let failures = 0;
+		checkBackupBundle(
+			dir,
+			(ok, name, detail) => {
+				if (!ok) failures += 1;
+				lines.push(`${ok ? "ok" : "fail"} ${name}: ${detail}`);
+			},
+			(name, detail) => lines.push(`warn ${name}: ${detail}`),
+		);
+		expect(failures).toBe(0);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toStartWith("ok backup bundle: bundle=ompbot-bundle-");
+	});
+
+	test("a DB without a stamp (the daemon ran, no backup succeeded) still fails", async () => {
+		new Database(join(dir, "ompbot.db")).close();
+		const line = await bundleLine();
+		expect(line).toStartWith("fail backup bundle: stamp=missing");
+	});
+});
+
+const FIRST_INSTALL_LINE =
+	"warn backup bundle: stamp=missing (first install: the daemon makes the first backup when it starts)";
+
+describe("ompbot doctor dispatch hosts", () => {
+	let home: TestHome;
+	beforeEach(() => {
+		home = makeHome("ompbot-doctor-hosts-");
+		const path = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(path, "utf8"));
+		writeFileSync(
+			path,
+			JSON.stringify({ ...config, herdr: {}, dispatchHosts: { wsl: { ssh: "wsl" }, oci: { ssh: "host2" } } }),
+			{ mode: 0o600 },
+		);
+	});
+	afterEach(() => home.remove());
+
+	/** Rewrites config.json's herdr section (`undefined` drops it together with dispatchHosts, which needs herdr). */
+	function setHerdr(herdr: { bin?: string } | undefined): void {
+		const path = join(home.dir, "config.json");
+		const { dispatchHosts, herdr: _old, ...rest } = JSON.parse(readFileSync(path, "utf8"));
+		writeFileSync(path, JSON.stringify(herdr === undefined ? rest : { ...rest, herdr, dispatchHosts }), {
+			mode: 0o600,
+		});
+	}
+	const stubDoctor = async (_home: string, write: (line: string) => void) => {
+		write("ok config: stub");
+		return 0;
+	};
+	/** `herdr integration status`, local (`<bin> integration status`) or over ssh (quoted remote words). */
+	const isIntegrationStatus = (cmd: string[]) =>
+		(cmd[1] === "integration" && cmd[2] === "status") || cmd.slice(-2).join(" ") === "'integration' 'status'";
+	const INTEGRATION_CURRENT =
+		"codex: not installed (/home/u/.codex/hooks.json)\nomp: current (v10) (/home/u/.omp/agent/extensions/herdr-omp-agent-state.ts)\n";
+
+	test("herdr on: the local herdr --version line comes first; a missing herdr fails the exit code", async () => {
+		setHerdr({ bin: "/opt/herdr/bin/herdr" });
+		const calls: string[][] = [];
+		const ok: ProcessRunner = async (cmd) => {
+			calls.push(cmd);
+			if (isIntegrationStatus(cmd)) return { code: 0, stdout: INTEGRATION_CURRENT, stderr: "", timedOut: false };
+			return { code: 0, stdout: cmd[0] === "/opt/herdr/bin/herdr" ? "herdr 0.9.1\n" : "", stderr: "", timedOut: false };
+		};
+		const lines: string[] = [];
+		expect(await doctorCommand(home.dir, (line) => lines.push(line), { doctor: stubDoctor, run: ok })).toBe(0);
+		expect(lines).toEqual([
+			"ok config: stub",
+			"ok herdr: /opt/herdr/bin/herdr herdr 0.9.1",
+			"ok herdr omp integration: omp: current (v10)",
+			"ok dispatch host wsl: ssh wsl",
+			"ok herdr omp integration on wsl: omp: current (v10)",
+			"ok dispatch host oci: ssh host2",
+			"ok herdr omp integration on oci: omp: current (v10)",
+		]);
+		expect(calls[0]).toEqual(["/opt/herdr/bin/herdr", "--version"]);
+
+		setHerdr({});
+		const missing: ProcessRunner = async (cmd) =>
+			cmd[0] === "herdr"
+				? { code: null, stdout: "spawn failed: ENOENT", timedOut: false }
+				: { code: 0, stdout: "", stderr: "", timedOut: false };
+		const failed: string[] = [];
+		expect(await doctorCommand(home.dir, (line) => failed.push(line), { doctor: stubDoctor, run: missing })).toBe(1);
+		expect(failed[1]).toBe("fail herdr: herdr spawn failed: ENOENT");
+	});
+
+	test("herdr off: no herdr line and nothing is run", async () => {
+		setHerdr(undefined);
+		const calls: string[][] = [];
+		const run: ProcessRunner = async (cmd) => {
+			calls.push(cmd);
+			return { code: 0, stdout: "", stderr: "", timedOut: false };
+		};
+		const lines: string[] = [];
+		expect(await doctorCommand(home.dir, (line) => lines.push(line), { doctor: stubDoctor, run })).toBe(0);
+		expect(lines).toEqual(["ok config: stub"]);
+		expect(calls).toEqual([]);
+	});
+
+	test("herdr omp integration: current is ok; not installed or a failing command is a warning that keeps the exit code", async () => {
+		setHerdr({ bin: "/opt/herdr/bin/herdr" });
+		const path = join(home.dir, "config.json");
+		const withHerdrBin = JSON.parse(readFileSync(path, "utf8"));
+		writeFileSync(
+			path,
+			JSON.stringify({ ...withHerdrBin, dispatchHosts: { wsl: { ssh: "wsl", herdrBin: "/home/u/.local/bin/herdr" } } }),
+			{ mode: 0o600 },
+		);
+		const lineOf = async (integration: RunProcessResult, doctorCode: number) => {
+			const calls: string[][] = [];
+			const run: ProcessRunner = async (cmd) => {
+				calls.push(cmd);
+				if (isIntegrationStatus(cmd)) return integration;
+				return { code: 0, stdout: "herdr 0.9.5\n", stderr: "", timedOut: false };
+			};
+			const lines: string[] = [];
+			const code = await doctorCommand(home.dir, (line) => lines.push(line), {
+				doctor: async (_home, write) => {
+					write("ok config: stub");
+					return doctorCode;
+				},
+				run,
+			});
+			return { code, lines, calls };
+		};
+		const notInstalled: RunProcessResult = {
+			code: 0,
+			stdout: "omp: not installed (/home/u/.omp/agent/extensions/herdr-omp-agent-state.ts)\n",
+			stderr: "",
+			timedOut: false,
+		};
+		const broken: RunProcessResult = {
+			code: 2,
+			stdout: "",
+			stderr: "error: unrecognized subcommand 'integration'\n",
+			timedOut: false,
+		};
+		for (const doctorCode of [0, 1]) {
+			const missing = await lineOf(notInstalled, doctorCode);
+			expect(missing.code).toBe(doctorCode);
+			expect(missing.lines[2]).toBe(
+				"fail herdr omp integration: omp: not installed — herdr integration install omp (warning only)",
+			);
+			expect(missing.lines[4]).toBe(
+				"fail herdr omp integration on wsl: omp: not installed — herdr integration install omp (warning only)",
+			);
+			const failing = await lineOf(broken, doctorCode);
+			expect(failing.code).toBe(doctorCode);
+			expect(failing.lines[2]).toBe(
+				"fail herdr omp integration: integration status failed: error: unrecognized subcommand 'integration' — herdr integration install omp (warning only)",
+			);
+			const current = await lineOf({ code: 0, stdout: INTEGRATION_CURRENT, stderr: "", timedOut: false }, doctorCode);
+			expect(current.code).toBe(doctorCode);
+			expect(current.lines[2]).toBe("ok herdr omp integration: omp: current (v10)");
+			expect(current.calls).toContainEqual(["/opt/herdr/bin/herdr", "integration", "status"]);
+			expect(current.calls).toContainEqual(herdrSshArgv("wsl", "/home/u/.local/bin/herdr", ["integration", "status"]));
+		}
+	});
+
+	test("one ok/fail line per dispatch host through the injected runner; a down host never changes the exit code", async () => {
+		const calls: string[][] = [];
+		const run: ProcessRunner = async (cmd) => {
+			calls.push(cmd);
+			if (isIntegrationStatus(cmd) && !cmd.includes("wsl")) {
+				return { code: 0, stdout: INTEGRATION_CURRENT, stderr: "", timedOut: false };
+			}
+			if (cmd[0] === "herdr") return { code: 0, stdout: "herdr 0.9.1\n", stderr: "", timedOut: false };
+			return cmd.includes("wsl")
+				? { code: 255, stdout: "", stderr: "ssh: connect to host x port 2222: Connection refused\n", timedOut: false }
+				: { code: 0, stdout: "", stderr: "", timedOut: false };
+		};
+		for (const doctorCode of [0, 1]) {
+			const lines: string[] = [];
+			const code = await doctorCommand(home.dir, (line) => lines.push(line), {
+				doctor: async (_home, write) => {
+					write("ok config: stub");
+					return doctorCode;
+				},
+				run,
+			});
+			expect(code).toBe(doctorCode);
+			expect(lines).toEqual([
+				"ok config: stub",
+				"ok herdr: herdr herdr 0.9.1",
+				"ok herdr omp integration: omp: current (v10)",
+				"fail dispatch host wsl: ssh: connect to host x port 2222: Connection refused (warning only)",
+				"fail herdr omp integration on wsl: integration status failed: ssh: connect to host x port 2222: Connection refused — herdr integration install omp (warning only)",
+				"ok dispatch host oci: ssh host2",
+				"ok herdr omp integration on oci: omp: current (v10)",
+			]);
+		}
+		expect(calls[2]).toEqual(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--", "wsl", "true"]);
+	});
+});
+
+describe("ompbot backup bundle size cap (config maxBundleBytes + --max-bundle-bytes)", () => {
+	let home: TestHome;
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-bundlecap-");
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+	});
+
+	/** A seeded ledger plus a sessions tree well past a 10-byte cap (and past the config's reach-around). */
+	function seedBackedUpHome(): void {
+		const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+		db.run("CREATE TABLE origins (origin_key TEXT PRIMARY KEY)");
+		db.close();
+		mkdirSync(join(home.dir, "sessions", "discord-dm-200000000000000001", "e1"), { recursive: true });
+		writeFileSync(
+			join(home.dir, "sessions", "discord-dm-200000000000000001", "e1", "s.jsonl"),
+			'{"message":{"role":"user","content":"안녕"}}\n',
+		);
+	}
+
+	test("config maxBundleBytes reaches the backup and the flag overrides it", async () => {
+		writeFileSync(
+			join(home.dir, "config.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				channels: {
+					discord: {
+						ownerUserId: OWNER,
+						applicationId: "600000000000000000",
+						botTokenFile: "secrets/discord-bot-token",
+					},
+				},
+				ompExecutable: join(home.dir, "fake-omp"),
+				workspaceDir: "workspace",
+				maxBundleBytes: 10,
+			}),
+			{ mode: 0o600 },
+		);
+		seedBackedUpHome();
+
+		const capped = await runMain(home.dir, ["backup"]);
+		expect(capped.code, capped.stderr).toBe(1);
+		expect(capped.stderr).toContain("bundle_too_large");
+		expect(existsSync(join(home.dir, "backups", STAMP_FILE))).toBe(false);
+
+		const lifted = await runMain(home.dir, ["backup", "--max-bundle-bytes", String(512 * 1024 * 1024)]);
+		expect(lifted.code, lifted.stderr).toBe(0);
+		expect(lifted.stdout).toContain("backup bundle file=");
+	});
+
+	test("an invalid cap is refused: the flag with exit 2, the config with ConfigError exit 1", async () => {
+		seedBackedUpHome();
+		const flag = await runMain(home.dir, ["backup", "--max-bundle-bytes", "0"]);
+		expect(flag.code).toBe(2);
+		expect(flag.stderr).toContain("--max-bundle-bytes must be a positive integer");
+
+		writeFileSync(
+			join(home.dir, "config.json"),
+			JSON.stringify({
+				schemaVersion: 1,
+				channels: {
+					discord: {
+						ownerUserId: OWNER,
+						applicationId: "600000000000000000",
+						botTokenFile: "secrets/discord-bot-token",
+					},
+				},
+				ompExecutable: join(home.dir, "fake-omp"),
+				workspaceDir: "workspace",
+				maxBundleBytes: -5,
+			}),
+			{ mode: 0o600 },
+		);
+		const config = await runMain(home.dir, ["backup"]);
+		expect(config.code).toBe(1);
+		expect(config.stderr).toContain("field=maxBundleBytes");
+	});
+});
+
+describe("log rotation", () => {
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ompbot-ops-log-"));
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	test("the defaults are 10 MB x 5 files", () => {
+		expect(LOG_MAX_BYTES).toBe(10 * 1024 * 1024);
+		expect(LOG_FILES).toBe(5);
+	});
+
+	test("rotates before a write would pass maxBytes, keeps `files` files in total and drops the oldest", () => {
+		const path = join(dir, "ompbot.log");
+		const sink = rotatingFileSink(path, { maxBytes: 100, files: 3 });
+		const line = (n: number) => `${String(n).padStart(2, "0")}${"x".repeat(37)}`; // 39 bytes + newline = 40
+		for (let n = 1; n <= 9; n++) sink(line(n));
+		expect(readdirSync(dir).sort()).toEqual(["ompbot.log", "ompbot.log.1", "ompbot.log.2"]);
+		for (const name of readdirSync(dir)) expect(readFileSync(join(dir, name)).length).toBeLessThanOrEqual(100);
+		expect(readFileSync(path, "utf8")).toBe(`${line(9)}\n`);
+		expect(readFileSync(`${path}.1`, "utf8")).toBe(`${line(7)}\n${line(8)}\n`);
+		expect(readFileSync(`${path}.2`, "utf8")).toBe(`${line(5)}\n${line(6)}\n`);
+		expect(statSync(path).mode & 0o777).toBe(0o600);
+	});
+
+	test("an existing live file counts towards the limit after a restart", () => {
+		const path = join(dir, "ompbot.log");
+		writeFileSync(path, `${"y".repeat(79)}\n`);
+		rotatingFileSink(path, { maxBytes: 100, files: 2 })("z".repeat(30));
+		expect(readFileSync(`${path}.1`, "utf8")).toBe(`${"y".repeat(79)}\n`);
+		expect(readFileSync(path, "utf8")).toBe(`${"z".repeat(30)}\n`);
+	});
+});
+
+describe("refusing to start when the log directory is unusable", () => {
+	let home: TestHome;
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-logdir-");
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+	});
+
+	test("a logs path that is not a directory raises log_dir_unwritable", () => {
+		writeFileSync(join(home.dir, "logs"), "not a directory");
+		expect(() => openLogSink(home.dir)).toThrow(LogDirError);
+		expect(() => openLogSink(home.dir)).toThrow(/^log_dir_unwritable: .*logs/);
+	});
+
+	// biome-ignore format: keeps the reason link on the skip line
+	test.skipIf(isRoot)("a read-only logs directory raises log_dir_unwritable", () => { // root ignores permission bits, so this setup cannot fail
+		mkdirSync(join(home.dir, "logs"), { mode: 0o500 });
+		try {
+			expect(() => openLogSink(home.dir)).toThrow(/^log_dir_unwritable: .*logs \(EACCES\)/);
+		} finally {
+			chmodSync(join(home.dir, "logs"), 0o700);
+		}
+	});
+
+	test("the daemon process exits 1 with the reason on stderr and holds no lock or socket", async () => {
+		writeFileSync(join(home.dir, "logs"), "not a directory");
+		const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"));
+		const reason = await daemon.waitLog(/refusing to start: log_dir_unwritable: .*logs/);
+		expect(reason).toContain(home.dir);
+		expect(await daemon.exited).toBe(1);
+		expect(existsSync(join(home.dir, "ompbot.lock"))).toBe(false);
+		expect(existsSync(join(home.dir, "ompbot.sock"))).toBe(false);
+	});
+});
+
+describe("ompbot gc", () => {
+	let home: TestHome;
+	const sessionsRoot = () => join(home.dir, "sessions");
+	const sessionOf = (origin: string, epoch: number) => sessionDirFor(sessionsRoot(), origin, epoch);
+
+	/** A session directory with one file, the directory and the file last modified `ageDays` ago. */
+	function makeSession(path: string, ageDays: number, fileAgeDays = ageDays): void {
+		mkdirSync(path, { recursive: true });
+		const file = join(path, "session.jsonl");
+		writeFileSync(file, "{}\n");
+		utimesSync(file, new Date(Date.now() - fileAgeDays * DAY_MS), new Date(Date.now() - fileAgeDays * DAY_MS));
+		utimesSync(path, new Date(Date.now() - ageDays * DAY_MS), new Date(Date.now() - ageDays * DAY_MS));
+	}
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-");
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.ensureOrigin(ORIGIN, sessionOf(ORIGIN, 1));
+		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 2));
+		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 3));
+		store.ensureOrigin("discord/dm/200000000000000002", sessionOf("discord/dm/200000000000000002", 1));
+		store.close();
+		makeSession(sessionOf(ORIGIN, 1), 60); // previous epoch, old: the only one to delete
+		makeSession(sessionOf(ORIGIN, 2), 60, 2); // previous epoch, directory old but a file written 2 days ago
+		makeSession(sessionOf(ORIGIN, 3), 60); // CURRENT epoch, old: never deleted
+		makeSession(sessionOf("discord/dm/200000000000000002", 1), 60); // current (only) epoch of another origin
+		makeSession(sessionOf("discord/dm/200000000000000099", 1), 60); // origin unknown to the ledger
+		makeSession(join(dirname(sessionOf(ORIGIN, 1)), "notes"), 60); // not named e<N>
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+	});
+
+	test("deletes only previous-epoch directories whose newest file is past the retention window", () => {
+		const options = { homeDir: home.dir, retentionDays: 30, now: Date.now() };
+		const dry = gcSessions({ ...options, dryRun: true });
+		expect(dry.removed).toEqual([sessionOf(ORIGIN, 1)]);
+		expect(existsSync(sessionOf(ORIGIN, 1))).toBe(true);
+
+		const result = gcSessions(options);
+		expect(result.removed).toEqual([sessionOf(ORIGIN, 1)]);
+		expect(result.retained).toEqual([sessionOf(ORIGIN, 2)]);
+		expect(existsSync(sessionOf(ORIGIN, 1))).toBe(false);
+		for (const kept of [
+			sessionOf(ORIGIN, 2),
+			sessionOf(ORIGIN, 3),
+			sessionOf("discord/dm/200000000000000002", 1),
+			sessionOf("discord/dm/200000000000000099", 1),
+			join(dirname(sessionOf(ORIGIN, 1)), "notes"),
+		]) {
+			expect(existsSync(kept), kept).toBe(true);
+		}
+	});
+
+	test("a resumed older epoch stays live when the home is reached through a symlink", () => {
+		const link = join(home.dir, "..", `${basename(home.dir)}-link`);
+		symlinkSync(home.dir, link);
+		try {
+			const db = new Database(join(home.dir, "ompbot.db"));
+			db.run("UPDATE origins SET session_dir = ? WHERE origin_key = ?", [sessionOf(ORIGIN, 1), ORIGIN]);
+			db.close();
+			const result = gcSessions({ homeDir: link, retentionDays: 30, now: Date.now() });
+			expect(result.removed).toEqual([]);
+			expect(existsSync(sessionOf(ORIGIN, 1))).toBe(true);
+		} finally {
+			unlinkSync(link);
+		}
+	});
+
+	test("a retention window longer than the age deletes nothing", () => {
+		expect(gcSessions({ homeDir: home.dir, retentionDays: 90, now: Date.now() }).removed).toEqual([]);
+	});
+
+	test("`ompbot gc` honours --dry-run and then deletes with the default 30-day retention", async () => {
+		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
+		expect(dry.code, dry.stderr).toBe(0);
+		expect(dry.stdout).toContain(`gc would_remove path=${sessionOf(ORIGIN, 1)}`);
+		expect(existsSync(sessionOf(ORIGIN, 1))).toBe(true);
+		const real = await runMain(home.dir, ["gc"]);
+		expect(real.code, real.stderr).toBe(0);
+		expect(real.stdout).toContain(`gc removed path=${sessionOf(ORIGIN, 1)}`);
+		expect(real.stdout).toContain("gc_done removed=1 retained=1");
+		expect(existsSync(sessionOf(ORIGIN, 1))).toBe(false);
+	});
+});
+
+describe("ompbot gc: a ledger from before later tables existed", () => {
+	test("a db with only origins and inbound finishes, dry run and real", () => {
+		const home = makeHome("ompbot-ops-gc-old-");
+		try {
+			const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+			db.run(
+				"CREATE TABLE origins (origin_key TEXT PRIMARY KEY, epoch INTEGER NOT NULL, session_dir TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+			);
+			db.run(
+				"CREATE TABLE inbound (inbound_id INTEGER PRIMARY KEY, origin_key TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL)",
+			);
+			db.close();
+			const options = { homeDir: home.dir, retentionDays: 30, now: Date.now() };
+			expect(() => gcSessions({ ...options, dryRun: true })).not.toThrow();
+			expect(() => gcSessions(options)).not.toThrow();
+		} finally {
+			home.remove();
+		}
+	});
+});
+
+describe("ompbot gc: thread-scoped sessions", () => {
+	let home: TestHome;
+	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
+
+	/** A session directory with one file; the session dir and its parent origin dir are backdated together. */
+	function makeSession(path: string, ageDays: number): void {
+		mkdirSync(path, { recursive: true });
+		const file = join(path, "session.jsonl");
+		writeFileSync(file, "{}\n");
+		const old = new Date(Date.now() - ageDays * DAY_MS);
+		utimesSync(file, old, old);
+		utimesSync(path, old, old);
+		// gc reads the origin dir's own newest mtime too (an epoch bump there is real activity).
+		utimesSync(dirname(path), old, old);
+	}
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-thread-");
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.ensureOrigin(`discord/ch/${CHANNEL}`, sessionOf(`discord/ch/${CHANNEL}`));
+		store.ensureOrigin("discord/ch/300000000000000001/t/100", sessionOf("discord/ch/300000000000000001/t/100")); // fresh thread: kept
+		store.ensureOrigin("discord/ch/300000000000000001/t/50", sessionOf("discord/ch/300000000000000001/t/50")); // expired thread: removed
+		store.ensureOrigin(ORIGIN, sessionOf(ORIGIN));
+		store.close();
+		makeSession(sessionOf(`discord/ch/${CHANNEL}`), 60);
+		makeSession(sessionOf("discord/ch/300000000000000001/t/100"), 1);
+		makeSession(sessionOf("discord/ch/300000000000000001/t/50"), 60);
+		makeSession(sessionOf(ORIGIN), 1);
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+	});
+
+	test("an expired thread origin loses directory and ledger row; fresh ones and channel/DM origins stay", () => {
+		const options = { homeDir: home.dir, retentionDays: 30, now: Date.now() };
+		const dry = gcSessions({ ...options, dryRun: true });
+		expect(dry.threadOriginsRemoved).toEqual(["discord/ch/300000000000000001/t/50"]);
+		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/50"))).toBe(true);
+
+		const result = gcSessions(options);
+		expect(result.threadOriginsRemoved).toEqual(["discord/ch/300000000000000001/t/50"]);
+		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/50"))).toBe(false);
+		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/100"))).toBe(true);
+		// Channel and DM origins are epoch-managed: gc only ever touches their previous epochs.
+		expect(existsSync(sessionOf(`discord/ch/${CHANNEL}`))).toBe(true);
+		expect(existsSync(sessionOf(ORIGIN))).toBe(true);
+		// The ledger row is gone; a later message simply opens a fresh origin.
+		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		try {
+			expect(check.getOrigin("discord/ch/300000000000000001/t/50")).toBeUndefined();
+			expect(check.getOrigin("discord/ch/300000000000000001/t/100")).toBeDefined();
+		} finally {
+			check.close();
+		}
+	});
+
+	const hasOrigin = (key: string): boolean => {
+		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		try {
+			return check.getOrigin(key) !== undefined;
+		} finally {
+			check.close();
+		}
+	};
+
+	test("an origin directory swapped for a symlink is skipped: nothing outside sessions/ is deleted (J-9)", () => {
+		// the owner DM moves to epoch 2, and its origin directory becomes a link to a tree whose e1 is old.
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 2));
+		store.close();
+		const outside = join(home.dir, "outside");
+		makeSession(join(outside, "e1"), 60);
+		rmSync(dirname(sessionOf(ORIGIN)), { recursive: true });
+		symlinkSync(outside, dirname(sessionOf(ORIGIN)));
+		// The expired thread origin's directory is a link too (backdated, so it reads as expired).
+		const threadOutside = join(home.dir, "thread-outside");
+		makeSession(join(threadOutside, "e1"), 60);
+		const threadDir = dirname(sessionOf("discord/ch/300000000000000001/t/50"));
+		rmSync(threadDir, { recursive: true });
+		symlinkSync(threadOutside, threadDir);
+		const old = new Date(Date.now() - 60 * DAY_MS);
+		lutimesSync(threadDir, old, old);
+
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(existsSync(join(outside, "e1", "session.jsonl"))).toBe(true);
+		expect(result.removed).toEqual([]);
+		expect(existsSync(join(threadOutside, "e1", "session.jsonl"))).toBe(true);
+		expect(result.threadOriginsRemoved).not.toContain("discord/ch/300000000000000001/t/50");
+		expect(hasOrigin("discord/ch/300000000000000001/t/50")).toBe(true);
+	});
+
+	test("a thread origin with no directory yet is kept while its ledger row is fresh (J-10)", () => {
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.ensureOrigin("discord/ch/300000000000000001/t/200", sessionOf("discord/ch/300000000000000001/t/200")); // row now, no directory yet
+		store.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.threadOriginsRemoved).toEqual(["discord/ch/300000000000000001/t/50"]);
+		expect(hasOrigin("discord/ch/300000000000000001/t/200")).toBe(true);
+	});
+
+	test("an expired thread origin with pending inbound is kept whole (J-11)", () => {
+		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		db.run(
+			"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('m1', 'discord/ch/300000000000000001/t/50', 1, 'x', 'pending', 0)",
+		);
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.threadOriginsRemoved).toEqual([]);
+		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/50"))).toBe(true);
+		expect(hasOrigin("discord/ch/300000000000000001/t/50")).toBe(true);
+	});
+});
+
+describe("ompbot gc: uncertain inbound keeps its origin", () => {
+	let home: TestHome;
+	const THREAD = "discord/ch/300000000000000001/t/50";
+	const dirOf = () => sessionDirFor(join(home.dir, "sessions"), THREAD, 1);
+	const options = () => ({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-uncertain-");
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.ensureOrigin(THREAD, dirOf());
+		store.recordInbound({ originKey: THREAD, platformMessageId: "u1", textRef: "x" });
+		store.markUncertain("u1", "steer_threw");
+		store.close();
+		// An expired thread session: old files and old origin row, so only the uncertain row can keep it.
+		mkdirSync(dirOf(), { recursive: true });
+		const file = join(dirOf(), "session.jsonl");
+		writeFileSync(file, "{}\n");
+		const old = new Date(Date.now() - 60 * DAY_MS);
+		for (const path of [file, dirOf(), dirname(dirOf())]) utimesSync(path, old, old);
+		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		db.run("UPDATE origins SET updated_at = ? WHERE origin_key = ?", [old.getTime(), THREAD]);
+		db.close();
+	});
+
+	afterEach(() => home.remove());
+
+	test("dry-run and a real run both retain it; after the owner closes the row the usual rule removes it", () => {
+		const dry = gcSessions({ ...options(), dryRun: true });
+		expect(dry.retained).toContain(dirname(dirOf()));
+		expect(dry.threadOriginsRemoved).toEqual([]);
+		const real = gcSessions(options());
+		expect(real.retained).toContain(dirname(dirOf()));
+		expect(real.threadOriginsRemoved).toEqual([]);
+		expect(existsSync(dirOf())).toBe(true);
+
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.discard("u1", "queue:close");
+		store.close();
+		const after = gcSessions(options());
+		expect(after.threadOriginsRemoved).toEqual([THREAD]);
+		expect(existsSync(dirOf())).toBe(false);
+	});
+});
+
+describe.each([
+	["Slack", "slack/dm/D1", "slack/ch/C1/t/50.9"],
+	["Teams", "teams/dm/t0123456789abcdef", "teams/ch/t0123456789abcdef/t/1700000000000"],
+])("ompbot gc: rows left by the removed %s channel", (_name, DM_KEY, THREAD_KEY) => {
+	let home: TestHome;
+	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
+
+	/** A session directory with one file, backdated together with its origin directory. */
+	function makeSession(path: string, ageDays: number): void {
+		mkdirSync(path, { recursive: true });
+		const file = join(path, "session.jsonl");
+		writeFileSync(file, "{}\n");
+		const old = new Date(Date.now() - ageDays * DAY_MS);
+		utimesSync(file, old, old);
+		utimesSync(path, old, old);
+		utimesSync(dirname(path), old, old);
+	}
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-slack-");
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.ensureOrigin(DM_KEY, sessionOf(DM_KEY, 1));
+		store.newEpoch(DM_KEY, sessionOf(DM_KEY, 2));
+		store.ensureOrigin(THREAD_KEY, sessionOf(THREAD_KEY));
+		store.close();
+		makeSession(sessionOf(DM_KEY, 1), 60);
+		makeSession(sessionOf(DM_KEY, 2), 1);
+		makeSession(sessionOf(THREAD_KEY), 60);
+	});
+	afterEach(() => home.remove());
+
+	test("its origins in the ledger do not stop gc: dry run and real finish, old epochs go, an expired thread goes whole", () => {
+		const options = { homeDir: home.dir, retentionDays: 30, now: Date.now() };
+		expect(() => gcSessions({ ...options, dryRun: true })).not.toThrow();
+		const result = gcSessions(options);
+		expect(result.removed).toEqual([sessionOf(DM_KEY, 1)]);
+		expect(result.threadOriginsRemoved).toEqual([THREAD_KEY]);
+		expect(existsSync(sessionOf(DM_KEY, 2))).toBe(true);
+		expect(existsSync(sessionOf(THREAD_KEY))).toBe(false);
+		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		try {
+			expect(check.getOrigin(THREAD_KEY)).toBeUndefined();
+		} finally {
+			check.close();
+		}
+	});
+});
+
+describe.each([
+	["Slack", "slack/dm/D1", "slack/ch/C1/t/10.1"],
+	["Teams", "teams/dm/t0123456789abcdef", "teams/ch/t0123456789abcdef/t/1700000000000"],
+])("daemon start: open inbound rows of the removed %s channel", (_name, dm, thread) => {
+	let home: TestHome;
+	let daemon: Daemon | undefined;
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-removed-rows-");
+	});
+	afterEach(async () => {
+		await daemon?.stop();
+		home.remove();
+	});
+
+	test("its pending and dispatched rows are discarded at start with inbound_discarded reason=platform_removed, and no turn runs", async () => {
+		const seed = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		seed.ensureOrigin(dm, join(home.dir, "sessions", "removed-dm"));
+		seed.ensureOrigin(thread, join(home.dir, "sessions", "removed-thread"));
+		seed.recordInbound({ originKey: dm, platformMessageId: "D1:1.0", textRef: "pending", threadRef: "D1:1.0" });
+		seed.recordInbound({
+			originKey: thread,
+			platformMessageId: "C1:10.1",
+			textRef: "dispatched",
+			threadRef: "C1:10.1",
+		});
+		seed.markDispatched("C1:10.1", { opRef: "op-removed-1", entryCursor: null });
+		seed.close();
+
+		const lines: string[] = [];
+		const clock = new FakeClock();
+		clock.t = Date.now();
+		const prompts: string[] = [];
+		const sessions = new FakeSessionStore();
+		daemon = new Daemon({
+			config: home.config,
+			channels: [discordBinding(new WaitingDiscordTransport())],
+			clock,
+			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: "boot",
+			driverFactory: (_origin, sessionDir) => {
+				const driver = new OpsDriver({ sessionDir, store: sessions });
+				const prompt = driver.prompt.bind(driver);
+				driver.prompt = async (text) => {
+					prompts.push(text);
+					return prompt(text);
+				};
+				return driver;
+			},
+		});
+		await daemon.start();
+
+		expect(daemon.store.getInbound("D1:1.0")?.state).toBe("discarded");
+		expect(daemon.store.getInbound("C1:10.1")?.state).toBe("discarded");
+		const discarded = lines.filter((line) => line.includes("event=inbound_discarded"));
+		expect(discarded).toHaveLength(2);
+		for (const line of discarded) expect(line).toContain("reason=platform_removed");
+		expect(discarded.some((line) => line.endsWith(`origin=${dm}`))).toBe(true);
+		expect(discarded.some((line) => line.endsWith(`origin=${thread}`))).toBe(true);
+		await daemon.sweep();
+		expect(prompts).toEqual([]);
+		expect(lines.some((line) => line.includes("event=turn_start"))).toBe(false);
+	});
+});
+
+describe("ompbot gc: deleted-monitor origins", () => {
+	let home: TestHome;
+	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
+
+	function makeSession(path: string, ageDays: number): void {
+		mkdirSync(path, { recursive: true });
+		const file = join(path, "session.jsonl");
+		writeFileSync(file, "{}\n");
+		const old = new Date(Date.now() - ageDays * DAY_MS);
+		utimesSync(file, old, old);
+		utimesSync(path, old, old);
+		utimesSync(dirname(path), old, old);
+	}
+
+	function originRow(key: string): boolean {
+		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		try {
+			return check.getOrigin(key) !== undefined;
+		} finally {
+			check.close();
+		}
+	}
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-monitor-");
+		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		for (const key of ["monitor/mold", "monitor/mnew", "monitor/mlive", "discord/ch/300000000000000001/t/50"]) {
+			store.ensureOrigin(key, sessionOf(key));
+		}
+		store.close();
+		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		db.exec(MONITOR_SCHEMA);
+		db.run(
+			"INSERT INTO monitors (id, name, trigger_json, instruction, cursor_at, created_at, updated_at) VALUES ('mlive', 'live', '{}', 'x', 0, 0, 0)",
+		);
+		db.close();
+		makeSession(sessionOf("monitor/mold"), 60); // deleted monitor, expired: removed
+		makeSession(sessionOf("monitor/mnew"), 1); // deleted monitor, recent: retained
+		makeSession(sessionOf("monitor/mlive"), 60); // live monitor: never touched
+		makeSession(sessionOf("discord/ch/300000000000000001/t/50"), 60);
+	});
+	afterEach(() => home.remove());
+
+	test("an orphan monitor origin past retention loses directory and ledger row", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.monitorOriginsRemoved).toEqual(["monitor/mold"]);
+		expect(existsSync(sessionOf("monitor/mold"))).toBe(false);
+		expect(originRow("monitor/mold")).toBe(false);
+		// Thread origins keep their own list and behavior.
+		expect(result.threadOriginsRemoved).toEqual(["discord/ch/300000000000000001/t/50"]);
+	});
+
+	test("an orphan monitor origin newer than the cutoff is retained", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.monitorOriginsRemoved).not.toContain("monitor/mnew");
+		expect(existsSync(sessionOf("monitor/mnew"))).toBe(true);
+		expect(originRow("monitor/mnew")).toBe(true);
+	});
+
+	test("a live monitor's origin is never touched, however old", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.monitorOriginsRemoved).not.toContain("monitor/mlive");
+		expect(existsSync(sessionOf("monitor/mlive"))).toBe(true);
+		expect(originRow("monitor/mlive")).toBe(true);
+	});
+
+	test("dry-run reports the orphan but removes nothing", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now(), dryRun: true });
+		expect(result.monitorOriginsRemoved).toEqual(["monitor/mold"]);
+		expect(existsSync(sessionOf("monitor/mold"))).toBe(true);
+		expect(originRow("monitor/mold")).toBe(true);
+	});
+
+	test("an orphan at epoch 2 is removed even though pruning its e1 dir bumps the origin dir mtime", () => {
+		const key = "monitor/mepoch";
+		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		db.run("INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 2, ?, 0)", [
+			key,
+			sessionOf(key, 2),
+		]);
+		db.close();
+		makeSession(sessionOf(key, 1), 60);
+		makeSession(sessionOf(key, 2), 60);
+		const dry = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now(), dryRun: true });
+		expect(dry.monitorOriginsRemoved).toContain(key);
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.monitorOriginsRemoved).toContain(key);
+		expect(existsSync(dirname(sessionOf(key, 1)))).toBe(false);
+		expect(originRow(key)).toBe(false);
+	});
+
+	test("a home without a monitors table skips the rule instead of failing", () => {
+		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		db.exec("DROP TABLE monitor_events; DROP TABLE monitor_slots; DROP TABLE monitor_incidents; DROP TABLE monitors");
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.monitorOriginsRemoved).toEqual([]);
+		expect(existsSync(sessionOf("monitor/mold"))).toBe(true);
+	});
+});
+
+describe("ompbot gc: ledger retention", () => {
+	let home: TestHome;
+	const NOW = Date.UTC(2026, 10, 13);
+	const KEY = "discord/ch/300000000000000001/t/11";
+	const dbFile = () => join(home.dir, "ompbot.db");
+	/** Ids of rows the fixture made, by name. */
+	const ids = new Map<string, number>();
+
+	beforeEach(() => {
+		home = makeHome("ompbot-ops-gc-ledger-");
+		const store = openBotStore(dbFile(), { now: () => NOW }, "Asia/Seoul");
+		store.ensureOrigin(KEY, join(home.dir, "sessions", "t"));
+		store.close();
+		const db = new Database(dbFile(), { strict: true });
+		const inbound = (
+			name: string,
+			ageDays: number,
+			state: string,
+			opRef: string,
+			threadRef = "300000000000000001:11",
+		) => {
+			const row = db
+				.query(
+					"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at, op_ref, thread_ref) VALUES (?, ?, 1, 'x', ?, ?, ?, ?) RETURNING inbound_id",
+				)
+				.get(name, KEY, state, NOW - ageDays * DAY_MS, opRef, threadRef) as { inbound_id: number };
+			ids.set(name, row.inbound_id);
+		};
+		const delivery = (name: string, ageDays: number, state: string, posts: number) => {
+			const row = db
+				.query(
+					"INSERT INTO deliveries (origin_key, op_ref, part, thread_ref, body, state, next_at, created_at) VALUES (?, ?, 0, '300000000000000001:11', 'b', ?, 0, ?) RETURNING delivery_id",
+				)
+				.get(KEY, `op-${name}`, state, NOW - ageDays * DAY_MS) as { delivery_id: number };
+			ids.set(name, row.delivery_id);
+			for (let i = 0; i < posts; i += 1) {
+				db.query(
+					"INSERT INTO delivery_posts (channel, ts, delivery_id, part, created_at) VALUES ('300000000000000001', ?, ?, ?, 0)",
+				).run(`${name}.${i}`, row.delivery_id, i);
+			}
+		};
+		const approval = (id: string, status: string, threadRef: string) =>
+			db
+				.query(
+					"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, origin_key, origin_thread_ref) VALUES (?, '300000000000000001', ?, 's', ?, 0, 0, ?, ?)",
+				)
+				.run(id, id, status, KEY, threadRef);
+		inbound("in-old-answered", 91, "answered", "opA");
+		inbound("in-old-failed", 91, "failed_notified", "opA2");
+		inbound("in-old-discarded", 91, "discarded", "opA3");
+		inbound("in-approval-done", 91, "answered", "opA4", "300000000000000001:88");
+		inbound("in-89", 89, "answered", "opK");
+		inbound("in-old-pending", 91, "pending", "opK2");
+		inbound("in-old-dispatched", 91, "dispatched", "opK3");
+		inbound("in-approval-pending", 91, "answered", "opK6", "300000000000000001:77");
+		delivery("d-old-confirmed", 91, "confirmed", 2);
+		delivery("d-old-expired", 91, "expired", 1);
+		delivery("d-old-ambiguous", 91, "failed_ambiguous", 0);
+		delivery("d-89", 89, "confirmed", 1);
+		delivery("d-old-pending", 91, "pending", 0);
+		delivery("d-old-inflight", 91, "inflight", 0);
+		approval("ap-pending", "pending", "300000000000000001:77");
+		approval("ap-done", "approved", "300000000000000001:88");
+		db.close();
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+		ids.clear();
+	});
+
+	function names(table: "inbound" | "deliveries"): string[] {
+		const db = new Database(dbFile(), { readonly: true, strict: true });
+		try {
+			const column = table === "inbound" ? "inbound_id" : "delivery_id";
+			const present = new Set(
+				(db.query(`SELECT ${column} AS id FROM ${table}`).all() as Array<{ id: number }>).map((row) => row.id),
+			);
+			const prefix = table === "inbound" ? "in-" : "d-";
+			return [...ids]
+				.filter(([name, id]) => name.startsWith(prefix) && present.has(id))
+				.map(([name]) => name)
+				.sort();
+		} finally {
+			db.close();
+		}
+	}
+
+	function count(sql: string): number {
+		const db = new Database(dbFile(), { readonly: true, strict: true });
+		try {
+			return (db.query(sql).get() as { n: number }).n;
+		} finally {
+			db.close();
+		}
+	}
+
+	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
+	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
+	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0 };
+
+	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
+		expect(result.ledgerRemoved).toEqual(EXPECTED);
+		expect(names("inbound")).toEqual(KEPT_INBOUND);
+		expect(names("deliveries")).toEqual(KEPT_DELIVERIES);
+		expect(count("SELECT COUNT(*) AS n FROM delivery_posts")).toBe(1);
+		expect(
+			count("SELECT COUNT(*) AS n FROM delivery_posts WHERE delivery_id NOT IN (SELECT delivery_id FROM deliveries)"),
+		).toBe(0);
+		expect(count("SELECT COUNT(*) AS n FROM approvals")).toBe(2);
+		// A second pass finds nothing more.
+		expect(gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW }).ledgerRemoved).toEqual({
+			inbound: 0,
+			deliveries: 0,
+			deliveryPosts: 0,
+			monitorEvents: 0,
+		});
+	});
+
+	test("dry-run counts the same rows and deletes none", () => {
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW, dryRun: true });
+		expect(result.ledgerRemoved).toEqual(EXPECTED);
+		expect(names("inbound")).toHaveLength(8);
+		expect(names("deliveries")).toHaveLength(6);
+		expect(count("SELECT COUNT(*) AS n FROM delivery_posts")).toBe(4);
+	});
+
+	test("a home without the posts and approvals tables prunes by age and state alone", () => {
+		const db = new Database(dbFile(), { strict: true });
+		db.exec("DROP TABLE delivery_posts; DROP TABLE approvals");
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
+		expect(result.ledgerRemoved).toEqual({ inbound: 5, deliveries: 3, deliveryPosts: 0, monitorEvents: 0 });
+		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
+		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
+	});
+
+	test("`ompbot gc --dry-run` prints the ledger counts in gc_done", async () => {
+		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
+		expect(dry.code, dry.stderr).toBe(0);
+		expect(dry.stdout).toMatch(/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+\n/);
+		expect(names("inbound")).toHaveLength(8);
+	});
+});
+
+describe("examples/ops-check-ompbot.json", () => {
+	test("is a proposal of uniquely identified checks for the ompbot unit and status command", () => {
+		const proposal = JSON.parse(
+			readFileSync(join(import.meta.dir, "..", "examples", "ops-check-ompbot.json"), "utf8"),
+		) as {
+			checks: Array<{ id: string; type: string; unit?: string; cmd?: string; expect?: string }>;
+		};
+		const ids = proposal.checks.map((check) => check.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(proposal.checks.find((check) => check.type === "systemd")?.unit).toBe("ompbot.service");
+		const status = proposal.checks.find((check) => check.type === "cmd");
+		expect(status?.cmd).toContain("main.ts status");
+		expect(status?.expect).toBe("데몬 실행 중");
+	});
+});

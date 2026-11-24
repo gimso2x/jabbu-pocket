@@ -1,0 +1,1044 @@
+import { describe, expect, test } from "bun:test";
+import type { ActionButton, ChannelPort, MessageRef, OutboundMessage, PostTarget } from "../src/channel/port";
+import { buttonRows } from "../src/discord/channel";
+import { createLogger } from "../src/log";
+import type { OmpDialogAnswerer, OmpDialogResponse } from "../src/omp/driver";
+import { ExtensionUiTap } from "../src/omp/rpc-driver";
+import { redact } from "../src/redact";
+import {
+	ApprovalBroker,
+	type ApprovalStore,
+	type ApprovalTimers,
+	choiceActionId,
+	parseApprovalActionId,
+	parseChoiceActionId,
+} from "../src/safety/approval";
+import { answerDialog } from "../src/safety/choice";
+import { OWNER, OWNER_DM } from "./helpers/bot-home";
+import { registryOf } from "./helpers/channels";
+
+const DM = OWNER_DM;
+const ORIGIN = { originKey: `discord/dm/${DM}`, channel: DM, threadTs: "700000000000000001" };
+const START = 1_800_000_000_000;
+const clock = { t: START, now: () => clock.t };
+
+/** Collects values and lets a test await the first one matching a predicate (already seen or arriving later). */
+class Seen<T> {
+	readonly items: T[] = [];
+	#waiters: Array<{ match: (item: T) => boolean; resolve: (item: T) => void }> = [];
+
+	push(item: T): void {
+		this.items.push(item);
+		for (const waiter of [...this.#waiters]) {
+			if (!waiter.match(item)) continue;
+			this.#waiters.splice(this.#waiters.indexOf(waiter), 1);
+			waiter.resolve(item);
+		}
+	}
+
+	waitFor(match: (item: T) => boolean, timeoutMs = 2_000): Promise<T> {
+		const found = this.items.find(match);
+		if (found !== undefined) return Promise.resolve(found);
+		const { promise, resolve, reject } = Promise.withResolvers<T>();
+		const timer = setTimeout(() => reject(new Error("expected item did not arrive")), timeoutMs);
+		this.#waiters.push({
+			match,
+			resolve: (item) => {
+				clearTimeout(timer);
+				resolve(item);
+			},
+		});
+		return promise;
+	}
+}
+
+interface CardWrite {
+	kind: "post" | "edit";
+	target: PostTarget;
+	ts: string;
+	msg: OutboundMessage;
+}
+
+class RecordingPort implements ChannelPort {
+	readonly platform = "discord" as const;
+	readonly writes = new Seen<CardWrite>();
+	#next = 1;
+
+	async post(target: PostTarget, msg: OutboundMessage): Promise<MessageRef> {
+		const ts = String(900_000_000_000_000_000n + BigInt(this.#next++));
+		this.writes.push({ kind: "post", target, ts, msg });
+		return { platform: "discord", conversationId: target.conversationId, messageId: ts };
+	}
+	async edit(ref: MessageRef, msg: OutboundMessage): Promise<void> {
+		this.writes.push({ kind: "edit", target: { conversationId: ref.conversationId }, ts: ref.messageId, msg });
+	}
+	async react(): Promise<void> {}
+	async uploadFile(): Promise<{ fileId: string }> {
+		return { fileId: "F1" };
+	}
+	async permalink(): Promise<string | undefined> {
+		return undefined;
+	}
+	mentionUser(userId: string): string {
+		return `<@${userId}>`;
+	}
+}
+
+class ManualTimers implements ApprovalTimers {
+	readonly armed = new Map<number, { fn: () => void; ms: number }>();
+	#next = 1;
+	set(fn: () => void, ms: number): unknown {
+		const id = this.#next++;
+		this.armed.set(id, { fn, ms });
+		return id;
+	}
+	clear(handle: unknown): void {
+		this.armed.delete(handle as number);
+	}
+	fireAll(): void {
+		for (const { fn } of [...this.armed.values()]) fn();
+	}
+}
+
+function memoryStore(): ApprovalStore & {
+	rows: Map<string, { status: string; replyTs: string | null; replyText: string | null }>;
+	autoChoices: Array<Parameters<ApprovalStore["addAutoChoice"]>[0]>;
+} {
+	const autoChoices: Array<Parameters<ApprovalStore["addAutoChoice"]>[0]> = [];
+	const rows = new Map<
+		string,
+		{
+			status: string;
+			channel: string;
+			messageTs: string;
+			summary: string;
+			originKey: string | null;
+			replyTs: string | null;
+			replyText: string | null;
+			originThreadRef: string | null;
+			mirrorRef: string | null;
+		}
+	>();
+	return {
+		rows,
+		autoChoices,
+		judgeCardAnswer: () => ({ kind: "new" }),
+		recordCardAnswer: () => undefined,
+		addAutoChoice: (input) => {
+			autoChoices.push(input);
+		},
+		createApproval: (input) => {
+			rows.set(input.approvalId, {
+				status: "pending",
+				channel: input.channel,
+				messageTs: input.messageTs,
+				summary: input.summary,
+				originKey: input.originKey ?? null,
+				replyTs: null,
+				replyText: null,
+				originThreadRef: input.originThreadRef ?? null,
+				mirrorRef: null,
+			});
+		},
+		getApproval: (id) => rows.get(id),
+		setApprovalMirrorRef: (id, mirrorRef) => {
+			const row = rows.get(id);
+			if (row?.status !== "pending") return false;
+			row.mirrorRef = mirrorRef;
+			return true;
+		},
+		replyApproval: (id, replyTs, text) => {
+			const row = rows.get(id);
+			if (row?.status !== "pending") return false;
+			Object.assign(row, { status: "replied", replyTs, replyText: text });
+			return true;
+		},
+		decideApproval: (id, status) => {
+			const row = rows.get(id);
+			if (row?.status !== "pending") return false;
+			row.status = status;
+			return true;
+		},
+		expirePendingApprovals: () => {
+			const expired: ReturnType<ApprovalStore["expirePendingApprovals"]> = [];
+			for (const [id, row] of rows) {
+				if (row.status !== "pending") continue;
+				row.status = "expired";
+				expired.push({
+					approvalId: id,
+					channel: row.channel,
+					messageTs: row.messageTs,
+					summary: row.summary,
+					originThreadRef: row.originThreadRef,
+					mirrorRef: row.mirrorRef,
+				});
+			}
+			return expired;
+		},
+	};
+}
+
+/** omp's decoded dialog frames through `ExtensionUiTap`, answered by real choice cards on a recording port. */
+function harness(timezone = "Asia/Seoul") {
+	clock.t = START;
+	const port = new RecordingPort();
+	const timers = new ManualTimers();
+	const store = memoryStore();
+	const logs = new Seen<string>();
+	const broker = new ApprovalBroker({
+		timezone,
+		channels: registryOf(port),
+		ownerUserId: OWNER,
+		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
+		store,
+		clock,
+		timers,
+	});
+	const replies = new Seen<Record<string, unknown>>();
+	const answered: Array<Promise<OmpDialogResponse | undefined>> = [];
+	const answerer: OmpDialogAnswerer = (request, signal) => {
+		const response = answerDialog(broker, ORIGIN, request, signal);
+		answered.push(response);
+		return response;
+	};
+	const tap = new ExtensionUiTap(
+		() => undefined,
+		(frame) => replies.push(frame),
+		answerer,
+	);
+	const send = (frame: Record<string, unknown>): void => tap.frame({ type: "extension_ui_request", ...frame });
+	/** The card's first version: buttons attached, or the post itself for a reply-only card. */
+	const card = (withButtons: boolean) =>
+		port.writes.waitFor((w) =>
+			withButtons ? w.kind === "edit" && (w.msg.buttons?.length ?? 0) > 0 : w.kind === "post",
+		);
+	const finalEdit = (ts: string) =>
+		port.writes.waitFor((w) => w.kind === "edit" && w.ts === ts && w.msg.buttons?.length === 0);
+	const click = (button: ActionButton | undefined) =>
+		broker.handleAction({ actionId: button?.actionId ?? "missing", userId: OWNER });
+	/** The n-th card is open (registered, buttons attached): the broker logs `choice_requested` right after. */
+	const requested = (n: number) =>
+		logs.waitFor(() => logs.items.filter((line) => line.includes("choice_requested")).length >= n);
+	// The child is gone: the cards still waiting are closed.
+	const close = async () => tap.close();
+	return { port, timers, store, broker, logs, replies, answered, send, card, finalEdit, click, requested, close };
+}
+
+const reply = (id: string, body: Record<string, unknown>) => ({ type: "extension_ui_response", id, ...body });
+
+describe("choice action ids", () => {
+	test("round trip; approval ids and malformed ids are not choice ids, choice ids are not approval ids", () => {
+		const id = choiceActionId(3, DM, "700000000000000007");
+		expect(id).toBe(`ompbot:choice:3:${DM}:700000000000000007`);
+		expect(parseChoiceActionId(id)).toEqual({ index: 3, channel: DM, ts: "700000000000000007" });
+		expect(parseApprovalActionId(id)).toBeUndefined();
+		expect(parseChoiceActionId(`ompbot:approval:approve:${DM}:700000000000000002`)).toBeUndefined();
+		expect(parseChoiceActionId(`ompbot:choice:x:${DM}:700000000000000002`)).toBeUndefined();
+		expect(parseChoiceActionId(`ompbot:choice:1:${DM}`)).toBeUndefined();
+	});
+});
+
+describe("omp dialogs answered on choice cards", () => {
+	test("select: a button card in the asking thread; the n-th click answers omp with options[n]", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "u1", title: "배포 방식", options: ["blue-green", "canary", "rolling"] });
+		const posted = await h.card(false);
+		expect(posted.target).toEqual({ conversationId: DM, threadId: ORIGIN.threadTs });
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["blue-green", "canary", "rolling"]);
+		expect(shown.msg.buttons?.map((b) => b.actionId)).toEqual([0, 1, 2].map((n) => choiceActionId(n, DM, shown.ts)));
+		expect(shown.msg.buttonsNote).toContain("까지 답이 없으면 취소로 처리됩니다");
+		// Only the owner's click counts.
+		expect(h.broker.handleAction({ actionId: shown.msg.buttons?.[1]?.actionId ?? "", userId: "U_OTHER" })).toBe(false);
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "u1")).toEqual(reply("u1", { value: "canary" }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("✅ 선택: canary");
+		expect(h.store.rows.get(`${DM}:${shown.ts}`)).toMatchObject({ status: "replied", replyText: "canary" });
+		// A second click on the closed card does nothing.
+		expect(h.click(shown.msg.buttons?.[0])).toBe(false);
+		await h.close();
+		expect(h.replies.items).toHaveLength(1);
+	});
+
+	test("select rows `label — description`: buttons show the label, the card lists each row whole, omp gets the whole row", async () => {
+		const options = ["로컬만 — OCI 카드만 먼저", "전부 — 원격 호스트까지"];
+		const h = harness();
+		h.send({ method: "select", id: "d1", title: "범위", options });
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["로컬만", "전부"]);
+		expect(shown.msg.text).toContain("1. 로컬만 — OCI 카드만 먼저\n2. 전부 — 원격 호스트까지");
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "d1")).toEqual(reply("d1", { value: options[1] }));
+		h.send({ method: "select", id: "d2", title: "범위", options });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "로컬만")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "d2")).toEqual(reply("d2", { value: options[0] }));
+		await h.close();
+	});
+
+	test("select with more than 5 options: a numbered list, answered by number, label or free text", async () => {
+		const options = ["a", "b", "c", "d", "e", "f"];
+		const h = harness();
+		h.send({ method: "select", id: "u1", title: "고르기", options });
+		const posted = await h.card(false);
+		expect(posted.msg.buttons).toBeUndefined();
+		expect(posted.msg.text).toContain("6. f");
+		expect(posted.msg.text).toContain("번호로 이 스레드에 답장해 주세요");
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, " 6 ")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "u1")).toEqual(reply("u1", { value: "f" }));
+		h.send({ method: "select", id: "u2", title: "고르기", options });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "c")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "u2")).toEqual(reply("u2", { value: "c" }));
+		await h.close();
+	});
+
+	const OTHER = "Other (type your own)";
+	const FOUR = ["a", "b", "c", "d"];
+
+	test("select with an Other row: text outside the options picks the Other row, the next input gets the text without a card", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		const shown = await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "분석부터 보여줘")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: OTHER }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("✅ 선택: 기타 — 분석부터 보여줘");
+		const posts = h.port.writes.items.filter((w) => w.kind === "post").length;
+		h.send({ method: "input", id: "i1", title: "고르기" });
+		expect(await h.replies.waitFor((r) => r.id === "i1")).toEqual(reply("i1", { value: "분석부터 보여줘" }));
+		expect(h.port.writes.items.filter((w) => w.kind === "post")).toHaveLength(posts);
+		// Used once: the next input opens a card.
+		h.send({ method: "input", id: "i2", title: "다시" });
+		await h.requested(2);
+		await h.close();
+	});
+
+	test("qa-z #92: a last row that merely ends in ' (type your own)' is no Other row and takes no free text", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: ["a", "b", "Custom (type your own)"] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "아무 글")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "b")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "b" }));
+		await h.close();
+	});
+
+	test("select with an Other row: a number or label still picks that option; a card-thread reply outside the options picks Other", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "b" }));
+		h.send({ method: "select", id: "s2", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(2);
+		const second = h.port.writes.items.filter((w) => w.kind === "post").at(-1);
+		const id = `${DM}:${second?.ts}`;
+		expect(h.broker.handleCardReply({ approvalId: id, ts: "700000000000000091", text: "d" })).toEqual({
+			kind: "settled",
+		});
+		expect(await h.replies.waitFor((r) => r.id === "s2")).toEqual(reply("s2", { value: "d" }));
+		h.send({ method: "select", id: "s3", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(3);
+		const third = h.port.writes.items.filter((w) => w.kind === "post").at(-1);
+		expect(
+			h.broker.handleCardReply({ approvalId: `${DM}:${third?.ts}`, ts: "700000000000000092", text: "다른 얘기" }),
+		).toEqual({
+			kind: "settled",
+		});
+		expect(await h.replies.waitFor((r) => r.id === "s3")).toEqual(reply("s3", { value: OTHER }));
+		await h.close();
+	});
+
+	test("select without an Other row: outside text is refused, the card stays open with one hint line, a number still answers", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "승인", options: ["허용", "거부"] });
+		const shown = await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "음 잠깐만")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "아니 그게 아니라")).toBe(false);
+		// A card-thread reply is ignored, not settled as the card's answer.
+		expect(h.broker.handleCardReply({ approvalId: `${DM}:${shown.ts}`, ts: "700000000000000091", text: "음" })).toEqual(
+			{
+				kind: "duplicate",
+			},
+		);
+		const hint = await h.port.writes.waitFor((w) => w.kind === "edit" && w.msg.text.includes("번호나 선택지 이름으로"));
+		expect(h.port.writes.items.filter((w) => w.msg.text.includes("번호나 선택지 이름으로"))).toHaveLength(1);
+		expect(hint.msg.buttons?.map((b) => b.label)).toEqual(["허용", "거부"]);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.store.rows.get(`${DM}:${shown.ts}`)?.status).toBe("pending");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "거부" }));
+		await h.close();
+	});
+
+	test("multi-select (Done row last): outside text is refused like a select without an Other row", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "m1", title: "여럿", options: ["a", "b", "✓ Done selecting"] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "둘 다 아님")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "3")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m1")).toEqual(reply("m1", { value: "✓ Done selecting" }));
+		await h.close();
+	});
+
+	test("a text held behind the Other row is dropped when the next dialog is not an input, the turn ends, or 60s pass", async () => {
+		const pick = async (h: ReturnType<typeof harness>, id: string) => {
+			h.send({ method: "select", id, title: "고르기", options: [...FOUR, OTHER] });
+			await h.requested(h.logs.items.filter((l) => l.includes("choice_requested")).length + 1);
+			expect(await h.broker.answerDialog(ORIGIN.originKey, "보류 글")).toBe(true);
+			await h.replies.waitFor((r) => r.id === id);
+		};
+		const dropped = (h: ReturnType<typeof harness>) =>
+			h.logs.items.filter((l) => l.includes("dialog_pending_text_dropped")).length;
+		const h = harness();
+		// Next dialog is a confirm: the text is dropped, the confirm opens a card.
+		await pick(h, "s1");
+		h.send({ method: "confirm", id: "c1", title: "진행?", message: "m" });
+		await h.requested(2);
+		expect(dropped(h)).toBe(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "예")).toBe(true);
+		// The turn ends: the held text is dropped; the next input opens a card.
+		await pick(h, "s2");
+		h.broker.dropInput(ORIGIN.originKey, "turn_ended");
+		expect(dropped(h)).toBe(2);
+		h.send({ method: "input", id: "i1", title: "글" });
+		await h.requested(4);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "글")).toBe(true);
+		await h.replies.waitFor((r) => r.id === "i1");
+		// 60 seconds later the text is stale: the input opens a card.
+		await pick(h, "s3");
+		clock.t += 60_001;
+		h.send({ method: "input", id: "i2", title: "글" });
+		await h.requested(6);
+		expect(dropped(h)).toBe(3);
+		expect(h.replies.items.filter((r) => r.id === "i2")).toHaveLength(0);
+		await h.close();
+	});
+
+	test("a required multi-select has no Done row: selectionMarker checkbox still refuses outside text, even with an Other-looking last row", async () => {
+		const h = harness();
+		h.send({
+			method: "select",
+			id: "m1",
+			title: "여럿",
+			options: ["a", "b", OTHER],
+			selectionMarker: "checkbox",
+		});
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "둘 다 아님")).toBe(false);
+		expect(h.replies.items).toHaveLength(0);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m1")).toEqual(reply("m1", { value: "a" }));
+		await h.close();
+	});
+
+	test("a blank text never picks the Other row: it is refused and the card stays open", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "   ")).toBe(false);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "5")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: OTHER }));
+		await h.close();
+	});
+
+	test("a held text is only used by an input of the same turn (opRef)", async () => {
+		const h = harness();
+		const ask = (opRef: string, request: Parameters<typeof answerDialog>[2]) =>
+			answerDialog(h.broker, { ...ORIGIN, opRef }, request, new AbortController().signal);
+		const select = ask("op-1", { method: "select", id: "s1", title: "t", options: [...FOUR, OTHER] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "글")).toBe(true);
+		expect(await select).toEqual({ value: OTHER });
+		void ask("op-2", { method: "input", id: "i1", title: "t" });
+		await h.requested(2);
+		expect(h.logs.items.some((l) => l.includes("dialog_pending_text_dropped") && l.includes("other_turn"))).toBe(true);
+		await h.close();
+	});
+
+	test("a held text never answers a secret input", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "비번은 hunter2")).toBe(true);
+		await h.replies.waitFor((r) => r.id === "s1");
+		h.send({ method: "input", id: "i1", title: "토큰", secret: true });
+		expect(await h.replies.waitFor((r) => r.id === "i1")).toEqual(reply("i1", { cancelled: true }));
+		await h.close();
+	});
+
+	test("confirm: 예 answers confirmed true, 아니오 answers confirmed false", async () => {
+		const h = harness();
+		h.send({ method: "confirm", id: "c1", title: "계속할까요", message: "테스트가 2개 실패합니다" });
+		const first = await h.card(true);
+		expect(first.msg.buttons?.map((b) => b.label)).toEqual(["예", "아니오"]);
+		expect(h.click(first.msg.buttons?.[0])).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "c1")).toEqual(reply("c1", { confirmed: true }));
+		h.send({ method: "confirm", id: "c2", title: "계속할까요", message: "다시" });
+		const second = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts !== first.ts && (w.msg.buttons?.length ?? 0) > 0,
+		);
+		expect(h.click(second.msg.buttons?.[1])).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "c2")).toEqual(reply("c2", { confirmed: false }));
+		await h.close();
+	});
+
+	test("input: a reply in the card's thread answers { value }; editor takes the conversation reply", async () => {
+		const h = harness();
+		h.send({ method: "input", id: "i1", title: "브랜치 이름", placeholder: "feature/..." });
+		const posted = await h.card(false);
+		expect(posted.msg.text).toContain("이 스레드에 답장해 주세요");
+		expect(posted.msg.text).toContain("까지 답이 없으면 취소로 처리됩니다");
+		await h.requested(1);
+		const settled = h.broker.handleCardReply({
+			approvalId: `${DM}:${posted.ts}`,
+			ts: "700000000000000301",
+			text: "feature/ask",
+		});
+		expect(settled).toEqual({ kind: "settled" });
+		expect(await h.replies.waitFor((r) => r.id === "i1")).toEqual(reply("i1", { value: "feature/ask" }));
+		// A later reply in the closed card's thread goes back to the asking conversation.
+		expect(
+			h.broker.handleCardReply({ approvalId: `${DM}:${posted.ts}`, ts: "700000000000000302", text: "late" }),
+		).toEqual({
+			kind: "route",
+			originKey: ORIGIN.originKey,
+		});
+		h.send({ method: "editor", id: "e1", title: "커밋 메시지", prefill: "wip" });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "feat: ask cards")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "e1")).toEqual(reply("e1", { value: "feat: ask cards" }));
+		await h.close();
+	});
+
+	test("secret input: the card warns and omp gets cancelled at once", async () => {
+		const h = harness();
+		h.send({ method: "input", id: "s1", title: "API 키", secret: true });
+		const posted = await h.card(false);
+		expect(posted.msg.text).toContain("비밀값은 채팅에 쓰지 마세요");
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { cancelled: true }));
+		expect((await h.finalEdit(posted.ts)).msg.text).toContain("🚫 취소됨");
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(0);
+		await h.close();
+	});
+
+	test("deadline: a select times out cancelled; a confirm times out as 아니오, which is what omp reads", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "t1", title: "고르기", options: ["A", "B"], timeout: 30_000 });
+		const shown = await h.card(true);
+		// The card's deadline comes just before omp's own timeout.
+		expect([...h.timers.armed.values()].map((t) => t.ms)).toEqual([29_000]);
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "t1")).toEqual(reply("t1", { cancelled: true, timedOut: true }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("⌛ 시간 초과: 취소로 처리됨");
+
+		h.send({ method: "confirm", id: "t2", title: "계속할까요", message: "?", timeout: 30_000 });
+		const confirm = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts !== shown.ts && (w.msg.buttons?.length ?? 0) > 0,
+		);
+		expect(confirm.msg.buttonsNote).toContain("까지 답이 없으면 아니오로 처리됩니다");
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "t2")).toEqual(reply("t2", { cancelled: true, timedOut: true }));
+		expect((await h.finalEdit(confirm.ts)).msg.text).toContain("⌛ 시간 초과: 아니오로 처리됨");
+		await h.close();
+	});
+
+	test("ask deadline, nothing answered: omp gets the timeout itself (with or without a recommendation)", async () => {
+		const h = harness();
+		const questions = (recommended: number | undefined) => [
+			{
+				id: "q1",
+				question: "환경",
+				options: [{ label: "dev" }, { label: "prod" }],
+				...(recommended === undefined ? {} : { recommended }),
+			},
+			{ id: "q2", question: "알림", options: [{ label: "on" }, { label: "off" }], multi: true },
+		];
+		const seen = new Set<string>();
+		for (const [id, recommended, picked] of [
+			["t1", 1, "1) prod · 2) on"],
+			["t2", undefined, "1) dev · 2) on"],
+		] as const) {
+			h.send({ method: "ask", id, questions: questions(recommended) });
+			const ask = await h.port.writes.waitFor(
+				(w) => w.kind === "edit" && !seen.has(w.ts) && (w.msg.buttons?.length ?? 0) > 0,
+			);
+			seen.add(ask.ts);
+			expect(ask.msg.buttonsNote).toContain("추천(없으면 1번) 선택지로 처리됩니다");
+			h.timers.fireAll();
+			expect(await h.replies.waitFor((r) => r.id === id)).toEqual(reply(id, { cancelled: true, timedOut: true }));
+			const final = (await h.finalEdit(ask.ts)).msg.text;
+			expect(final).toContain(`⌛ 시간 초과: 추천(없으면 1번) 선택지로 자동 선택 — ${picked}`);
+			expect(final).not.toContain("취소");
+		}
+		await h.close();
+	});
+
+	test("ask deadline, partly answered: the owner's answers stay, the rest take recommended ?? 0", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "t3",
+			questions: [
+				{ id: "q1", question: "환경", options: [{ label: "dev" }, { label: "prod" }] },
+				{ id: "q2", question: "알림", options: [{ label: "on" }, { label: "off" }], recommended: 1 },
+				{ id: "q3", question: "로그", options: [{ label: "short" }, { label: "long" }], multi: true },
+			],
+		});
+		const ask = await h.card(true);
+		expect(h.click(ask.msg.buttons?.[1])).toBe(true);
+		await h.port.writes.waitFor((w) => w.kind === "edit" && w.ts === ask.ts && w.msg.text.includes("→ prod"));
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "t3")).toEqual(
+			reply("t3", {
+				answers: [
+					{ id: "q1", selectedOptions: ["prod"] },
+					{ id: "q2", selectedOptions: ["off"] },
+					{ id: "q3", selectedOptions: ["short"] },
+				],
+			}),
+		);
+		expect((await h.finalEdit(ask.ts)).msg.text).toContain("자동 선택 — 1) prod · 2) off · 3) short");
+		await h.close();
+	});
+
+	test("ask deadline, partly answered: an out-of-range recommended is clamped like omp's own fallback", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "t3c",
+			questions: [
+				{ id: "q1", question: "환경", options: [{ label: "dev" }, { label: "prod" }] },
+				{ id: "q2", question: "알림", options: [{ label: "on" }, { label: "off" }], recommended: 5 },
+				{ id: "q3", question: "로그", options: [{ label: "short" }, { label: "long" }], recommended: -2 },
+			],
+		});
+		const ask = await h.card(true);
+		expect(h.click(ask.msg.buttons?.[1])).toBe(true);
+		await h.port.writes.waitFor((w) => w.kind === "edit" && w.ts === ask.ts && w.msg.text.includes("→ prod"));
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "t3c")).toEqual(
+			reply("t3c", {
+				answers: [
+					{ id: "q1", selectedOptions: ["prod"] },
+					{ id: "q2", selectedOptions: ["off"] },
+					{ id: "q3", selectedOptions: ["short"] },
+				],
+			}),
+		);
+		expect((await h.finalEdit(ask.ts)).msg.text).toContain("자동 선택 — 1) prod · 2) off · 3) short");
+		await h.close();
+	});
+
+	test("ask: each question's recommended button is primary (Discord PRIMARY=1), the rest default, kept on redraw", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "r1",
+			questions: [
+				{ id: "q1", question: "환경", options: [{ label: "dev" }, { label: "prod" }], recommended: 1 },
+				{ id: "q2", question: "알림", options: [{ label: "on" }, { label: "off" }], recommended: 0 },
+				{ id: "q3", question: "로그", options: [{ label: "short" }, { label: "long" }] },
+			],
+		});
+		const ask = await h.card(true);
+		const styles = (buttons: readonly ActionButton[] | undefined) => (buttons ?? []).map((b) => b.style);
+		expect(ask.msg.buttons?.map((b) => b.label)).toEqual([
+			"1. dev",
+			"1. prod",
+			"2. on",
+			"2. off",
+			"3. short",
+			"3. long",
+		]);
+		expect(styles(ask.msg.buttons)).toEqual([undefined, "primary", "primary", undefined, undefined, undefined]);
+		// Discord draws that style as button style 1 (primary) and 2 (the rest).
+		// buttonRows returns the wire shape as unknown[]: Action Rows of buttons with a numeric style.
+		const rows = buttonRows(ask.msg.buttons ?? []) as Array<{ components: Array<{ style: number }> }>;
+		expect(rows.flatMap((row) => row.components.map((c) => c.style))).toEqual([2, 1, 1, 2, 2, 2]);
+		// A partial answer redraws the card: the emphasis stays.
+		expect(h.click(ask.msg.buttons?.[0])).toBe(true);
+		const redrawn = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts === ask.ts && w.msg.text.includes("→ dev"),
+		);
+		expect(styles(redrawn.msg.buttons)).toEqual(styles(ask.msg.buttons));
+		h.timers.fireAll();
+		await h.replies.waitFor((r) => r.id === "r1");
+		await h.close();
+	});
+
+	test("select and confirm carry no recommendation: every button keeps the default style", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: ["A", "B"] });
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.style)).toEqual([undefined, undefined]);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		await h.replies.waitFor((r) => r.id === "s1");
+		await h.close();
+	});
+
+	// the deadline line threw RangeError for an unrepresentable date, so no card.
+	test("ask with timeout Number.MAX_SAFE_INTEGER still shows its card; the deadline is cut to the timer's limit", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "h1",
+			questions: [{ id: "q1", question: "환경", options: [{ label: "dev" }, { label: "prod" }] }],
+			timeout: Number.MAX_SAFE_INTEGER,
+		});
+		const ask = await h.card(true);
+		expect(ask.msg.buttons?.map((b) => b.label)).toEqual(["dev", "prod"]);
+		expect(ask.msg.buttonsNote).toMatch(/^⏳ \d\d:\d\d까지 답이 없으면 /);
+		// setTimeout fires at once past 2^31-1 ms, which would end the card as soon as it shows.
+		expect([...h.timers.armed.values()].map((t) => t.ms)).toEqual([2 ** 31 - 1]);
+		expect(h.click(ask.msg.buttons?.[1])).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "h1")).toEqual(
+			reply("h1", { answers: [{ id: "q1", selectedOptions: ["prod"] }] }),
+		);
+		await h.close();
+	});
+
+	test("omp's cancel ends the waiting card; a later click writes nothing to omp", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "x1", title: "고르기", options: ["A", "B"] });
+		const shown = await h.card(true);
+		h.send({ method: "cancel", id: "x-cancel", targetId: "x1" });
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("🚫 취소됨");
+		expect(h.click(shown.msg.buttons?.[0])).toBe(false);
+		await h.answered[0];
+		// A later dialog is answered normally; its reply is the only one ever written.
+		h.send({ method: "confirm", id: "x2", title: "다음", message: "?" });
+		const next = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts !== shown.ts && (w.msg.buttons?.length ?? 0) > 0,
+		);
+		expect(h.click(next.msg.buttons?.[0])).toBe(true);
+		await h.replies.waitFor((r) => r.id === "x2");
+		expect(h.replies.items).toEqual([reply("x2", { confirmed: true })]);
+		await h.close();
+	});
+
+	test("ask: a button answers the single-select question, a reply fills the multi one", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "a1",
+			questions: [
+				{ id: "q1", header: "배포", question: "어디로?", options: [{ label: "dev" }, { label: "prod" }] },
+				{
+					id: "q2",
+					question: "무엇을 알릴까?",
+					options: [{ label: "discord" }, { label: "mail" }, { label: "sms" }],
+					multi: true,
+				},
+			],
+		});
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["1. dev", "1. prod"]);
+		expect(shown.msg.text).toContain("번호를 쉼표로 답장해 주세요");
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		// The card stays open for the multi question; its buttons stay as drawn (a click's index never changes meaning).
+		const partial = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts === shown.ts && w.msg.text.includes("→ prod"),
+		);
+		expect(partial.msg.buttons?.map((b) => b.actionId)).toEqual(shown.msg.buttons?.map((b) => b.actionId));
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1, 3")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "a1")).toEqual(
+			reply("a1", {
+				answers: [
+					{ id: "q1", selectedOptions: ["prod"] },
+					{ id: "q2", selectedOptions: ["discord", "sms"] },
+				],
+			}),
+		);
+		h.send({
+			method: "ask",
+			id: "a2",
+			questions: [{ id: "q1", question: "이름?", options: [{ label: "기본" }] }],
+		});
+		await h.port.writes.waitFor((w) => w.kind === "edit" && w.ts !== shown.ts && (w.msg.buttons?.length ?? 0) > 0);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "직접 지을게요")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "a2")).toEqual(
+			reply("a2", { answers: [{ id: "q1", selectedOptions: [], customInput: "직접 지을게요" }] }),
+		);
+		await h.close();
+	});
+
+	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "d1",
+			questions: [
+				{ id: "q1", question: "환경", options: [{ label: "dev" }, { label: "prod" }] },
+				{ id: "q2", question: "알림", options: [{ label: "a" }, { label: "b" }] },
+			],
+		});
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["1. dev", "1. prod", "2. a", "2. b"]);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		await h.port.writes.waitFor((w) => w.kind === "edit" && w.ts === shown.ts && w.msg.text.includes("→ dev"));
+		// The same button again (the card's buttons were drawn once): it must not answer q2.
+		h.click(shown.msg.buttons?.[0]);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "d1")).toEqual(
+			reply("d1", {
+				answers: [
+					{ id: "q1", selectedOptions: ["dev"] },
+					{ id: "q2", selectedOptions: ["b"] },
+				],
+			}),
+		);
+		await h.close();
+	});
+
+	test("ask: buttons stop at 25 per card; the overflowing question is answered by number", async () => {
+		const h = harness();
+		const options = ["a", "b", "c", "d", "e"].map((label) => ({ label }));
+		const questions = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `q${n}`, question: `질문${n}`, options }));
+		h.send({ method: "ask", id: "b1", questions });
+		const shown = await h.card(true);
+		expect(shown.msg.buttons).toHaveLength(25);
+		expect(new Set(shown.msg.buttons?.map((b) => b.label.split(".")[0]))).toEqual(new Set(["1", "2", "3", "4", "5"]));
+		const blocks = shown.msg.text.split("\n\n");
+		expect(blocks[5]).toStartWith("*6. 질문6*");
+		expect(blocks[5]).toEndWith("\n번호로 답장해 주세요");
+		expect(blocks[4]).toEndWith("\n버튼을 누르거나 번호로 답장해 주세요");
+		await h.close();
+	});
+
+	test("select: a conversation message right behind the closing click is handed back unread, not dropped", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: ["A", "B"] });
+		const shown = await h.card(true);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		// Still open when it arrives (queued behind the click), so the card takes it — then closes without reading it.
+		const taken = h.broker.answerDialog(ORIGIN.originKey, "2");
+		expect(await taken).toBe(false);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "A" }));
+		expect(h.logs.items.some((line) => line.includes("choice_reply_unread"))).toBe(true);
+		await h.close();
+	});
+
+	test("a card answered by a reply in its thread keeps that reply's ts; its backfill replay is a duplicate", async () => {
+		const h = harness();
+		h.send({ method: "input", id: "i1", title: "브랜치 이름" });
+		const posted = await h.card(false);
+		await h.requested(1);
+		const id = `${DM}:${posted.ts}`;
+		expect(h.broker.handleCardReply({ approvalId: id, ts: "700000000000000307", text: "feature/x" })).toEqual({
+			kind: "settled",
+		});
+		await h.replies.waitFor((r) => r.id === "i1");
+		await h.finalEdit(posted.ts);
+		expect(h.store.rows.get(id)).toMatchObject({ status: "replied", replyTs: "700000000000000307" });
+		expect(h.broker.handleCardReply({ approvalId: id, ts: "700000000000000307", text: "feature/x" })).toEqual({
+			kind: "duplicate",
+		});
+		await h.close();
+	});
+
+	test("a restart rewrites a left-open choice card under ❓, an approval card under 🔐 승인 요청", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "r1", title: "고르기", options: ["A", "B"] });
+		const choice = await h.card(true);
+		const abort = new AbortController();
+		const approval = h.broker.ask(DM, "main에 push", { signal: abort.signal });
+		const approvalCard = await h.port.writes.waitFor(
+			(w) => w.kind === "edit" && w.ts !== choice.ts && (w.msg.buttons?.length ?? 0) > 0,
+		);
+		const rebooted = new ApprovalBroker({
+			timezone: "Asia/Seoul",
+			channels: registryOf(h.port),
+			ownerUserId: OWNER,
+			log: createLogger({ sink: () => undefined, clock, redact }),
+			store: h.store,
+			clock,
+		});
+		expect(await rebooted.expireStale(false)).toBe(2);
+		const expiredChoice = await h.finalEdit(choice.ts);
+		expect(expiredChoice.msg.text).toStartWith("❓ 질문\n");
+		expect(expiredChoice.msg.text).toContain("데몬 재시작으로 만료됨");
+		const expiredApproval = await h.finalEdit(approvalCard.ts);
+		expect(expiredApproval.msg.text).toStartWith("🔐 승인 요청\n");
+		abort.abort();
+		await approval;
+		await h.close();
+	});
+
+	test("two open cards: a conversation reply answers neither", async () => {
+		const h = harness();
+		h.send({ method: "input", id: "i1", title: "첫째" });
+		h.send({ method: "input", id: "i2", title: "둘째" });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "뭐든")).toBe(false);
+		await h.close();
+	});
+
+	test("a daemon restart expires a choice card left open, like an approval card", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "r1", title: "고르기", options: ["A", "B"] });
+		const shown = await h.card(true);
+		const rebooted = new ApprovalBroker({
+			timezone: "Asia/Seoul",
+			channels: registryOf(h.port),
+			ownerUserId: OWNER,
+			log: createLogger({ sink: () => undefined, clock, redact }),
+			store: h.store,
+			clock,
+		});
+		expect(await rebooted.expireStale(false)).toBe(1);
+		const expired = await h.finalEdit(shown.ts);
+		expect(expired.msg.text).toContain("재시작으로 만료됨");
+		await h.close();
+	});
+});
+
+test("the card deadline is HH:MM in the configured timezone (America/New_York)", async () => {
+	// clock = 2027-01-15T08:00:00Z; the card closes 29 s later: 03:00 in New York (EST), 17:00 in Seoul.
+	const h = harness("America/New_York");
+	h.send({ method: "confirm", id: "tz1", title: "계속할까요", message: "?", timeout: 30_000 });
+	const card = await h.port.writes.waitFor((w) => w.kind === "edit" && (w.msg.buttons?.length ?? 0) > 0);
+	expect(card.msg.buttonsNote).toStartWith("⏳ 03:00까지 답이 없으면 아니오로 처리됩니다");
+	h.timers.fireAll();
+});
+
+// omp 19.1 `ask` forms: the card is `answerForm` (src/safety/form-choice.ts); data shapes follow omp's
+// `parseFormDialogResponse` (see test/omp-form.test.ts).
+describe("omp 19.1 form dialogs on choice cards", () => {
+	const FORM = `<form>
+<label><input type="radio" name="db" value="sqlite" checked> SQLite</label>
+<label><input type="radio" name="db" value="pg"> Postgres</label>
+<label><input type="checkbox" name="tests" value="yes"> Run tests</label>
+<fieldset><legend>Features</legend>
+<label><input type="checkbox" name="features" value="auth"> Auth</label>
+<label><input type="checkbox" name="features" value="cache"> Cache</label>
+</fieldset>
+<label>Replicas <input type="number" name="replicas" min="1" max="5"></label>
+<label>Service name <input name="svc" required></label>
+</form>`;
+	const edited = (h: ReturnType<typeof harness>, ts: string, part: string) =>
+		h.port.writes.waitFor((w) => w.kind === "edit" && w.ts === ts && w.msg.text.includes(part));
+
+	test("buttons, replies and a re-asked rule violation fill every field and answer { data }", async () => {
+		const h = harness();
+		h.send({ method: "form", id: "f1", html: FORM });
+		const shown = await h.card(true);
+		// Buttons: single choice (one per option) and the lone checkbox as yes/no; the rest is answered by reply.
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["1. SQLite", "1. Postgres", "2. 예", "2. 아니오"]);
+		const text = shown.msg.text;
+		expect(text).toContain("1. SQLite (추천)");
+		expect(text).not.toContain("2. Postgres (추천)");
+		// A field without a default shows no recommendation, and a text field never speaks of numbers.
+		const block = (n: number) => text.split("\n\n")[n - 1] ?? "";
+		expect(block(3)).not.toContain("(추천)");
+		expect(block(4)).toContain("숫자를 적어 주세요 (1~5)");
+		expect(block(4)).not.toContain("번호");
+		expect(block(5)).not.toContain("번호");
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		expect(h.click(shown.msg.buttons?.[2])).toBe(true);
+		await edited(h, shown.ts, "→ 예");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1, 2")).toBe(true);
+		await edited(h, shown.ts, "→ Auth, Cache");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(true);
+		const warned = await edited(h, shown.ts, "⚠️ Replicas: 5 이하여야 합니다");
+		expect(warned.msg.text).toContain("*4. Replicas*");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "3")).toBe(true);
+		await edited(h, shown.ts, "→ 3");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "web")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f1")).toEqual(
+			reply("f1", { data: { db: "pg", tests: "yes", features: ["auth", "cache"], replicas: 3, svc: "web" } }),
+		);
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("✅ 답:");
+		await h.close();
+	});
+
+	test("a reply naming no option is refused with a ⚠️ line and the field is asked again", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f2",
+			html: `<form><p>Pick</p>${["a", "b", "c", "d", "e", "f"].map((v) => `<label><input type="radio" name="x" value="${v}"> ${v}</label>`).join("")}</form>`,
+		});
+		const posted = await h.card(false);
+		expect(posted.msg.buttons).toBeUndefined();
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(true);
+		await edited(h, posted.ts, "⚠️ Pick: 없는 번호입니다(1~6)");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "6")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f2")).toEqual(reply("f2", { data: { x: "f" } }));
+		await h.close();
+	});
+
+	test("a pattern violation is refused and asked again; `-` keeps the field's default", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f3",
+			html: `<form><label>Slug <input name="slug" pattern="[a-z]+" value="abc"></label><label>Note <input name="note" value="hi"></label></form>`,
+		});
+		const posted = await h.card(false);
+		expect(posted.msg.text).toContain("(기본값: abc)");
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "ABC1")).toBe(true);
+		await edited(h, posted.ts, "⚠️ Slug: 형식에 맞지 않습니다");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "-")).toBe(true);
+		await edited(h, posted.ts, "→ abc");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "bye")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f3")).toEqual(reply("f3", { data: { slug: "abc", note: "bye" } }));
+		await h.close();
+	});
+
+	test("deadline, nothing answered: cancelled+timedOut so omp submits the form's defaults", async () => {
+		const h = harness();
+		h.send({ method: "form", id: "f4", html: FORM, timeout: 30_000 });
+		const shown = await h.card(true);
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "f4")).toEqual(reply("f4", { cancelled: true, timedOut: true }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("⌛ 시간 초과");
+		await h.close();
+	});
+
+	test("deadline, partly answered: the rest take the form's defaults, the card says so and the ledger gets rows", async () => {
+		const html = `<form><label><input type="radio" name="db" value="a" checked> A</label><label><input type="radio" name="db" value="b"> B</label><label>Name <input name="n" value="x"></label></form>`;
+		const h = harness();
+		h.send({ method: "form", id: "f5", html, timeout: 30_000 });
+		const shown = await h.card(true);
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		await edited(h, shown.ts, "→ B");
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "f5")).toEqual(reply("f5", { data: { db: "b", n: "x" } }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("기본값으로 자동 선택");
+		expect(h.store.autoChoices.map((row) => row.chosen)).toEqual(["x"]);
+		await h.close();
+	});
+
+	test("deadline with a required field still empty: no partial data, cancelled+timedOut", async () => {
+		const html = `<form><label><input type="radio" name="db" value="a"> A</label><label><input type="radio" name="db" value="b"> B</label><label>Name <input name="n" required></label></form>`;
+		const h = harness();
+		h.send({ method: "form", id: "f6", html, timeout: 30_000 });
+		const shown = await h.card(true);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		await edited(h, shown.ts, "→ A");
+		h.timers.fireAll();
+		expect(await h.replies.waitFor((r) => r.id === "f6")).toEqual(reply("f6", { cancelled: true, timedOut: true }));
+		expect((await h.finalEdit(shown.ts)).msg.text).toContain("Name: 필수 항목입니다");
+		await h.close();
+	});
+
+	test("a form the card cannot take (secret input, no named control) is cancelled at once, without a card", async () => {
+		const h = harness();
+		h.send({ method: "form", id: "p1", html: `<form><input type="password" name="pw"></form>` });
+		h.send({ method: "form", id: "p2", html: `<form><p>nothing to fill</p></form>` });
+		h.send({ method: "form", id: "p3" });
+		for (const id of ["p1", "p2", "p3"])
+			expect(await h.replies.waitFor((r) => r.id === id)).toEqual(reply(id, { cancelled: true }));
+		expect(h.port.writes.items).toHaveLength(0);
+		await h.close();
+	});
+});

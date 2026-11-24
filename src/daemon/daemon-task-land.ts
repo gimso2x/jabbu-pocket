@@ -1,0 +1,477 @@
+import type { IngestOutcome } from "../channel/types";
+import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
+import { herdrCloseTaskAgent } from "../dispatch/omp";
+import { confidentBand } from "../lanes/land";
+import { readAutoLandHold } from "../ops/apply";
+import { evaluateTask, memoryTaskChecks } from "../tasks/evaluate";
+import type { TaskGateHooks } from "../tasks/gate";
+import { landTask, type TaskLandOutcome, type TaskLandResult, taskLandHold } from "../tasks/land";
+import { hostOpsOf, landModeOfRow } from "../tasks/land-remote";
+import type { TaskRow } from "../tasks/ledger";
+import {
+	buildBlockedSettledCard,
+	buildMergeSettledCard,
+	cardMessage,
+	RECOMMEND_VALUE_MAX,
+	setStatusReaction,
+	type TaskCard,
+	taskLandNote,
+} from "../tasks/notify";
+import { recordWithConfig } from "../tasks/records";
+import {
+	AUTO_LAND_MARKER,
+	AUTO_LAND_TEXT,
+	MERGE_REJECTED_NOTE,
+	RECOMMEND_REJECTED_NOTE,
+	TASK_LANDING_NOTE,
+} from "./daemon-constants";
+import { adapterOfConversation, approvalOf, autoLandPolicy, type DaemonContext } from "./daemon-context";
+import { DaemonTaskPrLand } from "./daemon-task-pr-land";
+
+/** Feeds `text` as an owner message through the adapter's message path: the bot posts `marker` (in `threadTs`'s thread, or as a root) and the message takes its id; `posted.ts` is set once the marker is up. */
+export async function ingestOwnerText(
+	ctx: DaemonContext,
+	/** `injected`: put in by `ompbot inject`, not by an owner click (`OwnerIngest.injected`). */
+	target: { channel: string; threadTs?: string | undefined; kind: "dm" | "ch"; injected?: boolean },
+	text: string,
+	marker: string,
+	quoted?: readonly string[],
+	posted: { ts?: string } = {},
+): Promise<{ outcome: IngestOutcome; markerTs: string }> {
+	const { channel, threadTs, kind, injected } = target;
+	const adapter = adapterOfConversation(ctx, channel);
+	const route = ctx.channels.forConversation(channel);
+	if (adapter === undefined || route === undefined) throw new Error("daemon not started");
+	const { messageId } = await route.port.post(
+		{ conversationId: channel, ...(threadTs === undefined ? {} : { threadId: threadTs }) },
+		{ text: marker },
+	);
+	posted.ts = messageId;
+	// A reply in an approval card's thread settles the card without an inbound row, so acceptance comes from the
+	// adapter's own verdict, not from the ledger.
+	const outcome = await adapter.ingestOwner({
+		conversationId: channel,
+		kind,
+		threadId: threadTs,
+		messageId,
+		text,
+		quoted,
+		...(injected === true ? { injected } : {}),
+	});
+	return { outcome, markerTs: messageId };
+}
+
+/** The landing of reached [TASK]s (auto-merge, `머지` button) and the card buttons that put an owner answer in a thread; owns the landing lock and the one-click-per-card keys. */
+export class DaemonTaskLanding {
+	readonly #ctx: DaemonContext;
+	/** Task cards (`<channel>:<ts>`) whose button (`머지`, `추천대로`) was clicked in this process: a second click does nothing. Never cleared. */
+	readonly #mergeClicks = new Set<string>();
+	/** Approvals (canonical `<channel>:<ts>`) whose `다시 요청` was clicked in this process, on either card. Never cleared. */
+	readonly #retryClicks = new Set<string>();
+	/** Tasks being landed (auto-merge, `머지` button and PR poll share it): held through `landTask` and, after a handoff, until the "머지해" turn ended. A call meanwhile is `in_flight`. */
+	readonly #taskLanding = new Set<string>();
+	/** The PR landing of a local task in a `lanes.land` pr repository. */
+	readonly #prLand: DaemonTaskPrLand;
+
+	constructor(ctx: DaemonContext) {
+		this.#ctx = ctx;
+		this.#prLand = new DaemonTaskPrLand(ctx, this.#taskLanding, (task) => this.#afterTaskLanded(task));
+	}
+
+	/** One sweep poll of a review task's open PR (skipped while the task is being landed). */
+	pollPrLand(row: TaskRow): Promise<void> {
+		return this.#prLand.poll(row);
+	}
+
+	/** A `머지` click on a task card: the same as answering "머지해" in the task thread. Only a task in review takes it. */
+	handleTaskMerge(taskId: string, channel: string | undefined, messageTs: string | undefined): Promise<void> {
+		return this.#handleTaskCardButton({
+			kind: "merge",
+			taskId,
+			channel,
+			messageTs,
+			requiredStatus: "review",
+			ownerText: "머지해",
+			marker: "🔘 머지 (버튼)",
+			notFound: { text: `⚠️ 이 TASK를 찾을 수 없음 (${taskId})`, buttons: [] },
+			settledCard: buildMergeSettledCard,
+			wrongStatusNote: (status) => `이미 처리됐거나 머지할 상태가 아님 (${status})`,
+			requestedNote: (clock) => `▶ 머지 요청됨 · ${clock}`,
+			rejectedNote: MERGE_REJECTED_NOTE,
+		});
+	}
+
+	/** Whether the daemon can land now: started, with a channel, and not draining for a restart. */
+	landReady(): boolean {
+		return this.#ctx.router?.draining !== true && this.#ctx.adapters.size > 0 && this.#ctx.store !== undefined;
+	}
+
+	/**
+	 * Auto-merge of a reached task (`taskAutoLand`). A local task is landed by the core (`landTask`); only its `handoff`
+	 * — and every remote task — has the bot answer "머지해" in the task thread under a `🤖 자동 머지` marker.
+	 * `not_accepted`: a draining or unstarted daemon, a top-level or unreadable thread, or a "머지해" that did not go in.
+	 * `in_flight`: the task holds its landing lock. Repeats across sweeps are kept out by the sweep's `reached:<reachKey>` notice key.
+	 */
+	async autoLand(row: TaskRow, gate?: TaskGateHooks): Promise<TaskLandOutcome> {
+		const log = this.#ctx.log;
+		if (!this.landReady()) {
+			log.info("task_autoland_ignored", { task: row.taskId, reason: "not_ready" });
+			return { state: "not_accepted" };
+		}
+		if (this.#ctx.taskGates?.has(row.taskId) === true) {
+			log.info("task_autoland_ignored", { task: row.taskId, reason: "gating" });
+			return { state: "in_flight" };
+		}
+		// A local task in the confident band lands only after the review·QA gate (`TaskGateRunner`), never on the reach.
+		const policy = autoLandPolicy(this.#ctx);
+		// A task on a host cannot get that gate (the reviewers read a local worktree): it is never auto-merged in the band.
+		if (policy !== undefined && row.host !== null && confidentBand(row.risk, policy) !== undefined)
+			return { state: "held", reasons: [`원격 TASK는 독립 리뷰·QA 게이트를 받을 수 없음(위험 ${row.risk})`] };
+		if (gate !== undefined && policy !== undefined && row.host === null && confidentBand(row.risk, policy)) {
+			const decided = await this.#ctx.taskGates?.decide(row, gate, policy);
+			if (decided !== undefined) return decided;
+		}
+		return this.landAuto(row);
+	}
+
+	/** The landing half of `autoLand`: the core's landing under the task's landing lock, "머지해" on a handoff. */
+	async landAuto(row: TaskRow): Promise<TaskLandOutcome> {
+		const log = this.#ctx.log;
+		if (this.#taskLanding.has(row.taskId)) {
+			log.info("task_autoland_ignored", { task: row.taskId, reason: "in_flight" });
+			return { state: "in_flight" };
+		}
+		this.#taskLanding.add(row.taskId);
+		let handedOff = false;
+		try {
+			const thread = parseThreadRef(row.threadRef);
+			if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) {
+				log.warn("task_autoland_rejected", { task: row.taskId, reason: "bad_thread", thread: row.threadRef });
+				return { state: "not_accepted" };
+			}
+			const result = await this.#coreLand(row, "auto");
+			if (result.state !== "handoff") return result;
+			const posted: { ts?: string } = {};
+			const { outcome } = await ingestOwnerText(
+				this.#ctx,
+				{ channel: thread.channel, threadTs: thread.threadTs, kind: "ch" },
+				AUTO_LAND_TEXT,
+				AUTO_LAND_MARKER,
+				undefined,
+				posted,
+			);
+			if (outcome === "dropped" || outcome === "card_rejected") {
+				log.warn("task_autoland_rejected", { task: row.taskId, reason: outcome, marker: posted.ts });
+				return { state: "not_accepted" };
+			}
+			log.info("task_autoland_requested", { task: row.taskId, marker: posted.ts, outcome });
+			handedOff = true;
+			this.#releaseAfterTurn(row.taskId, thread.channel, posted.ts);
+			return result;
+		} finally {
+			if (!handedOff) this.#taskLanding.delete(row.taskId);
+		}
+	}
+
+	/** The core's landing of a task (`landTask`, or its PR path in a `lanes.land` pr repository). A remote task is the model turn's. */
+	async #coreLand(row: TaskRow, mode: "auto" | "button"): Promise<TaskLandResult> {
+		const log = this.#ctx.log;
+		const config = this.#ctx.options.config;
+		const landMode = await landModeOfRow(config, row);
+		if (row.host !== null && landMode?.config.mode !== "pr") {
+			log.info("task_land_handoff", { task: row.taskId, mode, reason: "remote" });
+			return { state: "handoff", reason: `원격 호스트(${row.host}) TASK` };
+		}
+		const store = this.#ctx.store;
+		const land = this.#ctx.lander;
+		if (store === undefined || land === undefined) throw new Error("daemon not started");
+		const wikiNotes = this.#ctx.wikiNotes;
+		const hostOps = hostOpsOf(config, row.host, this.#ctx.options.herdrRun);
+		const result = await (this.#ctx.options.taskLand ?? landTask)(row, {
+			mode,
+			...(landMode?.config.mode === "pr" ? { pr: this.#prLand.hook(mode, landMode) } : {}),
+			// The worktree and branch go with the landing: the note's content is collected right before it starts.
+			land: async (request, hooks) => {
+				await wikiNotes?.taskDraft(row);
+				return land(request, hooks);
+			},
+			stopChecks: (taskId) => this.#ctx.checkRunner?.cancel(taskId) ?? Promise.resolve(),
+			judge: (task, options) => evaluateTask(task, hostOps, memoryTaskChecks(), undefined, options?.integrityBase),
+			holdReason: () => {
+				const fresh = store.tasks.get(row.taskId);
+				return taskLandHold(fresh, {
+					frozen: this.#ctx.frozen() !== undefined,
+					paused: fresh !== undefined && store.tasks.isPaused(fresh),
+					hold: mode === "auto" ? readAutoLandHold(config.homeDir) : undefined,
+				});
+			},
+			ledger: store.tasks,
+			afterDone: (task) => this.#afterTaskLanded(task),
+		});
+		if (result.state === "landed" || result.state === "merged-not-pushed") {
+			await wikiNotes?.taskDone(row.taskId, [
+				`${result.baseBranch}에 머지 (${result.sha.slice(0, 12)})`,
+				result.state === "landed" && result.pushed !== undefined
+					? `push ${result.pushed}`
+					: result.state === "landed"
+						? "push 없음(origin 원격 없음)"
+						: `push 안 됨: ${result.reason}`,
+			]);
+		} else wikiNotes?.taskDropDraft(row);
+		const fields = { task: row.taskId, mode, ...result };
+		const event = `task_land_${result.state.replace(/-/g, "_")}`;
+		if (result.state === "landed" || result.state === "pr-open") log.info(event, fields);
+		else log.warn(event, fields);
+		return result;
+	}
+
+	/** After a core landing closed the task: the thread reaction follows the ledger and the herdr agent is closed; a failure becomes a card line. */
+	async #afterTaskLanded(row: TaskRow): Promise<string[]> {
+		const status = this.#ctx.store?.tasks.get(row.taskId)?.status ?? "done";
+		await setStatusReaction(this.#ctx.channels, this.#ctx.log, row.threadRef, status);
+		const failed = await this.closeTaskAgent(row);
+		return failed === undefined ? [] : [`herdr 워커 정리 실패: ${failed.slice(0, 160)}`];
+	}
+
+	/**
+	 * Ends a closed task's herdr agent where it runs (`herdrCloseTaskAgent`: a local task's workspace, a remote task's
+	 * tab over the host's ssh), so a finished worker's omp does not stay up. Undefined when nothing failed; a failure is
+	 * logged (`task_agent_close_failed`) and returned.
+	 */
+	async closeTaskAgent(row: TaskRow): Promise<string | undefined> {
+		const config = this.#ctx.options.config; // live: dispatchHosts and recordsRepo are reloadable
+		await recordWithConfig(config, this.#ctx.store?.tasks.get(row.taskId) ?? row); // the closed task's last records commit
+		const entry = row.host === null ? undefined : config.dispatchHosts?.[row.host];
+		if (row.host === null ? config.herdr === undefined : entry === undefined) return undefined;
+		const herdrRun = this.#ctx.options.herdrRun;
+		const closed = await herdrCloseTaskAgent(row.agent, {
+			cwd: config.workspaceDir,
+			...(entry === undefined ? {} : { sshTarget: entry.ssh }),
+			...(entry?.herdrBin === undefined ? {} : { herdrBin: entry.herdrBin }),
+			...(herdrRun === undefined ? {} : { run: herdrRun }),
+		});
+		if (closed.ok) return undefined;
+		this.#ctx.log.warn("task_agent_close_failed", {
+			task: row.taskId,
+			agent: row.agent,
+			host: row.host ?? "local",
+			error: closed.error,
+		});
+		return closed.error;
+	}
+
+	/** Frees a task's landing lock once the turn that took its handed-off "머지해" (inbound `<channel>:<markerTs>`) has ended; an inbound not found frees it at once. */
+	#releaseAfterTurn(taskId: string, channel: string, markerTs: string | undefined): void {
+		const inbound = markerTs === undefined ? undefined : this.#ctx.store?.getInbound(`${channel}:${markerTs}`);
+		const router = this.#ctx.router;
+		if (inbound === undefined || router === undefined) {
+			this.#ctx.log.warn("task_land_release_early", { task: taskId, marker: markerTs });
+			this.#taskLanding.delete(taskId);
+			return;
+		}
+		const originKey = inbound.originKey;
+		const mailbox = router.mailbox(originKey);
+		void mailbox
+			.resumePending()
+			.then(() => mailbox.whenTurnEnds())
+			.catch((error: unknown) => this.#ctx.log.warn("task_land_release_failed", { task: taskId, error: String(error) }))
+			.finally(() => this.#taskLanding.delete(taskId));
+	}
+
+	/**
+	 * A `추천대로` click on a blocked task's card: the same as answering "추천대로" in the task thread, with the
+	 * recommendation the button carried (its `value`) quoted in the owner text and the card's note. Only a blocked task
+	 * takes it.
+	 */
+	handleTaskRecommend(
+		taskId: string,
+		value: string | undefined,
+		channel: string | undefined,
+		messageTs: string | undefined,
+	): Promise<void> {
+		const recommend = (value ?? "").replace(/\s+/g, " ").trim().slice(0, RECOMMEND_VALUE_MAX);
+		const short = recommend.length > 120 ? `${recommend.slice(0, 119)}…` : recommend;
+		return this.#handleTaskCardButton({
+			kind: "recommend",
+			taskId,
+			channel,
+			messageTs,
+			requiredStatus: "blocked",
+			ownerText: recommend === "" ? "추천대로" : `추천대로 (추천: ${recommend})`,
+			marker: "🔘 추천대로 (버튼)",
+			notFound: { text: `이미 처리됐거나 막힌 상태가 아님 (TASK 없음: ${taskId})`, buttons: [] },
+			settledCard: buildBlockedSettledCard,
+			wrongStatusNote: (status) => `이미 처리됐거나 막힌 상태가 아님 (${status})`,
+			requestedNote: (clock) => `▶ 추천대로 진행 요청됨 · ${clock}${short === "" ? "" : ` — 추천: ${short}`}`,
+			rejectedNote: RECOMMEND_REJECTED_NOTE,
+		});
+	}
+
+	/**
+	 * One button on a task card (`머지`, `추천대로`) is the owner answering `ownerText` in the task thread. Only a task in
+	 * `requiredStatus` takes it, and one card takes one click per process — the key goes in before the first await,
+	 * so a quick second click finds it. Every outcome redraws the card without its button.
+	 */
+	async #handleTaskCardButton(button: {
+		kind: "merge" | "recommend";
+		taskId: string;
+		channel: string | undefined;
+		messageTs: string | undefined;
+		requiredStatus: TaskRow["status"];
+		ownerText: string;
+		marker: string;
+		notFound: { text: string; buttons: [] };
+		settledCard: (row: TaskRow, note: string) => TaskCard;
+		wrongStatusNote: (status: string) => string;
+		requestedNote: (clock: string) => string;
+		rejectedNote: string;
+	}): Promise<void> {
+		const { kind, taskId, channel, messageTs } = button;
+		const log = this.#ctx.log;
+		const key = `${channel ?? "-"}:${messageTs ?? taskId}`;
+		if (this.#mergeClicks.has(key)) {
+			log.info(`task_${kind}_ignored`, { task: taskId, reason: "duplicate" });
+			return;
+		}
+		this.#mergeClicks.add(key);
+		const redraw = async (card: TaskCard | { text: string; buttons: [] }) => {
+			if (channel === undefined || messageTs === undefined) return;
+			const port = this.#ctx.channels.forConversation(channel)?.port;
+			if (port === undefined) return;
+			const msg = "title" in card ? cardMessage(card, port) : card;
+			await port
+				.edit({ platform: port.platform, conversationId: channel, messageId: messageTs }, msg)
+				.catch((error: unknown) => log.warn(`task_${kind}_card_edit_failed`, { task: taskId, error: String(error) }));
+		};
+		const row = this.#ctx.store?.tasks.get(taskId);
+		if (row === undefined || row.status !== button.requiredStatus) {
+			log.info(`task_${kind}_ignored`, { task: taskId, reason: row === undefined ? "not_found" : row.status });
+			await redraw(row === undefined ? button.notFound : button.settledCard(row, button.wrongStatusNote(row.status)));
+			return;
+		}
+		const rejected = button.settledCard(row, button.rejectedNote);
+		const thread = parseThreadRef(row.threadRef);
+		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) {
+			log.warn(`task_${kind}_inject_rejected`, { task: taskId, reason: "bad_thread", thread: row.threadRef });
+			await redraw(rejected);
+			return;
+		}
+		// `머지` lands through the core first (`landTask`), under the task's landing lock shared with auto-merge; only a
+		// handoff puts "머지해" in, and the lock then waits for that thread turn.
+		const merge = kind === "merge";
+		// The owner's 머지 goes without the gate: a running one is aborted (no receipt) and waited for first.
+		if (merge) await this.#ctx.taskGates?.abort(taskId);
+		if (merge && this.#taskLanding.has(taskId)) {
+			log.info("task_merge_ignored", { task: taskId, reason: "in_flight" });
+			await redraw(button.settledCard(row, TASK_LANDING_NOTE));
+			return;
+		}
+		if (merge) this.#taskLanding.add(taskId);
+		let handedOff = false;
+		try {
+			let requested = button.requestedNote(this.#ctx.clockFormat.format(this.#ctx.clock.now()));
+			if (merge) {
+				await redraw(button.settledCard(row, `${requested} — 코어 착지 중`));
+				const result = await this.#coreLand(row, "button");
+				if (result.state !== "handoff") {
+					await redraw(button.settledCard(row, taskLandNote(result)));
+					return;
+				}
+				requested = `${requested} — ${taskLandNote(result)}`;
+			}
+			await redraw(button.settledCard(row, requested));
+			const posted: { ts?: string } = {};
+			try {
+				const { outcome } = await ingestOwnerText(
+					this.#ctx,
+					{ channel: thread.channel, threadTs: thread.threadTs, kind: "ch" },
+					button.ownerText,
+					button.marker,
+					undefined,
+					posted,
+				);
+				if (outcome !== "dropped" && outcome !== "card_rejected") {
+					log.info(`task_${kind}_requested`, { task: taskId, marker: posted.ts, outcome });
+					if (merge) {
+						handedOff = true;
+						this.#releaseAfterTurn(taskId, thread.channel, posted.ts);
+					}
+					return;
+				}
+				log.warn(`task_${kind}_inject_rejected`, { task: taskId, reason: "dropped", marker: posted.ts });
+			} catch (error) {
+				log.warn(`task_${kind}_inject_rejected`, {
+					task: taskId,
+					reason: "error",
+					...(posted.ts === undefined ? {} : { marker: posted.ts }),
+					error: String(error),
+				});
+			}
+			await redraw(rejected);
+		} finally {
+			if (merge && !handedOff) this.#taskLanding.delete(taskId);
+		}
+	}
+
+	/**
+	 * A `다시 요청` click on a timed-out approval card (canonical or mirror): the same as the owner asking the requesting
+	 * thread to put the request up again. The old tool call is gone, so the click opens a new turn there; approving
+	 * still takes a click on the new card. One approval takes one click per process, keyed before the first await.
+	 */
+	async handleApprovalRetry(
+		approvalId: string,
+		channel: string | undefined,
+		messageTs: string | undefined,
+	): Promise<void> {
+		const log = this.#ctx.log;
+		if (this.#retryClicks.has(approvalId)) {
+			log.info("approval_retry_ignored", { id: approvalId, reason: "duplicate" });
+			return;
+		}
+		this.#retryClicks.add(approvalId);
+		const clicked = channel === undefined || messageTs === undefined ? undefined : { channel, ts: messageTs };
+		const redraw = (note: string) => approvalOf(this.#ctx).redrawCards(approvalId, note, clicked);
+		const row = this.#ctx.store?.getApproval(approvalId);
+		const thread = row?.originThreadRef ? parseThreadRef(row.originThreadRef) : undefined;
+		const refused =
+			row === undefined
+				? "승인 기록 없음"
+				: row.status !== "expired"
+					? `상태 ${row.status}`
+					: thread === undefined || thread.threadTs === TOP_LEVEL_TS
+						? "요청 스레드를 알 수 없음"
+						: undefined;
+		if (refused !== undefined || row === undefined || thread === undefined) {
+			const reason = row === undefined ? "not_found" : row.status !== "expired" ? row.status : "bad_thread";
+			log.info("approval_retry_ignored", { id: approvalId, reason });
+			await redraw(`⚠️ 다시 요청할 수 없음 (${refused})`);
+			return;
+		}
+		await redraw(`▶ 다시 요청됨 · ${this.#ctx.clockFormat.format(this.#ctx.clock.now())}`);
+		const firstLine = row.summary.split("\n")[0] ?? "";
+		const posted: { ts?: string } = {};
+		try {
+			const { outcome } = await ingestOwnerText(
+				this.#ctx,
+				{ channel: thread.channel, threadTs: thread.threadTs, kind: "ch" },
+				`다시 요청: ${firstLine.slice(0, 200)}\n(방금 시간 초과로 거부된 승인 요청입니다. 같은 요청을 ompbot_request_approval로 다시 올려 주세요.)`,
+				"🔘 다시 요청 (버튼)",
+				undefined,
+				posted,
+			);
+			if (outcome !== "dropped" && outcome !== "card_rejected") {
+				log.info("approval_retry_requested", { id: approvalId, marker: posted.ts, outcome });
+				return;
+			}
+			log.warn("approval_retry_inject_rejected", { id: approvalId, reason: "dropped", marker: posted.ts });
+		} catch (error) {
+			log.warn("approval_retry_inject_rejected", {
+				id: approvalId,
+				reason: "error",
+				...(posted.ts === undefined ? {} : { marker: posted.ts }),
+				error: String(error),
+			});
+		}
+		await redraw("⚠️ 다시 요청을 넣지 못함 — 스레드에 직접 다시 요청해 주세요");
+	}
+}

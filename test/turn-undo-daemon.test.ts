@@ -1,0 +1,243 @@
+// AC-4 of T-20261111-03: the daemon wires `turnUndo` into every mailbox — a chat turn that changes a configured
+// repository leaves a snapshot row, `!undo` shows a real approval card whose approval puts the turn's files back, an
+// empty configuration says so without a row, and a config reload takes effect on the next turn without a restart.
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { OmpbotConfig } from "../src/config";
+import { Daemon } from "../src/daemon/daemon";
+import { createLogger } from "../src/log";
+import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
+import { discordBinding, makeHome, OWNER, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { git, makeRepo } from "./helpers/git-fixtures";
+
+const ORIGIN = `discord/dm/${OWNER_DM}`;
+
+let home: TestHome;
+let transport: WaitingDiscordTransport;
+let daemon: Daemon | undefined;
+let repos: string[];
+
+beforeEach(() => {
+	home = makeHome("ompbot-turn-undo-daemon-");
+	transport = new WaitingDiscordTransport();
+	daemon = undefined;
+	repos = [];
+});
+
+afterEach(async () => {
+	await daemon?.stop();
+	for (const repo of repos.splice(0)) rmSync(repo, { recursive: true, force: true });
+	home.remove();
+});
+
+/** The test home's config with `turnSnapshot.repos` set, the shape `loadConfig` returns. */
+function withTurnSnapshot(config: OmpbotConfig, list: readonly string[]): OmpbotConfig {
+	return { ...config, turnSnapshot: { repos: [...list] } };
+}
+
+async function boot(config: OmpbotConfig, driver: FakeOmpDriverOptions = {}): Promise<Daemon> {
+	const instance = new FakeOmpDriver({ ...driver, sessionDir: join(home.dir, "s"), store: new FakeSessionStore() });
+	const d = new Daemon({
+		config,
+		channels: [discordBinding(transport)],
+		clock: { now: () => Date.now() },
+		log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact: (text) => text }),
+		ompVersion: "omp-test 0",
+		bootId: "boot",
+		sweepMs: 3_600_000,
+		gateSweepMs: 0,
+		taskSweepMs: 0,
+		driverFactory: () => instance,
+	});
+	daemon = d;
+	await d.start();
+	return d;
+}
+
+/** Approve buttons the transport received; the card's buttons go up with the edit that follows its post. */
+function approveButtons(): string[] {
+	return transport.calls.flatMap((call: FakeDiscordCall) => {
+		if (call.method !== "createMessage" && call.method !== "editMessage") return [];
+		return (call.components ?? []).flatMap((row) => {
+			if (typeof row !== "object" || row === null || !("components" in row) || !Array.isArray(row.components))
+				return [];
+			return row.components.flatMap((button: unknown) =>
+				typeof button === "object" &&
+				button !== null &&
+				"custom_id" in button &&
+				typeof button.custom_id === "string" &&
+				button.custom_id.includes(":approve:")
+					? [button.custom_id]
+					: [],
+			);
+		});
+	});
+}
+
+/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+	for (let hop = 0; hop < hops; hop += 1) {
+		if (ready()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	}
+	throw new Error(`never happened: ${what}`);
+}
+
+/** Clicks the undo card's approve button as the owner, once the buttons are on the card; returns the card's ledger key. */
+async function approveUndoCard(): Promise<string> {
+	await until(() => approveButtons().length > 0, "the undo card's approve button");
+	const actionId = approveButtons()[0] ?? "";
+	const [, , , channel = "", card = ""] = actionId.split(":");
+	await transport.emitInteraction({
+		id: "800000000000000001",
+		application_id: "600000000000000000",
+		type: 3,
+		token: "token-1",
+		channel_id: channel,
+		user: { id: OWNER },
+		data: { custom_id: actionId, component_type: 2 },
+		message: { id: card, channel_id: channel },
+	});
+	return `${channel}:${card}`;
+}
+
+const turnSnapshots = (d: Daemon) => d.store.listTurnSnapshots({ originKey: ORIGIN });
+
+describe("AC-4: turnUndo is wired into the mailbox", () => {
+	test("no configuration: a chat turn and !undo start no git, !undo says it is not configured, no row exists", async () => {
+		const d = await boot(home.config);
+		const spawn = spyOn(Bun, "spawn");
+		try {
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "고쳐줘" });
+			await transport.waitForPosts((text) => text.startsWith("ECHO 고쳐줘"));
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "!undo" });
+			await transport.waitForPosts((text) => text.includes("설정되지 않았습니다"));
+			const gitRuns = spawn.mock.calls.filter(([cmd]) => Array.isArray(cmd) && cmd[0] === "git");
+			expect(gitRuns).toEqual([]);
+		} finally {
+			spawn.mockRestore();
+		}
+		expect(turnSnapshots(d)).toEqual([]);
+	});
+
+	test("a configured repository: the turn leaves a row, the undo card is approved, and the file comes back", async () => {
+		const repo = makeRepo(repos);
+		// The turn's own work (the fake driver's reply step) creates the file, between the before and after captures.
+		const d = await boot(withTurnSnapshot(home.config, [repo]), {
+			respond: () => {
+				writeFileSync(join(repo, "changed.txt"), "by the turn\n");
+				return "고쳤습니다";
+			},
+		});
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "고쳐줘" });
+		await transport.waitForPosts((text) => text.startsWith("고쳤습니다"));
+		await until(() => turnSnapshots(d).length > 0, "the turn's snapshot row");
+		expect(turnSnapshots(d).map((row) => row.repo)).toEqual([repo]);
+		expect(existsSync(join(repo, "changed.txt"))).toBe(true);
+
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "!undo" });
+		const card = await approveUndoCard();
+		await transport.waitForPosts((text) => text.includes("되돌림: "));
+		expect(existsSync(join(repo, "changed.txt"))).toBe(false);
+		// The card belongs to the asking DM conversation, not to a channel origin rebuilt from the thread ref.
+		expect(d.store.getApproval(card)?.originKey).toBe(ORIGIN);
+		expect(d.store.getApproval(card)?.status).toBe("approved");
+	});
+
+	test("a reload that adds a repository takes effect on the next turn, without a restart", async () => {
+		const repo = makeRepo(repos);
+		let turn = 0;
+		// Every turn writes its own file; only the turn after the reload may leave a row.
+		const d = await boot(home.config, {
+			respond: () => {
+				turn += 1;
+				writeFileSync(join(repo, `turn-${turn}.txt`), "by the turn\n");
+				return `답 ${turn}`;
+			},
+		});
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "고쳐줘" });
+		await transport.waitForPosts((text) => text.startsWith("답 1"));
+		expect(turnSnapshots(d)).toEqual([]);
+
+		// A reload re-reads config.json: write the repository list there, the way the owner would.
+		const raw = JSON.parse(await Bun.file(join(home.dir, "config.json")).text()) as Record<string, unknown>;
+		raw.turnSnapshot = { repos: [repo] };
+		await Bun.write(join(home.dir, "config.json"), JSON.stringify(raw));
+		d.reloadConfig("ipc");
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "또 고쳐줘" });
+		await transport.waitForPosts((text) => text.startsWith("답 2"));
+		await until(() => turnSnapshots(d).length > 0, "the post-reload turn's snapshot row");
+		expect(turnSnapshots(d).map((row) => row.repo)).toEqual([repo]);
+	});
+});
+
+describe("wiki turn notes without turnSnapshot", () => {
+	/** The fake driver's reply step commits in `repo`, between the before and after heads. */
+	const committing = (repo: string): FakeOmpDriverOptions => ({
+		respond: () => {
+			writeFileSync(join(repo, "committed.txt"), "by the turn\n");
+			git(repo, "add", "--", "committed.txt");
+			git(repo, "commit", "-q", "-m", "feat: 대화 커밋");
+			return "커밋했습니다";
+		},
+	});
+	const wikiClient = () => join(home.dir, "wiki-client");
+
+	test("wikiNotes.repos set: a committing chat turn becomes a wiki turn row, with no snapshot row", async () => {
+		const repo = makeRepo(repos);
+		const d = await boot({ ...home.config, wikiNotes: { client: wikiClient(), repos: [repo] } }, committing(repo));
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+		await transport.waitForPosts((text) => text.startsWith("커밋했습니다"));
+		await until(() => d.store.listUnsentWikiTurns().length > 0, "the turn's wiki row");
+		const [row] = d.store.listUnsentWikiTurns();
+		expect(row?.repo).toBe(repo);
+		expect(row?.inbound).toBe("커밋해줘");
+		expect(row?.commits.map((commit) => commit.subject)).toEqual(["feat: 대화 커밋"]);
+		expect(turnSnapshots(d)).toEqual([]);
+	});
+
+	test("wikiNotes without repos falls back to taskAutoLand.repos", async () => {
+		const repo = makeRepo(repos);
+		const d = await boot(
+			{ ...home.config, wikiNotes: { client: wikiClient() }, taskAutoLand: { repos: [repo] } },
+			committing(repo),
+		);
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+		await transport.waitForPosts((text) => text.startsWith("커밋했습니다"));
+		await until(() => d.store.listUnsentWikiTurns().length > 0, "the turn's wiki row");
+		expect(d.store.listUnsentWikiTurns().map((row) => row.repo)).toEqual([repo]);
+	});
+
+	test("no wikiNotes: a committing chat turn starts no git and leaves no wiki row", async () => {
+		const repo = makeRepo(repos);
+		let turn = 0;
+		const d = await boot(
+			{ ...home.config, taskAutoLand: { repos: [repo] } },
+			{
+				respond: () => {
+					turn += 1;
+					writeFileSync(join(repo, `turn-${turn}.txt`), "by the turn\n");
+					git(repo, "add", "--", `turn-${turn}.txt`);
+					git(repo, "commit", "-q", "-m", `feat: 턴 ${turn}`);
+					return `답 ${turn}`;
+				},
+			},
+		);
+		const spawn = spyOn(Bun, "spawn");
+		try {
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+			// The second answer comes after the first turn's after-heads step ran: nothing of the first turn is still pending.
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "또 커밋해줘" });
+			await transport.waitForPosts((text) => text.startsWith("답 2"));
+			const gitRuns = spawn.mock.calls.filter(([cmd]) => Array.isArray(cmd) && cmd[0] === "git");
+			expect(gitRuns).toEqual([]);
+		} finally {
+			spawn.mockRestore();
+		}
+		expect(d.store.listUnsentWikiTurns()).toEqual([]);
+	});
+});

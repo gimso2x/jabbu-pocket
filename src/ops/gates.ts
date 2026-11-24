@@ -1,0 +1,630 @@
+import { Database } from "bun:sqlite";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { OmpbotConfig } from "../config";
+import { isAutonomousRow } from "../core/mailbox";
+import { readSweepHeartbeat } from "../daemon/heartbeat";
+import { holderAlive } from "../daemon/lock";
+import { nextFireOf, toMonitor } from "../monitors/ledger";
+import { checkOmpRuntimeSync } from "../omp/runtime-check";
+import { localDay } from "../time";
+import { APPLY_LOCK_FILE, parseApplyLock } from "./apply-lock";
+import { readStamp } from "./backup";
+import { readFreeze, readUnfrozenAt } from "./freeze";
+import { HERDR_HEALTH_STALE_MS, HERDR_UNREACHABLE_AFTER, readHerdrHealth } from "./herdr-health";
+import {
+	type DiskView,
+	diskHeadroom,
+	diskLow,
+	formatHeadroom,
+	type HostLoadReader,
+	hostPressure,
+	type StatfsReader,
+} from "./host-resources";
+import { DEFAULT_HOST_SESSION_CEILING } from "./host-sessions";
+import { OFFSITE_STAMP_FILE } from "./offsite";
+
+/** Opening a FIFO in the ledger's place blocks forever, so the ledger is opened only after this passes. */
+export function assertRegularLedger(dbPath: string): void {
+	if (!statSync(dbPath).isFile()) throw new Error("ledger is not a regular file");
+}
+
+export * from "./gate-thresholds";
+
+import {
+	AMBIGUOUS_STUCK_MS,
+	BACKUP_FUTURE_TOLERANCE_MS,
+	BACKUP_MAX_AGE_MS,
+	DELIVERY_OVERDUE_MS,
+	DRAIN_ORPHANED_MS,
+	INBOUND_CONFLICT_WINDOW_MS,
+	INBOUND_STARVATION_MS,
+	LANE_STUCK_MS,
+	MONITOR_FAILURE_WINDOW_MS,
+	MONITOR_OVERDUE_MS,
+	ORIGIN_SILENT_MS,
+	SOCKET_DOWN_MS,
+	SWEEP_STALLED_MS,
+	TURNS_FAILING_THRESHOLD,
+	TURNS_FAILING_WINDOW_MS,
+} from "./gate-thresholds";
+
+/**
+ * `unknown`: nothing to judge from (no heartbeat stamp, no ledger file — a home no daemon has run in). It is neither
+ * health nor a failure: `ompbot gates` counts it apart and fails on it only with `--strict`, and the daemon's own
+ * gate sweep keeps the previous state.
+ */
+export type GateState = "open" | "closed" | "unknown";
+
+export interface Gate {
+	name: string;
+	state: GateState;
+	detail: string;
+}
+
+export interface GatesOptions {
+	homeDir: string;
+	now: number;
+	/** Configured omp executable; when set, the `omp_runtime` gate checks it can still host an RPC child. */
+	ompExecutable?: string;
+	/** True when config.json has an `offsite` target; only then does the `offsite_age` gate exist. */
+	offsiteConfigured?: boolean;
+	/** True when config.json has `channels.discord`; only then does the `discord_disconnected` gate exist. */
+	discordConfigured?: boolean;
+	/** Paths whose filesystems `disk_low` judges; default `defaultDiskPaths`. */
+	diskPaths?: string[];
+	/** Config `ompProfile`: its agent dir joins the default `disk_low` paths. */
+	ompProfile?: string;
+	/** Test seam: filesystem stats per path (default `statfsSync`). */
+	statfs?: StatfsReader;
+	/** Test seam: load average, CPU count and /proc/meminfo for `host_pressure` (default this machine's). */
+	hostLoad?: Partial<HostLoadReader>;
+	/** Test seam: whether a pid runs, for `drain_orphaned` (default `pidAlive`). */
+	isAlive?: (pid: number) => boolean;
+	/**
+	 * `costCap.dailyUsd` and the bot's zone (`config.timezone`, where "today" is). With a ceiling the `cost_cap` gate
+	 * exists and opens while today's ledger total has reached it (a warning only); without
+	 * one there is nothing to judge and no gate.
+	 */
+	dailyCap?: { usd: number; timezone: string };
+	/** Host-wide omp session ceiling (`hostSessionCeiling`, resolved default 8): no gate of its own, a start-gate input the status views carry along. */
+	hostSessionCeiling?: number;
+}
+
+/** The part of {@link GatesOptions} config.json decides. */
+export type ConfigGateOptions = Pick<
+	GatesOptions,
+	"ompExecutable" | "ompProfile" | "offsiteConfigured" | "discordConfigured" | "dailyCap" | "hostSessionCeiling"
+>;
+
+/**
+ * The config-derived gate options. The daemon's gate sweep, `/status`, `ompbot status`/`gates`/`apply` and the
+ * dashboard all build their gates from this, so a gate the sweep alerts on is never missing from a status view. A
+ * db-only home (no config.json) gets none: no omp to check, no offsite target, no ceiling. `timezone` is where the
+ * cost ceiling's "today" is: the config's own zone unless the caller (the dashboard's partial config) names it.
+ */
+export function gateOptionsFromConfig(
+	config:
+		| (Partial<
+				Pick<
+					OmpbotConfig,
+					"agent" | "ompExecutable" | "ompProfile" | "offsite" | "costCap" | "hostSessionCeiling" | "timezone"
+				>
+		  > & {
+				/** Only whether `discord` is there is read (the dashboard's config carries a partial `channels`). */
+				channels?: { discord?: object | undefined } | undefined;
+		  })
+		| undefined,
+	timezone: string | undefined = config?.timezone,
+): ConfigGateOptions {
+	if (config === undefined) return {};
+	const dailyUsd = config.costCap?.dailyUsd;
+	return {
+		...((config.agent ?? "omp") === "omp" && config.ompExecutable !== undefined
+			? { ompExecutable: config.ompExecutable }
+			: {}),
+		...(config.ompProfile === undefined ? {} : { ompProfile: config.ompProfile }),
+		offsiteConfigured: config.offsite !== undefined,
+		discordConfigured: config.channels?.discord !== undefined,
+		hostSessionCeiling: config.hostSessionCeiling ?? DEFAULT_HOST_SESSION_CEILING,
+		...(dailyUsd === undefined || timezone === undefined ? {} : { dailyCap: { usd: dailyUsd, timezone } }),
+	};
+}
+
+function gate(name: string, open: boolean, detail: string): Gate {
+	return { name, state: open ? "open" : "closed", detail };
+}
+
+/** Gates judged from the ledger; all `unknown` while `ompbot.db` does not exist. */
+const LEDGER_GATES = [
+	"inbound_starved",
+	"origin_silent",
+	"deliveries_overdue",
+	"deliveries_ambiguous_stuck",
+	"lanes_stuck",
+	"monitors_failed",
+	"monitors_stalled",
+	"turns_failing",
+] as const;
+
+/** Every known gate `collectGates` can emit; the dashboard's `gateText` must have a real label for each. */
+export const GATE_NAMES = [
+	...LEDGER_GATES,
+	"inbound_identity_conflicts",
+	"backup_age",
+	"offsite_age",
+	"sweep_stalled",
+	"discord_disconnected",
+	"omp_runtime",
+	"frozen",
+	"ledger_unreadable",
+	"disk_low",
+	"host_pressure",
+	"herdr_unreachable",
+	"drain_orphaned",
+	"cost_cap",
+] as const;
+
+/**
+ * `drain_orphaned`: the heartbeat says draining while `<home>/apply.lock` names an apply that no longer runs. A drain
+ * the daemon holds has no expiry, and while it lasts `origin_silent` and `monitors_stalled` stay closed, so without
+ * this nothing reports a bot that quietly holds every message. Only judged when there is something to judge (a
+ * drain or an apply lock); a drain with no apply lock (`ompbot drain` by hand) has no holder to call dead.
+ */
+function drainOrphanedGate(
+	homeDir: string,
+	heartbeat: ReturnType<typeof readSweepHeartbeat>,
+	now: number,
+	isAlive: ((pid: number) => boolean) | undefined,
+): Gate | undefined {
+	const name = "drain_orphaned";
+	let lockText: string | undefined;
+	try {
+		lockText = readFileSync(join(homeDir, APPLY_LOCK_FILE), "utf8");
+	} catch {
+		lockText = undefined;
+	}
+	if (heartbeat?.draining !== true && lockText === undefined) return undefined;
+	if (heartbeat === undefined) return unknownGate(name, "stamp=missing");
+	if (heartbeat.draining !== true) return gate(name, false, "draining=0");
+	const holder = lockText === undefined ? undefined : parseApplyLock(lockText);
+	if (holder === undefined) return gate(name, false, lockText === undefined ? "apply=none" : "apply_lock=unreadable");
+	if (holderAlive(holder.pid, holder.bootId, isAlive)) return gate(name, false, `apply=${holder.stamp} running`);
+	const startedAt = Date.parse(holder.startedAt);
+	const minutes = Number.isNaN(startedAt) ? undefined : Math.max(0, Math.floor((now - startedAt) / 60_000));
+	return gate(
+		name,
+		Number.isNaN(startedAt) || now - startedAt >= DRAIN_ORPHANED_MS,
+		`apply=${holder.stamp} pid=${holder.pid} gone minutes=${minutes ?? "unknown"}`,
+	);
+}
+
+function unknownGate(name: string, detail: string): Gate {
+	return { name, state: "unknown", detail };
+}
+
+function tableExists(db: Database, name: string): boolean {
+	return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
+}
+
+/** The ledger is opened read-only, so a database the daemon has not migrated yet may lack newer columns. */
+function columnExists(db: Database, table: string, column: string): boolean {
+	return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
+}
+
+function scalar(db: Database, sql: string): number {
+	const row = db.query(sql).get() as Record<string, number> | null;
+	return row == null ? 0 : Number(Object.values(row)[0] ?? 0);
+}
+
+/** Today's `usage_daily` total (`src/ops/cost-cap.ts` keys it by the bot zone's day). */
+function dailySpend(db: Database, day: string): number {
+	const row = db.query("SELECT COALESCE(SUM(cost), 0) AS cost FROM usage_daily WHERE day = ?").get(day) as {
+		cost: number;
+	} | null;
+	return row?.cost ?? 0;
+}
+
+/**
+ * Enabled monitors whose next fire is 15+ minutes past. Closed while draining (drain stops monitor ticks), while frozen
+ * (the freeze holds every monitor back on purpose; the `frozen` gate reports it) and for a heartbeat without the
+ * `draining` field (a daemon older than this gate: ops-check runs the new CLI against it). Unknown without a stamp. A fire the freeze held back
+ * counts as due at the unfreeze (`unfrozenAt`), so it only opens if it still has not fired 15 minutes after it.
+ */
+function monitorsStalled(
+	db: Database,
+	heartbeat: ReturnType<typeof readSweepHeartbeat>,
+	now: number,
+	frozen: boolean,
+	unfrozenAt: number | undefined,
+): Gate {
+	const name = "monitors_stalled";
+	if (heartbeat === undefined) return unknownGate(name, "stamp=missing");
+	if (heartbeat.draining === undefined) return gate(name, false, "heartbeat=old");
+	if (heartbeat.draining) return gate(name, false, "draining");
+	if (frozen) return gate(name, false, "frozen");
+	// A stamp from the future (clock jump, corruption) would hide stalls until then: ignore it.
+	const thawedAt = unfrozenAt !== undefined && unfrozenAt <= now ? unfrozenAt : undefined;
+	if (
+		!tableExists(db, "monitors") ||
+		!["trigger_json", "cursor_at", "enabled"].every((c) => columnExists(db, "monitors", c))
+	) {
+		return gate(name, false, "schema=old");
+	}
+	let overdue = 0;
+	for (const raw of db.query("SELECT * FROM monitors WHERE enabled = 1").all()) {
+		let next: number | null;
+		try {
+			next = nextFireOf(toMonitor(raw as Parameters<typeof toMonitor>[0]));
+		} catch {
+			continue;
+		}
+		if (next === null) continue;
+		const due = thawedAt !== undefined && next < thawedAt ? thawedAt : next;
+		if (due <= now - MONITOR_OVERDUE_MS) overdue++;
+	}
+	return gate(name, overdue > 0, `overdue=${overdue}`);
+}
+
+/**
+ * Opens as soon as `ompExecutable` stops answering `--version` with `omp/<x.y.z>` (gone, not executable, not omp), so
+ * the owner hears about it before chat turns start failing. Same check, and remembered versions, as the RPC driver.
+ */
+function ompRuntimeGate(ompExecutable: string): Gate {
+	const problem = checkOmpRuntimeSync(ompExecutable);
+	return gate("omp_runtime", problem !== undefined, problem === undefined ? "ok" : `${problem.code} ${problem.detail}`);
+}
+
+/** Open when any judged filesystem is low; the detail names the tightest one (lowest free share). */
+function diskGate(paths: readonly string[], statfs: StatfsReader | undefined): Gate {
+	const views = paths
+		.map((path) => diskHeadroom(path, statfs))
+		.filter((view) => view.freeBytes !== null && view.totalBytes !== null);
+	if (views.length === 0) return gate("disk_low", false, "statfs=unavailable");
+	const share = (view: DiskView) => (view.totalBytes ? (view.freeBytes ?? 0) / view.totalBytes : 0);
+	const low = views.filter(diskLow);
+	const tightest = (low.length > 0 ? low : views).reduce((a, b) => (share(b) < share(a) ? b : a));
+	return gate("disk_low", low.length > 0, `path=${tightest.path} ${formatHeadroom(tightest)}`);
+}
+
+function hostPressureGate(read: Partial<HostLoadReader> | undefined): Gate {
+	const pressure = hostPressure(read);
+	const mem = pressure.memAvailableRatio === null ? "unknown" : String(Math.floor(pressure.memAvailableRatio * 100));
+	const cgroup =
+		pressure.cgroupVersion === undefined
+			? "absent"
+			: pressure.cgroupVersion === null
+				? "none"
+				: `v${pressure.cgroupVersion}`;
+	const pct = (ratio: number | null): string => (ratio === null ? "?" : String(Math.floor(ratio * 100)));
+	return gate(
+		"host_pressure",
+		pressure.open,
+		`load15=${pressure.load15.toFixed(2)} cpus=${pressure.cpus} mem_avail_pct=${mem} cgroup=${cgroup} cgroup_high_free_pct=${pct(pressure.cgroupHighFreeRatio)} cgroup_hard_free_pct=${pct(pressure.cgroupHardFreeRatio)}${
+			pressure.cgroupIncomplete ? " cgroup_incomplete=1" : ""
+		}`,
+	);
+}
+
+/**
+ * Read-only health projection over `<homeDir>`: opens the ledger read-only (never re-queues inflight deliveries,
+ * unlike `openStore`) plus the backup stamp, and answers "does anything need a human?". Follows the upstream
+ * `ops cycle` contract: any open gate means exit 1, so automation cannot mistake a sick bot for a healthy one. A gate
+ * with nothing to judge from is `unknown`, not closed (`ompbot gates --strict` fails on those too).
+ *
+ * Held (`failed_ambiguous`) deliveries gate only once they are past the boot requeue window: the daemon's start puts
+ * fresher ones back to pending by itself, and a newer one may just be waiting for the owner's look
+ * (`ompbot deliveries ack|resend`). Gating on every held row would alert on each one the moment it happened.
+ */
+/**
+ * The default `disk_low` paths: the bot home, `~/.omp/agent` and, with `ompProfile`, the profile's agent dir
+ * (`~/.omp/profiles/<profile>/agent`); an omp dir that does not exist is left out.
+ */
+export function defaultDiskPaths(homeDir: string, ompProfile?: string, userHome: string = homedir()): string[] {
+	const agentDirs = [
+		join(userHome, ".omp", "agent"),
+		...(ompProfile === undefined ? [] : [join(userHome, ".omp", "profiles", ompProfile, "agent")]),
+	];
+	return [homeDir, ...agentDirs.filter((dir) => existsSync(dir))];
+}
+
+export function collectGates(options: GatesOptions): Gate[] {
+	const { homeDir, now } = options;
+	const gates: Gate[] = [];
+
+	const stamp = readStamp(join(homeDir, "backups"));
+	if (stamp === undefined) {
+		gates.push(gate("backup_age", true, "stamp=missing"));
+	} else {
+		const age = now - stamp.ts.getTime();
+		if (age < -BACKUP_FUTURE_TOLERANCE_MS) {
+			gates.push(gate("backup_age", true, "ts_in_future"));
+		} else {
+			gates.push(gate("backup_age", age > BACKUP_MAX_AGE_MS, `hours=${(age / 3_600_000).toFixed(1)}`));
+		}
+	}
+
+	if (options.offsiteConfigured === true) {
+		const offsite = readStamp(join(homeDir, "backups"), OFFSITE_STAMP_FILE);
+		if (offsite === undefined) {
+			gates.push(gate("offsite_age", true, "stamp=missing"));
+		} else {
+			const age = now - offsite.ts.getTime();
+			if (age < -BACKUP_FUTURE_TOLERANCE_MS) gates.push(gate("offsite_age", true, "ts_in_future"));
+			else gates.push(gate("offsite_age", age > BACKUP_MAX_AGE_MS, `hours=${(age / 3_600_000).toFixed(1)}`));
+		}
+	}
+
+	// Filesystem-based like backup_age, so it reports even when the ledger is unreadable. No stamp at all means no
+	// daemon has ever swept here (fresh install): unknown, the same "cannot judge" stance as db=missing, not health.
+	const heartbeat = readSweepHeartbeat(homeDir);
+	if (heartbeat === undefined) {
+		gates.push(unknownGate("sweep_stalled", "stamp=missing"));
+	} else {
+		const beatAge = now - heartbeat.ts.getTime();
+		if (beatAge < -BACKUP_FUTURE_TOLERANCE_MS) {
+			gates.push(gate("sweep_stalled", true, "ts_in_future"));
+		} else {
+			gates.push(
+				gate("sweep_stalled", beatAge > SWEEP_STALLED_MS, `seconds=${Math.max(0, Math.round(beatAge / 1000))}`),
+			);
+		}
+	}
+
+	// Discord only when configured. A stamp without the discord field cannot be read as health:
+	// a daemon that runs Discord always reports its gateway, so a missing field means nothing to judge.
+	if (options.discordConfigured === true) {
+		if (heartbeat === undefined) gates.push(unknownGate("discord_disconnected", "stamp=missing"));
+		else if (heartbeat.discord === undefined) gates.push(unknownGate("discord_disconnected", "discord=missing"));
+		else if (heartbeat.discord.state === "up") gates.push(gate("discord_disconnected", false, "discord=up"));
+		else {
+			const downMs = now - heartbeat.discord.since.getTime();
+			gates.push(
+				downMs < -BACKUP_FUTURE_TOLERANCE_MS
+					? gate("discord_disconnected", true, "discord=down ts_in_future")
+					: gate(
+							"discord_disconnected",
+							downMs >= SOCKET_DOWN_MS,
+							`discord=down minutes=${Math.max(0, Math.floor(downMs / 60_000))}`,
+						),
+			);
+		}
+	}
+
+	// Open for as long as FROZEN exists, so a freeze the owner forgot keeps showing in `gates` and the gate alerts.
+	const freeze = readFreeze(homeDir);
+	gates.push(
+		gate(
+			"frozen",
+			freeze !== undefined,
+			freeze === undefined
+				? "off"
+				: `since=${freeze.since}${freeze.reason === "" ? "" : ` reason=${freeze.reason.replace(/\s+/g, "_")}`}`,
+		),
+	);
+
+	const orphaned = drainOrphanedGate(homeDir, heartbeat, now, options.isAlive);
+	if (orphaned !== undefined) gates.push(orphaned);
+
+	// No stamp: herdr is off or the daemon predates the check, so there is nothing to judge and no gate.
+	const herdr = readHerdrHealth(homeDir);
+	if (herdr !== undefined) {
+		if (now - herdr.ts.getTime() > HERDR_HEALTH_STALE_MS) {
+			gates.push(gate("herdr_unreachable", false, "stamp=stale"));
+		} else if (herdr.fails >= HERDR_UNREACHABLE_AFTER) {
+			gates.push(gate("herdr_unreachable", true, `fails=${herdr.fails} since=${herdr.since}`));
+		} else {
+			gates.push(gate("herdr_unreachable", false, "ok"));
+		}
+	}
+
+	if (options.ompExecutable !== undefined) gates.push(ompRuntimeGate(options.ompExecutable));
+
+	// Host resources, like the stamps, report even when the ledger is unreadable: a full disk is often why it is.
+	const diskPaths = options.diskPaths ?? defaultDiskPaths(homeDir, options.ompProfile);
+	gates.push(diskGate(diskPaths, options.statfs));
+	gates.push(hostPressureGate(options.hostLoad));
+
+	const dbPath = join(homeDir, "ompbot.db");
+	if (!existsSync(dbPath)) {
+		for (const name of LEDGER_GATES) gates.push(unknownGate(name, "db=missing"));
+		if (options.dailyCap !== undefined) gates.push(unknownGate("cost_cap", "db=missing"));
+		return gates;
+	}
+
+	let db: Database | undefined;
+	const ledger: Gate[] = [];
+	try {
+		assertRegularLedger(dbPath);
+		db = new Database(dbPath, { readonly: true, strict: true });
+		if (!tableExists(db, "inbound") || !tableExists(db, "deliveries")) throw new Error("ledger tables missing");
+		const lastSign = columnExists(db, "inbound", "last_event_at")
+			? "COALESCE(last_event_at, dispatched_at)"
+			: "dispatched_at";
+		// Origins waiting on a live approval card. A card past `expires_at` (ms epoch) waits on nobody even while its
+		// row still reads `pending` (`expireStale` failing), so it exempts nothing.
+		const pendingApprovals =
+			tableExists(db, "approvals") && columnExists(db, "approvals", "origin_key")
+				? `SELECT origin_key FROM approvals WHERE status = 'pending' AND origin_key IS NOT NULL${
+						columnExists(db, "approvals", "expires_at") ? ` AND expires_at > ${now}` : ""
+					}`
+				: undefined;
+		const waitingOnOwner = pendingApprovals === undefined ? "" : ` AND origin_key NOT IN (${pendingApprovals})`;
+		const starved = scalar(
+			db,
+			`SELECT COUNT(*) AS n FROM inbound WHERE state = 'dispatched' AND dispatched_at IS NOT NULL AND ${lastSign} <= ${now - INBOUND_STARVATION_MS}${waitingOnOwner}`,
+		);
+		ledger.push(gate("inbound_starved", starved > 0, `silent_old=${starved}`));
+
+		if (heartbeat?.draining === true) {
+			// A restart drain holds pending rows on purpose; the next process dispatches them.
+			ledger.push(gate("origin_silent", false, "draining"));
+		} else if (!["origin_key", "created_at"].every((c) => columnExists(db as Database, "inbound", c))) {
+			// A pre-migration ledger must stay readable, never throw (same stance as the other column guards).
+			ledger.push(gate("origin_silent", false, "schema=old"));
+		} else {
+			// A paused lane holds its owner messages until the owner resumes it: a wait on the owner, not a silence.
+			const heldByPause =
+				tableExists(db, "lanes") && columnExists(db, "lanes", "origin_key")
+					? " AND origin_key NOT IN (SELECT origin_key FROM lanes WHERE status = 'paused')"
+					: "";
+			// A freeze holds autonomous rows (peer, lane, monitor) pending on purpose; the owner's rows still wait on a turn.
+			const peerColumn = columnExists(db, "inbound", "peer_user_id") ? "peer_user_id" : "NULL";
+			const waiting = db
+				.query(
+					`SELECT origin_key, platform_message_id, ${peerColumn} AS peer_user_id, created_at FROM inbound
+					 WHERE state = 'pending' AND created_at <= ${now - ORIGIN_SILENT_MS} AND origin_key NOT LIKE 'monitor/%'${waitingOnOwner}${heldByPause}
+					 AND origin_key NOT IN (SELECT origin_key FROM inbound WHERE state = 'dispatched' AND ${lastSign} > ${now - INBOUND_STARVATION_MS})`,
+				)
+				.all() as Array<{
+				origin_key: string;
+				platform_message_id: string;
+				peer_user_id: string | null;
+				created_at: number;
+			}>;
+			const counted =
+				freeze === undefined
+					? waiting
+					: waiting.filter(
+							(row) =>
+								!isAutonomousRow(row.origin_key, {
+									peerUserId: row.peer_user_id,
+									platformMessageId: row.platform_message_id,
+								}),
+						);
+			const silent = {
+				n: counted.length,
+				origins: new Set(counted.map((row) => row.origin_key)).size,
+				oldest: counted.length === 0 ? null : Math.min(...counted.map((row) => row.created_at)),
+			};
+			const minutes = silent.oldest === null ? 0 : Math.floor((now - silent.oldest) / 60_000);
+			ledger.push(
+				gate(
+					"origin_silent",
+					silent.n > 0,
+					silent.n > 0 ? `waiting=${silent.n} origins=${silent.origins} oldest_min=${minutes}` : "waiting=0",
+				),
+			);
+		}
+
+		const overdue = scalar(
+			db,
+			`SELECT COUNT(*) AS n FROM deliveries WHERE state IN ('pending','inflight') AND next_at <= ${now - DELIVERY_OVERDUE_MS}`,
+		);
+		ledger.push(gate("deliveries_overdue", overdue > 0, `overdue=${overdue}`));
+
+		// The owner's manual path exists (`ompbot deliveries`), so a held row that even a restart can no longer requeue
+		// (older than the 24h freshness window) is a stuck one, not a state that resolves itself.
+		const stuckAmbiguous = columnExists(db, "deliveries", "created_at")
+			? scalar(
+					db,
+					`SELECT COUNT(*) AS n FROM deliveries WHERE state = 'failed_ambiguous' AND created_at <= ${now - AMBIGUOUS_STUCK_MS}`,
+				)
+			: 0;
+		ledger.push(gate("deliveries_ambiguous_stuck", stuckAmbiguous > 0, `stuck=${stuckAmbiguous}`));
+
+		// `updated_at` moves on every 15-minute status-message redraw, so it never ages while the daemon runs; the
+		// newest history entry (created, progress, owner_reply, claim, not_done, reopened…) is the lane's real activity.
+		const laneActivity = columnExists(db, "lanes", "history")
+			? "CASE WHEN json_type(history, '$[#-1].at') = 'integer' THEN json_extract(history, '$[#-1].at') ELSE updated_at END"
+			: "updated_at";
+		// A quiet working lane is not stuck while a turn dispatched inside the same 24h window still runs on its origin,
+		// or while it waits on the owner (a live approval card for that origin); only the rest are orphans. A turn
+		// dispatched before the window has itself gone a day without lane progress, however many events it emits.
+		const laneOrigin = tableExists(db, "lanes") && columnExists(db, "lanes", "origin_key");
+		const laneRunning =
+			laneOrigin && columnExists(db, "inbound", "origin_key")
+				? `origin_key IN (SELECT origin_key FROM inbound WHERE state = 'dispatched' AND dispatched_at > ${now - LANE_STUCK_MS})`
+				: "0";
+		const laneApproval = laneOrigin && pendingApprovals !== undefined ? `origin_key IN (${pendingApprovals})` : "0";
+		const quietLanes = (
+			tableExists(db, "lanes")
+				? db
+						.query(
+							`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN ${laneRunning} THEN 1 ELSE 0 END), 0) AS running,
+							 COALESCE(SUM(CASE WHEN NOT (${laneRunning}) AND ${laneApproval} THEN 1 ELSE 0 END), 0) AS approval
+							 FROM lanes WHERE status = 'working' AND ${laneActivity} <= ${now - LANE_STUCK_MS}`,
+						)
+						.get()
+				: { total: 0, running: 0, approval: 0 }
+		) as { total: number; running: number; approval: number };
+		const orphanLanes = quietLanes.total - quietLanes.running - quietLanes.approval;
+		// A closed lane whose merge is still pending or blocked is work nobody landed: no turn runs it, so it only ages.
+		const unlandedLanes =
+			tableExists(db, "lanes") && columnExists(db, "lanes", "meta")
+				? scalar(
+						db,
+						`SELECT COUNT(*) AS n FROM lanes WHERE status = 'closed' AND ${laneActivity} <= ${now - LANE_STUCK_MS}
+						 AND json_valid(meta) AND json_extract(meta, '$.land.state') IN ('pending', 'blocked')`,
+					)
+				: 0;
+		ledger.push(
+			gate(
+				"lanes_stuck",
+				orphanLanes + unlandedLanes > 0,
+				`working_old=${orphanLanes} running=${quietLanes.running} approval_wait=${quietLanes.approval} unlanded=${unlandedLanes}`,
+			),
+		);
+
+		// A monitor whose run after the failure succeeded (delivered or deliberately silent) has recovered: the same
+		// success resolves its incidents, so it no longer gates even while the failure is inside the window.
+		const failedMonitors =
+			tableExists(db, "monitor_events") && tableExists(db, "monitors")
+				? scalar(
+						db,
+						`SELECT COUNT(DISTINCT e.monitor_id) AS n FROM monitor_events e JOIN monitors m ON m.id = e.monitor_id
+						 WHERE e.stage = 'failed_no_retry' AND e.updated_at > ${now - MONITOR_FAILURE_WINDOW_MS} AND m.enabled = 1
+						 AND NOT EXISTS (SELECT 1 FROM monitor_events later WHERE later.monitor_id = e.monitor_id
+						   AND later.event_id > e.event_id AND later.stage IN ('delivered', 'no_report'))`,
+					)
+				: 0;
+		ledger.push(gate("monitors_failed", failedMonitors > 0, `failed_recent=${failedMonitors}`));
+
+		ledger.push(monitorsStalled(db, heartbeat, now, freeze !== undefined, readUnfrozenAt(homeDir)));
+
+		// Monitor failures never write a `[turn failed]` delivery (their notices are `⏰ …`), so this counts chat turns
+		// only. The columns are guarded like `last_event_at`: a pre-migration ledger must stay readable, never throw.
+		const failedTurns =
+			columnExists(db, "deliveries", "body") && columnExists(db, "deliveries", "created_at")
+				? scalar(
+						db,
+						`SELECT COUNT(*) AS n FROM deliveries WHERE body LIKE '[turn failed]%' AND created_at > ${now - TURNS_FAILING_WINDOW_MS}`,
+					)
+				: 0;
+		ledger.push(gate("turns_failing", failedTurns >= TURNS_FAILING_THRESHOLD, `recent=${failedTurns}`));
+
+		// Only reported, never open: a re-received id keeps its first row, so nothing is stuck. A ledger from before
+		// the table reads as zero.
+		const conflicts = tableExists(db, "inbound_conflicts")
+			? scalar(db, `SELECT COUNT(*) AS n FROM inbound_conflicts WHERE created_at > ${now - INBOUND_CONFLICT_WINDOW_MS}`)
+			: 0;
+		ledger.push(gate("inbound_identity_conflicts", false, `last24h=${conflicts}`));
+
+		// The daily cost ceiling (`costCap.dailyUsd`): open while today's spend has reached it (a warning only, nothing is
+		// stopped). A ledger without the table (a daemon that never finished a turn) reads as zero spend.
+		if (options.dailyCap !== undefined) {
+			const day = localDay(now, options.dailyCap.timezone);
+			const spend = tableExists(db, "usage_daily") ? dailySpend(db, day) : 0;
+			ledger.push(
+				gate(
+					"cost_cap",
+					spend >= options.dailyCap.usd,
+					`today=${spend.toFixed(2)} cap=${options.dailyCap.usd.toFixed(2)}`,
+				),
+			);
+		}
+		gates.push(...ledger);
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		gates.push(gate("ledger_unreadable", true, `error=${reason.replace(/\s+/g, " ").slice(0, 120)}`));
+	} finally {
+		try {
+			db?.close();
+		} catch {
+			// a handle that never opened has nothing to close
+		}
+	}
+
+	return gates;
+}

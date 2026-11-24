@@ -1,0 +1,13 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"entry": [
+		"release/export.ts",
+		"scripts/**",
+		"test/**/*.test.ts",
+		"test/fixtures/*-child.ts",
+		"test/helpers/fake-agy.ts"
+	],
+	"project": ["src/**/*.ts", "release/**/*.ts", "test/**/*.ts"],
+	"ignoreExportsUsedInFile": true,
+	"ignoreIssues": { "src/heavy-run.ts": ["exports"] }
+}

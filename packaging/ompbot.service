@@ -1,0 +1,18 @@
+[Unit]
+Description=ompbot (chat bot driving omp --mode rpc)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=@PATH@
+ExecStart=@BUN@ --no-env-file @REPO_DIR@/src/main.ts daemon
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=90
+LimitCORE=0
+
+[Install]
+WantedBy=default.target

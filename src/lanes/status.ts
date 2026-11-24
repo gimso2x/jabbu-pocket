@@ -1,0 +1,391 @@
+import type { LaneModelTier } from "../model-tiers";
+import { StoreError } from "../store/transitions";
+import type { TaskCheck } from "../tasks/checker";
+import type { AcceptanceItem, TaskRisk } from "../tasks/docs";
+import type { LanePrLand } from "./pr-land-types";
+import type { WorkflowChoice } from "./workflow";
+
+/** Work lane states: `closed` only via a verified done claim; `paused` is the owner's hold (turn aborted, autonomous actions wait). */
+export type LaneStatus = "working" | "done-claimed" | "not-done" | "paused" | "closed";
+
+/** Origin keys of lane sessions; the key is built here and never parsed afterwards. */
+export const LANE_ORIGIN_PREFIX = "ompbot/work/";
+
+export const laneOriginKey = (name: string): string => `${LANE_ORIGIN_PREFIX}${name}`;
+export const isLaneOrigin = (originKey: string): boolean => originKey.startsWith(LANE_ORIGIN_PREFIX);
+
+export interface LaneHistoryEntry {
+	at: number;
+	event: string;
+	detail?: string;
+	sha?: string;
+}
+
+export interface LaneClaim {
+	repo: string;
+	commit: string;
+	summary: string;
+	claimedAt: number;
+}
+
+/**
+ * Where a closed worktree lane stands with its merge: `pending` waits for the owner's `머지`/`폐기` (or for the landing that
+ * already began, `requestedBy`), `blocked` needs the owner (dirty checkout, twice not fast-forward), `landed` is merged
+ * and pushed (`cleanup` names what was not cleaned up), `merged-not-pushed` is merged with the push refused, `discarded`
+ * dropped the worktree and branch unmerged. Only `pending` and `blocked` take a merge or a discard.
+ */
+export type LaneLandState = "pending" | "pr-open" | "landed" | "merged-not-pushed" | "blocked" | "discarded";
+
+/** `autoLandHeld` of a lane closed past an integrity refusal: auto-merge skips it, the owner's `머지` does not. */
+export const INTEGRITY_APPROVED = "무결성 승인";
+/** `autoLandHeld` of a lane the owner closed past checks that timed out twice: auto-merge skips it, `머지` does not. */
+export const INCONCLUSIVE_APPROVED = "확인 불가 승인";
+/** `autoLandHeld` of a `not-done` lane the owner closed past failed checks (`닫아`): auto-merge skips it, `머지` does not. */
+export const OWNER_ACCEPTED = "오너 수락";
+/** `autoLandHeld` of a closed lane whose auto-merge the owner's pause holds: `머지해`/`머지` still lands it. */
+export const OWNER_PAUSE_HELD = "오너 멈춤";
+
+export interface LaneLand {
+	state: LaneLandState;
+	/** Landings refused because the base branch had moved ahead (not fast-forward); the second one is `blocked`. */
+	attempts: number;
+	/** The base branch before the merge (how to undo it); `"unknown"` when a restart lost it. */
+	preSha?: string;
+	/** Why the landing is `blocked` or `merged-not-pushed`. */
+	reason?: string;
+	/** Why auto-merge leaves this lane to the owner: `INTEGRITY_APPROVED`, `INCONCLUSIVE_APPROVED`, `OWNER_ACCEPTED` or `OWNER_PAUSE_HELD`. */
+	autoLandHeld?: string;
+	/** A landing has begun and not finished: the tick resumes it (each step is idempotent). */
+	requestedBy?: "auto" | "owner";
+	/** `origin/<baseBranch>` once the merge was pushed there. */
+	pushed?: string;
+	/** What of the worktree and branch a `landed`/`merged-not-pushed` landing left behind; absent = both are gone. */
+	cleanup?: string;
+	/** The Outcome card in the lane thread (edited in place as the landing moves on). */
+	cardTs?: string;
+	/** Landings that threw (git or host unavailable) in a row; the third is `blocked`. */
+	errors?: number;
+	/** `lanes.land` mode when the landing began; `pr`: `prLand` is its pull request (state `pr-open` waits for its CI). */
+	mode?: "ff" | "pr";
+	prLand?: LanePrLand;
+}
+
+/** Judgements at `head` that ended with timed-out checks only, and when the last one ran. */
+export interface LaneChecksInconclusive {
+	head: string;
+	runs: number;
+	lastAt: number;
+}
+
+/** What this process is: the `omp` version, the kencrew source commit (`+dirty`, `unknown`), OS and arch. */
+export interface RuntimeIdentity {
+	omp: string;
+	kencrew: string;
+	os: string;
+	arch: string;
+}
+
+/**
+ * What a review, QA or check run observed (src/lanes/runtime.ts): `head` is the checked worktree's or copy's HEAD, `base`
+ * the base branch tip at the time, `overlay` the content hash of the `--config` overlay, `argv` the `omp -p` arguments
+ * without the prompt (review and QA only). Recorded on receipts and checks; only receipts are judged by it.
+ */
+export interface ReceiptRuntime extends RuntimeIdentity {
+	head: string;
+	base?: string;
+	overlay?: string;
+	argv?: string[];
+}
+
+/**
+ * The independent review of a closed lane's claim commit (`taskAutoLand.review`): a receipt for `sha` only — a lane
+ * whose `meta.sha` moved on has no receipt. Auto-merge needs `CLEAR`; `BLOCK` and `inconclusive` go to the owner.
+ */
+export interface LaneReview {
+	/** The commit reviewed (`meta.sha` at the time). */
+	sha: string;
+	verdict: "CLEAR" | "BLOCK" | "inconclusive";
+	model: string;
+	at: number;
+	/** What the reviewer wrote before its `VERDICT` line (redacted, at most 1500 characters). */
+	notes: string;
+	/** Why the review is `inconclusive` (timed out, exit code, no or several VERDICT lines, no diff). */
+	reason?: string;
+	/** The reviewer's `CONFIDENCE` (0–1) in its verdict; absent when it wrote none or a malformed one (older receipts). */
+	confidence?: number;
+	/** What the review ran on; absent on receipts made before it was recorded (they count as current). */
+	runtime?: ReceiptRuntime;
+}
+
+/**
+ * The run QA of a closed lane's claim commit (`taskAutoLand.qa`): a receipt for `sha` only, like `LaneReview`.
+ * Auto-merge needs `PASS`; `FAIL` and `inconclusive` (timed out, unparsable last line, no copy) go to the owner.
+ */
+export interface LaneQa {
+	/** The commit run (`meta.sha` at the time). */
+	sha: string;
+	verdict: "PASS" | "FAIL" | "inconclusive";
+	/** What the QA run reported (redacted, at most 10 of 200 characters each). */
+	findings: string[];
+	model: string;
+	at: number;
+	/** Why the QA is `inconclusive`. */
+	reason?: string;
+	/** What the QA ran on; absent on receipts made before it was recorded (they count as current). */
+	runtime?: ReceiptRuntime;
+}
+
+/**
+ * What the claim commit changed against the base branch (`computeLaneChanges`), shown on the Outcome card only: never
+ * read by the auto-merge. Bound to `sha`: a lane whose `meta.sha` moved on shows none. Overlaps are a snapshot of the
+ * moment the card went up (branch commits only, not uncommitted work in other worktrees).
+ */
+export interface LaneChanges {
+	/** The claim commit these numbers are for (ignored when `meta.sha` differs). */
+	sha: string;
+	files: number;
+	insertions: number;
+	deletions: number;
+	/** Text files with the most changed lines (added + deleted), at most 5. */
+	top: { path: string; added: number; deleted: number }[];
+	/** Other open lanes of the same repository that changed the same files (at most 3 lanes, 5 files each). */
+	overlaps: { lane: string; files: string[] }[];
+	/** Files the base branch changed after the merge-base that this lane changed too (at most 5). */
+	baseDrift: string[];
+	/** Why this lane's own diff could not be read (then the numbers are 0 and the lists empty). */
+	error?: string;
+	/** Why the base drift or another lane's diff could not be read (that part only is missing). */
+	overlapError?: string;
+}
+
+/** One item of work a lane's claim left undone: a `blocking` one holds the auto-merge, the rest go to `followups.jsonl`. */
+export interface LaneLeftover {
+	/** Redacted, at most 200 characters. */
+	text: string;
+	blocking: boolean;
+}
+
+/**
+ * A lane whose work goes out as a GitHub pull request instead of a merge into its base branch
+ *: its Outcome card offers `PR 게시`·`보류`·`폐기`, and `requestLand` refuses it.
+ */
+export interface LaneExternalPr {
+	/** The GitHub `owner/name` that receives the PR. */
+	repo: string;
+	/** The PR's base branch. */
+	base: string;
+	/** The PR body file, relative to the repository top level. */
+	bodyFile: string;
+	title: string;
+	/** The git remote to push to; absent = chosen at publish (the remote of the gh login's fork, else a new fork). */
+	pushRemote?: string;
+	/** The branch the push creates on the remote (`pr/<laneId>`), or the head branch of the PR it continues. */
+	branch: string;
+	/** An open PR this lane continues (`!pr <PR 주소|번호>`); absent = picked at publish (or a new PR). */
+	prNumber?: number;
+}
+
+/**
+ * Where publishing an external PR stands: `asking` waits for the approval card, `held` is the owner's (or a
+ * restart's) hold, `failed` names why, `published` has the PR. `url`·`branch`·`remote`·`sha`·`at` of the last
+ * publish are kept across `!reopen` (a later publish updates the same PR).
+ */
+export interface LanePr {
+	state: "asking" | "held" | "failed" | "published";
+	reason?: string;
+	url?: string;
+	branch?: string;
+	/** The remote (name or URL) the branch was pushed to. */
+	remote?: string;
+	/** The commit the PR branch points at. */
+	sha?: string;
+	at?: number;
+	/** The pr-watch cursor: what the last pass saw (absent: baseline next); merged/closed = ended. */
+	watch?: LanePrWatch;
+	/** The owner stopped watching this PR (`!prwatch off <레인>`); a new publish clears it. */
+	watchOff?: boolean;
+}
+
+/**
+ * What one pr-watch pass saw of a published PR (`LanePr.watch`): the head and commits to tell new pushes by, the
+ * feedback and check keys already reported (so nothing repeats), and the PR's state — a merged or closed PR is no
+ * longer watched. The lane's meta JSON column keeps it, so no schema change is involved.
+ */
+export interface LanePrWatch {
+	/** The PR head sha of the last read. */
+	head: string;
+	/** The PR's commit shas as of the last read (GitHub caps the list at 250). */
+	commits: readonly string[];
+	/** Feedback and check keys already reported, at most 400 (the oldest drop off). */
+	seen: readonly string[];
+	state: "open" | "merged" | "closed";
+	/** ISO time of the last read. */
+	polledAt: string;
+	/** ISO time the merged or closed state was first read. */
+	closedAt?: string;
+}
+
+/** Evidence of a lane's progress report: a worktree file and its content hash (`preserved`: copied to the artifacts). */
+export interface LaneFileEvidence {
+	file: string;
+	sha256: string;
+	preserved?: boolean;
+}
+
+/** Evidence of a progress report: a successful tool call of the lane session and the hash of its result text. */
+export interface LaneToolEvidence {
+	toolCallId: string;
+	tool: string;
+	sha256: string;
+}
+
+export type LaneProgressEvidence = LaneFileEvidence | LaneToolEvidence;
+
+/** Runtime facts of a lane that are not registry columns (kept as one JSON column). */
+export interface LaneMeta {
+	/** `⏳ title · mm:ss` message in the lane thread. */
+	statusTs?: string;
+	/** Start of the current working period (reset when a closed lane is reopened). */
+	startedAt: number;
+	/** Last time the status message was edited. */
+	lastProgressAt: number;
+	/** HEAD of the lane cwd's repository when the lane started (or was reopened); a claim must be a newer commit. */
+	baseSha?: string;
+	milestone?: string;
+	ownerQuestion?: { recommend: string; askedAt: number; fallbackAt?: number };
+	/** The file the latest milestone report named as evidence (path relative to the worktree) and its sha256. */
+	milestoneEvidence?: LaneProgressEvidence;
+	/** Every evidence the lane's progress reports recorded (newest last, capped); the files in it are kept at close. */
+	evidence?: LaneProgressEvidence[];
+	claim?: LaneClaim;
+	/** The latest `claimedAt` any claim of this lane got (kept after the claim is dropped): the next one is later, so it names one claim. */
+	lastClaimedAt?: number;
+	/** The owner approved this integrity verdict (commit + refusal fingerprint); the same verdict is not asked again. */
+	integrityApproval?: { sha: string; fingerprint: string; at: number };
+	/** Full sha recorded when the claim was verified and the lane closed. */
+	sha?: string;
+	/** What the root / status messages currently show (reconciled on every tick). */
+	renderedRoot?: string;
+	renderedStatus?: string;
+	/** Counter for synthetic inbound ids of messages the core steers into the lane. */
+	steerSeq: number;
+	/**
+	 * Worktree lanes (absent on lanes that worked in `cwd` directly, which keep closing as before): `L-YYYYMMDD-NN`,
+	 * the repository top level the lane started from, its own worktree and branch `lane/<laneId>`, and the branch that
+	 * was checked out in `repo` at the start.
+	 */
+	laneId?: string;
+	repo?: string;
+	worktree?: string;
+	branch?: string;
+	baseBranch?: string;
+	/** The conversation (origin key) that started the lane; absent on lanes started before it was recorded (no backfill). */
+	parentOrigin?: string;
+	/** The start's `cwd` after realpath: with `parentOrigin` and the title, the key a repeated start is matched on. */
+	requestedCwd?: string;
+	/** The risk the starter named (or a keyword floor raised it to); absent = unrated, compared as `DEFAULT_LANE_RISK`. */
+	risk?: TaskRisk;
+	/** The worker tier the start chose, its reason and the exact `lanes.models` value; absent on a lane started before tiers. */
+	tier?: LaneModelTier;
+	tierReason?: string;
+	/** The judge's confidence in `tier` (0..1) when the starter gave one. */
+	tierConfidence?: number;
+	/** The workflow the head chose at the start (`ompbot_work_start` `workflow`); absent = none, no keyword line. */
+	workflow?: WorkflowChoice;
+	/** Why the lane never began: the chosen workflow's command is not loaded in its omp (closed, worktree removed). */
+	launchFailed?: string;
+	/** `lanes.models[tier]` at the start; absent = the bot's default model (tier not configured). */
+	workerModel?: string;
+	/** Acceptance criteria as given at the start; a trailing `[check: …]` is re-run by the core before closing. */
+	acceptance?: AcceptanceItem[];
+	/** The start's brief (redacted, at most 16000 characters): the spec the independent review reads. */
+	brief?: string;
+	/** Repository-relative globs the lane's changes must stay inside (`ompbot_work_start` `scope`); absent = no check. */
+	scope?: string[];
+	/** Claim-commit files outside `scope` (at most `SCOPE_VIOLATIONS_MAX`); set at close, dropped by `!reopen` and a new claim. */
+	scopeViolations?: string[];
+	/** Why the close could not list the claim's changed files (one line): the scope check failed, not passed. */
+	scopeError?: string;
+	/** What the lane left undone (`ompbot_claim_done` `leftovers`) at its last claim; `!reopen` drops it. */
+	leftovers?: LaneLeftover[];
+	/** The independent review of the claim commit (`taskAutoLand.review`); `!reopen` drops it. */
+	review?: LaneReview;
+	/** The run QA of the claim commit (`taskAutoLand.qa`); `!reopen` drops it. */
+	qa?: LaneQa;
+	/** What the claim commit changed, computed once per claim commit when its card goes up; `!reopen` drops it. */
+	changes?: LaneChanges;
+	/**
+	 * The last `[check: …]` run, at worktree HEAD `head`; the same HEAD is never checked again, except its timed-out
+	 * (inconclusive) results — `inconclusive` counts those judgements at one HEAD (absent when the run had none).
+	 */
+	checks?: {
+		head: string;
+		results: TaskCheck[];
+		inconclusive?: LaneChecksInconclusive;
+		/** Where the run happened; observed only — the checks are judged by `head` alone. */
+		runtime?: RuntimeIdentity & { head: string; base?: string };
+	};
+	/** The merge of a closed worktree lane (absent without a worktree or before the first close); kept while sent back to work; `!reopen` drops it. */
+	land?: LaneLand;
+	/** This lane's work goes out as a GitHub PR (`ompbot_work_start` `externalPr`, or `!pr` on the closed lane). */
+	externalPr?: LaneExternalPr;
+	/** Publishing that PR (`LaneManager.requestPublish`); `!reopen` keeps only a published one. */
+	pr?: LanePr;
+	/** The state the lane was in when the owner paused it; `paused` only, cleared at resume. */
+	pausedFrom?: Exclude<LaneStatus, "paused" | "closed">;
+	/** When the pause began; the key that keeps the held-work warning and the held-message notice to one each. */
+	pausedAt?: number;
+	/** How the pause was asked: an owner message in the lane thread, the ⏸ button, or a terminal attach. */
+	pausedBy?: "owner-message" | "button" | "attach";
+	/** The lane's session is handed to a terminal omp (`ompbot lanes attach`); absent otherwise. */
+	attach?: LaneAttach;
+	/** Terminal hand-back session files the owner picks one from (index 0 = the attached file, pinned) and whether the pick resumes. */
+	sessionChoices?: { files: string[]; resume: boolean };
+}
+
+/** A lane session handed to a terminal omp: who holds it and what to compare the hand-back with. */
+export interface LaneAttach {
+	/** The `ompbot lanes attach` process; when it is gone the lane is taken back (`LaneManager.tick`). */
+	pid: number;
+	at: number;
+	/** The file the lane's child had open (else the one it would resume): the terminal omp resumes exactly this. */
+	sessionFile: string;
+	/** Its size at the hand-over: what the terminal appended starts here. */
+	size: number;
+	/** The worktree HEAD at the hand-over (absent when git could not say): the summary counts files changed since. */
+	head?: string;
+	/** The lane was paused already: the hand-back leaves it paused. */
+	wasPaused: boolean;
+	/** `--keep-paused`: the hand-back leaves the lane paused. */
+	keepPaused: boolean;
+}
+
+/** Inbound ids of messages the core itself steers into a lane (first prompt, not-done, nudge): never the owner's. */
+export const isCoreSteerId = (platformMessageId: string): boolean => platformMessageId.startsWith("lane:");
+
+export interface LaneRow {
+	name: string;
+	title: string;
+	threadRef: string;
+	originKey: string;
+	cwd: string;
+	sessionDir: string;
+	status: LaneStatus;
+	history: LaneHistoryEntry[];
+	meta: LaneMeta;
+	createdAt: number;
+	updatedAt: number;
+}
+
+const ALLOWED: Record<LaneStatus, readonly LaneStatus[]> = {
+	working: ["done-claimed", "paused"],
+	"done-claimed": ["closed", "not-done", "working", "paused"],
+	// `closed`: work merged into the base branch outside the lane (`#closeIfLandedOutside`).
+	"not-done": ["done-claimed", "working", "paused", "closed"],
+	paused: ["working", "done-claimed"],
+	closed: ["working"],
+};
+
+export function assertLaneTransition(from: LaneStatus, to: LaneStatus): void {
+	if (!ALLOWED[from].includes(to)) throw new StoreError("invalid_transition", `lane ${from} -> ${to}`);
+}

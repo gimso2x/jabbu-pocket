@@ -1,0 +1,262 @@
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { buildChildEnv } from "../omp/env";
+import { hiddenChanges } from "./hidden-changes";
+
+export interface ClaimEvidence {
+	repo: string;
+	commit: string;
+	summary: string;
+}
+
+export type VerifyResult = { ok: true; sha: string } | { ok: false; reasons: string[] };
+
+export interface GitResult {
+	code: number;
+	stdout: string;
+	stderr: string;
+}
+
+/** Runs `git <args>`; rejects only when git itself cannot run (missing binary, timeout). */
+export type GitRunner = (args: string[]) => Promise<GitResult>;
+
+/** The check could not be completed (git missing, timeout): the claim stays pending instead of being judged. */
+export class VerifyUnavailableError extends Error {
+	constructor(detail: string) {
+		super(`verification unavailable: ${detail}`);
+		this.name = "VerifyUnavailableError";
+	}
+}
+
+const GIT_TIMEOUT_MS = 30_000;
+/** Commit ids and refs only: never an option (`--upload-pack=...`) or a path. */
+const COMMIT_ARG = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
+
+/** Parent env minus bot secrets (`buildChildEnv`) and any `GIT_*` that could redirect git to another repository. */
+function gitEnv(): Record<string, string> {
+	const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+	return buildChildEnv({ GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" }, inherited);
+}
+
+/** Git printed more than the runner's `stdoutCap`: it is stopped and its output is not read further. */
+export class GitOutputCapError extends VerifyUnavailableError {
+	constructor(cap: number) {
+		super(`git output is larger than ${cap} bytes`);
+		this.name = "GitOutputCapError";
+	}
+}
+
+/**
+ * A `GitRunner` that gives each git call `timeoutMs` (a push to a remote needs longer than a local query). With
+ * `stdoutCap`, a call whose stdout grows past that many bytes is killed and rejects with `GitOutputCapError`.
+ */
+export const gitRunner =
+	(timeoutMs: number, stdoutCap = Number.POSITIVE_INFINITY): GitRunner =>
+	async (args) => {
+		let timer: Timer | undefined;
+		let group: number | undefined;
+		try {
+			const proc = Bun.spawn(["git", "-c", "core.fsmonitor=false", ...args], {
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				// Its own process group: a timeout ends git and what it started (an external diff, a textconv, a hook) too,
+				// which would otherwise hold the pipes open past the deadline (qa-d M-3).
+				detached: true,
+				// `git status` must not rewrite the index of a repository somebody is working in.
+				env: gitEnv(),
+			});
+			const out = proc.stdout.getReader();
+			const err = proc.stderr.getReader();
+			group = proc.pid;
+			const timedOut = Promise.withResolvers<never>();
+			timer = setTimeout(() => {
+				try {
+					process.kill(-proc.pid, "SIGKILL");
+				} catch {
+					proc.kill("SIGKILL");
+				}
+				for (const reader of [out, err]) reader.cancel().catch(() => undefined);
+				timedOut.reject(new Error(`git timed out after ${timeoutMs}ms`));
+			}, timeoutMs);
+			const [stdout, stderr, code] = await Promise.race([
+				Promise.all([readText(out, stdoutCap), readText(err), proc.exited]),
+				timedOut.promise,
+			]);
+			if (proc.signalCode !== null) throw new Error(`git killed by ${proc.signalCode}`);
+			return { code, stdout, stderr };
+		} catch (error) {
+			if (error instanceof GitOutputCapError) {
+				try {
+					if (group !== undefined) process.kill(-group, "SIGKILL");
+				} catch {
+					// already gone
+				}
+				throw error;
+			}
+			throw new VerifyUnavailableError(error instanceof Error ? error.message : String(error));
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+
+/** All of a pipe as text; a cancelled reader ends it early with what was read; more than `cap` bytes throws. */
+async function readText(
+	reader: { read(): Promise<{ done: boolean; value?: Uint8Array }> },
+	cap = Number.POSITIVE_INFINITY,
+): Promise<string> {
+	const decoder = new TextDecoder();
+	let text = "";
+	let bytes = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) return text + decoder.decode();
+		bytes += value?.byteLength ?? 0;
+		if (bytes > cap) throw new GitOutputCapError(cap);
+		text += decoder.decode(value, { stream: true });
+	}
+}
+
+export const defaultGit: GitRunner = gitRunner(GIT_TIMEOUT_MS);
+
+/** The most git output the integrity check reads of a lane's diff; a lane that wrote more is held, not read whole. */
+export const LANE_DIFF_MAX_BYTES = 512 * 1024;
+export const cappedDiffGit: GitRunner = gitRunner(GIT_TIMEOUT_MS, LANE_DIFF_MAX_BYTES);
+
+const SHA_PATTERN = /^[0-9a-f]{40,64}$/;
+
+/** A claim names its repository by absolute path; only an existing directory is worth asking git about. */
+function checkRepoPath(repo: string): { real: string } | { problem: string } {
+	if (!isAbsolute(repo)) return { problem: `repo must be an absolute path: ${repo}` };
+	try {
+		const real = realpathSync(repo);
+		if (!statSync(real).isDirectory()) return { problem: `repo is not a directory: ${repo}` };
+		return { real };
+	} catch {
+		return { problem: `repo does not exist: ${repo}` };
+	}
+}
+
+/** Real path of the repository top level containing `dir`; undefined when `dir` is not inside a work tree. */
+async function topLevel(dir: string, git: GitRunner): Promise<string | undefined> {
+	const result = await git(["-C", dir, "rev-parse", "--show-toplevel"]);
+	if (result.code !== 0) return undefined;
+	try {
+		return realpathSync(result.stdout.trim());
+	} catch {
+		return undefined;
+	}
+}
+
+/** HEAD of the lane cwd's repository when the lane starts; undefined when there is no repository or no commit yet. */
+export async function resolveBaseSha(laneCwd: string, git: GitRunner = defaultGit): Promise<string | undefined> {
+	const top = await topLevel(laneCwd, git);
+	if (top === undefined) return undefined;
+	const head = await git(["-C", top, "rev-parse", "--verify", "HEAD^{commit}"]);
+	const sha = head.stdout.trim();
+	return head.code === 0 && SHA_PATTERN.test(sha) ? sha : undefined;
+}
+
+/**
+ * Checks a done claim with git itself, never with the lane's word. Only the top-level repository of the lane cwd is
+ * ever inspected: a claimed `repo` whose top level differs (a nested repository, a repository above a nested cwd, a
+ * foreign path) is refused as `repo_mismatch`. On that top level the working tree must be clean
+ * (`status --porcelain` prints nothing) and `commit` must exist, be reachable from HEAD and be new since the lane
+ * started (`baseSha`): the starting commit itself, or one that does not descend from it, is `no_new_commit`.
+ * With the lane's `baseBranch`, a commit already in that branch (no work on top of it) is `no_new_commit` too, and one
+ * that does not descend from `baseSha` still passes when it has commits above its merge-base with the branch (the lane
+ * rebased after `!reopen`, so the earlier claim it started from was rewritten).
+ * Every failed check contributes one reason. Returns the full sha on success.
+ */
+export async function verifyClaim(
+	evidence: ClaimEvidence,
+	laneCwd: string,
+	baseSha?: string,
+	baseBranch?: string,
+	git: GitRunner = defaultGit,
+): Promise<VerifyResult> {
+	const claimed = checkRepoPath(evidence.repo);
+	if ("problem" in claimed) return { ok: false, reasons: [claimed.problem] };
+	if (!COMMIT_ARG.test(evidence.commit)) {
+		return { ok: false, reasons: [`commit is not a valid commit id: ${evidence.commit.slice(0, 80)}`] };
+	}
+	const top = await topLevel(laneCwd, git);
+	if (top === undefined) return { ok: false, reasons: [`lane project ${laneCwd} is not inside a git repository`] };
+	if ((await topLevel(claimed.real, git)) !== top) {
+		return {
+			ok: false,
+			reasons: [`repo_mismatch: ${evidence.repo} is not the lane project's repository (${top})`],
+		};
+	}
+	const reasons: string[] = [];
+
+	const status = await git(["-C", top, "status", "--porcelain", "--untracked-files=all"]);
+	if (status.code !== 0) {
+		reasons.push(`git status failed in ${top}: ${status.stderr.trim().split("\n")[0] || `exit ${status.code}`}`);
+	} else if (status.stdout.trim() !== "") {
+		const files = status.stdout.trim().split("\n");
+		const shown = files.slice(0, 10).join("; ");
+		reasons.push(
+			`uncommitted changes in ${top} (${files.length} path${files.length === 1 ? "" : "s"}): ${shown}${files.length > 10 ? "; ..." : ""}`,
+		);
+	}
+
+	const hidden = await hiddenChanges(git, top);
+	if ("failed" in hidden) reasons.push(hidden.failed);
+	else if (hidden.length > 0) {
+		reasons.push(
+			`status가 숨긴 변경(assume-unchanged/skip-worktree) in ${top} (${hidden.length} path${hidden.length === 1 ? "" : "s"}): ${hidden.slice(0, 10).join("; ")}`,
+		);
+	}
+
+	const exists = await git(["-C", top, "cat-file", "-e", `${evidence.commit}^{commit}`]);
+	if (exists.code !== 0) reasons.push(`commit ${evidence.commit} does not exist in ${top}`);
+
+	if (reasons.length > 0) return { ok: false, reasons };
+	const resolved = await git(["-C", top, "rev-parse", `${evidence.commit}^{commit}`]);
+	const sha = resolved.stdout.trim();
+	if (resolved.code !== 0 || !SHA_PATTERN.test(sha)) {
+		return { ok: false, reasons: [`cannot resolve commit ${evidence.commit} in ${top}`] };
+	}
+
+	const reachable = await git(["-C", top, "merge-base", "--is-ancestor", sha, "HEAD"]);
+	if (reachable.code === 1) reasons.push(`no_new_commit: commit ${sha} is not reachable from HEAD of ${top}`);
+	else if (reachable.code !== 0) reasons.push(`cannot check that commit ${sha} is reachable from HEAD of ${top}`);
+	else if (baseSha !== undefined) {
+		if (sha === baseSha) {
+			reasons.push(`no_new_commit: commit ${sha} is the commit the lane started from; commit your work first`);
+		} else {
+			const reason = await newWorkProblem(git, top, sha, baseSha, baseBranch);
+			if (reason !== undefined) reasons.push(reason);
+		}
+	}
+	if (reasons.length > 0) return { ok: false, reasons };
+	return { ok: true, sha };
+}
+
+/** Why `sha` (not `baseSha` itself) is not new work of the lane; `undefined` = it is. */
+async function newWorkProblem(
+	git: GitRunner,
+	top: string,
+	sha: string,
+	baseSha: string,
+	baseBranch: string | undefined,
+): Promise<string | undefined> {
+	const notDescending = `no_new_commit: commit ${sha} does not descend from the lane's starting commit ${baseSha}`;
+	if (baseBranch === undefined) {
+		return (await git(["-C", top, "merge-base", "--is-ancestor", baseSha, sha])).code === 1 ? notDescending : undefined;
+	}
+	const baseRef = `refs/heads/${baseBranch}`;
+	const base = await git(["-C", top, "rev-parse", "--verify", "-q", `${baseRef}^{commit}`]);
+	const baseRead = base.code === 0;
+	if (baseRead && (await git(["-C", top, "merge-base", "--is-ancestor", sha, baseRef])).code === 0) {
+		return `no_new_commit: commit ${sha} is already in ${baseBranch} (no new commit on top of it); commit your work first`;
+	}
+	if ((await git(["-C", top, "merge-base", "--is-ancestor", baseSha, sha])).code !== 1) return undefined;
+	if (!baseRead) return `${notDescending}, and ${baseBranch} could not be read to judge a rebase`;
+	const mergeBase = await git(["-C", top, "merge-base", baseRef, sha]);
+	if (mergeBase.code !== 0) return `${notDescending} nor shares history with ${baseBranch}`;
+	const count = await git(["-C", top, "rev-list", "--count", `${mergeBase.stdout.trim()}..${sha}`]);
+	if (count.code !== 0) return `${notDescending}, and its commits above ${baseBranch} could not be counted`;
+	return Number(count.stdout.trim()) >= 1 ? undefined : `${notDescending} and has no commit above ${baseBranch}`;
+}

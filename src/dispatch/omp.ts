@@ -1,0 +1,760 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { buildChildEnv, withOmpProfile } from "../omp/env";
+import { type AssistantTail, lastAssistantProgram, parseLastAssistantOutput, sessionPathOf } from "../omp/session-tail";
+import { redact } from "../redact";
+import { recordProcessCall } from "./audit";
+
+export interface RunProcessResult {
+	code: number | null;
+	stdout: string;
+	/** Tail of stderr; herdr writes its `{"error":{code,message}}` here. Fakes may leave it out. */
+	stderr?: string;
+	timedOut: boolean;
+}
+
+export interface RunProcessOptions {
+	cwd?: string;
+	timeoutMs?: number;
+	/** Collects up to this many stdout characters; a longer tail is cut, the run still succeeds. */
+	stdoutCap?: number;
+	/** Drops Slack and bot credential prefixes plus inherited git overrides, like every other child ompbot spawns. */
+	env?: Record<string, string>;
+	/** Aborting it kills the whole process group like the timeout does (`timedOut` stays false); the run still resolves. */
+	signal?: AbortSignal;
+	/** Written to the child's stdin, which is then closed (absent: stdin is not connected). */
+	stdin?: string;
+}
+
+export type ProcessRunner = (cmd: string[], opts: RunProcessOptions) => Promise<RunProcessResult>;
+
+/** Default stdout collection cap; callers that legitimately need more (a whole task-branch diff) pass `stdoutCap`. */
+export const DEFAULT_STDOUT_CAP = 64_000;
+
+/** The bot's own child hygiene: `buildChildEnv`'s rules plus no inherited git redirects. */
+export function dispatchEnv(inherited: Record<string, string | undefined>): Record<string, string> {
+	const env = buildChildEnv({}, inherited);
+	for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
+	env.LC_ALL = env.LC_ALL ?? "C.UTF-8";
+	env.OMP_NONINTERACTIVE = "1";
+	return env;
+}
+
+/** After a timeout or abort kills the group, how long a child that has not exited yet gets before the run ends anyway. */
+const KILL_GRACE_MS = 2_000;
+
+const spawnProcess: ProcessRunner = (cmd, opts) => {
+	let child: ChildProcess;
+	try {
+		child = spawn(cmd[0] as string, cmd.slice(1), {
+			cwd: opts.cwd,
+			stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+			detached: true,
+			env: opts.env,
+		});
+	} catch (error) {
+		// An argument node refuses (a NUL byte) or the kernel (E2BIG) throws here, not as an `error` event: same result shape.
+		return Promise.resolve({
+			code: null,
+			stdout: `spawn failed: ${error instanceof Error ? error.message : String(error)}`,
+			timedOut: false,
+		});
+	}
+	if (opts.stdin !== undefined) {
+		// A child that exits before reading all of it closes the pipe: that is its exit to report, not a crash here.
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(opts.stdin);
+	}
+	let stdout = "";
+	let timedOut = false;
+	const stdoutCap = opts.stdoutCap ?? DEFAULT_STDOUT_CAP;
+	child.stdout?.setEncoding("utf8");
+	child.stdout?.on("data", (chunk: string) => {
+		if (stdout.length < stdoutCap) stdout += chunk;
+	});
+	let stderr = "";
+	child.stderr?.setEncoding("utf8");
+	child.stderr?.on("data", (chunk: string) => {
+		stderr = `${stderr}${chunk}`.slice(-4_000);
+	});
+	const done = Promise.withResolvers<{ code: number | null; spawnError?: string }>();
+	child.once("error", (error) => done.resolve({ code: null, spawnError: error.message }));
+	child.once("close", (code) => done.resolve({ code }));
+	// A killed run ends at its child's exit (or after a grace): a grandchild that left the group (`setsid`) may still
+	// hold stdout/stderr, and `close` would wait for it. A run that ends on its own still collects until `close`.
+	let exited = false;
+	let killed = false;
+	let grace: NodeJS.Timeout | undefined;
+	const endKilled = () => {
+		child.stdout?.destroy();
+		child.stderr?.destroy();
+		done.resolve({ code: child.exitCode });
+	};
+	child.once("exit", () => {
+		exited = true;
+		if (killed) endKilled();
+	});
+	const killGroup = () => {
+		try {
+			if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+		} catch {
+			child.kill("SIGKILL");
+		}
+		if (killed) return;
+		killed = true;
+		if (exited) endKilled();
+		else grace = setTimeout(endKilled, KILL_GRACE_MS);
+	};
+	const timer = setTimeout(() => {
+		timedOut = true;
+		killGroup();
+	}, opts.timeoutMs ?? 600_000);
+	const { signal } = opts;
+	signal?.addEventListener("abort", killGroup, { once: true });
+	if (signal?.aborted) killGroup();
+	return done.promise.then(({ code, spawnError }) => {
+		clearTimeout(timer);
+		clearTimeout(grace);
+		signal?.removeEventListener("abort", killGroup);
+		if (spawnError !== undefined) return { code: null, stdout: `spawn failed: ${spawnError}`, timedOut };
+		return { code, stdout, stderr, timedOut };
+	});
+};
+
+/**
+ * One process with a hard timeout: the whole process group is killed, stdout is capped by the collector. Every
+ * external call of the bot passes here (herdr, ssh, task git), so this is where the dispatch audit line is written.
+ */
+export const realProcessRunner: ProcessRunner = async (cmd, opts) => {
+	const startedAt = Date.now();
+	const result = await spawnProcess(cmd, opts);
+	recordProcessCall(cmd, result, Date.now() - startedAt);
+	return result;
+};
+
+export interface OmpPrintOptions {
+	task: string;
+	cwd: string;
+	/** Extra system-prompt text (the same safety floors the daemon's children get). */
+	systemPromptAppendix: string;
+	ompBin: string;
+	timeoutMs?: number;
+	maxChars?: number;
+	inheritedEnv?: Record<string, string | undefined>;
+	run?: ProcessRunner;
+	/** `--model <model>` (absent: omp's own default). */
+	model?: string;
+	/** `--tools <list>`, e.g. `read,grep,glob` for a read-only run (absent: omp's own default). */
+	tools?: string;
+	/** Aborting it kills the run's process group (the runner's `signal`). */
+	signal?: AbortSignal;
+	/**
+	 * A run that must not take anything from its cwd or the user's discovery (the lane reviewer): `--config <configPath>`
+	 * (an overlay) and `--no-extensions --no-skills --no-rules --no-context-files` right after `--no-session`.
+	 */
+	isolation?: { configPath: string };
+	/**
+	 * `--config <overlayConfig>` right after `--no-session` (config `ompConfigOverlay`), or after the isolation flags when
+	 * both are given (the lane QA run: isolation first, then `taskAutoLand.qa.overlay`).
+	 */
+	overlayConfig?: string;
+	/** Variables set on top of the cleaned inherited env. */
+	env?: Record<string, string>;
+	/** Config `ompProfile`: `OMP_PROFILE` in the child env and the inherited `PI_CODING_AGENT_DIR` dropped (`withOmpProfile`). */
+	ompProfile?: string;
+}
+
+/** The flags an isolated `omp -p` gets after `--config <overlay>`. */
+export const OMP_ISOLATION_FLAGS = ["--no-extensions", "--no-skills", "--no-rules", "--no-context-files"] as const;
+
+export interface OmpPrintResult {
+	ok: boolean;
+	output: string;
+	/** The process exit code (`null`: killed, or it never started). */
+	code: number | null;
+	timedOut: boolean;
+}
+
+/** The argv of `runOmpPrint` before the `--` and the task: the binary, the flags in the order omp reads them. */
+export function ompPrintArgs(
+	options: Pick<OmpPrintOptions, "ompBin" | "isolation" | "overlayConfig" | "systemPromptAppendix" | "model" | "tools">,
+): string[] {
+	return [
+		options.ompBin,
+		"-p",
+		"--no-session",
+		...(options.isolation === undefined ? [] : ["--config", options.isolation.configPath, ...OMP_ISOLATION_FLAGS]),
+		...(options.overlayConfig === undefined ? [] : ["--config", options.overlayConfig]),
+		"--append-system-prompt",
+		options.systemPromptAppendix,
+		...(options.model === undefined ? [] : ["--model", options.model]),
+		...(options.tools === undefined ? [] : ["--tools", options.tools]),
+	];
+}
+
+/**
+ * `omp -p … -- <task>`: one-shot agent run for simple tasks. The task comes last after `--`, so a task starting with
+ * `-` is the prompt, never an omp flag. Output is capped; timeout kills the process group.
+ */
+export async function runOmpPrint(options: OmpPrintOptions): Promise<OmpPrintResult> {
+	const maxChars = options.maxChars ?? 8_000;
+	const result = await (options.run ?? realProcessRunner)([...ompPrintArgs(options), "--", options.task], {
+		cwd: options.cwd,
+		timeoutMs: options.timeoutMs ?? 600_000,
+		env: { ...withOmpProfile(dispatchEnv(options.inheritedEnv ?? process.env), options.ompProfile), ...options.env },
+		...(options.signal === undefined ? {} : { signal: options.signal }),
+	});
+	const suffix = result.timedOut ? "\n\n[시간 초과로 중단됨 — 출력 일부만 수집]" : "";
+	// Masked before the cap: a secret straddling the cap would otherwise leave a fragment the shapes no longer match.
+	const output = `${redact(result.stdout.trim()).slice(0, maxChars)}${suffix}`.trim();
+	return {
+		ok: !result.timedOut && result.code === 0,
+		output: output === "" ? "(빈 출력)" : output,
+		code: result.code,
+		timedOut: result.timedOut,
+	};
+}
+
+export interface HerdrRunnerOptions {
+	herdrBin?: string;
+	cwd?: string;
+	timeoutMs?: number;
+	run?: ProcessRunner;
+	/** Run herdr on a remote host over ssh (hub fleet pattern); args are appended after the ssh command. */
+	sshTarget?: string;
+	/** Aborting it kills the herdr call in flight (the runner's `signal`); a start also refuses to begin once aborted. */
+	signal?: AbortSignal;
+}
+
+/** One argv element tops out at 128KB: a task above this (UTF-8 bytes, after any ssh quoting) would make the spawn throw E2BIG. */
+export const MAX_TASK_BYTES = 100_000;
+
+/** The same runner without the abort signal: cleanup of what an aborted start created must still run. */
+function uncancellable(options: HerdrRunnerOptions): HerdrRunnerOptions {
+	const { signal: _signal, ...rest } = options;
+	return rest;
+}
+
+/** POSIX single-quote one argument so the remote login shell (ssh joins argv with spaces) sees it verbatim. */
+export function remoteShellQuote(arg: string): string {
+	return `'${arg.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * The ssh argv for running `bin args…` on a remote host. Every remote word is quoted; the only exception is a
+ * `--cwd` value of exactly `~`, left bare so the remote shell expands it (the `workDir ?? "~"` fallback).
+ */
+export function herdrSshArgv(sshTarget: string, bin: string, args: string[]): string[] {
+	const remote = [remoteShellQuote(bin)];
+	args.forEach((arg, index) => {
+		remote.push(arg === "~" && args[index - 1] === "--cwd" ? arg : remoteShellQuote(arg));
+	});
+	return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", sshTarget, ...remote];
+}
+
+/** Local herdr binary (config `herdr.bin`); restart-bound, so the daemon sets it once at start. */
+let localHerdrBin: string | undefined;
+
+/** Sets the binary local herdr calls run (no `sshTarget`, no per-call `herdrBin`); `undefined` → `herdr` on PATH. */
+export function setLocalHerdrBin(bin: string | undefined): void {
+	localHerdrBin = bin;
+}
+
+async function herdrRun(args: string[], options: HerdrRunnerOptions): Promise<RunProcessResult> {
+	const bin = options.herdrBin ?? (options.sshTarget === undefined ? localHerdrBin : undefined) ?? "herdr";
+	const cmd = options.sshTarget === undefined ? [bin, ...args] : herdrSshArgv(options.sshTarget, bin, args);
+	return (options.run ?? realProcessRunner)(cmd, {
+		timeoutMs: options.timeoutMs ?? 120_000,
+		cwd: options.cwd,
+		env: dispatchEnv(process.env),
+		...(options.signal === undefined ? {} : { signal: options.signal }),
+	});
+}
+
+/** Owner agent names: short, lowercase, no surprises — they become herdr agent names and tab labels. */
+export const OWNER_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+/** Shapes of herdr's JSON outputs (outside-controlled data, read at one boundary). */
+type HerdrAgentList = {
+	result?: {
+		agents?: Array<{
+			name?: string;
+			pane_id?: string;
+			tab_id?: string;
+			workspace_id?: string;
+			agent_status?: string;
+			agent_session?: unknown;
+		}>;
+	};
+};
+type HerdrWorkspaceList = { result?: { workspaces?: Array<{ workspace_id?: string; label?: string }> } };
+type HerdrWorkspaceCreated = {
+	result?: { workspace?: { workspace_id?: string }; tab?: { tab_id?: string }; root_pane?: { pane_id?: string } };
+};
+type HerdrTabCreated = { result?: { tab?: { tab_id?: string }; root_pane?: { pane_id?: string } } };
+
+/** JSON.parse at the herdr output boundary: unparseable output reads as `undefined`, never throws. */
+function parseHerdrJson<T>(stdout: string): T | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		return undefined;
+	}
+	// herdr answers with an object; `null` or a bare number is as unusable as text that is not JSON.
+	return parsed !== null && typeof parsed === "object" ? (parsed as T) : undefined;
+}
+
+/** `result.agents` of a herdr agent list: `undefined` when the output is not JSON, else only its object entries (a non-array reads as empty). */
+function parseHerdrAgents(stdout: string): NonNullable<NonNullable<HerdrAgentList["result"]>["agents"]> | undefined {
+	const parsed = parseHerdrJson<HerdrAgentList>(stdout);
+	if (parsed === undefined) return undefined;
+	const agents: unknown = parsed.result?.agents;
+	if (!Array.isArray(agents)) return [];
+	return agents.filter((agent) => agent !== null && typeof agent === "object");
+}
+
+/**
+ * Why a herdr call failed, at most `max` chars: herdr's stderr `{"error":{code,message}}` as `code: message`
+ * (e.g. `agent_blocked` when the agent waits on an approval), else the raw stderr/stdout, else the exit code.
+ */
+function herdrFailure(result: RunProcessResult, max = 160): string {
+	if (result.timedOut) return "timed out";
+	const stderr = result.stderr?.trim() ?? "";
+	const error = parseHerdrJson<{ error?: { code?: unknown; message?: unknown } }>(stderr)?.error;
+	const detail =
+		typeof error?.code === "string"
+			? `${error.code}${typeof error.message === "string" ? `: ${error.message}` : ""}`
+			: stderr || result.stdout.trim() || `exit ${result.code}`;
+	// Masked before the cut, like every other output of these runs: a secret cut short no longer matches its shape.
+	return redact(detail).slice(0, max);
+}
+
+/** `--env KEY=VALUE` pairs for herdr's `workspace create` / `tab create`: they reach the process launched in the new pane. */
+const envArgs = (env: Record<string, string> | undefined): string[] =>
+	Object.entries(env ?? {}).flatMap(([key, value]) => ["--env", `${key}=${value}`]);
+
+/**
+ * `herdr workspace create --no-focus` (the owner's view stays where it is): returns the workspace's root pane id (the
+ * agent needs a shell prompt pane) and the workspace id, so a failed start can close what it created. `env` goes to
+ * the launched pane process (and so to the agent started in it), unlike `HerdrRunnerOptions.env` of herdr itself.
+ */
+export async function herdrCreateWorkspace(
+	cwd: string,
+	label: string,
+	options: HerdrRunnerOptions = {},
+	env?: Record<string, string>,
+): Promise<{ paneId: string; workspaceId: string | undefined } | { error: string }> {
+	const result = await herdrRun(
+		["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus", ...envArgs(env)],
+		options,
+	);
+	if (result.code !== 0) return { error: `workspace create failed: ${herdrFailure(result)}` };
+	const parsed = parseHerdrJson<HerdrWorkspaceCreated>(result.stdout);
+	if (parsed === undefined) return { error: "workspace create output is not JSON" };
+	const paneId = parsed.result?.root_pane?.pane_id;
+	const workspaceId = parsed.result?.workspace?.workspace_id;
+	return paneId
+		? { paneId, workspaceId: workspaceId === "" ? undefined : workspaceId }
+		: { error: "workspace create returned no root pane" };
+}
+
+/** The agent herdr starts: omp, or agy for the agy [TASK] worker trial. */
+export type HerdrAgentKind = "omp" | "agy";
+
+/** `herdr agent start … --kind <kind>`; non-empty `agentArgs` go to the agent after `--` (herdr's `[-- [AGENT_ARG]...]`). */
+function agentStartArgs(
+	name: string,
+	paneId: string,
+	agentArgs: string[] | undefined,
+	kind: HerdrAgentKind = "omp",
+): string[] {
+	const args = ["agent", "start", name, "--kind", kind, "--pane", paneId, "--timeout", "60000"];
+	return agentArgs === undefined || agentArgs.length === 0 ? args : [...args, "--", ...agentArgs];
+}
+
+/**
+ * Starts a herdr-managed omp agent in a fresh workspace and hands it the task. The agent keeps running in its
+ * pane after this returns — progress lives in the pane, readable with `herdr agent read <name>`.
+ */
+export async function herdrStartAgent(input: {
+	name: string;
+	task: string;
+	cwd: string;
+	/** Extra agent arguments (config `workerOmpArgs`, or an agy worker's), passed after `--`; empty/absent → none. */
+	agentArgs?: string[];
+	/** Default omp. */
+	kind?: HerdrAgentKind;
+	/** Environment of the agent's pane (herdr `--env`), e.g. `OMP_WIKI_NOTE_DISABLE=1` for a [TASK] worker. */
+	env?: Record<string, string>;
+	/**
+	 * Close the workspace this call created when the first prompt fails (a [TASK] start, whose caller then removes the
+	 * worktree). Default false: a plain herdr dispatch keeps the agent up so the same name can be prompted again.
+	 */
+	closeOnPromptFailure?: boolean;
+	options?: HerdrRunnerOptions;
+}): Promise<{ ok: true; agentName: string; paneId: string } | { ok: false; error: string }> {
+	const { name, task, cwd } = input;
+	const options = input.options ?? {};
+	if (options.signal?.aborted === true) return { ok: false, error: "aborted before the agent started" };
+	const cleanup = uncancellable(options);
+	const label = `ompbot · ${name}`;
+	const ws = await herdrCreateWorkspace(cwd, label, options, input.env);
+	if ("error" in ws) return { ok: false, error: ws.error };
+	const started = await herdrRun(agentStartArgs(name, ws.paneId, input.agentArgs, input.kind), options);
+	if (started.code !== 0) {
+		// Like the remote start: close only the workspace this call created.
+		if (ws.workspaceId !== undefined) await herdrRun(["workspace", "close", ws.workspaceId], cleanup);
+		return { ok: false, error: `agent start failed: ${herdrFailure(started)}` };
+	}
+	const prompted = await herdrRun(["agent", "prompt", name, task], options);
+	if (prompted.code !== 0) {
+		// herdr has no agent stop: closing the workspace ends the agent running in its pane.
+		if (input.closeOnPromptFailure === true && ws.workspaceId !== undefined) {
+			await herdrRun(["workspace", "close", ws.workspaceId], cleanup);
+		}
+		return { ok: false, error: `agent prompt failed: ${herdrFailure(prompted)}` };
+	}
+	return { ok: true, agentName: name, paneId: ws.paneId };
+}
+
+export interface RemoteHerdrStartInput {
+	sshTarget: string;
+	name: string;
+	task: string;
+	cwd: string;
+	/** Extra omp arguments (that host's `dispatchHosts.<h>.ompArgs`), passed after `--`; empty/absent → none. */
+	agentArgs?: string[];
+	/** Environment of the agent's pane (herdr `--env` on the workspace or tab it creates). */
+	env?: Record<string, string>;
+	/** Close the tab (or the workspace) this call created when the first prompt fails; see `herdrStartAgent`. */
+	closeOnPromptFailure?: boolean;
+	options?: HerdrRunnerOptions;
+}
+
+export interface RemoteHerdrStartResult {
+	ok: true;
+	agentName: string;
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+	createdWorkspace: boolean;
+}
+
+/**
+ * One remote agent start, following the hub fleet owner-start flow: reuse the shared owners workspace, create a
+ * tab in it, rename, `agent start --kind omp`, then deliver the prompt. On a failed start the tab/workspace this
+ * call created is closed again. Not concurrency-safe per host: nothing serializes remote starts, so two starts of
+ * one name at once can both pass the name check.
+ */
+export async function herdrRemoteStart(
+	input: RemoteHerdrStartInput,
+): Promise<RemoteHerdrStartResult | { ok: false; error: string }> {
+	const { sshTarget, name, task, cwd } = input;
+	const run = input.options?.run;
+	const herdrBin = input.options?.herdrBin;
+	const runner: HerdrRunnerOptions = {
+		sshTarget,
+		...(run === undefined ? {} : { run }),
+		...(herdrBin === undefined ? {} : { herdrBin }),
+		...(input.options?.signal === undefined ? {} : { signal: input.options.signal }),
+	};
+	if (runner.signal?.aborted === true) return { ok: false, error: "aborted before the agent started" };
+	// ssh hands the quoted prompt over as one argument: the quote expansion counts against the same argv limit.
+	const quotedBytes = Buffer.byteLength(remoteShellQuote(task));
+	if (quotedBytes > MAX_TASK_BYTES) {
+		return { ok: false, error: `task too long for ssh (${quotedBytes} bytes quoted, limit ${MAX_TASK_BYTES})` };
+	}
+	const cleanup = uncancellable(runner);
+
+	const list = await herdrRun(["agent", "list"], runner);
+	if (list.code !== 0) return { ok: false, error: `agent list failed: ${herdrFailure(list, 120)}` };
+	if (parseHerdrAgents(list.stdout)?.some((agent) => agent.name === name) === true) {
+		return { ok: false, error: `herdr already has an agent named ${name}` };
+	}
+
+	const label = "ompbot-owners";
+	const wsList = await herdrRun(["workspace", "list"], runner);
+	if (wsList.code !== 0) return { ok: false, error: `workspace list failed: ${herdrFailure(wsList)}` };
+	const listedWorkspaces = parseHerdrJson<HerdrWorkspaceList>(wsList.stdout);
+	let workspaceId =
+		listedWorkspaces?.result?.workspaces?.find((workspace) => workspace.label === label)?.workspace_id ?? "";
+
+	let createdWorkspace = false;
+	let tabId = "";
+	let paneId = "";
+	if (workspaceId === "") {
+		const created = await herdrRun(
+			["workspace", "create", "--label", label, "--cwd", cwd, "--no-focus", ...envArgs(input.env)],
+			runner,
+		);
+		if (created.code !== 0) return { ok: false, error: `workspace create failed: ${herdrFailure(created)}` };
+		const createdWs = parseHerdrJson<HerdrWorkspaceCreated>(created.stdout);
+		workspaceId = createdWs?.result?.workspace?.workspace_id ?? "";
+		tabId = createdWs?.result?.tab?.tab_id ?? "";
+		paneId = createdWs?.result?.root_pane?.pane_id ?? "";
+		createdWorkspace = true;
+		if (workspaceId === "" || paneId === "") return { ok: false, error: "workspace create returned no ids" };
+	} else {
+		const tab = await herdrRun(
+			["tab", "create", "--workspace", workspaceId, "--cwd", cwd, "--label", name, "--no-focus", ...envArgs(input.env)],
+			runner,
+		);
+		if (tab.code !== 0) return { ok: false, error: `tab create failed: ${herdrFailure(tab)}` };
+		const createdTab = parseHerdrJson<HerdrTabCreated>(tab.stdout);
+		tabId = createdTab?.result?.tab?.tab_id ?? "";
+		paneId = createdTab?.result?.root_pane?.pane_id ?? "";
+		if (tabId === "" || paneId === "") return { ok: false, error: "tab create returned no ids" };
+	}
+	if (workspaceId === "" || tabId === "") {
+		return { ok: false, error: createdWorkspace ? "workspace create returned no ids" : "tab create returned no ids" };
+	}
+
+	await herdrRun(["tab", "rename", tabId, name], runner);
+	// Hub fleet cleanup: close only what this call created above; the shared owners workspace is never closed.
+	const closeCreated = createdWorkspace ? ["workspace", "close", workspaceId] : ["tab", "close", tabId];
+	const start = await herdrRun(agentStartArgs(name, paneId, input.agentArgs), runner);
+	if (start.code !== 0) {
+		await herdrRun(closeCreated, cleanup);
+		return { ok: false, error: `agent start failed: ${herdrFailure(start, 140)}` };
+	}
+	const prompted = await herdrRun(["agent", "prompt", name, task], runner);
+	if (prompted.code !== 0) {
+		if (input.closeOnPromptFailure === true) await herdrRun(closeCreated, cleanup);
+		return { ok: false, error: `agent prompt failed: ${herdrFailure(prompted, 140)}` };
+	}
+	return { ok: true, agentName: name, paneId, tabId, workspaceId, createdWorkspace };
+}
+
+type HerdrAgentEntry = NonNullable<NonNullable<HerdrAgentList["result"]>["agents"]>[number];
+
+/** The `herdr agent list` entry named `name` (`undefined`: none); a herdr that cannot be asked is an error. */
+async function herdrAgentEntry(
+	name: string,
+	options: HerdrRunnerOptions,
+): Promise<{ ok: true; agent: HerdrAgentEntry | undefined } | { ok: false; error: string }> {
+	const list = await herdrRun(["agent", "list"], options);
+	if (list.code !== 0) return { ok: false, error: `agent list failed: ${herdrFailure(list, 120)}` };
+	const agents = parseHerdrAgents(list.stdout);
+	if (agents === undefined) return { ok: false, error: "agent list output is not JSON" };
+	return { ok: true, agent: agents.find((entry) => entry.name === name) };
+}
+
+/** Whether herdr has an agent of that name; a herdr that cannot be asked is an error, not "no". */
+export async function herdrAgentExists(
+	name: string,
+	options: HerdrRunnerOptions = {},
+): Promise<{ ok: true; exists: boolean } | { ok: false; error: string }> {
+	const found = await herdrAgentEntry(name, options);
+	return found.ok ? { ok: true, exists: found.agent !== undefined } : found;
+}
+
+/** The pane an agent runs in (its board card key); `undefined` when herdr cannot be asked or has no such agent. */
+export async function herdrAgentPane(name: string, options: HerdrRunnerOptions = {}): Promise<string | undefined> {
+	const found = await herdrAgentEntry(name, options);
+	const pane = found.ok ? found.agent?.pane_id : undefined;
+	return typeof pane === "string" && pane !== "" ? pane : undefined;
+}
+
+/**
+ * Ends a closed task's herdr agent. A local task owns its workspace (`herdrCreateWorkspace`), so the workspace is
+ * closed; a remote task is one tab of the host's shared owners workspace ({@link herdrRemoteStart}), so only its tab
+ * is, and the other agents there keep running. No agent of that name: nothing to close. An error when herdr cannot be
+ * asked, names no workspace or tab for it, or refuses the close.
+ */
+export async function herdrCloseTaskAgent(
+	name: string,
+	options: HerdrRunnerOptions = {},
+): Promise<{ ok: true } | { ok: false; error: string }> {
+	const found = await herdrAgentEntry(name, options);
+	if (!found.ok) return found;
+	const { agent } = found;
+	if (agent === undefined) return { ok: true };
+	const scope = options.sshTarget === undefined ? "workspace" : "tab";
+	const id = scope === "workspace" ? agent.workspace_id : agent.tab_id;
+	if (typeof id !== "string" || id === "") return { ok: false, error: `agent ${name} has no ${scope}_id` };
+	const closed = await herdrRun([scope, "close", id], options);
+	return closed.code === 0 ? { ok: true } : { ok: false, error: `${scope} close failed: ${herdrFailure(closed, 120)}` };
+}
+
+/** herdr's `agent_status` values (`herdr agent wait --until`), plus `gone` for a name the list does not have. */
+export type HerdrAgentStatus = "idle" | "working" | "blocked" | "done" | "unknown" | "gone";
+
+/** `sessionPath`: the agent's omp session jsonl (`agent_session` kind `path`, absolute, `.jsonl`), when herdr names one. */
+export type HerdrAgentStatusResult =
+	| { ok: true; status: HerdrAgentStatus; sessionPath?: string }
+	| { ok: false; error: string };
+
+const HERDR_REPORTED_STATUSES: Record<Exclude<HerdrAgentStatus, "gone">, true> = {
+	idle: true,
+	working: true,
+	blocked: true,
+	done: true,
+	unknown: true,
+};
+
+const isReportedStatus = (value: unknown): value is Exclude<HerdrAgentStatus, "gone"> =>
+	typeof value === "string" && Object.hasOwn(HERDR_REPORTED_STATUSES, value);
+
+/** What herdr says an agent is doing; a herdr that cannot be asked is an error, a missing name is `gone`. */
+export async function herdrAgentStatus(
+	name: string,
+	options: HerdrRunnerOptions = {},
+): Promise<HerdrAgentStatusResult> {
+	const found = await herdrAgentEntry(name, options);
+	if (!found.ok) return found;
+	const { agent } = found;
+	if (agent === undefined) return { ok: true, status: "gone" };
+	const status = isReportedStatus(agent.agent_status) ? agent.agent_status : "unknown";
+	const sessionPath = sessionPathOf(agent.agent_session);
+	return sessionPath === undefined ? { ok: true, status } : { ok: true, status, sessionPath };
+}
+
+/** A remote session tail read: at most this long, and this much stdout kept (an assistant line reaches 1.5MB). */
+export const SESSION_TAIL_TIMEOUT_MS = 20_000;
+export const SESSION_TAIL_STDOUT_CAP = 5_000_000;
+
+/**
+ * {@link readLastAssistant} on a `dispatchHosts` machine: one ssh running `python3 -` with the reader program (and
+ * the path inside it) on stdin. Undefined when no assistant message is within the byte cap; throws when ssh or the
+ * read fails.
+ */
+export async function readRemoteLastAssistant(
+	sshTarget: string,
+	path: string,
+	run: ProcessRunner = realProcessRunner,
+): Promise<AssistantTail | undefined> {
+	const result = await run(herdrSshArgv(sshTarget, "python3", ["-"]), {
+		stdin: lastAssistantProgram(path),
+		stdoutCap: SESSION_TAIL_STDOUT_CAP,
+		timeoutMs: SESSION_TAIL_TIMEOUT_MS,
+	});
+	if (result.timedOut) throw new Error("session read timed out");
+	if (result.code !== 0) throw new Error(`session read failed: ${herdrFailure(result, 120)}`);
+	return parseLastAssistantOutput(result.stdout);
+}
+
+/** How long an interrupt waits for herdr to see the agent stop after the Esc. */
+export const HERDR_INTERRUPT_WAIT_MS = 15_000;
+
+/** herdr states that count as a stopped agent after an Esc. */
+const STOPPED_STATUSES: Partial<Record<HerdrAgentStatus, true>> = { idle: true, done: true, blocked: true };
+
+export interface HerdrInterruptResult {
+	/** True only when the re-read state after the Esc is idle, done or blocked. */
+	confirmed: boolean;
+	/** The re-read state; absent when the Esc was refused or the re-read failed. */
+	status?: HerdrAgentStatus;
+	/** The owner-facing line: confirmed, or what kept it from being confirmed. */
+	text: string;
+}
+
+/**
+ * Stops a herdr agent's turn as far as the herdr CLI allows (it has no pause command): `agent send-keys <name> esc`,
+ * a bounded `agent wait` for idle/done/blocked, then one re-read of the state. Only the re-read decides; a timed-out
+ * wait is not a failure by itself. Never prompts the agent.
+ */
+export async function herdrInterruptAgent(
+	name: string,
+	options: HerdrRunnerOptions = {},
+): Promise<HerdrInterruptResult> {
+	const sent = await herdrRun(["agent", "send-keys", name, "esc"], options);
+	if (sent.code !== 0) {
+		return { confirmed: false, text: `Esc를 보내지 못해 멈춤을 확인하지 못했습니다(${herdrFailure(sent)})` };
+	}
+	await herdrRun(
+		[
+			"agent",
+			"wait",
+			name,
+			"--until",
+			"idle",
+			"--until",
+			"done",
+			"--until",
+			"blocked",
+			"--timeout",
+			String(HERDR_INTERRUPT_WAIT_MS),
+		],
+		options,
+	);
+	const reread = await herdrAgentStatus(name, options);
+	if (!reread.ok) {
+		return {
+			confirmed: false,
+			text: `Esc는 보냈지만 멈춤을 확인하지 못했습니다(herdr 상태: 읽기 실패 — ${reread.error})`,
+		};
+	}
+	if (STOPPED_STATUSES[reread.status] === true) {
+		return {
+			confirmed: true,
+			status: reread.status,
+			text: `Esc를 보냈고 멈춤을 확인했습니다(herdr 상태: ${reread.status})`,
+		};
+	}
+	return {
+		confirmed: false,
+		status: reread.status,
+		text: `Esc는 보냈지만 멈춤을 확인하지 못했습니다(herdr 상태: ${reread.status})`,
+	};
+}
+
+/** How long a follow-up waits for herdr to see the agent start (working) or stop on a question (blocked). */
+const PROMPT_CONFIRM_TIMEOUT_MS = 15_000;
+
+/** herdr error codes after which the prompt may have landed although no start was seen. */
+const UNCONFIRMED_CODES: Record<string, true> = { agent_prompt_stalled: true, timeout: true };
+
+export interface HerdrPromptResult {
+	ok: boolean;
+	error?: string;
+	/** Delivered as far as herdr knows, but the agent was not seen to start: the text may or may not be in. */
+	unconfirmed?: true;
+}
+
+/**
+ * Delivers a follow-up prompt to an already-running herdr agent and waits (bounded) until herdr sees it working or
+ * blocked. A herdr without `--wait` (usage error naming it) gets the plain prompt once instead.
+ */
+export async function herdrPromptExisting(
+	name: string,
+	task: string,
+	options: HerdrRunnerOptions = {},
+): Promise<HerdrPromptResult> {
+	const waited = await herdrRun(
+		[
+			"agent",
+			"prompt",
+			name,
+			task,
+			"--wait",
+			"--until",
+			"working",
+			"--until",
+			"blocked",
+			"--timeout",
+			String(PROMPT_CONFIRM_TIMEOUT_MS),
+		],
+		options,
+	);
+	if (waited.code === 0) return { ok: true };
+	const code = parseHerdrJson<{ error?: { code?: unknown } }>(waited.stderr?.trim() ?? "")?.error?.code;
+	if (typeof code === "string" && Object.hasOwn(UNCONFIRMED_CODES, code)) {
+		return { ok: false, unconfirmed: true, error: `agent prompt unconfirmed: ${code}` };
+	}
+	if (code === undefined && !waited.timedOut && waited.stderr?.includes("--wait") === true) {
+		const plain = await herdrRun(["agent", "prompt", name, task], options);
+		return plain.code === 0 ? { ok: true } : { ok: false, error: `agent prompt failed: ${herdrFailure(plain)}` };
+	}
+	return { ok: false, error: `agent prompt failed: ${herdrFailure(waited)}` };
+}
+
+/** Tails an agent's terminal output (bounded) — how the owner checks on a dispatched herdr agent. */
+export async function herdrReadAgent(
+	name: string,
+	options: HerdrRunnerOptions = {},
+): Promise<{ ok: boolean; output?: string; error?: string }> {
+	const result = await herdrRun(["agent", "read", name], options);
+	return result.code === 0
+		? { ok: true, output: redact(result.stdout.trim()).slice(-4_000) }
+		: { ok: false, error: herdrFailure(result) };
+}

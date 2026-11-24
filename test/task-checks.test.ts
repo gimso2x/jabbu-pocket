@@ -1,0 +1,1017 @@
+import { Database } from "bun:sqlite";
+import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { DiscordChannel } from "../src/discord/channel";
+import { mrkdwnToDiscord } from "../src/discord/format";
+import type { ProcessRunner, RunProcessResult } from "../src/dispatch/omp";
+import { checkTask, digest } from "../src/tasks/checker";
+import { acceptanceItems, docsDirOf, parseSpec, renderProgress, renderSpec } from "../src/tasks/docs";
+import {
+	evaluateTask,
+	ledgerTaskChecks,
+	memoryTaskChecks,
+	runWorktreeChecks,
+	type TaskCheckCache,
+} from "../src/tasks/evaluate";
+import { createTaskHostOps, type TaskHostOps } from "../src/tasks/host";
+import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
+import { buildReachedCard } from "../src/tasks/notify";
+import type { SignalCheck } from "../src/tasks/signals";
+import { blockedChecksPassHead, TaskSweeper } from "../src/tasks/sweeper";
+import { OWNER } from "./helpers/bot-home";
+import { registryOf } from "./helpers/channels";
+import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
+
+const T0 = Date.parse("2026-11-04T01:00:00Z");
+/** The sweeper's in-memory check results; a fresh one per evaluation unless a test shares it. */
+const cache = (): TaskCheckCache => memoryTaskChecks();
+const BUN_TEST = '[check: command ["bun","test"] stdout~" 0 fail"]';
+const HEAD_A = "a".repeat(40);
+const HEAD_B = "b".repeat(40);
+/** The branch's starting point (`task_ledger.base_sha`) of a fake-host task. */
+const BASE_SHA = "c".repeat(40);
+
+interface Task {
+	ledger: TaskLedger;
+	row: TaskRow;
+	files: Record<string, string>;
+}
+
+/** A registered task whose three documents are complete: every AC checked with `test:` evidence. */
+function task(
+	acceptance: string[],
+	repo = "/r/repo",
+	db = new Database(":memory:", { strict: true }),
+	where: { host?: string; recordsRoot?: string } = {},
+): Task {
+	const ledger = new TaskLedger(db, {
+		timezone: "Asia/Seoul",
+		clock: { now: () => T0 },
+	});
+	const registered = ledger.register({
+		title: "check",
+		risk: "L2",
+		originKey: "discord/ch/111111111111111111/t/222222222222222222",
+		threadRef: "111111111111111111:222222222222222222",
+		host: where.host ?? null,
+		repo,
+		acceptance: acceptanceItems(acceptance),
+		...(where.recordsRoot === undefined ? {} : { recordsRoot: where.recordsRoot }),
+	});
+	ledger.setBaseSha(registered.taskId, BASE_SHA);
+	const row = ledger.require(registered.taskId);
+	const meta = {
+		taskId: row.taskId,
+		hostLabel: "local",
+		repo: row.repo,
+		worktree: row.worktree,
+		branch: row.branch,
+		agent: row.agent,
+		threadLink: "x",
+		registeredAt: T0,
+		timezone: "Asia/Seoul",
+	};
+	const spec = renderSpec(
+		meta,
+		{ title: "t", risk: "L2", goal: "g", scope: [], exclusions: [], acceptance: [], repo: row.repo },
+		row.acceptance,
+	).replaceAll("- [ ] AC-", "- [x] AC-");
+	const outcome = [
+		`# ${row.taskId} Outcome 증거`,
+		"## 요약",
+		"바뀌었습니다.",
+		...row.acceptance.flatMap((item) => [`## ${item.id}`, "- test: bun test → 5 pass 0 fail"]),
+		"",
+	].join("\n");
+	const dir = docsDirOf(row);
+	return {
+		ledger,
+		row,
+		files: {
+			[`${dir}/spec.md`]: spec,
+			[`${dir}/PROGRESS.md`]: renderProgress(row.taskId, T0, "Asia/Seoul"),
+			[`${dir}/outcome.md`]: outcome,
+		},
+	};
+}
+
+interface FakeHost {
+	ops: TaskHostOps;
+	runs: { argv: string[]; worktree: string; timeoutMs: number }[];
+	heads: { count: number };
+	diffs: { count: number };
+}
+
+function fakeHost(
+	files: Record<string, string>,
+	over: {
+		run?: (argv: string[]) => { code: number | null; output: string; timedOut?: boolean };
+		head?: () => { sha: string; clean: boolean };
+		/** The task branch's diff since its base sha (default: empty); a string error is a failed read. */
+		diff?: { ok: true; value: string } | { ok: false; error: string };
+	} = {},
+): FakeHost {
+	const runs: FakeHost["runs"] = [];
+	const heads = { count: 0 };
+	const diffs = { count: 0 };
+	const unused = () => {
+		throw new Error("not used");
+	};
+	const ops: TaskHostOps = {
+		pathExists: unused,
+		createWorktree: unused,
+		removeWorktree: unused,
+		writeFile: unused,
+		commitDocs: unused,
+		commitOnTaskBranch: unused,
+		readPlan: async (path, worktree) => ({ ok: true, value: files[`${worktree}/${path}`] }),
+		removeRecords: unused,
+		readFile: async (path) => ({ ok: true, value: files[path] }),
+		readBytes: async (path) => ({ ok: true, value: files[path] === undefined ? undefined : Buffer.from(files[path]) }),
+		runCheck: async ({ worktree, argv, timeoutMs }) => {
+			runs.push({ worktree, argv, timeoutMs });
+			const result = over.run?.(argv) ?? { code: 0, output: "5 pass\n 0 fail\n" };
+			return { timedOut: false, ...result };
+		},
+		headOf: async () => {
+			heads.count += 1;
+			return over.head?.() ?? { sha: HEAD_A, clean: true };
+		},
+		branchDiff: async () => {
+			diffs.count += 1;
+			return over.diff ?? { ok: true, value: "" };
+		},
+	};
+	return { ops, runs, heads, diffs };
+}
+
+/** A sweeper over the real `evaluateTask` and `host`; the agent is idle, Discord is a fake. */
+function sweeperFor(t: Task, host: Pick<FakeHost, "ops">): { sweeper: TaskSweeper; transport: FakeDiscordTransport } {
+	const transport = new FakeDiscordTransport();
+	const sweeper = new TaskSweeper({
+		ledger: t.ledger,
+		evaluate: (row, checks) => evaluateTask(row, host.ops, checks),
+		remind: async () => ({ ok: true }),
+		agentStatus: async () => ({ ok: true, status: "idle" }),
+		readAgent: async () => ({ ok: true, output: "" }),
+		channels: registryOf(new DiscordChannel(transport, { ownerUserId: OWNER })),
+		ownerUserId: OWNER,
+		now: () => T0,
+		log: { info() {}, warn() {} },
+	});
+	return { sweeper, transport };
+}
+
+const posted = (transport: FakeDiscordTransport): string[] =>
+	transport.calls.flatMap((call) =>
+		call.method === "createMessage" && call.content !== undefined ? [call.content] : [],
+	);
+
+describe("[check: …] signals in the judgement", () => {
+	test("AC-3: a check that exits 1 or whose stdout misses the regex keeps the task short of the outcome", async () => {
+		const { row, files } = task([`bun test가 통과한다 ${BUN_TEST}`, "README가 있다"]);
+
+		const exit1 = fakeHost(files, { run: () => ({ code: 1, output: "3 pass\n 2 fail\n" }) });
+		const failed = await evaluateTask(row, exit1.ops, cache());
+		expect(failed.ok && failed.judgement.reached).toBe(false);
+		const failedProblems = failed.ok ? failed.judgement.problems : [];
+		expect(failedProblems).toHaveLength(1);
+		expect(failedProblems[0]).toStartWith("check AC-1 실패: ");
+		expect(exit1.runs).toEqual([{ worktree: row.worktree, argv: ["bun", "test"], timeoutMs: 900_000 }]);
+
+		const mismatch = fakeHost(files, { run: () => ({ code: 0, output: "3 pass\n 2 fail\n" }) });
+		const unmatched = await evaluateTask(row, mismatch.ops, cache());
+		expect(unmatched.ok && unmatched.judgement.reached).toBe(false);
+		expect(unmatched.ok ? unmatched.judgement.problems : []).toEqual([expect.stringMatching(/^check AC-1 실패: /)]);
+
+		const passing = fakeHost(files);
+		const passed = await evaluateTask(row, passing.ops, cache());
+		expect(passed.ok && passed.judgement).toMatchObject({
+			reached: true,
+			problems: [],
+			checks: [{ id: "AC-1", signal: 'command ["bun","test"] stdout~" 0 fail"', ok: true }],
+		});
+	});
+
+	test("AC-2: a task without checks is judged exactly as before, and the runner is never asked", async () => {
+		const { row, files } = task(["하나", "둘"]);
+		const dir = docsDirOf(row);
+		const spec = files[`${dir}/spec.md`] as string;
+		let asked = 0;
+		const judge = (specText: string, withRunner: boolean) =>
+			checkTask({
+				snapshot: row.acceptance,
+				spec: specText,
+				progress: files[`${dir}/PROGRESS.md`],
+				outcome: files[`${dir}/outcome.md`],
+				commitCheck: async () => "ok",
+				...(withRunner
+					? {
+							runChecks: async () => {
+								asked += 1;
+								return { deferred: "never" };
+							},
+						}
+					: {}),
+			});
+
+		const complete = await judge(spec, true);
+		expect(complete).toMatchObject({ reached: true, problems: [], checks: [] });
+		expect(complete).toEqual(await judge(spec, false));
+		// The reached-notice key is the pre-check fingerprint, so a deploy does not re-post an old Outcome.
+		expect(complete.reachKey).toBe(
+			digest({
+				spec: parseSpec(spec).acceptance,
+				evidence: complete.evidence,
+				updatedAt: complete.updatedAt,
+			}),
+		);
+
+		const unchecked = spec.replace("- [x] AC-2", "- [ ] AC-2");
+		const short = await judge(unchecked, true);
+		expect(short).toMatchObject({ reached: false, problems: ["AC-2: spec.md 체크박스가 [x]가 아닙니다"] });
+		expect(short).toEqual(await judge(unchecked, false));
+		expect(asked).toBe(0);
+	});
+
+	test("AC-4: another unmet condition skips the checks; two sweeps at one HEAD run the command once", async () => {
+		const t = task([`bun test가 통과한다 ${BUN_TEST}`]);
+		const dir = docsDirOf(t.row);
+		const unchecked = { ...t.files, [`${dir}/spec.md`]: t.files[`${dir}/spec.md`]?.replace("- [x]", "- [ ]") ?? "" };
+		const early = fakeHost(unchecked);
+		const judged = await evaluateTask(t.row, early.ops, cache());
+		expect(judged.ok ? judged.judgement.problems : []).toEqual(["AC-1: spec.md 체크박스가 [x]가 아닙니다"]);
+		expect([early.runs.length, early.heads.count]).toEqual([0, 0]);
+
+		let head = HEAD_A;
+		const host = fakeHost(t.files, {
+			run: () => ({ code: 1, output: "1 fail" }),
+			head: () => ({ sha: head, clean: true }),
+		});
+		const { sweeper } = sweeperFor(t, host);
+		const first = await sweeper.check(t.row);
+		const second = await sweeper.check(t.ledger.require(t.row.taskId));
+		expect(host.runs).toHaveLength(1);
+		// Two sweeps' HEAD reads, plus one after the only command run (a check must leave the worktree as it found it).
+		expect(host.heads.count).toBe(3);
+		expect([first.status, second.status]).toEqual(["working", "working"]);
+		expect(second.judgement?.problems).toEqual([expect.stringMatching(/^check AC-1 실패: exit 1: 1 fail$/)]);
+
+		head = HEAD_B;
+		await sweeper.check(t.ledger.require(t.row.taskId));
+		expect(host.runs).toHaveLength(2);
+	});
+
+	test("blocked with nothing else unmet: checks still run; all passing marks the HEAD, the worker hears it once", async () => {
+		const t = task([`bun test가 통과한다 ${BUN_TEST}`]);
+		const dir = docsDirOf(t.row);
+		const progress = t.files[`${dir}/PROGRESS.md`] ?? "";
+		const blocked = {
+			...t.files,
+			[`${dir}/PROGRESS.md`]: progress
+				.replace("status: working", "status: blocked")
+				.replace("blocked_reason:", "blocked_reason: npm: command not found"),
+		};
+
+		const failing = fakeHost(blocked, { run: () => ({ code: 127, output: "npm: command not found" }) });
+		const stillBad = await evaluateTask(t.row, failing.ops, cache());
+		expect(failing.runs).toHaveLength(1);
+		expect(stillBad.ok && stillBad.judgement).toMatchObject({ reached: false, blocked: true, checks: [] });
+		expect(stillBad.ok && stillBad.judgement.blockedChecksPassHead).toBeUndefined();
+
+		const unchecked = { ...blocked, [`${dir}/spec.md`]: blocked[`${dir}/spec.md`]?.replace("- [x]", "- [ ]") ?? "" };
+		const incomplete = fakeHost(unchecked);
+		await evaluateTask(t.row, incomplete.ops, cache());
+		expect(incomplete.runs).toHaveLength(0);
+
+		const host = fakeHost(blocked);
+		const reminders: string[] = [];
+		const sweeper = new TaskSweeper({
+			ledger: t.ledger,
+			evaluate: (row, checks) => evaluateTask(row, host.ops, checks),
+			remind: async (_row, text) => {
+				reminders.push(text);
+				return { ok: true };
+			},
+			agentStatus: async () => ({ ok: true, status: "idle" }),
+			readAgent: async () => ({ ok: true, output: "" }),
+			channels: registryOf(new DiscordChannel(new FakeDiscordTransport(), { ownerUserId: OWNER })),
+			ownerUserId: OWNER,
+			now: () => T0,
+			log: { info() {}, warn() {} },
+		});
+		// Sweep 1 sends the one retry prompt and holds; sweep 2 reports the block and tells the worker the checks pass.
+		for (let i = 0; i < 3; i += 1) await sweeper.check(t.ledger.require(t.row.taskId));
+		const judged = await evaluateTask(t.row, host.ops, cache());
+		expect(judged.ok && judged.judgement).toMatchObject({
+			reached: false,
+			blocked: true,
+			blockedChecksPassHead: HEAD_A,
+		});
+		expect(t.ledger.require(t.row.taskId).status).toBe("blocked");
+		expect(reminders.filter((text) => text === blockedChecksPassHead(true))).toHaveLength(1);
+	});
+
+	test("a timed-out check is inconclusive and never reused: the next call runs it again, other results stay", async () => {
+		let timedOut = true;
+		const host = fakeHost(
+			{},
+			{
+				run: (argv) =>
+					argv[0] === "slow"
+						? { code: timedOut ? null : 0, output: "", timedOut }
+						: argv[0] === "false"
+							? { code: 1, output: "boom" }
+							: { code: 0, output: "" },
+			},
+		);
+		const known = new Map<string, SignalCheck>();
+		const requests = [
+			{ id: "AC-1", signal: 'command ["true"]' },
+			{ id: "AC-2", signal: 'command ["false"]' },
+			{ id: "AC-3", signal: 'command ["slow"]' },
+		];
+		const first = await runWorktreeChecks(host.ops, "/r/wt", () => known, requests);
+		expect(first).toEqual({
+			head: HEAD_A,
+			results: [
+				{ id: "AC-1", signal: 'command ["true"]', ok: true, detail: "exit 0" },
+				{ id: "AC-2", signal: 'command ["false"]', ok: false, detail: "exit 1: boom" },
+				{
+					id: "AC-3",
+					signal: 'command ["slow"]',
+					ok: false,
+					detail: "900초 안에 끝나지 않았습니다(확인 불가)",
+					inconclusive: true,
+				},
+			],
+		});
+		expect([...known.keys()]).toEqual(['command ["true"]', 'command ["false"]']);
+		expect(host.runs.map((run) => run.argv[0])).toEqual(["true", "false", "slow"]);
+
+		timedOut = false;
+		const second = await runWorktreeChecks(host.ops, "/r/wt", () => known, requests);
+		expect(host.runs.map((run) => run.argv[0])).toEqual(["true", "false", "slow", "slow"]);
+		expect("results" in second && second.results.map((r) => [r.ok, r.inconclusive])).toEqual([
+			[true, undefined],
+			[false, undefined],
+			[true, undefined],
+		]);
+		// Now conclusive, it is reused like any other result.
+		await runWorktreeChecks(host.ops, "/r/wt", () => known, requests);
+		expect(host.runs).toHaveLength(4);
+	});
+
+	test("AC-5: uncommitted changes in the worktree defer the checks and hold the outcome", async () => {
+		const t = task([`bun test가 통과한다 ${BUN_TEST}`]);
+		const host = fakeHost(t.files, { head: () => ({ sha: HEAD_A, clean: false }) });
+		const { sweeper, transport } = sweeperFor(t, host);
+		const result = await sweeper.check(t.row);
+		expect(host.runs).toHaveLength(0);
+		expect(result.status).toBe("working");
+		expect(result.judgement).toMatchObject({
+			reached: false,
+			checks: [],
+			problems: ["미커밋 변경이 있어 check를 미룹니다"],
+		});
+		expect(posted(transport).some((text) => text.includes("Outcome 도달"))).toBe(false);
+	});
+
+	test("AC-7: file checks compare sha256 and a JSON field against the worktree file", async () => {
+		const body = '{"version":"1.2.0","nested":{"list":[1,{"ok":true}]}}';
+		const sha = createHash("sha256").update(body).digest("hex");
+		const judge = async (signal: string, content: string | undefined) => {
+			const t = task([`패키지 버전 [check: ${signal}]`]);
+			const files = { ...t.files, ...(content === undefined ? {} : { [`${t.row.worktree}/pkg/a.json`]: content }) };
+			const result = await evaluateTask(t.row, fakeHost(files).ops, cache());
+			if (!result.ok) throw new Error(result.error);
+			return result.judgement;
+		};
+		const pass = await judge(`file pkg/a.json sha256=${sha} json:.nested.list.1.ok=true`, body);
+		expect(pass).toMatchObject({ reached: true, checks: [{ id: "AC-1", ok: true }] });
+		expect((await judge('file pkg/a.json json:.version="1.2.0"', body)).reached).toBe(true);
+
+		const wrongSha = await judge(`file pkg/a.json sha256=${"0".repeat(64)}`, body);
+		expect(wrongSha.reached).toBe(false);
+		expect(wrongSha.problems).toEqual([expect.stringMatching(/^check AC-1 실패: sha256 /)]);
+		const wrongField = await judge('file pkg/a.json json:.version="2.0.0"', body);
+		expect(wrongField.problems).toEqual(['check AC-1 실패: .version가 "1.2.0"입니다(기대 "2.0.0")']);
+		const noField = await judge("file pkg/a.json json:.missing=1", body);
+		expect(noField.problems).toEqual(["check AC-1 실패: .missing 필드가 없습니다"]);
+		const notJson = await judge("file pkg/a.json json:.version=1", "not json");
+		expect(notJson.problems).toEqual(["check AC-1 실패: JSON이 아닙니다: pkg/a.json"]);
+		const missing = await judge("file pkg/a.json", undefined);
+		expect(missing.problems).toEqual(["check AC-1 실패: 파일이 없습니다: pkg/a.json"]);
+	});
+
+	test("AC-8: the Outcome card says check n/n passed and carries none of the command output", async () => {
+		const t = task([`bun test가 통과한다 ${BUN_TEST}`, 'README [check: file README.md; command ["true"]]']);
+		const files = { ...t.files, [`${t.row.worktree}/README.md`]: "# readme\n" };
+		const host = fakeHost(files, { run: () => ({ code: 0, output: "OUTPUT-MARKER 12 pass\n 0 fail\n" }) });
+		const { sweeper, transport } = sweeperFor(t, host);
+		const result = await sweeper.check(t.row);
+		expect(result.status).toBe("review");
+		const card = posted(transport).find((text) => text.includes("Outcome 도달")) ?? "";
+		expect(card).toContain("check 3/3 통과");
+		expect(card).not.toContain("OUTPUT-MARKER");
+		expect(card).not.toContain("0 fail");
+		expect(card).not.toContain("exit 0");
+	});
+});
+
+describe("host runCheck / headOf", () => {
+	function recorder(answer: Partial<RunProcessResult> = {}) {
+		const calls: { cmd: string[]; cwd: string | undefined; timeoutMs: number | undefined }[] = [];
+		const run: ProcessRunner = async (cmd, opts) => {
+			calls.push({ cmd, cwd: opts.cwd, timeoutMs: opts.timeoutMs });
+			return { code: 0, stdout: "", timedOut: false, ...answer };
+		};
+		return { calls, run };
+	}
+
+	test("AC-6: local argv runs as the process itself in the worktree, 120 s; output is stdout then stderr", async () => {
+		const { calls, run } = recorder({ code: 1, stdout: "out\n", stderr: "err\n" });
+		const ops = createTaskHostOps({ run });
+		const result = await ops.runCheck({ worktree: "/r/wt", argv: ["bun", "test", "$HOME; id"], timeoutMs: 120_000 });
+		expect(calls).toEqual([{ cmd: ["bun", "test", "$HOME; id"], cwd: "/r/wt", timeoutMs: 120_000 }]);
+		expect(result).toEqual({ code: 1, output: "out\n\nerr\n", timedOut: false });
+		await expect(ops.runCheck({ worktree: "/r/wt; id", argv: ["x"], timeoutMs: 1 })).rejects.toThrow("unsafe path");
+	});
+
+	test("AC-6: a real local run sees the worktree as cwd and its arguments verbatim (no shell)", async () => {
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-check-")));
+		try {
+			const ops = createTaskHostOps({});
+			const pwd = await ops.runCheck({ worktree: dir, argv: ["pwd"], timeoutMs: 120_000 });
+			expect(pwd).toEqual({ code: 0, output: `${dir}\n`, timedOut: false });
+			const echo = await ops.runCheck({ worktree: dir, argv: ["echo", "$HOME;", "`id`"], timeoutMs: 120_000 });
+			expect(echo.output).toBe("$HOME; `id`\n");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-6: over ssh every argument is single-quoted after a cd into the worktree; ssh failure throws", async () => {
+		const { calls, run } = recorder({ stdout: " 0 fail\n" });
+		const ops = createTaskHostOps({ sshTarget: "wsl", run });
+		const result = await ops.runCheck({
+			worktree: "/r/wt",
+			argv: ["bun", "test", "it's here", "a;b"],
+			timeoutMs: 120_000,
+		});
+		expect(calls).toEqual([
+			{
+				cmd: [
+					"ssh",
+					"-o",
+					"BatchMode=yes",
+					"-o",
+					"ConnectTimeout=8",
+					"--",
+					"wsl",
+					"export",
+					'PATH="$HOME/.local/bin:$PATH"',
+					"&&",
+					"cd",
+					"'/r/wt'",
+					"&&",
+					"'bun'",
+					"'test'",
+					"'it'\\''s here'",
+					"'a;b'",
+				],
+				cwd: undefined,
+				timeoutMs: 120_000,
+			},
+		]);
+		expect(result).toEqual({ code: 0, output: " 0 fail\n", timedOut: false });
+		const down = createTaskHostOps({ sshTarget: "wsl", run: recorder({ code: 255, stderr: "no route" }).run });
+		await expect(down.runCheck({ worktree: "/r/wt", argv: ["true"], timeoutMs: 1 })).rejects.toThrow(
+			"host unreachable",
+		);
+		const slow = createTaskHostOps({ sshTarget: "wsl", run: recorder({ code: null, timedOut: true }).run });
+		expect(await slow.runCheck({ worktree: "/r/wt", argv: ["sleep"], timeoutMs: 1 })).toMatchObject({ timedOut: true });
+	});
+
+	test("readBytes over ssh reads base64 and returns the file's exact bytes; a failed read is a missing file", async () => {
+		const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x80, 0x41, 0x0a]);
+		const { calls, run } = recorder({ stdout: `${bytes.toString("base64")}\n` });
+		const ops = createTaskHostOps({ sshTarget: "wsl", run });
+		expect(await ops.readBytes("/r/wt/bin.dat")).toEqual({ ok: true, value: bytes });
+		expect(calls[0]?.cmd.slice(-4)).toEqual(["--", "wsl", "base64", "/r/wt/bin.dat"]);
+		const missing = createTaskHostOps({ sshTarget: "wsl", run: recorder({ code: 1 }).run });
+		expect(await missing.readBytes("/r/wt/none")).toEqual({ ok: true, value: undefined });
+	});
+
+	test("headOf reads untracked files whatever the repo config says (qa-i #124)", async () => {
+		const seen: string[][] = [];
+		const run: ProcessRunner = async (cmd) => {
+			seen.push([...cmd]);
+			return { code: 0, stdout: cmd.includes("rev-parse") ? `${"c".repeat(40)}\n` : "", timedOut: false };
+		};
+		await createTaskHostOps({ run }).headOf("/r/wt");
+		expect(seen.find((cmd) => cmd.includes("status"))).toContain("--untracked-files=all");
+	});
+
+	test("headOf: HEAD sha plus whether git status --porcelain is empty; git failure throws", async () => {
+		const sha = "c".repeat(40);
+		const answers =
+			(porcelain: string, revParse = { code: 0, stdout: `${sha}\n` }): ProcessRunner =>
+			async (cmd) => ({
+				...(cmd.includes("rev-parse") ? revParse : { code: 0, stdout: porcelain }),
+				timedOut: false,
+			});
+		expect(await createTaskHostOps({ run: answers("") }).headOf("/r/wt")).toEqual({ sha, clean: true });
+		expect(await createTaskHostOps({ run: answers("?? new.ts\n") }).headOf("/r/wt")).toEqual({ sha, clean: false });
+		await expect(
+			createTaskHostOps({ run: answers("", { code: 128, stdout: "fatal: not a git repository" }) }).headOf("/r/wt"),
+		).rejects.toThrow("git rev-parse failed");
+	});
+});
+
+interface GitTask extends Task {
+	ops: TaskHostOps;
+	/** The temp directory holding the repository and its task worktree. */
+	root: string;
+	/** Writes (or with `null` deletes) one file in the worktree and commits it on the task branch. */
+	commit(path: string, content: string | null, message: string): void;
+}
+
+const gitAt =
+	(cwd: string) =>
+	(...args: string[]): string => {
+		const result = Bun.spawnSync(["git", "-C", cwd, ...args]);
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+		return result.stdout.toString().trim();
+	};
+
+/**
+ * A real task worktree in a temp repository: `main` holds `mainFiles`, the task branch starts at the worktree's HEAD
+ * (`baseSha`), then the docs commit (complete documents: every AC checked with `test:` evidence) as a non-records `startTask` leaves it.
+ */
+async function gitTask(mainFiles: Record<string, string> = {}, docsMessage?: string): Promise<GitTask> {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-integrity-")));
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	const git = gitAt(repo);
+	git("init", "-q", "-b", "main");
+	git("config", "user.name", "t");
+	git("config", "user.email", "t@t");
+	const seed = { "README.md": "# repo\n", ...mainFiles };
+	for (const [path, content] of Object.entries(seed)) {
+		mkdirSync(dirname(join(repo, path)), { recursive: true });
+		writeFileSync(join(repo, path), content);
+	}
+	git("add", "--", ...Object.keys(seed));
+	git("commit", "-q", "-m", "init");
+	const t = task(["하나"], repo);
+	const ops = createTaskHostOps({});
+	const { worktree, branch, taskId } = t.row;
+	expect(await ops.createWorktree({ repo, worktree, branch })).toEqual({ ok: true, value: null });
+	t.ledger.setBaseSha(taskId, gitAt(worktree)("rev-parse", "HEAD"));
+	t.row = t.ledger.require(taskId);
+	for (const [path, content] of Object.entries(t.files)) {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, content);
+	}
+	const wt = gitAt(worktree);
+	if (docsMessage === undefined) expect((await ops.commitDocs({ worktree, taskId })).ok).toBe(true);
+	else {
+		wt("add", "--", `docs/tasks/${taskId}`);
+		wt("commit", "-q", "-m", docsMessage);
+	}
+	const commit = (path: string, content: string | null, message: string) => {
+		if (content === null) wt("rm", "-q", "--", path);
+		else {
+			mkdirSync(dirname(join(worktree, path)), { recursive: true });
+			writeFileSync(join(worktree, path), content);
+			wt("add", "--", path);
+		}
+		wt("commit", "-q", "-m", message);
+	};
+	return { ...t, ops, root, commit };
+}
+
+describe("diff integrity of the task branch", () => {
+	test("AC-1: an it.skip( added to a .test.ts holds the sweep short of the outcome; the commit removing it reaches", async () => {
+		const g = await gitTask();
+		try {
+			g.commit("test/rotate.test.ts", 'it.skip("rotates", () => {});\n', "test: rotate (skipped)");
+			const { sweeper, transport } = sweeperFor(g, g);
+			const held = await sweeper.check(g.row);
+			expect(held.status).toBe("working");
+			expect(held.judgement?.reached).toBe(false);
+			expect(held.judgement?.problems).toContainEqual(
+				expect.stringMatching(/^무결성 skipped_test: test\/rotate\.test\.ts: it\.skip\(/),
+			);
+			expect(posted(transport).some((text) => text.includes("Outcome 도달"))).toBe(false);
+
+			g.commit("test/rotate.test.ts", 'it("rotates", () => {});\n', "test: rotate");
+			const reached = await sweeper.check(g.ledger.require(g.row.taskId));
+			expect(reached.judgement).toMatchObject({ reached: true, problems: [] });
+			expect(reached.status).toBe("review");
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-2: TODO markers and stub bodies hold the outcome too, one problem line per refusal", async () => {
+		const t = task(["하나"]);
+		const diff = [
+			"diff --git a/src/rotate.ts b/src/rotate.ts",
+			"--- a/src/rotate.ts",
+			"+++ b/src/rotate.ts",
+			"@@ -1,0 +1,2 @@",
+			"+const size = 10; // TODO pick the real limit",
+			'+export function rotate(): never { throw new Error("not implemented"); }',
+		].join("\n");
+		const judged = await evaluateTask(t.row, fakeHost(t.files, { diff: { ok: true, value: diff } }).ops, cache());
+		expect(judged.ok && judged.judgement).toMatchObject({
+			reached: false,
+			integrityWarnings: [],
+			problems: [
+				"무결성 unfinished_work_marker: src/rotate.ts: const size = 10; // TODO pick the real limit",
+				'무결성 stub_implementation: src/rotate.ts: export function rotate(): never { throw new Error("not implemented"); }',
+			],
+		});
+	});
+
+	test("AC-2: guard deletions and unproven claims do not hold the outcome; the card shows them under 무결성 경고", async () => {
+		const t = task(["하나"]);
+		const dir = docsDirOf(t.row);
+		const files = {
+			...t.files,
+			[`${dir}/outcome.md`]: (t.files[`${dir}/outcome.md`] as string).replace(
+				"바뀌었습니다.",
+				"회전을 고쳤고 모두 통과했습니다.",
+			),
+		};
+		const diff = [
+			"--- a/src/rotate.ts",
+			"+++ b/src/rotate.ts",
+			"@@ -3 +2,0 @@",
+			'-\tif (size < 0) throw new Error("refuse negative size");',
+		].join("\n");
+		const { sweeper, transport } = sweeperFor(t, fakeHost(files, { diff: { ok: true, value: diff } }));
+		const result = await sweeper.check(t.row);
+		expect(result.status).toBe("review");
+		const warnings = [
+			'무결성 guard_deletion_without_adversarial_regression: src/rotate.ts: if (size < 0) throw new Error("refuse negative size");',
+			"무결성 unproven_claim_word: summary: 회전을 고쳤고 모두 통과했습니다.",
+		];
+		expect(result.judgement).toMatchObject({ reached: true, problems: [], integrityWarnings: warnings });
+		const card = posted(transport).find((text) => text.includes("Outcome 도달")) ?? "";
+		const lines = card.split("\n");
+		const head = lines.indexOf("**⚠️ 무결성 경고**");
+		// Right after the summary line, one bullet per warning.
+		expect(lines[head - 1]).toBe("• 회전을 고쳤고 모두 통과했습니다.");
+		expect(lines.slice(head + 1, head + 3)).toEqual(warnings.map((line) => `• ${line}`));
+	});
+
+	test("AC-2: an undeclared feature removal only warns; the outcome is still reached", async () => {
+		const t = task(["하나"]);
+		const diff = ["--- a/src/rotate.ts", "+++ b/src/rotate.ts", "@@ -3 +2,0 @@", "-export function rotate() {"].join(
+			"\n",
+		);
+		const { sweeper } = sweeperFor(t, fakeHost(t.files, { diff: { ok: true, value: diff } }));
+		const result = await sweeper.check(t.row);
+		expect(result.status).toBe("review");
+		expect(result.judgement).toMatchObject({
+			reached: true,
+			problems: [],
+			integrityWarnings: ["무결성 undeclared_feature_removal: src/rotate.ts: export function rotate() {"],
+		});
+	});
+
+	test("a removal named in outcome.md or in a doc/plans file the context names is declared: no warning", async () => {
+		const diff = ["--- a/src/rotate.ts", "+++ b/src/rotate.ts", "@@ -3 +2,0 @@", "-export function rotate() {"].join(
+			"\n",
+		);
+		const judge = async (docs: { outcome?: string; plan?: string }) => {
+			const t = task(["하나"]);
+			const dir = docsDirOf(t.row);
+			if (docs.outcome !== undefined) t.files[`${dir}/outcome.md`] = `${t.files[`${dir}/outcome.md`]}\n${docs.outcome}`;
+			if (docs.plan !== undefined) {
+				t.files[`${dir}/context.md`] = "# 컨텍스트\n## 배경\n스펙 doc/plans/spin.md\n";
+				t.files[`${t.row.worktree}/doc/plans/spin.md`] = docs.plan;
+			}
+			const { sweeper } = sweeperFor(t, fakeHost(t.files, { diff: { ok: true, value: diff } }));
+			return (await sweeper.check(t.row)).judgement?.integrityWarnings;
+		};
+		expect(await judge({ outcome: "## 지운 export\n- rotate\n" })).toEqual([]);
+		expect(await judge({ plan: "- `rotate` 삭제\n" })).toEqual([]);
+		// The plan is named but does not name the export: still a warning.
+		expect(await judge({ plan: "- 회전 정리\n" })).toEqual([
+			"무결성 undeclared_feature_removal: src/rotate.ts: export function rotate() {",
+		]);
+	});
+
+	test("AC-2: a clean diff leaves the judgement and the card exactly as without the integrity read", async () => {
+		const t = task(["하나"]);
+		const dir = docsDirOf(t.row);
+		const clean = [
+			"--- /dev/null",
+			"+++ b/src/rotate.ts",
+			"@@ -0,0 +1 @@",
+			"+export const rotate = (size: number): number => size;",
+		].join("\n");
+		const host = fakeHost(t.files, { diff: { ok: true, value: clean } });
+		const withDiff = await evaluateTask(t.row, host.ops, cache());
+		expect(host.diffs.count).toBe(1);
+		const without = await checkTask({
+			snapshot: t.row.acceptance,
+			spec: t.files[`${dir}/spec.md`],
+			progress: t.files[`${dir}/PROGRESS.md`],
+			outcome: t.files[`${dir}/outcome.md`],
+			commitCheck: async () => "ok",
+		});
+		expect(withDiff.ok && withDiff.judgement).toEqual(without);
+		const { sweeper, transport } = sweeperFor(t, host);
+		await sweeper.check(t.row);
+		const card = posted(transport).find((text) => text.includes("Outcome 도달")) ?? "";
+		expect(card).toBe(
+			mrkdwnToDiscord(buildReachedCard(t.row, without, OWNER).text.replace(`{{mention:${OWNER}}}`, `<@${OWNER}>`)),
+		);
+		expect(card).not.toContain("무결성");
+	});
+
+	test("AC-3: the diff starts at the base sha — a TODO main committed before it is not judged", async () => {
+		const g = await gitTask({ "src/old.ts": "export const old = 1; // TODO from main\n" });
+		try {
+			g.commit("src/rotate.ts", "export const rotate = (size: number): number => size;\n", "feat: rotate");
+			const diff = await g.ops.branchDiff({
+				worktree: g.row.worktree,
+				branch: g.row.branch,
+				baseSha: g.row.baseSha as string,
+			});
+			expect(diff.ok).toBe(true);
+			const text = diff.ok ? diff.value : "";
+			expect(text).toContain("+export const rotate");
+			expect(text).not.toContain("TODO from main");
+			expect(text).not.toContain("docs/tasks/");
+			const judged = await evaluateTask(g.row, g.ops, cache());
+			expect(judged.ok && judged.judgement).toMatchObject({ reached: true, problems: [] });
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+
+	test("the integrity diff leaves out the worker's own task documents updated after the docs commit", async () => {
+		const g = await gitTask({});
+		try {
+			g.commit("src/rotate.ts", "export const rotate = (size: number): number => size;\n", "feat: rotate");
+			g.commit(`docs/tasks/${g.row.taskId}/PROGRESS.md`, "status: done\n", "docs(task): progress");
+			const diff = await g.ops.branchDiff({
+				worktree: g.row.worktree,
+				branch: g.row.branch,
+				baseSha: g.row.baseSha as string,
+			});
+			const text = diff.ok ? diff.value : "";
+			expect(text).toContain("+export const rotate");
+			expect(text).not.toContain("docs/tasks/");
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-3: a diff past the default 64 K cap but under the diff cap is read whole; past the diff cap it is refused", async () => {
+		const g = await gitTask();
+		try {
+			g.commit("src/big.ts", `export const big = "${"x".repeat(70_000)}";\n`, "feat: big");
+			const input = { worktree: g.row.worktree, branch: g.row.branch, baseSha: g.row.baseSha as string };
+			const under = await g.ops.branchDiff(input);
+			expect(under.ok).toBe(true);
+			// Read whole through the real process runner, not cut at the default 64 K collector cap.
+			expect(under.ok && under.value.length).toBeGreaterThan(70_000);
+
+			g.commit("src/huge.ts", `export const huge = "${"y".repeat(520_000)}";\n`, "feat: huge");
+			const over = await g.ops.branchDiff(input);
+			expect(over).toEqual({ ok: false, error: "diff too large" });
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-3: no base sha or a failing git defers the integrity check and holds the outcome", async () => {
+		const g = await gitTask({});
+		try {
+			const input = { worktree: g.row.worktree, branch: g.row.branch, baseSha: g.row.baseSha as string };
+			const noBase = await evaluateTask({ ...g.row, baseSha: null }, g.ops, cache());
+			expect(noBase.ok && noBase.judgement).toMatchObject({
+				reached: false,
+				problems: ["diff를 읽지 못해 무결성 검사를 미룹니다: no_base"],
+			});
+
+			const failing = createTaskHostOps({
+				run: async () => ({ code: 128, stdout: "fatal: bad revision", timedOut: false }),
+			});
+			expect(await failing.branchDiff(input)).toEqual({ ok: false, error: "git diff failed: fatal: bad revision" });
+			const failed = await evaluateTask(g.row, failing, cache());
+			expect(failed.ok && failed.judgement).toMatchObject({
+				reached: false,
+				problems: ["diff를 읽지 못해 무결성 검사를 미룹니다: git diff failed: fatal: bad revision"],
+			});
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+
+	test("plansRoot: a remote task's declared removals are read through readPlan from the local recordsRepo, not from the remote worktree", async () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-plans-root-")));
+		try {
+			const recordsRepo = join(root, "records");
+			mkdirSync(join(recordsRepo, "doc/plans"), { recursive: true });
+			const t = task(["하나"], "/r/repo", undefined, { host: "wsl", recordsRoot: "/srv/records" });
+			const dir = docsDirOf(t.row);
+			expect(dir).toBe(`/srv/records/docs/tasks/${t.row.taskId}`);
+			const remoteFiles: Record<string, string> = {
+				...t.files,
+				[`${dir}/context.md`]: "# 컨텍스트\n## 배경\n스펙 doc/plans/spin.md\n",
+				// The remote worktree's own copy names nothing: it must not be consulted.
+				[`${t.row.worktree}/doc/plans/spin.md`]: "- 회전 정리\n",
+			};
+			const removal = [
+				"--- a/src/rotate.ts",
+				"+++ b/src/rotate.ts",
+				"@@ -3 +2,0 @@",
+				"-export function rotate() {",
+			].join("\n");
+			const run: ProcessRunner = async (cmd) => {
+				if (cmd.includes("diff")) return { code: 0, stdout: removal, timedOut: false };
+				if (cmd.at(-2) === "cat") {
+					const text = remoteFiles[cmd.at(-1) ?? ""];
+					return text === undefined
+						? { code: 1, stdout: "", timedOut: false }
+						: { code: 0, stdout: text, timedOut: false };
+				}
+				return { code: 1, stdout: "", timedOut: false };
+			};
+			const ops = createTaskHostOps({ sshTarget: "wsl", recordsRepo, run });
+
+			const undeclared = await evaluateTask(t.row, ops, cache());
+			expect(undeclared.ok && undeclared.judgement.integrityWarnings).toEqual([
+				"무결성 undeclared_feature_removal: src/rotate.ts: export function rotate() {",
+			]);
+			writeFileSync(join(recordsRepo, "doc/plans/spin.md"), "- `rotate` 삭제\n");
+			const declared = await evaluateTask(t.row, ops, cache());
+			expect(declared.ok && declared.judgement).toMatchObject({ reached: true, integrityWarnings: [] });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-3: evaluateTask without the sweep's checks (CLI, dashboard) never reads the diff", async () => {
+		const g = await gitTask();
+		try {
+			g.commit("test/rotate.test.ts", 'it.skip("rotates", () => {});\n', "test: rotate (skipped)");
+			let reads = 0;
+			const counted: TaskHostOps = {
+				...g.ops,
+				branchDiff: (input) => {
+					reads += 1;
+					return g.ops.branchDiff(input);
+				},
+			};
+			const judged = await evaluateTask(g.row, counted);
+			expect(judged.ok && judged.judgement).toMatchObject({ reached: true, integrityWarnings: [] });
+			expect(reads).toBe(0);
+			const swept = await evaluateTask(g.row, counted, cache());
+			expect(swept.ok && swept.judgement.reached).toBe(false);
+			expect(reads).toBe(1);
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("file checks read the worktree file's bytes (qa-i #126)", () => {
+	test("a binary file passes with its exact sha256 and fails with a wrong one; json: still reads text", async () => {
+		const g = await gitTask();
+		try {
+			const bytes = new Uint8Array([0x00, 0xff, 0xfe, 0x80, 0x41, 0x0a]);
+			const sha = createHash("sha256").update(bytes).digest("hex");
+			writeFileSync(join(g.row.worktree, "bin.dat"), bytes);
+			writeFileSync(join(g.row.worktree, "a.json"), '{"v":"é"}');
+			const wt = gitAt(g.row.worktree);
+			wt("add", "--", "bin.dat", "a.json");
+			wt("commit", "-q", "-m", "data");
+			const run = await runWorktreeChecks(g.ops, g.row.worktree, () => new Map(), [
+				{ id: "AC-1", signal: `file bin.dat sha256=${sha}` },
+				{ id: "AC-2", signal: `file bin.dat sha256=${"0".repeat(64)}` },
+				{ id: "AC-3", signal: 'file a.json json:.v="é"' },
+			]);
+			expect("results" in run && run.results.map((result) => [result.id, result.ok])).toEqual([
+				["AC-1", true],
+				["AC-2", false],
+				["AC-3", true],
+			]);
+		} finally {
+			rmSync(g.root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("[check:] results in the ledger (check_json)", () => {
+	const spec = [`bun test가 통과한다 ${BUN_TEST}`];
+	const stored = (t: Task) => t.ledger.require(t.row.taskId).checks;
+
+	test("AC-2: a new ledger and sweeper over the same disk file reuse the verdict, running nothing", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "task-check-receipts-"));
+		try {
+			const file = join(dir, "ompbot.db");
+			const db = new Database(file, { strict: true });
+			const t = task(spec, "/r/repo", db);
+			const host = fakeHost(t.files, { run: () => ({ code: 1, output: "1 fail" }) });
+			await sweeperFor(t, host).sweeper.check(t.row);
+			expect(host.runs).toHaveLength(1);
+			db.close();
+
+			const reopened = new TaskLedger(new Database(file, { strict: true }), {
+				timezone: "Asia/Seoul",
+				clock: { now: () => T0 },
+			});
+			const again = { ...t, ledger: reopened, row: reopened.require(t.row.taskId) };
+			expect(again.row.checks?.head).toBe(HEAD_A);
+			const second = await sweeperFor(again, host).sweeper.check(again.row);
+			expect(host.runs).toHaveLength(1);
+			expect(second.judgement?.problems).toEqual([expect.stringMatching(/^check AC-1 실패: exit 1: 1 fail$/)]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("AC-4: the merge-time judge runs the checks again and leaves the ledger value alone", async () => {
+		const t = task(spec);
+		const host = fakeHost(t.files);
+		await sweeperFor(t, host).sweeper.check(t.row);
+		const before = stored(t);
+		expect(before?.head).toBe(HEAD_A);
+		expect(host.runs).toHaveLength(1);
+		await evaluateTask(t.ledger.require(t.row.taskId), host.ops, memoryTaskChecks());
+		expect(host.runs).toHaveLength(2);
+		expect(stored(t)).toEqual(before);
+	});
+
+	test("AC-5: a new HEAD runs again and replaces the stored head, even when nothing is left to store", async () => {
+		const t = task(spec);
+		let head = HEAD_A;
+		let timedOut = false;
+		const host = fakeHost(t.files, {
+			head: () => ({ sha: head, clean: true }),
+			run: () => ({ code: timedOut ? null : 0, output: "5 pass\n 0 fail\n", timedOut }),
+		});
+		const { sweeper } = sweeperFor(t, host);
+		await sweeper.check(t.row);
+		expect(stored(t)?.head).toBe(HEAD_A);
+		expect(stored(t)?.results).toHaveLength(1);
+
+		head = HEAD_B;
+		timedOut = true;
+		await sweeper.check(t.ledger.require(t.row.taskId));
+		expect(host.runs).toHaveLength(2);
+		expect(stored(t)).toEqual({ head: HEAD_B, results: [] });
+	});
+
+	test("AC-6: an inconclusive result is not stored and the next judgement runs it again", async () => {
+		const t = task(spec);
+		let timedOut = true;
+		const host = fakeHost(t.files, {
+			run: () => ({ code: timedOut ? null : 0, output: "5 pass\n 0 fail\n", timedOut }),
+		});
+		const { sweeper } = sweeperFor(t, host);
+		await sweeper.check(t.row);
+		expect(stored(t)).toEqual({ head: HEAD_A, results: [] });
+		timedOut = false;
+		await sweeper.check(t.ledger.require(t.row.taskId));
+		expect(host.runs).toHaveLength(2);
+		expect(stored(t)?.results).toHaveLength(1);
+	});
+
+	test("AC-7: a check that moved the worktree leaves no result in the ledger", async () => {
+		const t = task(spec);
+		let reads = 0;
+		const host = fakeHost(t.files, {
+			head: () => {
+				reads += 1;
+				return { sha: reads === 1 ? HEAD_A : HEAD_B, clean: true };
+			},
+		});
+		await evaluateTask(t.row, host.ops, ledgerTaskChecks(t.ledger));
+		expect(host.runs).toHaveLength(1);
+		expect(stored(t)).toEqual({ head: HEAD_A, results: [] });
+	});
+
+	test("an uncommitted worktree defers the checks and keeps what is stored", async () => {
+		const t = task(spec);
+		const host = fakeHost(t.files);
+		await sweeperFor(t, host).sweeper.check(t.row);
+		const before = stored(t);
+		const dirty = fakeHost(t.files, { head: () => ({ sha: HEAD_B, clean: false }) });
+		await evaluateTask(t.row, dirty.ops, ledgerTaskChecks(t.ledger));
+		expect(dirty.runs).toHaveLength(0);
+		expect(stored(t)).toEqual(before);
+	});
+});

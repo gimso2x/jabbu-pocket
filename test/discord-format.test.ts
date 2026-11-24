@@ -1,0 +1,332 @@
+import { describe, expect, spyOn, test } from "bun:test";
+import { displayWidth, FENCE_RESERVE, REDELIVERED_PREFIX } from "../src/channel/text";
+import * as discordCard from "../src/discord/card";
+import { mrkdwnToDiscord, renderDiscordParts } from "../src/discord/format";
+import { renderDiscordMessages } from "../src/discord/messages";
+import { MESSAGE_CONTENT_LIMIT } from "../src/discord/transport";
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+describe("mrkdwnToDiscord", () => {
+	test.each([
+		["*a*", "**a**"],
+		["앞 *굵게 쓴 말* 뒤", "앞 **굵게 쓴 말** 뒤"],
+		["~a~", "~~a~~"],
+		["_기울임_", "_기울임_"],
+		["<https://x.y|라벨>", "[라벨](https://x.y)"],
+		["<https://x.y>", "https://x.y"],
+		["보기: <https://x.y/a?b=1&amp;c=2|링크>", "보기: [링크](https://x.y/a?b=1&c=2)"],
+		["&lt;a&gt;", "<a>"],
+		["a &amp;&amp; b", "a && b"],
+		["<@123>", "<@123>"],
+		["<#456>", "<#456>"],
+		["<#456|일반>", "<#456>"],
+		["2*3*4는 곱", "2*3*4는 곱"],
+		["`*a*`", "`*a*`"],
+		["```\n*a* <https://x.y|l> &lt;\n```", "```\n*a* <https://x.y|l> &lt;\n```"],
+		["앞 *a* `~b~` 뒤 ~c~", "앞 **a** `~b~` 뒤 ~~c~~"],
+	])("%p → %p", (input, output) => {
+		expect(mrkdwnToDiscord(input)).toBe(output);
+	});
+
+	test.each(["<!here>", "<!channel>", "<!everyone>", "<!here|@here>"])("%p is plain text, never a ping", (input) => {
+		const out = mrkdwnToDiscord(`알림 ${input} 끝`);
+		expect(out).not.toMatch(/@(here|channel|everyone)/);
+		expect(out).not.toContain("<!");
+		expect(out.startsWith("알림 ")).toBe(true);
+	});
+});
+
+describe("renderDiscordParts", () => {
+	test("a markdown table is wrapped in a code fence; text around it is kept", () => {
+		const body = "표입니다\n\n| 도구 | 횟수 |\n|---|---|\n| bash | 10 |\n\n끝";
+		const [part, ...rest] = renderDiscordParts(body, false);
+		expect(rest).toHaveLength(0);
+		expect(part).toBe("표입니다\n\n```\n도구 | 횟수\n-----+-----\nbash | 10\n```\n\n끝");
+	});
+
+	test("a table already inside a code fence is not wrapped twice", () => {
+		const body = "```\n| a | b |\n|---|---|\n```";
+		expect(renderDiscordParts(body, false)).toEqual([body]);
+	});
+
+	test("a long answer splits into parts of at most 2000 characters", () => {
+		const paragraph = "가나다라마바사 아자차카타파하 ".repeat(20).trim();
+		const body = Array.from({ length: 30 }, (_, i) => `${i}. ${paragraph}`).join("\n\n");
+		const parts = renderDiscordParts(body, true, "✅ 01:02 · 도구 3회");
+		expect(parts.length).toBeGreaterThan(2);
+		for (const part of parts) expect(part.length).toBeLessThanOrEqual(2000);
+	});
+
+	test("a code fence cut by a split is closed in every part", () => {
+		const code = Array.from({ length: 300 }, (_, i) => `line ${i} ${"x".repeat(20)}`).join("\n");
+		const parts = renderDiscordParts(`앞\n\n\`\`\`ts\n${code}\n\`\`\`\n\n뒤`, false);
+		expect(parts.length).toBeGreaterThan(1);
+		for (const part of parts) {
+			expect(part.length).toBeLessThanOrEqual(2000);
+			expect((part.match(/```/g) ?? []).length % 2).toBe(0);
+		}
+	});
+
+	test("emoji (surrogate pairs) are never cut in half", () => {
+		const parts = renderDiscordParts("😀".repeat(3000), false);
+		expect(parts.length).toBeGreaterThan(1);
+		for (const part of parts) {
+			expect(part.length).toBeLessThanOrEqual(2000);
+			expect(LONE_SURROGATE.test(part)).toBe(false);
+		}
+		expect(parts.join("")).toBe("😀".repeat(3000));
+	});
+
+	test("the redelivery mark opens only the first part and the footer closes only the last", () => {
+		const body = Array.from({ length: 12 }, (_, i) => `${i} ${"내용 ".repeat(100)}`).join("\n\n");
+		const parts = renderDiscordParts(body, true, "✅ 00:42");
+		expect(parts.length).toBeGreaterThan(1);
+		parts.forEach((part, i) => {
+			expect(part.startsWith(REDELIVERED_PREFIX)).toBe(i === 0);
+			expect(part.endsWith("_✅ 00:42_")).toBe(i === parts.length - 1);
+			expect(part.length).toBeLessThanOrEqual(2000);
+		});
+		const single = renderDiscordParts("짧은 답", false, "✅ 00:01");
+		expect(single).toEqual(["짧은 답\n_✅ 00:01_"]);
+	});
+
+	/** No part carries a cut fence mark or a language tag torn from its fence. */
+	const expectFencesWhole = (parts: string[], label: string) => {
+		for (const [i, part] of parts.entries()) {
+			const inner = part.replace(/^```\n/, "").replace(/\n```$/, "");
+			expect(part.length, label).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+			expect((part.match(/```/g) ?? []).length % 2, `${label} #${i} fences`).toBe(0);
+			expect(inner.endsWith("`"), `${label} #${i} ends in a cut fence: ${JSON.stringify(inner.slice(-8))}`).toBe(false);
+			expect(/^(`{1,2}js|js\b)/.test(inner), `${label} #${i} starts with a cut fence or its tag`).toBe(false);
+		}
+		expect(
+			parts.some((part) => part.includes("```js\n")),
+			`${label}: js tag on the opening fence's line`,
+		).toBe(true);
+	};
+
+	test("a code fence sliding across the 2000-character boundary is never cut and keeps its js tag", () => {
+		const budget = MESSAGE_CONTENT_LIMIT - FENCE_RESERVE;
+		for (let at = budget - 6; at <= budget + 2; at++) {
+			const parts = renderDiscordParts(`${"a".repeat(at)}\`\`\`js\nconst x = 1;\n\`\`\`\nend`, false);
+			expect(parts.length, `at ${at}`).toBeGreaterThan(1);
+			expectFencesWhole(parts, `at ${at}`);
+		}
+	});
+
+	test("a fenced table right before a code fence: the table stays whole, the fence uncut", () => {
+		const table = "| 도구 | 횟수 |\n|---|---|\n| bash | 10 |";
+		const aligned = "도구 | 횟수\n-----+-----\nbash | 10";
+		const budget = MESSAGE_CONTENT_LIMIT - FENCE_RESERVE;
+		for (let at = budget - 90; at <= budget + 2; at++) {
+			const parts = renderDiscordParts(
+				`${"a".repeat(at)}\n\n${table}\n\`\`\`js\nconst x = 1;\n\`\`\`\n${"끝".repeat(100)}`,
+				false,
+			);
+			expect(parts.length, `at ${at}`).toBeGreaterThan(1);
+			expectFencesWhole(parts, `at ${at}`);
+			expect(
+				parts.some((part) => part.includes(`\`\`\`\n${aligned}\n\`\`\``)),
+				`at ${at}: table whole`,
+			).toBe(true);
+		}
+	});
+});
+
+describe("renderDiscordMessages", () => {
+	const card = (title: string): string =>
+		`\`\`\`card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"${title}"},"children":[]}}}\n\`\`\``;
+
+	test("a card whose embed rendering throws stays its fence text with an issue; the other card is still an embed", () => {
+		const real = discordCard.cardToEmbed;
+		const spy = spyOn(discordCard, "cardToEmbed").mockImplementation((element) => {
+			if (element.title === "터짐") throw new Error("render boom");
+			return real(element);
+		});
+		try {
+			const body = `앞\n${card("터짐")}\n중간\n${card("정상")}\n뒤`;
+			const parts = renderDiscordMessages(body, false);
+			expect(parts.cardIssues).toEqual(["card 1: render boom"]);
+			expect(parts.map((p) => p.embeds?.length ?? 0)).toEqual([0, 1, 0]);
+			expect(parts[0]?.content).toBe(`앞\n${card("터짐")}\n중간`);
+			expect(parts[1]?.embeds?.[0]?.title).toBe("정상");
+			expect(parts[2]?.content).toBe("뒤");
+			for (const part of parts) expect(part.content.length).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+});
+
+describe("qa50b K-9: tables without outer pipes", () => {
+	test("a GFM table without leading/trailing pipes is fenced too", () => {
+		const body = "name | value\n--- | ---\na | 1\nb | 2";
+		expect(renderDiscordParts(body, false)).toEqual(["```\nname | value\n-----+------\na    | 1\nb    | 2\n```"]);
+	});
+
+	test("a line with a pipe over a plain --- rule (no pipe, one cell) stays text", () => {
+		const body = "a | b\n---\n끝";
+		expect(renderDiscordParts(body, false)).toEqual([body]);
+	});
+});
+
+describe("renderDiscordParts qa-i low", () => {
+	test("a fence opened and closed on one line does not stop a later table from being fenced", () => {
+		const body = "```bash npm test```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |";
+		expect(renderDiscordParts(body, false)).toEqual(["```bash npm test```\n\n```\na | b\n--+--\n1 | 2\n```"]);
+	});
+});
+
+describe("table alignment and inline markdown stripping", () => {
+	test("Hangul and ASCII columns align on the same displayWidth with a rule row under the header", () => {
+		const body = "| 도구 | 횟수 |\n|---|---|\n| bash | 10 |\n| 읽기 | 7 |";
+		const [part, ...rest] = renderDiscordParts(body, false);
+		expect(rest).toHaveLength(0);
+		expect(part).toBe("```\n도구 | 횟수\n-----+-----\nbash | 10\n읽기 | 7\n```");
+		const inner = (part ?? "").split("\n").slice(1, -1);
+		expect(inner[1]).toBe("-----+-----");
+		const pipeColumns = [inner[0], inner[2], inner[3]].map((line) =>
+			displayWidth((line ?? "").slice(0, (line ?? "").indexOf("|"))),
+		);
+		expect(pipeColumns).toEqual([5, 5, 5]);
+	});
+
+	test("strips **bold**, __bold__, `code`, [label](url) inside cells before measuring width; keeps others as-is", () => {
+		const body = [
+			"| **항목** | __상태__ | `값` | [문서](https://x.test/a_(b)) |",
+			"|---|---|---|---|",
+			"| **굵게** | __밑줄__ | `코드` | [이름](https://x) |",
+			"| *기울임* | a__b__c | `__proto__` | ~~취소~~ |",
+			"| **[링크](https://x)** | [`코드링크`](https://y) | a \\| b | _유지_ |",
+		].join("\n");
+		const [part] = renderDiscordParts(body, false);
+		const inner = (part ?? "").split("\n").slice(1, -1);
+		expect(inner).toEqual([
+			"항목     | 상태     | 값        | 문서",
+			"---------+----------+-----------+---------",
+			"굵게     | 밑줄     | 코드      | 이름",
+			"*기울임* | a__b__c  | __proto__ | ~~취소~~",
+			"링크     | 코드링크 | a | b     | _유지_",
+		]);
+		const widths = [inner[0], inner[2], inner[3]].map((line) =>
+			[...(line ?? "").matchAll(/\|/g)].map((m) => displayWidth((line ?? "").slice(0, m.index))),
+		);
+		expect(widths).toEqual([
+			[9, 20, 32],
+			[9, 20, 32],
+			[9, 20, 32],
+		]);
+	});
+
+	test("pads short rows with empty cells and drops extra cells past the header width", () => {
+		const body = "| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |";
+		expect(renderDiscordParts(body, false)).toEqual(["```\na | b | c\n--+---+--\n1 |   |\n1 | 2 | 3\n```"]);
+	});
+
+	test("keeps an aligned table under 2000 chars whole even when alignment expands it past original length", () => {
+		const table = [
+			"| col1 | col2 |",
+			"|---|---|",
+			`| ${"가".repeat(30)} | 1 |`,
+			...Array.from({ length: 15 }, (_, i) => `| r${i} | v${i} |`),
+		].join("\n");
+		const prefix = "a".repeat(1900 - table.length);
+		const parts = renderDiscordParts(`${prefix}\n\n${table}\n\n끝`, false);
+		expect(parts.length).toBeGreaterThan(1);
+		for (const part of parts) expect(part.length).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+		expect(parts.some((part) => part.includes("col1") && part.includes("r14") && part.includes("v14"))).toBe(true);
+	});
+
+	test("splits an aligned table exceeding 2000 chars cleanly with closed fences per part", () => {
+		const rows = Array.from({ length: 90 }, (_, i) => `| 행${String(i).padStart(2, "0")} | ${"내용".repeat(10)} |`);
+		const body = ["| 번호 | 설명 |", "|---|---|", ...rows].join("\n");
+		const parts = renderDiscordParts(body, false);
+		expect(parts.length).toBeGreaterThan(1);
+		for (const part of parts) {
+			expect(part.length).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+			expect((part.match(/```/g) ?? []).length % 2).toBe(0);
+		}
+	});
+});
+
+describe("quadratic input (qa-z #30, #33, #34)", () => {
+	const SIZE = 65_536;
+	const table = (cell: string): string => `| a | b |\n|---|---|\n| x | ${cell} |`;
+	const elapsed = (run: () => unknown): number => {
+		const start = performance.now();
+		run();
+		return performance.now() - start;
+	};
+
+	test.each(["<!a", "<#1|", "<http:a", "<https://x|"])(
+		"an unclosed Slack token %p repeated to 64KB converts in bounded time",
+		(unit) => {
+			const text = unit.repeat(Math.ceil(SIZE / unit.length));
+			expect(elapsed(() => mrkdwnToDiscord(text))).toBeLessThan(250);
+		},
+	);
+
+	test("an unclosed token still converts when it is closed", () => {
+		expect(mrkdwnToDiscord("<!here> <!subteam^S1|@dev> <#9|x>")).toBe("here subteam <#9>");
+	});
+
+	test.each(["[", "**a ", "__a ", "`a", "[a]("])(
+		"a table cell of %p repeated to 64KB renders in bounded time",
+		(unit) => {
+			const cell = unit.repeat(Math.ceil(SIZE / unit.length));
+			expect(elapsed(() => renderDiscordMessages(table(cell), false))).toBeLessThan(250);
+		},
+	);
+
+	test("a 10000-character underscore cell renders instead of overflowing the stack", () => {
+		const out = renderDiscordMessages(table("_".repeat(10_000)), false);
+		expect(out.length).toBeGreaterThan(0);
+	});
+
+	test("cell markdown is still stripped inside the span caps", () => {
+		const out = renderDiscordMessages(table("**굵게** `코드` [라벨](https://x.y) __밑줄__"), false);
+		expect(out[0]?.content).toContain("굵게 코드 라벨 밑줄");
+	});
+});
+
+describe("renderDiscordMessages copy blocks", () => {
+	const copy = (text: string): string => `\`\`\`copy\n${text}\n\`\`\``;
+	const contents = (body: string, redelivered = false, footer?: string): string[] =>
+		renderDiscordMessages(body, redelivered, footer).map((part) => part.content);
+
+	test("a copy fence is a message of its own with the bare text; text around it stays apart", () => {
+		const id = "/resolve discord:1234567890123456789/9876543210987654321";
+		expect(contents(`앞 글\n${copy(`\n${id}\n\n`)}\n뒷 글`)).toEqual(["앞 글", id, "뒷 글"]);
+	});
+
+	test("several copy fences go out one by one, in order, with cards between", () => {
+		const card = '```card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"T"},"children":[]}}}\n```';
+		const parts = renderDiscordMessages(`${copy("a")}\n${card}\n${copy("b c")}\n${copy("d")}`, false);
+		expect(parts.map((p) => (p.embeds ? "embed" : p.content))).toEqual(["a", "embed", "b c", "d"]);
+	});
+
+	test("a blank or over-long copy fence stays an ordinary code block in the text", () => {
+		const long = "x".repeat(MESSAGE_CONTENT_LIMIT + 1);
+		expect(contents(`가\n${copy("")}\n나`)).toEqual([`가\n${copy("")}\n나`]);
+		const out = contents(copy(long));
+		expect(out.length).toBeGreaterThan(1);
+		expect(out.every((part) => part.length <= MESSAGE_CONTENT_LIMIT)).toBe(true);
+		expect(contents(copy("x".repeat(MESSAGE_CONTENT_LIMIT)))).toEqual(["x".repeat(MESSAGE_CONTENT_LIMIT)]);
+	});
+
+	test("a plain code block stays inside its text message", () => {
+		expect(contents("가\n```\nlog\n```\n나")).toEqual(["가\n```\nlog\n```\n나"]);
+	});
+
+	test("a copy fence inside another fence is not cut out", () => {
+		const body = `\`\`\`\`md\n${copy("a")}\n\`\`\`\``;
+		expect(contents(body)).toEqual([body]);
+	});
+
+	test("redelivered line and footer never join a copy message", () => {
+		expect(contents(copy("cmd"), true, "3s")).toEqual([REDELIVERED_PREFIX, "cmd", "_3s_"]);
+		expect(contents(`${copy("cmd")}\n끝`, false, "3s")).toEqual(["cmd", "끝\n_3s_"]);
+		expect(contents(`시작\n${copy("cmd")}`, true)).toEqual([`${REDELIVERED_PREFIX}\n시작`, "cmd"]);
+	});
+});

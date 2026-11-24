@@ -1,0 +1,239 @@
+import { LANE_MODEL_TIERS } from "../model-tiers";
+import type { HostToolDef } from "../safety/host-tools";
+import { TASK_RISKS } from "../tasks/docs";
+import type { LaneManager } from "./manager";
+import { LaneInputError } from "./manager-constants";
+import { RESERVATION_AFTER_MAX } from "./reservations";
+import { SILENCE_PROPERTIES, silenceParams, stringParam } from "./tool-params";
+import { WORKFLOW_NAMES } from "./workflow";
+
+/** Offered to chat sessions: starts a work lane in `channel` (like the `작업: <제목> @<경로>` message); on Discord a thread. */
+export function buildWorkStartTool(manager: LaneManager, channel: string, originKey: string): HostToolDef {
+	return {
+		name: "ompbot_work_start",
+		label: "Start work lane",
+		description:
+			"Start a long task as its own work lane: a new chat thread and a separate omp session working in its own git worktree and branch (`lane/L-YYYYMMDD-NN`) of the repository that contains `cwd`. Use it for tasks that take long or touch another project. Returns the lane name.",
+		parameters: {
+			type: "object",
+			properties: {
+				title: { type: "string", description: "Short title shown on the thread" },
+				cwd: { type: "string", description: "Absolute path of the project directory (inside a git repository)" },
+				brief: { type: "string", description: "What the lane must do" },
+				acceptance: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						'Acceptance criteria, one per item. An item may end with `[check: command ["bun","run","check"]]` (or `file <path>`): the bot re-runs it in the lane worktree before the lane can close.',
+				},
+				risk: {
+					type: "string",
+					enum: [...TASK_RISKS],
+					description: "Risk class L0 (trivial) .. L4 (dangerous); default L3",
+				},
+				scope: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						'Repository-relative globs the lane may change (e.g. ["src/lanes/**", "test/lane-*.test.ts"]). At close every file the claim commit changed is matched; any outside holds the auto-merge and is shown on the Outcome card. Omit for no check.',
+				},
+				model: {
+					type: "string",
+					enum: [...LANE_MODEL_TIERS],
+					description:
+						"Model tier of the lane session (owner config `lanes.models`): high for design, debugging or wide changes; middle for ordinary implementation; low for mechanical edits. Omit to let the risk class decide (L0-L1 low, L2 middle, L3 and above or unrated high); L3 and above always run on high.",
+				},
+				tierReason: {
+					type: "string",
+					description:
+						"One line on why that model tier was chosen (shown on the lane card). Omit for the default wording.",
+				},
+				tierConfidence: {
+					type: "number",
+					minimum: 0,
+					maximum: 1,
+					description: "Confidence 0..1 in the tier choice (the judge's conf, when one was asked).",
+				},
+				externalPr: {
+					type: "object",
+					properties: {
+						repo: {
+							type: "string",
+							description: "GitHub owner/name that receives the PR; default: read from the origin remote",
+						},
+						base: { type: "string", description: "PR base branch; default: the lane's base branch" },
+						bodyFile: { type: "string", description: "Repository-relative PR body file; default pr-body.md" },
+						title: { type: "string", description: "PR title; default: the lane title" },
+						pushRemote: {
+							type: "string",
+							description: "git remote to push to; default: the remote of the gh login's fork (made when none)",
+						},
+						branch: { type: "string", description: "Branch to create on the remote; default pr/<laneId>" },
+					},
+					additionalProperties: false,
+					description:
+						"Mark the lane as an external pull request (e.g. a contribution to someone else's repository): it is never merged into its base branch; when it closes, its card offers PR 게시 (owner approval, push to the fork without force, gh pr create), 보류 and 폐기.",
+				},
+				workflow: {
+					type: "object",
+					properties: {
+						name: {
+							type: "string",
+							enum: [...WORKFLOW_NAMES],
+							description:
+								"ulw-execute for a lane that carries out a written spec, ulw-plan for a lane that only plans; ulw, ulw-loop, mass-ulw, ulw-research or jevify otherwise",
+						},
+						reason: { type: "string", description: "Why this workflow (one line, required)" },
+					},
+					required: ["name", "reason"],
+					additionalProperties: false,
+					description:
+						"Optional: the one workflow the lane runs under; its keyword opens the lane's first prompt. Omit when light direct work is enough — no workflow keyword is added then, and a word in `brief` never selects one. A chosen ULW workflow that the lane's omp has not loaded closes the lane as failed instead of running it as plain work.",
+				},
+				after: {
+					type: "array",
+					items: { type: "string" },
+					minItems: 1,
+					maxItems: RESERVATION_AFTER_MAX,
+					description:
+						"Names of lanes of the same repository that must land first. No lane starts now: the request is reserved with these arguments frozen, and once every one of them has landed the owner gets a start card (nothing starts by itself; a reservation expires after 24 hours).",
+				},
+				force: {
+					type: "boolean",
+					description:
+						"Only true when the owner explicitly accepted the tight host after a `시작 거부: 호스트 여유` refusal (memory·disk). Anything else (including a busy load) is not force: pass the refusal to the owner instead.",
+				},
+			},
+			required: ["title", "cwd"],
+			additionalProperties: false,
+		},
+		async execute(params) {
+			const brief = typeof params.brief === "string" ? params.brief : undefined;
+			const args = {
+				title: stringParam(params, "title"),
+				cwd: stringParam(params, "cwd"),
+				brief,
+				channel,
+				acceptance: params.acceptance,
+				risk: params.risk,
+				scope: params.scope,
+				model: params.model,
+				tierReason: params.tierReason,
+				tierConfidence: params.tierConfidence,
+				externalPr: params.externalPr,
+				workflow: params.workflow,
+			};
+			if (params.after !== undefined) {
+				const reservation = await manager.reserve({
+					args,
+					after: params.after,
+					originKey,
+					threadRef: manager.store.latestInboundThread(originKey),
+				});
+				return `예약됨 #${reservation.id}: ${reservation.after.join(", ")} 착지 뒤 시작 가능 카드를 올립니다 (24시간 안에 시작하지 않으면 만료). tell the owner the reservation is waiting; no lane was started.`;
+			}
+			const lane = await manager
+				.start({ ...args, parentOrigin: originKey, force: params.force === true, reuseOpen: true })
+				.catch((error: unknown) => {
+					// The capacity refusal carries the measured numbers; the force hint is this surface's, not the manager's.
+					if (error instanceof LaneInputError && error.message.startsWith("시작 거부: "))
+						throw new LaneInputError(`${error.message} — 오너가 강행한다고 명시하면 force: true로 다시 시작하세요`);
+					throw error;
+				});
+			const link = await manager.threadLink(lane);
+			const state = lane.reused === true ? "already open for this request" : "started";
+			const started = `lane ${lane.name} ${state} (thread ${lane.threadRef}, origin ${lane.originKey})`;
+			const reply = link === undefined ? started : `${started}; tell the owner the lane thread link: ${link}`;
+			return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+		},
+	};
+}
+
+/** Offered to a lane session only. The lane reports milestones and claims completion through these. */
+export function buildLaneTools(manager: LaneManager, originKey: string): HostToolDef[] {
+	return [
+		{
+			name: "ompbot_lane_progress",
+			label: "Report lane milestone",
+			description:
+				"Report a milestone of this work lane in one line; it is shown in the lane's status message in its chat thread. It needs `evidence`: either `{ file }`, a regular file inside this lane's worktree that shows the milestone (a test log, a changed source file), or `{ toolCallId }`, the id of a tool call of this session that finished without error (not an `ompbot_*` tool). The core records the sha256 of the file or of the call's result; a missing, linked or outside file, or a failed, unknown or `ompbot_*` call means the report is not recorded. With `needsOwner: true` the line is the question the owner must decide: it needs no evidence, and the turn ends after it.",
+			parameters: {
+				type: "object",
+				properties: {
+					text: { type: "string", description: "One-line milestone, or the owner's decision to make" },
+					evidence: {
+						type: "object",
+						description:
+							"Proof of the milestone: one of a regular file inside the lane worktree, or a finished tool call of this session",
+						properties: {
+							file: { type: "string", description: "Path of the file (relative or absolute)" },
+							toolCallId: {
+								type: "string",
+								description: "Id of a tool call of this session that finished without error",
+							},
+						},
+						additionalProperties: false,
+					},
+					needsOwner: {
+						type: "boolean",
+						description: "True when the lane waits for the owner's decision (the turn ends after this call)",
+					},
+					...SILENCE_PROPERTIES,
+				},
+				required: ["text"],
+				additionalProperties: false,
+			},
+			execute: async (params) =>
+				manager.progress(originKey, stringParam(params, "text"), {
+					needsOwner: params.needsOwner === true,
+					evidence: params.evidence,
+					...silenceParams(params),
+				}),
+		},
+		{
+			name: "ompbot_claim_done",
+			label: "Claim lane done",
+			description:
+				"Claim that this lane's task is finished. The bot itself checks that `git -C <repo> status --porcelain` is empty and that the commit exists; only then the lane closes. Commit everything first.",
+			parameters: {
+				type: "object",
+				properties: {
+					repo: { type: "string", description: "Absolute path of the git repository" },
+					commit: { type: "string", description: "Sha of the commit that contains the work" },
+					summary: {
+						type: "string",
+						description:
+							"Five lines: 결과 (done/partial/blocked + gist), 변경 (files, behavior), 증거 (exact commands actually run, results, criteria shown), 미확인 (unrun checks, risks, or 없음), 인계 (remaining work or owner decisions, or 없음)",
+					},
+					leftovers: {
+						type: "array",
+						maxItems: 20,
+						items: {
+							type: "object",
+							properties: {
+								text: { type: "string", description: "One line of remaining work (cut to 200 characters)" },
+								blocking: {
+									type: "boolean",
+									description: "True when the work must be done before merging (holds the auto-merge)",
+								},
+							},
+							required: ["text", "blocking"],
+							additionalProperties: false,
+						},
+						description:
+							"The 인계 line as items: blocking ones hold the auto-merge; the others are written to the bot's follow-up ledger when the lane is merged. Omit when nothing is left.",
+					},
+				},
+				required: ["repo", "commit", "summary"],
+				additionalProperties: false,
+			},
+			execute: async (params) =>
+				manager.claimDone(originKey, {
+					repo: stringParam(params, "repo"),
+					commit: stringParam(params, "commit"),
+					summary: stringParam(params, "summary"),
+					leftovers: params.leftovers,
+				}),
+		},
+	];
+}

@@ -1,0 +1,206 @@
+import { readdirSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import type { TurnSettledInfo } from "../../src/core/mailbox";
+import { OriginRouter, openBotStore, sessionDirFor } from "../../src/core/origin";
+import type { InboundRecord } from "../../src/core/types";
+import { DiscordChannel } from "../../src/discord/channel";
+import { LaneManager } from "../../src/lanes/manager";
+import type { LaneManagerDeps } from "../../src/lanes/manager-types";
+import { defaultGit } from "../../src/lanes/verify";
+import { createLogger } from "../../src/log";
+import type { OmpSessionDriver } from "../../src/omp/driver";
+import { FakeOmpDriver, FakeSessionStore } from "../../src/omp/fake-driver";
+import { IDLE_HOST_LOAD } from "../../src/ops/host-resources";
+import { redact } from "../../src/redact";
+import type { Store } from "../../src/store/db";
+import { OWNER, WaitingDiscordTransport } from "./bot-home";
+import { registryOf } from "./channels";
+
+/** 2027-01-15 KST: lane ids of a harness lane read `L-20270115-NN`. */
+export const LANE_START = 1_800_000_000_000;
+
+/** Removes a fixture repository together with the lane worktrees created beside it (`<repo>-l-<yyyymmdd>-<nn>`). */
+export function removeRepoAndWorktrees(repo: string): void {
+	const prefix = `${basename(repo)}-l-`;
+	for (const entry of readdirSync(dirname(repo))) {
+		if (entry.startsWith(prefix)) rmSync(join(dirname(repo), entry), { recursive: true, force: true });
+	}
+	rmSync(repo, { recursive: true, force: true });
+}
+
+export interface LaneHarness {
+	manager: LaneManager;
+	store: Store;
+	transport: WaitingDiscordTransport;
+	drivers: Map<string, FakeOmpDriver>;
+	logs: string[];
+	advance(ms: number): void;
+	/** Resolves once every mailbox call, background verdict and other background work of the manager has been handled. */
+	settle(): Promise<void>;
+	/** Hands an inbound row to the origin's mailbox like the daemon does (an owner message in the lane's thread). */
+	route(record: InboundRecord): Promise<void>;
+	/** `steer:` calls the lane's omp child received. */
+	steers(originKey: string): string[];
+	/** `prompt:` calls the lane's omp child received. */
+	prompts(originKey: string): string[];
+	/** Resolves at the next turn end a mailbox reports, after the manager handled it (`onTurnSettled`). */
+	turnSettled(): Promise<TurnSettledInfo>;
+	close(): void;
+}
+
+/** Builds the driver the router hands a lane session (tests substitute a never-settling fake here). */
+export type LaneDriverFactory = (originKey: string, sessionDir: string) => OmpSessionDriver;
+
+/** The manager seams a harness test may replace, plus the lane session's driver. */
+export type LaneHarnessExtra = Partial<
+	Pick<
+		LaneManagerDeps,
+		| "hostOps"
+		| "verify"
+		| "collectDiff"
+		| "frozen"
+		| "maxLanes"
+		| "land"
+		| "autoLandPolicy"
+		| "autoLandHold"
+		| "repoMatches"
+		| "integrity"
+		| "approvals"
+		| "ownerUserId"
+		| "laneBusy"
+		| "reviewer"
+		| "qaWorktreesDir"
+		| "lanesDir"
+		| "changesGit"
+		| "rebaseGit"
+		| "pidAlive"
+		| "wikiNotes"
+		| "requestApproval"
+		| "prTools"
+		| "landMode"
+		| "prLandSeams"
+		| "hostLoad"
+		| "hostSessions"
+		| "laneModels"
+		| "ownerSilenceConfig"
+		| "statfs"
+	>
+> & {
+	driver?: LaneDriverFactory;
+	/** True for a core message whose route must fail (the mailbox refusing it). */
+	routeFails?: (record: InboundRecord) => boolean;
+};
+
+/** A `LaneManager` over a real store and router with held fake omp turns, a fake clock and a fake Discord. */
+export function laneHarness(homeDir: string, extra: LaneHarnessExtra = {}): LaneHarness {
+	const { driver: laneDriver, routeFails, ...managerExtra } = extra;
+	let now = LANE_START;
+	const clock = { now: () => now };
+	const store = openBotStore(join(homeDir, "ompbot.db"), clock, "Asia/Seoul");
+	const transport = new WaitingDiscordTransport();
+	const sessions = new FakeSessionStore();
+	const drivers = new Map<string, FakeOmpDriver>();
+	const sessionsRoot = join(homeDir, "sessions");
+	const logs: string[] = [];
+	const log = createLogger({ sink: (line) => logs.push(line), clock, redact });
+	const settledWaiters: Array<(info: TurnSettledInfo) => void> = [];
+	// Assigned right below the router: the router tells it when a held lane's child starts working again.
+	let manager!: LaneManager;
+	const router = new OriginRouter({
+		timezone: "Asia/Seoul",
+		store,
+		clock,
+		log,
+		sessionsRoot,
+		statusProvider: () => "",
+		// The registry is the single source of the hold (like the daemon): a restart keeps it; so is the core's rebase.
+		isHeld: (originKey) =>
+			store.getLaneByOrigin(originKey)?.status === "paused" || manager?.isCoreRebasing(originKey) === true,
+		isAttached: (originKey) => store.getLaneByOrigin(originKey)?.meta.attach !== undefined,
+		onHeldWork: (info) => manager?.onHeldWork(info.originKey),
+		// Like the daemon: a new lane session gets its todos.
+		initialTodos: (originKey) => manager?.initialTodos(originKey),
+		launchRefusal: (originKey, driver) => manager.launchRefusal(originKey, driver),
+		onLaunchRefused: (originKey, reason) => manager.failLaunch(originKey, reason),
+		onTurnSettled: (info) => {
+			for (const resolve of settledWaiters.splice(0)) resolve(info);
+		},
+		driverFactory:
+			laneDriver ??
+			((origin, sessionDir) => {
+				const driver = new FakeOmpDriver({ sessionDir, store: sessions, holdTurns: true });
+				drivers.set(origin, driver);
+				return driver;
+			}),
+	});
+	const pending: Promise<unknown>[] = [];
+	manager = new LaneManager({
+		timezone: "Asia/Seoul",
+		store,
+		channels: registryOf(new DiscordChannel(transport, { ownerUserId: OWNER })),
+		clock,
+		log,
+		sessionsRoot,
+		// The start-capacity gate would otherwise read this machine's live memory.
+		hostLoad: IDLE_HOST_LOAD,
+		route: (record) => {
+			if (routeFails?.(record) === true) return Promise.reject(new Error("route refused"));
+			const run = router.route(record);
+			pending.push(run);
+			return run;
+		},
+		stopWhenIdle: (origin) => {
+			const run = router.mailbox(origin).stopWhenIdle();
+			pending.push(run);
+			return run;
+		},
+		pauseTurn: (origin) => {
+			const run = router.mailbox(origin).pauseTurn();
+			pending.push(run);
+			return run;
+		},
+		resumePending: (origin) => {
+			const run = router.mailbox(origin).resumePending();
+			pending.push(run);
+			return run;
+		},
+		sessionDirFor: (origin) => sessionDirFor(sessionsRoot, origin, 1),
+		// Like the daemon: the follow-up ledger lives in the bot home.
+		followupsFile: join(homeDir, "followups.jsonl"),
+		session: router.sessionOps(),
+		// The core's rebase commits: a throwaway identity, like the fixtures' git (no global git config needed).
+		rebaseGit: (args) => defaultGit(["-c", "user.name=t", "-c", "user.email=t@example.com", ...args]),
+		...managerExtra,
+	});
+	const callsOf = (originKey: string, prefix: string) =>
+		drivers.get(originKey)?.calls.filter((call) => call.startsWith(prefix)) ?? [];
+	return {
+		manager,
+		store,
+		transport,
+		drivers,
+		logs,
+		advance: (ms) => {
+			now += ms;
+		},
+		settle: async () => {
+			// Background work (a verdict the tick started, an Outcome card, an auto-merge) may route more messages: wait
+			// until none is left.
+			for (let seen = -1; seen !== pending.length; ) {
+				seen = pending.length;
+				await Promise.all(pending);
+				await manager.settledInBackground();
+				await manager.idle();
+			}
+		},
+		route: (record) => {
+			const run = router.route(record);
+			pending.push(run);
+			return run;
+		},
+		steers: (originKey) => callsOf(originKey, "steer:"),
+		turnSettled: () => new Promise((resolve) => settledWaiters.push(resolve)),
+		prompts: (originKey) => callsOf(originKey, "prompt:"),
+		close: () => store.close(),
+	};
+}

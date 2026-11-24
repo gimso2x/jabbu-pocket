@@ -1,0 +1,222 @@
+import { join } from "node:path";
+import { parseArgs } from "node:util";
+import { callDaemon } from "../daemon/ipc";
+import type { DrainCounts } from "../daemon/status";
+
+export const DRAIN_USAGE = `  drain [--wait [--timeout <min>]] | --cancel
+                                 hold new turns/monitor fires for a restart (inbound stays pending); --wait exits 0 once
+                                 no turn, host tool or approval is left, or cancels the drain and exits 1 at the
+                                 timeout (default 60 min), and on SIGINT/SIGTERM/SIGHUP cancels it and exits 128+signal;
+                                 --cancel ends the drain and dispatches what waited
+`;
+
+/** How often `drain --wait` re-reads the daemon's counts. */
+const POLL_MS = 1_000;
+const DEFAULT_TIMEOUT_MIN = 60;
+
+type DrainResponse = { ok: true; draining: boolean } & DrainCounts;
+
+function isDrainResponse(value: unknown): value is DrainResponse {
+	return typeof value === "object" && value !== null && "ok" in value && value.ok === true && "draining" in value;
+}
+
+const countsText = (r: DrainCounts): string => `turns=${r.turns} hostTools=${r.hostTools} approvals=${r.approvals}`;
+
+export interface DrainWaitOptions {
+	/** One daemon drain op; throws when the daemon is unreachable or answers something unexpected. */
+	call: (op: "drain" | "drain_status" | "drain_cancel") => Promise<DrainResponse>;
+	timeoutMin: number;
+	/**
+	 * Cut limit (min): still busy by then, the wait ends `{ ok: true, cut: true }` with the drain kept on (the caller
+	 * restarts anyway). Given, it replaces `timeoutMin`; absent, the timeout cancels the drain as before.
+	 */
+	cutAfterMin?: number;
+	now?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+	/** Called once after the drain is requested, before the wait loop. */
+	onStarted?: (counts: DrainCounts) => void;
+}
+
+export type DrainWaitResult =
+	| { ok: true; cut?: true; counts: DrainCounts }
+	| { ok: false; reason: "cancelled_elsewhere" | "timeout"; counts: DrainCounts }
+	| { ok: false; reason: "unreachable"; error: string };
+
+/** Starts a drain and waits until nothing is unfinished; on timeout the drain is cancelled. Shared by `drain --wait` and `apply`. */
+export async function waitForDrain(options: DrainWaitOptions): Promise<DrainWaitResult> {
+	const now = options.now ?? Date.now;
+	const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
+	let accepted = false;
+	try {
+		const cut = options.cutAfterMin !== undefined;
+		const deadline = now() + (options.cutAfterMin ?? options.timeoutMin) * 60_000;
+		let state = await options.call("drain");
+		accepted = true;
+		options.onStarted?.(state);
+		for (;;) {
+			if (!state.draining) return { ok: false, reason: "cancelled_elsewhere", counts: state };
+			if (state.turns === 0 && state.hostTools === 0 && state.approvals === 0) return { ok: true, counts: state };
+			if (now() >= deadline) {
+				if (cut) return { ok: true, cut: true, counts: state };
+				await options.call("drain_cancel");
+				return { ok: false, reason: "timeout", counts: state };
+			}
+			await sleep(Math.min(POLL_MS, Math.max(0, deadline - now())));
+			state = await options.call("drain_status");
+		}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		// The daemon has no drain expiry: a drain it accepted must not outlive this wait, or new turns stay held.
+		if (!accepted) return { ok: false, reason: "unreachable", error: message };
+		let cancel: string;
+		try {
+			await options.call("drain_cancel");
+			cancel = "drain cancelled";
+		} catch (cancelError) {
+			cancel = `drain cancel failed: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`;
+		}
+		return { ok: false, reason: "unreachable", error: `${message}; ${cancel}` };
+	}
+}
+
+const SIGNAL_EXIT = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 } as const;
+type GuardedSignal = keyof typeof SIGNAL_EXIT;
+
+/**
+ * Signals to a process holding a daemon drain (`drain --wait`, `apply`). The daemon has no drain expiry, so a
+ * SIGINT, SIGTERM or SIGHUP cancels the drain this process asked for, then exits 128+signal; nothing held, it just
+ * exits. Once the restart of that daemon was requested the drain goes with the old process, and a signal is ignored
+ * instead: an apply must not stop halfway through a restart or its rollback.
+ */
+export class DrainSignalGuard {
+	#socketPath: string | undefined;
+	#restarting = false;
+	#exiting = false;
+	readonly #log: (line: string) => void;
+	readonly #exit: (code: number) => void;
+	readonly #cancel: (socketPath: string) => Promise<unknown>;
+
+	constructor(options: {
+		log: (line: string) => void;
+		exit?: (code: number) => void;
+		/** Default: `drain_cancel` over the daemon socket. */
+		cancel?: (socketPath: string) => Promise<unknown>;
+	}) {
+		this.#log = options.log;
+		this.#exit = options.exit ?? ((code) => process.exit(code));
+		this.#cancel = options.cancel ?? ((socketPath) => socketDrainCall(socketPath)("drain_cancel"));
+	}
+
+	/** A drain is (about to be) requested from the daemon at `socketPath`; a signal from now on cancels it. */
+	drainStarted(socketPath: string): void {
+		this.#socketPath = socketPath;
+		this.#restarting = false;
+	}
+
+	/** The daemon of the held drain is being restarted: signals are ignored until the next `drainStarted`. */
+	restartRequested(): void {
+		this.#restarting = true;
+	}
+
+	/** Installs the SIGINT/SIGTERM/SIGHUP handlers; returns their remover. */
+	install(): () => void {
+		const handler = (signal: GuardedSignal): void => {
+			void this.#onSignal(signal);
+		};
+		const signals = Object.keys(SIGNAL_EXIT) as GuardedSignal[];
+		for (const signal of signals) process.on(signal, handler);
+		return () => {
+			for (const signal of signals) process.off(signal, handler);
+		};
+	}
+
+	async #onSignal(signal: GuardedSignal): Promise<void> {
+		if (this.#exiting) return;
+		if (this.#restarting) {
+			this.#log(`${signal} ignored: the daemon restart was already requested`);
+			return;
+		}
+		this.#exiting = true;
+		let note = "no drain held";
+		if (this.#socketPath !== undefined) {
+			try {
+				await this.#cancel(this.#socketPath);
+				note = "drain cancelled";
+			} catch (error) {
+				note = `drain cancel failed: ${error instanceof Error ? error.message : String(error)}`;
+			}
+		}
+		this.#log(`${signal}: ${note}; exiting`);
+		this.#exit(SIGNAL_EXIT[signal]);
+	}
+}
+
+/** Typed daemon drain call over the unix socket. */
+export function socketDrainCall(socketPath: string): DrainWaitOptions["call"] {
+	return async (op) => {
+		const response = await callDaemon(socketPath, { op }, 10_000);
+		if (!isDrainResponse(response)) throw new Error(`unexpected response: ${JSON.stringify(response)}`);
+		return response;
+	};
+}
+
+/** `ompbot drain`; resolves with the exit code. */
+export async function drainCommand(args: string[], homeDir: string): Promise<number> {
+	const { values } = parseArgs({
+		args,
+		options: { wait: { type: "boolean" }, timeout: { type: "string" }, cancel: { type: "boolean" } },
+	});
+	// `Number("")` is 0: the value must look like a number, as `apply --timeout` requires.
+	const timeoutMin =
+		values.timeout === undefined
+			? DEFAULT_TIMEOUT_MIN
+			: /^\d+(\.\d+)?$/.test(values.timeout)
+				? Number(values.timeout)
+				: Number.NaN;
+	if (!Number.isFinite(timeoutMin) || timeoutMin < 0) {
+		process.stderr.write("drain: --timeout must be a non-negative number of minutes\n");
+		return 2;
+	}
+	const socketPath = join(homeDir, "ompbot.sock");
+	const call = socketDrainCall(socketPath);
+	const unreachable = (error: unknown): number => {
+		process.stderr.write(`drain: daemon not reachable (${error instanceof Error ? error.message : String(error)})\n`);
+		return 1;
+	};
+	if (values.cancel === true || values.wait !== true) {
+		try {
+			if (values.cancel === true) {
+				process.stdout.write(`drain cancelled ${countsText(await call("drain_cancel"))}\n`);
+			} else {
+				process.stdout.write(`drain started ${countsText(await call("drain"))}\n`);
+			}
+			return 0;
+		} catch (error) {
+			return unreachable(error);
+		}
+	}
+	const guard = new DrainSignalGuard({ log: (line) => process.stderr.write(`drain: ${line}\n`) });
+	guard.drainStarted(socketPath);
+	const removeGuard = guard.install();
+	let result: DrainWaitResult;
+	try {
+		result = await waitForDrain({
+			call,
+			timeoutMin,
+			onStarted: (counts) => process.stdout.write(`drain started ${countsText(counts)}\n`),
+		});
+	} finally {
+		removeGuard();
+	}
+	if (result.ok) {
+		process.stdout.write(`drain_done ${countsText(result.counts)}\n`);
+		return 0;
+	}
+	if (result.reason === "unreachable") return unreachable(result.error);
+	process.stderr.write(
+		result.reason === "timeout"
+			? `drain: timed out after ${timeoutMin} min, drain cancelled ${countsText(result.counts)}\n`
+			: `drain: cancelled elsewhere ${countsText(result.counts)}\n`,
+	);
+	return 1;
+}

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="406" viewBox="0 0 1000 406" role="img" aria-labelledby="title desc" font-family="'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR','Noto Sans CJK KR',system-ui,sans-serif">
+  <title id="title">jabbu-pocket가 요청 하나를 처리하는 다섯 단계</title>
+  <desc id="desc">Discord에서 오너 요청이 들어오면 jabbu-pocket 데몬이 의도와 맥락을 읽어 판단하고, omp RPC 세션과 작업 레인이 일하며, 수락기준과 검사 증거로 확인한 뒤, 사람의 승인과 머지로 끝나는 흐름을 왼쪽에서 오른쪽으로 그린 그림.</desc>
+  <rect width="1000" height="406" rx="14" fill="#0d1117"/>
+  <text x="40" y="50" font-size="22" font-weight="700" fill="#e6edf3">요청 하나가 지나가는 다섯 칸</text>
+  <text x="40" y="76" font-size="13" fill="#8b949e">말이 들어오면 판단하고, 일하고, 증거로 확인한 뒤에 끝냅니다.</text>
+
+  <g>
+    <rect x="40" y="104" width="160" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+    <circle cx="66" cy="131" r="12" fill="#58a6ff"/>
+    <text x="66" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1117">1</text>
+    <text x="86" y="136" font-size="14.5" font-weight="700" fill="#e6edf3">오너 요청</text>
+    <line x1="56" y1="160" x2="184" y2="160" stroke="#21262d"/>
+    <text x="56" y="186" font-size="12.5" fill="#8b949e">Discord</text>
+    <text x="56" y="210" font-size="12.5" fill="#8b949e">DM·채널의 한 줄</text>
+    <text x="56" y="234" font-size="12.5" fill="#8b949e">오너만 통과</text>
+  </g>
+
+  <g>
+    <rect x="230" y="104" width="160" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+    <circle cx="256" cy="131" r="12" fill="#bc8cff"/>
+    <text x="256" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1117">2</text>
+    <text x="276" y="136" font-size="14.5" font-weight="700" fill="#e6edf3">데몬 판단</text>
+    <line x1="246" y1="160" x2="374" y2="160" stroke="#21262d"/>
+    <text x="246" y="186" font-size="12.5" fill="#8b949e">의도·맥락 먼저</text>
+    <text x="246" y="210" font-size="12.5" fill="#8b949e">직접 답할지</text>
+    <text x="246" y="234" font-size="12.5" fill="#8b949e">위임할지 고름</text>
+  </g>
+
+  <g>
+    <rect x="420" y="104" width="160" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+    <circle cx="446" cy="131" r="12" fill="#3fb950"/>
+    <text x="446" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1117">3</text>
+    <text x="466" y="136" font-size="14.5" font-weight="700" fill="#e6edf3">위임 실행</text>
+    <line x1="436" y1="160" x2="564" y2="160" stroke="#21262d"/>
+    <text x="436" y="186" font-size="12.5" fill="#8b949e">omp RPC 세션</text>
+    <text x="436" y="210" font-size="12.5" fill="#8b949e">작업 레인·[TASK]</text>
+    <text x="436" y="234" font-size="12.5" fill="#8b949e">워크트리에서 커밋</text>
+  </g>
+
+  <g>
+    <rect x="610" y="104" width="160" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+    <circle cx="636" cy="131" r="12" fill="#d29922"/>
+    <text x="636" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1117">4</text>
+    <text x="656" y="136" font-size="14.5" font-weight="700" fill="#e6edf3">증거 확인</text>
+    <line x1="626" y1="160" x2="754" y2="160" stroke="#21262d"/>
+    <text x="626" y="186" font-size="12.5" fill="#8b949e">수락기준 대조</text>
+    <text x="626" y="210" font-size="12.5" fill="#8b949e">검사 재실행</text>
+    <text x="626" y="234" font-size="12.5" fill="#8b949e">통과분만 인정</text>
+  </g>
+
+  <g>
+    <rect x="800" y="104" width="160" height="170" rx="12" fill="#161b22" stroke="#30363d"/>
+    <circle cx="826" cy="131" r="12" fill="#f778ba"/>
+    <text x="826" y="136" text-anchor="middle" font-size="13" font-weight="700" fill="#0d1117">5</text>
+    <text x="846" y="136" font-size="14.5" font-weight="700" fill="#e6edf3">승인·머지</text>
+    <line x1="816" y1="160" x2="944" y2="160" stroke="#21262d"/>
+    <text x="816" y="186" font-size="12.5" fill="#8b949e">사람이 끝을 정함</text>
+    <text x="816" y="210" font-size="12.5" fill="#8b949e">장부에 남김</text>
+    <text x="816" y="234" font-size="12.5" fill="#8b949e">다음 턴으로</text>
+  </g>
+
+  <g stroke="#58a6ff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M205 189 H220"/>
+    <path d="M214 183 L220 189 L214 195"/>
+    <path d="M395 189 H410"/>
+    <path d="M404 183 L410 189 L404 195"/>
+    <path d="M585 189 H600"/>
+    <path d="M594 183 L600 189 L594 195"/>
+    <path d="M775 189 H790"/>
+    <path d="M784 183 L790 189 L784 195"/>
+  </g>
+
+  <rect x="40" y="298" width="920" height="64" rx="10" fill="#161b22" stroke="#21262d"/>
+  <text x="60" y="322" font-size="11" fill="#8b949e">설계 원칙</text>
+  <text x="60" y="344" font-size="13.5" fill="#e6edf3">대화방마다 omp 세션 하나 · 장부(SQLite)가 진실의 원천 · 되돌릴 수 없는 일은 승인 카드</text>
+</svg>

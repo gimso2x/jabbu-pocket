@@ -1,0 +1,129 @@
+import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { defaultHomeDir, HOME_MODE, SECRET_MODE, workspaceOverlapsHome } from "../config";
+import { remoteShellQuote } from "../dispatch/omp";
+
+export const INIT_USAGE = `  init [--platform discord] --owner <Discord user id> --app-id <application id> [--omp <abs path>] [--workspace <dir>] | --help
+                                 create the home (0700), secrets/ (0700), the workspace and a minimal config.json (0600);
+                                 --omp defaults to omp on PATH, --workspace to <home>/workspace; never writes tokens and
+                                 never touches an existing config.json (exit 2)
+`;
+
+const SNOWFLAKE = /^[0-9]{17,20}$/;
+
+function fail(message: string): number {
+	process.stderr.write(`init: ${message}\n${INIT_USAGE}`);
+	return 2;
+}
+
+/** `ompbot init`: every argument is checked before anything is created, so a refused run leaves no trace. */
+export function initCommand(args: string[], env: Record<string, string | undefined>): number {
+	let values: {
+		owner?: string;
+		omp?: string;
+		workspace?: string;
+		help?: boolean;
+		platform?: string;
+		"app-id"?: string;
+	};
+	try {
+		({ values } = parseArgs({
+			args,
+			options: {
+				owner: { type: "string" },
+				platform: { type: "string" },
+				"app-id": { type: "string" },
+				omp: { type: "string" },
+				workspace: { type: "string" },
+				help: { type: "boolean", short: "h" },
+			},
+		}));
+	} catch (error) {
+		return fail(error instanceof Error ? error.message : String(error));
+	}
+	if (values.help === true) {
+		process.stdout.write(INIT_USAGE);
+		return 0;
+	}
+	const platform = values.platform ?? "discord";
+	if (platform !== "discord") return fail("--platform must be discord");
+	for (const [option, value] of [
+		["--owner", values.owner],
+		["--app-id", values["app-id"]],
+	] as const) {
+		if (value === undefined || !SNOWFLAKE.test(value)) return fail(`${option} must be a Discord id (17-20 digits)`);
+	}
+	// An empty value would resolve to the current directory; leave the option out to get the default instead.
+	if (values.omp === "") return fail("--omp is empty; leave it out to use omp on PATH");
+	if (values.workspace === "") return fail("--workspace is empty; leave it out to use <home>/workspace");
+	const omp = values.omp === undefined ? Bun.which("omp", { PATH: env.PATH ?? "" }) : resolve(values.omp);
+	if (omp === null) return fail("omp not found on PATH; pass --omp <absolute path to omp>");
+	if (!existsSync(omp)) return fail(`--omp ${omp} does not exist`);
+	if (!statSync(omp).isFile()) return fail(`--omp ${omp} is a directory, not the omp executable`);
+	try {
+		accessSync(omp, constants.X_OK);
+	} catch {
+		return fail(`--omp ${omp} is not executable`);
+	}
+
+	const homeDir = resolve(defaultHomeDir(env));
+	const configPath = join(homeDir, "config.json");
+	if (existsSync(configPath)) return fail(`${configPath} already exists; nothing changed`);
+	const workspaceDir = resolve(values.workspace ?? join(homeDir, "workspace"));
+	const secretsDir = join(homeDir, "secrets");
+	if (workspaceOverlapsHome(homeDir, workspaceDir)) {
+		return fail(`--workspace ${workspaceDir} is the home, config.json or inside secrets/; pick another directory`);
+	}
+	// mkdir fails halfway (raw EEXIST/ENOTDIR, a bare home left behind) when a file sits where a directory goes.
+	for (const [label, dir] of [
+		["home", homeDir],
+		["home", secretsDir],
+		["--workspace", workspaceDir],
+	] as const) {
+		let existing = dir;
+		while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+		if (!statSync(existing).isDirectory()) return fail(`${label} ${dir}: ${existing} is not a directory`);
+	}
+
+	// chmod follows links: a secrets/ that is a symlink (or not a directory) would change a path outside the home.
+	const secretsStat = lstatSync(secretsDir, { throwIfNoEntry: false });
+	if (secretsStat !== undefined && (secretsStat.isSymbolicLink() || !secretsStat.isDirectory())) {
+		return fail(`home ${secretsDir} is a symlink or not a directory; nothing changed`);
+	}
+
+	mkdirSync(homeDir, { recursive: true, mode: HOME_MODE });
+	chmodSync(homeDir, HOME_MODE);
+	mkdirSync(secretsDir, { recursive: true, mode: HOME_MODE });
+	chmodSync(secretsDir, HOME_MODE);
+	mkdirSync(workspaceDir, { recursive: true });
+	const config = {
+		schemaVersion: 1,
+		channels: {
+			discord: {
+				ownerUserId: values.owner,
+				botTokenFile: "secrets/discord-bot-token",
+				applicationId: values["app-id"],
+			},
+		},
+		ompExecutable: omp,
+		workspaceDir,
+		sessionRetentionDays: 30,
+	};
+	writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: SECRET_MODE, flag: "wx" });
+	chmodSync(configPath, SECRET_MODE);
+
+	const homePrefix =
+		env.OMPBOT_HOME === undefined || env.OMPBOT_HOME === "" ? "" : `OMPBOT_HOME=${remoteShellQuote(homeDir)} `;
+	process.stdout.write(
+		[
+			`init_done home=${homeDir} config=${configPath} workspace=${workspaceDir}`,
+			"next: put the Discord bot token into a file (never into chat or shell history), then run doctor:",
+			"  umask 077",
+			`  cat > ${remoteShellQuote(join(secretsDir, "discord-bot-token"))}   # paste the bot token then Ctrl-D`,
+			`  ${homePrefix}bun src/main.ts doctor`,
+			"",
+		].join("\n"),
+	);
+	return 0;
+}

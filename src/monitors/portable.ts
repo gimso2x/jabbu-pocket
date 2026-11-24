@@ -1,0 +1,433 @@
+import {
+	chmodSync,
+	copyFileSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { secretInodes } from "../ops/backup-tree";
+import type { MonitorLedger, MonitorRow } from "./ledger";
+import {
+	canTakeExport,
+	clearWriteTarget,
+	exportStem,
+	isMonitorFile,
+	PortableUsageError,
+	splitOption,
+} from "./portable-files";
+import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext } from "./spec";
+
+/**
+ * Host-independent monitor files (`ompbot monitors export|apply`): one JSON file per monitor holding only the spec
+ * fields, with paths under the scripts root and the workspace written as `@SCRIPTS@/…` and `@WORKSPACE@/…`, so the
+ * same file applies on a home with other paths. Webhook triggers carry no id or token; ids, cursors, state and
+ * timestamps stay in the database.
+ */
+const SCRIPTS_PLACEHOLDER = "@SCRIPTS@";
+const WORKSPACE_PLACEHOLDER = "@WORKSPACE@";
+/** A value spelled like a placeholder (`@SCRIPTS@`, `@WORKSPACE@/x`) or like one with extra leading `@`s. */
+const PLACEHOLDER_LIKE = /^(@+)((?:SCRIPTS|WORKSPACE)@(?:\/.*)?)$/s;
+/** The spec context of one home; export and apply need the workspace to map paths against. */
+export type PortableContext = SpecContext & { workspaceDir: string };
+
+/** The stored spec of a row, in the shape `parseMonitorSpec` returns. */
+export function specOfRow(row: MonitorRow): MonitorSpec {
+	return {
+		name: row.name,
+		trigger: row.trigger,
+		instruction: row.instruction,
+		overlap: row.overlap,
+		enabled: row.enabled,
+		...(row.channel === null ? {} : { channel: row.channel }),
+		...(row.copyChannel === null ? {} : { copyChannel: row.copyChannel }),
+		...(row.model === null ? {} : { model: row.model }),
+		...(row.thinking === null ? {} : { thinking: row.thinking }),
+		...(row.deliver === "turn" ? {} : { deliver: row.deliver }),
+		...(row.procedureFiles.length === 0 ? {} : { procedureFiles: row.procedureFiles }),
+	};
+}
+
+interface PlaceholderRoot {
+	root: string;
+	placeholder: string;
+}
+
+/** Placeholder roots, longest first, so a workspace inside the home never captures `<home>/scripts`. */
+function rootsOf(ctx: PortableContext): PlaceholderRoot[] {
+	return [
+		{ root: resolve(ctx.scriptsRoot), placeholder: SCRIPTS_PLACEHOLDER },
+		{ root: resolve(ctx.workspaceDir), placeholder: WORKSPACE_PLACEHOLDER },
+	].sort((a, b) => b.root.length - a.root.length);
+}
+
+/**
+ * An absolute path inside a placeholder root as `{placeholder, rest}` (`rest` empty for the root itself), judged after
+ * `..` and `.` are resolved: `<scripts>/../../x` is outside, whatever its spelling starts with.
+ */
+function underRoot(path: string, roots: readonly PlaceholderRoot[]): (PlaceholderRoot & { rest: string }) | undefined {
+	const normal = resolve(path);
+	for (const { root, placeholder } of roots) {
+		const rest = relative(root, normal);
+		if (!isOutside(rest)) return { root, placeholder, rest };
+	}
+	return undefined;
+}
+
+/** A `relative()` result that leaves its base: `..` first, or absolute (another drive). */
+function isOutside(rest: string): boolean {
+	return rest === ".." || rest.startsWith(`..${sep}`) || isAbsolute(rest);
+}
+
+/**
+ * The portable spec with a fixed key order (stable diffs). `onOutside` hears about absolute paths outside both roots,
+ * which are kept as they are.
+ */
+function portableSpec(
+	spec: MonitorSpec,
+	ctx: PortableContext,
+	onOutside: (path: string) => void = () => {},
+): Record<string, unknown> {
+	const roots = rootsOf(ctx);
+	const pathToPortable = (path: string): string => {
+		if (!isAbsolute(path)) {
+			// A relative value spelled like a placeholder gets one more `@`, so apply does not mistake it for one.
+			return PLACEHOLDER_LIKE.test(path) ? `@${path}` : path;
+		}
+		const inside = underRoot(path, roots);
+		if (inside === undefined) {
+			onOutside(path);
+			return path;
+		}
+		return inside.rest === "" ? inside.placeholder : `${inside.placeholder}/${inside.rest}`;
+	};
+	const toPortable = (value: string): string => {
+		const [prefix, path] = splitOption(value);
+		return `${prefix}${pathToPortable(path)}`;
+	};
+	// A relative procedure file is resolved against the workspace, so one that leads into the scripts dir
+	// (`../scripts/steps.md`) is written as a placeholder: the target home may lay its workspace out differently.
+	const toPortableProcedure = (path: string): string => {
+		if (!isAbsolute(path)) {
+			const inside = underRoot(resolve(ctx.workspaceDir, path), roots);
+			if (inside?.placeholder === SCRIPTS_PLACEHOLDER) return pathToPortable(resolve(ctx.workspaceDir, path));
+		}
+		return toPortable(path);
+	};
+	const { trigger } = spec;
+	let portableTrigger: Record<string, unknown>;
+	if (trigger.kind === "cron") {
+		portableTrigger = {
+			kind: "cron",
+			schedule: trigger.schedule,
+			timezone: trigger.timezone,
+			...(trigger.command === undefined ? {} : { command: trigger.command.map(toPortable) }),
+			...(trigger.timeoutMs === undefined ? {} : { timeoutMs: trigger.timeoutMs }),
+		};
+	} else if (trigger.kind === "at") {
+		portableTrigger = { kind: "at", at: trigger.at };
+	} else if (trigger.kind === "script") {
+		// Rows stored before fire/once/suppressUnchanged existed read as their defaults.
+		portableTrigger = {
+			kind: "script",
+			command: trigger.command.map(toPortable),
+			intervalMs: trigger.intervalMs,
+			fire: trigger.fire ?? "edge",
+			once: trigger.once ?? false,
+			suppressUnchanged: trigger.suppressUnchanged ?? false,
+		};
+	} else if (trigger.kind === "watcher") {
+		portableTrigger = { kind: "watcher", root: toPortable(trigger.root), debounceMs: trigger.debounceMs };
+	} else {
+		portableTrigger = { kind: "webhook" };
+	}
+	return {
+		name: spec.name,
+		trigger: portableTrigger,
+		instruction: spec.instruction,
+		overlap: spec.overlap,
+		enabled: spec.enabled,
+		...(spec.channel === undefined ? {} : { channel: spec.channel }),
+		...(spec.copyChannel === undefined ? {} : { copyChannel: spec.copyChannel }),
+		...(spec.model === undefined ? {} : { model: spec.model }),
+		...(spec.thinking === undefined ? {} : { thinking: spec.thinking }),
+		...(spec.deliver === undefined || spec.deliver === "turn" ? {} : { deliver: spec.deliver }),
+		...(spec.procedureFiles === undefined ? {} : { procedureFiles: spec.procedureFiles.map(toPortableProcedure) }),
+	};
+}
+
+export interface ExportResult {
+	written: number;
+	/** Stale `*.json` files of monitors no longer in the database. */
+	removed: number;
+	warnings: string[];
+}
+
+/**
+ * Writes `<dir>/<stem>.json` for every monitor and deletes the other `*.json` files there, so the directory mirrors
+ * the database. `withFiles` also copies the referenced script and procedure files under the placeholder roots to
+ * `<dir>/files/scripts/` and `<dir>/files/workspace/`, keeping their mode bits.
+ */
+export function exportMonitors(
+	ledger: MonitorLedger,
+	dir: string,
+	ctx: PortableContext,
+	options: { withFiles?: boolean } = {},
+): ExportResult {
+	try {
+		mkdirSync(dir, { recursive: true });
+		if (!statSync(dir).isDirectory()) throw new Error("not a directory");
+	} catch (error) {
+		throw new PortableUsageError(
+			`--dir is not a directory: ${dir} (${error instanceof Error ? error.message : String(error)})`,
+		);
+	}
+	const warnings: string[] = [];
+	const written = new Set<string>();
+	/** Source path → where it lands, the monitor naming it first and the placeholder root it was found under. */
+	const copies = new Map<string, { target: string; name: string; root: string }>();
+	const roots = rootsOf(ctx);
+	const filesRoots: Record<string, string> = {
+		[SCRIPTS_PLACEHOLDER]: join(dir, "files", "scripts"),
+		[WORKSPACE_PLACEHOLDER]: join(dir, "files", "workspace"),
+	};
+	// Sorted by name so a stem collision gets the same suffix on every host whatever the creation order.
+	const rows = ledger.listMonitors().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	for (const row of rows) {
+		const spec = specOfRow(row);
+		const portable = portableSpec(spec, ctx, (path) =>
+			warnings.push(`${row.name}: path outside the scripts dir and the workspace kept as is: ${path}`),
+		);
+		// The `name` inside the file is what apply matches on.
+		const stem = exportStem(row.name);
+		let file = `${stem}.json`;
+		const first = file;
+		for (let n = 2; written.has(file) || !canTakeExport(join(dir, file)); n++) file = `${stem}-${n}.json`;
+		if (file !== first && !written.has(first)) {
+			warnings.push(`${row.name}: ${first} belongs to the owner (not a monitor file), exported as ${file}`);
+		}
+		written.add(file);
+		// A file that cannot be written is a warning: the run goes on, so the stale cleanup below still happens.
+		try {
+			clearWriteTarget(join(dir, file));
+			writeFileSync(join(dir, file), `${JSON.stringify(portable, null, 2)}\n`);
+		} catch (error) {
+			warnings.push(`${row.name}: not written: ${file} (${error instanceof Error ? error.message : String(error)})`);
+		}
+		if (!options.withFiles) continue;
+		const referenced = [
+			...(spec.trigger.kind === "script" || spec.trigger.kind === "cron" ? (spec.trigger.command ?? []) : []).map(
+				(arg) => splitOption(arg)[1],
+			),
+			...(spec.procedureFiles ?? []).map((path) => resolve(ctx.workspaceDir, path)),
+		];
+		for (const path of referenced) {
+			const inside = isAbsolute(path) ? underRoot(path, roots) : undefined;
+			if (inside === undefined || inside.rest === "") continue;
+			const filesRoot = filesRoots[inside.placeholder] as string;
+			const target = join(filesRoot, inside.rest);
+			if (isOutside(relative(filesRoot, target))) {
+				warnings.push(`${row.name}: referenced file would land outside ${filesRoot}, not copied: ${path}`);
+				continue;
+			}
+			if (!copies.has(path)) copies.set(path, { target, name: row.name, root: inside.root });
+		}
+	}
+	const secretsPath = join(dirname(ctx.scriptsRoot), "secrets");
+	let secretsDir = secretsPath;
+	try {
+		secretsDir = realpathSync(secretsPath);
+	} catch {
+		// No secrets directory: nothing can resolve into it, and the spelled path still matches.
+	}
+	if (options.withFiles) {
+		// Copies of monitors that are gone (or no longer name the file) must not outlive them in the committed directory.
+		for (const filesRoot of Object.values(filesRoots)) rmSync(filesRoot, { recursive: true, force: true });
+	}
+	const secrets = options.withFiles ? secretInodes(secretsDir) : new Set<string>();
+	for (const [source, { target, name, root }] of copies) {
+		// The path is under its root as spelled; a symlink on the way may still lead out (`<workspace>/p.md -> /etc/…`),
+		// so the copy goes by where it really leads. A dangling link reads as not found.
+		let real: string;
+		let mode: number;
+		try {
+			real = realpathSync(source);
+			if (isOutside(relative(realpathSync(root), real))) {
+				warnings.push(`${name}: referenced file resolves outside ${root}, not copied: ${source}`);
+				continue;
+			}
+			// A workspace that falls back to the home (no usable config) would otherwise copy the bot's tokens out.
+			if (!isOutside(relative(secretsDir, real))) {
+				warnings.push(`${name}: referenced file is in the secrets directory, not copied: ${source}`);
+				continue;
+			}
+			const stat = statSync(real);
+			if (!stat.isFile()) continue;
+			// A hard link under a root shares the secret's inode: no path check sees it.
+			if (stat.nlink > 1 && secrets.has(`${stat.dev}:${stat.ino}`)) {
+				warnings.push(`${name}: referenced file is a hard link to a secrets/ file, not copied: ${source}`);
+				continue;
+			}
+			mode = stat.mode & 0o7777;
+		} catch {
+			warnings.push(`referenced file not found, not copied: ${source}`);
+			continue;
+		}
+		try {
+			mkdirSync(dirname(target), { recursive: true });
+			clearWriteTarget(target);
+			copyFileSync(real, target);
+			chmodSync(target, mode);
+		} catch (error) {
+			warnings.push(
+				`${name}: referenced file not copied: ${source} (${error instanceof Error ? error.message : String(error)})`,
+			);
+		}
+	}
+	let removed = 0;
+	for (const file of readdirSync(dir)) {
+		if (!file.endsWith(".json") || written.has(file) || !isMonitorFile(join(dir, file))) continue;
+		rmSync(join(dir, file), { force: true });
+		removed++;
+	}
+	return { written: written.size, removed, warnings };
+}
+
+/** Some files of an `apply` directory did not validate; nothing was changed. */
+export class PortableApplyError extends Error {
+	constructor(readonly problems: string[]) {
+		super(`${problems.length} monitor file(s) failed validation`);
+		this.name = "PortableApplyError";
+	}
+}
+
+export interface ApplyResult {
+	added: number;
+	updated: number;
+	unchanged: number;
+	removed: number;
+	/** `*.json` entries that are not regular files and were skipped. */
+	warnings: string[];
+}
+
+/** Replaces `@SCRIPTS@`/`@WORKSPACE@` in the path fields of a parsed file; anything malformed is left to validation. */
+function resolvePlaceholders(input: Record<string, unknown>, ctx: PortableContext): Record<string, unknown> {
+	const roots = rootsOf(ctx);
+	const pathToLocal = (value: string): string => {
+		const escaped = PLACEHOLDER_LIKE.exec(value);
+		// Two or more `@`s is export's escape of a literal value: drop one and leave the rest alone.
+		if (escaped !== null && (escaped[1] as string).length >= 2) return value.slice(1);
+		for (const { root, placeholder } of roots) {
+			if (value === placeholder) return root;
+			if (value.startsWith(`${placeholder}/`)) return join(root, value.slice(placeholder.length + 1));
+		}
+		return value;
+	};
+	const toLocal = (value: unknown): unknown => {
+		if (typeof value !== "string") return value;
+		const [prefix, path] = splitOption(value);
+		return `${prefix}${pathToLocal(path)}`;
+	};
+	const out = { ...input };
+	const trigger = input.trigger;
+	if (typeof trigger === "object" && trigger !== null && !Array.isArray(trigger)) {
+		const t = { ...(trigger as Record<string, unknown>) };
+		if (Array.isArray(t.command)) t.command = t.command.map(toLocal);
+		else if (t.command !== undefined) t.command = toLocal(t.command);
+		if (t.root !== undefined) t.root = toLocal(t.root);
+		out.trigger = t;
+	}
+	if (Array.isArray(input.procedureFiles)) out.procedureFiles = input.procedureFiles.map(toLocal);
+	return out;
+}
+
+/**
+ * Applies every `<dir>/*.json` by monitor name: a missing monitor is added, a different one updated, an equal one left
+ * untouched (its `updated_at` too). With `prune`, monitors without a file are removed. Every file is validated first;
+ * one failure throws `PortableApplyError` before anything changes. `dryRun` returns the counts without writing.
+ */
+export function applyMonitors(
+	ledger: MonitorLedger,
+	dir: string,
+	ctx: PortableContext,
+	options: { prune?: boolean; dryRun?: boolean } = {},
+): ApplyResult {
+	let files: string[];
+	const warnings: string[] = [];
+	let skipped = 0;
+	try {
+		files = readdirSync(dir)
+			.filter((file) => file.endsWith(".json"))
+			.sort()
+			.filter((file) => {
+				// Reading a FIFO blocks forever and a directory fails the whole apply: only regular files are specs.
+				// A dangling link stays in so its read error is reported.
+				const stat = statSync(join(dir, file), { throwIfNoEntry: false });
+				if (stat === undefined || stat.isFile()) return true;
+				warnings.push(`${file}: not a regular file, skipped`);
+				skipped++;
+				return false;
+			});
+	} catch (error) {
+		throw new PortableApplyError([`${dir}: ${error instanceof Error ? error.message : String(error)}`]);
+	}
+	const existing = new Map(ledger.listMonitors().map((row) => [row.name, row]));
+	const problems: string[] = [];
+	const seen = new Map<string, string>();
+	const adds: MonitorSpec[] = [];
+	const updates: Array<{ id: string; spec: MonitorSpec }> = [];
+	let unchanged = 0;
+	for (const file of files) {
+		try {
+			let input: unknown;
+			try {
+				input = JSON.parse(readFileSync(join(dir, file), "utf8"));
+			} catch (error) {
+				throw new MonitorSpecError(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			if (typeof input !== "object" || input === null || Array.isArray(input)) {
+				throw new MonitorSpecError("monitor spec must be an object");
+			}
+			const parsed = parseMonitorSpec(resolvePlaceholders(input as Record<string, unknown>, ctx), ctx);
+			const other = seen.get(parsed.name);
+			if (other !== undefined) throw new MonitorSpecError(`name "${parsed.name}" is also used by ${other}`);
+			seen.set(parsed.name, file);
+			const current = existing.get(parsed.name);
+			if (current === undefined) {
+				adds.push(parsed);
+				continue;
+			}
+			// Like `mergeMonitorSpec`, an edit keeps the webhook id and token the caller already hooked up.
+			const spec =
+				parsed.trigger.kind === "webhook" && current.trigger.kind === "webhook"
+					? { ...parsed, trigger: current.trigger }
+					: parsed;
+			const same = JSON.stringify(portableSpec(spec, ctx)) === JSON.stringify(portableSpec(specOfRow(current), ctx));
+			if (same) unchanged++;
+			else updates.push({ id: current.id, spec });
+		} catch (error) {
+			if (!(error instanceof MonitorSpecError)) throw error;
+			problems.push(`${file}: ${error.message}`);
+		}
+	}
+	if (problems.length > 0) throw new PortableApplyError(problems);
+	// A skipped entry may be the file of a monitor whose name cannot be read, so with one present nothing is pruned.
+	const pruneHeld = options.prune === true && skipped > 0;
+	if (pruneHeld)
+		warnings.push(
+			`--prune held: ${skipped} *.json entr${skipped === 1 ? "y is" : "ies are"} not regular files, no monitor removed`,
+		);
+	const removals = options.prune && !pruneHeld ? [...existing.values()].filter((row) => !seen.has(row.name)) : [];
+	if (!options.dryRun) {
+		ledger.transaction(() => {
+			for (const spec of adds) ledger.addMonitor(spec);
+			for (const { id, spec } of updates) ledger.updateMonitor(id, spec);
+			for (const row of removals) ledger.removeMonitor(row.id);
+		});
+	}
+	return { added: adds.length, updated: updates.length, unchanged, removed: removals.length, warnings };
+}

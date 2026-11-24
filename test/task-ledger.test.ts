@@ -1,0 +1,812 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ProcessRunner } from "../src/dispatch/omp";
+import { acceptanceItems, docsDirOf, renderOutcome, renderProgress, renderSpec } from "../src/tasks/docs";
+import { evaluateTask } from "../src/tasks/evaluate";
+import { createTaskHostOps } from "../src/tasks/host";
+import { openTaskLedger, TASK_STATUSES, TaskLedger, TaskTransitionError } from "../src/tasks/ledger";
+import { migrateTaskSchema, TASK_SCHEMA, type TaskLandRecord } from "../src/tasks/ledger-schema";
+import { makeHome, type TestHome } from "./helpers/bot-home";
+import { killSpawned, runMain } from "./helpers/daemon-process";
+
+const base = {
+	title: "로그 정리",
+	risk: "L2" as const,
+	originKey: "discord/ch/111111111111111111",
+	threadRef: "111111111111111111:700000000000000001",
+	host: null,
+	repo: "/r/repo",
+	acceptance: acceptanceItems(["하나", "둘"]),
+};
+
+function ledgerAt(now: { ms: number }): TaskLedger {
+	return new TaskLedger(new Database(":memory:", { strict: true }), {
+		timezone: "Asia/Seoul",
+		clock: { now: () => now.ms },
+	});
+}
+
+describe("TaskLedger", () => {
+	test("ids count per KST day and derive worktree, branch and agent", () => {
+		const now = { ms: Date.parse("2026-10-26T01:00:00Z") };
+		const ledger = ledgerAt(now);
+		const first = ledger.register(base);
+		const second = ledger.register({ ...base, host: "wsl" });
+		expect([first.taskId, second.taskId]).toEqual(["T-20261026-01", "T-20261026-02"]);
+		expect(first).toMatchObject({
+			status: "working",
+			worktree: "/r/repo-t-20261026-01",
+			branch: "task/T-20261026-01",
+			agent: "t-20261026-01",
+			host: null,
+		});
+		expect(second.host).toBe("wsl");
+		now.ms = Date.parse("2026-10-26T15:00:00Z"); // 00:00 KST of the next day
+		expect(ledger.register(base).taskId).toBe("T-20261027-01");
+		expect(ledger.getByAgent("t-20261026-02", "wsl")?.taskId).toBe("T-20261026-02");
+		expect(ledger.getByAgent("t-20261026-02", null)).toBeUndefined();
+		expect(ledger.isTaskRoot("111111111111111111:700000000000000001")).toBe(true);
+		expect(ledger.isTaskRoot("111111111111111111:700000000000000009")).toBe(false);
+	});
+
+	test("bot paths can never reach done or cancelled; a human close can, from any open state, once", () => {
+		const ledger = ledgerAt({ ms: 1_000 });
+		const row = ledger.register(base);
+		for (const target of ["done", "cancelled"] as const) {
+			expect(() => ledger.transition(row.taskId, target, "bot")).toThrow(TaskTransitionError);
+		}
+		expect(ledger.transition(row.taskId, "review", "bot").status).toBe("review");
+		expect(() => ledger.transition(row.taskId, "blocked", "bot")).toThrow(TaskTransitionError);
+		expect(ledger.transition(row.taskId, "working", "bot").status).toBe("working");
+		expect(ledger.transition(row.taskId, "blocked", "bot").status).toBe("blocked");
+		expect(() => ledger.transition(row.taskId, "review", "bot")).toThrow(TaskTransitionError);
+		expect(() => ledger.transition(row.taskId, "review", "human")).toThrow(TaskTransitionError);
+
+		const closed = ledger.transition(row.taskId, "done", "human");
+		expect(closed).toMatchObject({ status: "done", closedAt: 1_000 });
+		expect(() => ledger.transition(row.taskId, "working", "bot")).toThrow(TaskTransitionError);
+		expect(() => ledger.transition(row.taskId, "cancelled", "human")).toThrow(TaskTransitionError);
+		expect(ledger.listActive()).toEqual([]);
+	});
+
+	test("recordNotice is true once per key; discard only drops a working row", () => {
+		const ledger = ledgerAt({ ms: 5 });
+		const row = ledger.register(base);
+		expect(ledger.recordNotice(row.taskId, "reached:a")).toBe(true);
+		expect(ledger.recordNotice(row.taskId, "reached:a")).toBe(false);
+		expect(ledger.recordNotice(row.taskId, "reached:b")).toBe(true);
+		expect(ledger.require(row.taskId).notices).toEqual({ "reached:a": 5, "reached:b": 5 });
+		ledger.setProgressAt(row.taskId, 77);
+		ledger.markReminded(row.taskId, 88);
+		expect(ledger.require(row.taskId)).toMatchObject({ progressAt: 77, remindedAt: 88 });
+		const other = ledger.register(base);
+		ledger.transition(other.taskId, "review", "bot");
+		ledger.discard(other.taskId);
+		expect(ledger.get(other.taskId)).toBeDefined();
+		ledger.discard(row.taskId);
+		expect(ledger.get(row.taskId)).toBeUndefined();
+	});
+
+	test("history: registration line, one line per real move, none for no-ops or refused moves", () => {
+		const now = { ms: 10 };
+		const ledger = ledgerAt(now);
+		const row = ledger.register(base);
+		const lines = () => ledger.history(row.taskId).map((h) => [h.fromStatus, h.toStatus, h.actor, h.reason, h.at]);
+		expect(lines()).toEqual([[null, "working", "bot", "registered", 10]]);
+		now.ms = 20;
+		ledger.transition(row.taskId, "working", "bot"); // same state: no-op
+		expect(() => ledger.transition(row.taskId, "done", "bot")).toThrow(TaskTransitionError);
+		ledger.transition(row.taskId, "review", "bot", "outcome reached AC 2/2");
+		now.ms = 30;
+		ledger.transition(row.taskId, "done", "human", "close --as done");
+		expect(() => ledger.transition(row.taskId, "working", "bot")).toThrow(TaskTransitionError); // closed
+		expect(lines()).toEqual([
+			[null, "working", "bot", "registered", 10],
+			["working", "review", "bot", "outcome reached AC 2/2", 20],
+			["review", "done", "human", "close --as done", 30],
+		]);
+		const ids = ledger.history(row.taskId).map((h) => h.transitionId);
+		expect(ids).toEqual([...ids].sort((a, b) => a - b));
+		expect(ledger.history("T-19990101-01")).toEqual([]);
+	});
+
+	test("a failed history insert rolls the status change back", () => {
+		const db = new Database(":memory:", { strict: true });
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 1 } });
+		const row = ledger.register(base);
+		db.run("CREATE TRIGGER fail_history BEFORE INSERT ON task_transitions BEGIN SELECT RAISE(ABORT, 'injected'); END");
+		expect(() => ledger.transition(row.taskId, "review", "bot")).toThrow("injected");
+		expect(ledger.require(row.taskId).status).toBe("working");
+		expect(ledger.history(row.taskId)).toHaveLength(1);
+	});
+
+	test("discard drops the history lines too, with foreign keys on", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run("PRAGMA foreign_keys = ON");
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 1 } });
+		const row = ledger.register(base);
+		ledger.discard(row.taskId);
+		expect(ledger.get(row.taskId)).toBeUndefined();
+		expect(db.query("SELECT COUNT(*) AS n FROM task_transitions").get()).toEqual({ n: 0 });
+	});
+
+	test("tier_confidence round-trips and unreadable stored values read null", () => {
+		const ledger = ledgerAt({ ms: Date.parse("2026-11-19T00:00:00Z") });
+		const worker = { tier: "middle" as const, tierReason: "r", model: null };
+		const withConf = ledger.register({ ...base, worker: { ...worker, tierConfidence: 0.88 } });
+		expect(withConf.tierConfidence).toBe(0.88);
+		expect(ledger.register({ ...base, worker }).tierConfidence).toBeNull();
+		expect(ledger.register(base).tierConfidence).toBeNull();
+	});
+
+	test("migration adds the tier_confidence column to a database without it, leaving task rows alone", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run(TASK_SCHEMA);
+		db.run("ALTER TABLE tasks DROP COLUMN tier_confidence");
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+		);
+		const columns = () => (db.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+		expect(columns()).not.toContain("tier_confidence");
+		const before = db.query("SELECT * FROM tasks").all();
+		migrateTaskSchema(db);
+		expect(columns()).toContain("tier_confidence");
+		expect(db.query("SELECT * FROM tasks").all()).toEqual(
+			before.map((row) => ({ ...(row as object), tier_confidence: null, docs_dir: "/r-t/docs/tasks/T-20261001-01" })),
+		);
+	});
+
+	test("docs_dir: migration fills old rows with <worktree>/docs/tasks/<id>, leaves base_sha NULL, and is idempotent", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run(TASK_SCHEMA);
+		db.run("ALTER TABLE tasks DROP COLUMN base_sha");
+		db.run("ALTER TABLE tasks DROP COLUMN docs_dir");
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+		);
+		migrateTaskSchema(db);
+		const once = db.query("SELECT base_sha, docs_dir FROM tasks").all();
+		expect(once).toEqual([{ base_sha: null, docs_dir: "/r-t/docs/tasks/T-20261001-01" }]);
+		migrateTaskSchema(db);
+		expect(db.query("SELECT base_sha, docs_dir FROM tasks").all()).toEqual(once);
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 7 } });
+		const row = ledger.require("T-20261001-01");
+		expect([row.baseSha, row.docsDir]).toEqual([null, "/r-t/docs/tasks/T-20261001-01"]);
+	});
+
+	test("docs_dir: register puts the documents under recordsRoot when given, else the worktree; setBaseSha stores the base", () => {
+		const db = new Database(":memory:", { strict: true });
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => Date.UTC(2026, 10, 24) } });
+		const base = {
+			title: "t",
+			risk: "L2" as const,
+			originKey: "o",
+			threadRef: "111111111111111111:700000000000000001",
+			host: null,
+			repo: "/r",
+			acceptance: [],
+		};
+		const plain = ledger.register(base);
+		expect(plain.docsDir).toBe(`${plain.worktree}/docs/tasks/${plain.taskId}`);
+		expect(plain.baseSha).toBeNull();
+		const recorded = ledger.register({ ...base, recordsRoot: "/records" });
+		expect(recorded.docsDir).toBe(`/records/docs/tasks/${recorded.taskId}`);
+		ledger.setBaseSha(recorded.taskId, "a".repeat(40));
+		expect(ledger.require(recorded.taskId).baseSha).toBe("a".repeat(40));
+	});
+
+	test("AC-1: migration adds check_json to a database without it; existing rows read checks: null", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run(TASK_SCHEMA);
+		db.run("ALTER TABLE tasks DROP COLUMN check_json");
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+		);
+		const columns = () => (db.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+		expect(columns()).not.toContain("check_json");
+		migrateTaskSchema(db);
+		expect(columns()).toContain("check_json");
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 7 } });
+		expect(ledger.require("T-20261001-01").checks).toBeNull();
+	});
+
+	test("check_json round-trips; AC-3/AC-8: any malformed part reads as no results", () => {
+		const db = new Database(":memory:", { strict: true });
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 7 } });
+		const { taskId } = ledger.register(base);
+		const good = { head: "a".repeat(40), results: [{ signal: "s", ok: false, detail: "exit 1" }] };
+		ledger.recordChecks(taskId, good);
+		expect(ledger.require(taskId).checks).toEqual(good);
+
+		const read = (raw: string) => {
+			db.query("UPDATE tasks SET check_json = ? WHERE task_id = ?").run(raw, taskId);
+			return ledger.require(taskId).checks;
+		};
+		const item = { signal: "s", ok: true, detail: "d" };
+		expect(read(JSON.stringify({ results: [item] }))).toBeNull();
+		expect(read(JSON.stringify({ head: "", results: [item] }))).toBeNull();
+		expect(read(JSON.stringify({ head: "h", results: [{ ...item, ok: "yes" }] }))).toBeNull();
+		expect(read(JSON.stringify({ head: "h", results: [{ ...item, inconclusive: true }] }))).toBeNull();
+		expect(read(JSON.stringify({ head: "h", results: [item, { signal: "t", ok: true }] }))).toBeNull();
+		expect(read(JSON.stringify({ head: "h", results: "x" }))).toBeNull();
+		expect(read("[1]")).toBeNull();
+		expect(read("{not json")).toBeNull();
+		expect(read(JSON.stringify({ head: "h", results: [item] }))).toEqual({ head: "h", results: [item] });
+
+		ledger.recordChecks(taskId, null);
+		expect(ledger.require(taskId).checks).toBeNull();
+	});
+
+	test("migration adds the history table to a database that predates it, leaving task rows alone", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run(TASK_SCHEMA.slice(0, TASK_SCHEMA.indexOf("CREATE TABLE IF NOT EXISTS task_transitions")));
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+		);
+		const before = db.query("SELECT * FROM tasks").all();
+		migrateTaskSchema(db);
+		expect(db.query("SELECT * FROM tasks").all()).toEqual(
+			before.map((row) => ({ ...(row as object), docs_dir: "/r-t/docs/tasks/T-20261001-01" })),
+		);
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 7 } });
+		expect(ledger.history("T-20261001-01")).toEqual([]);
+		ledger.transition("T-20261001-01", "working", "bot", "resume dispatch");
+		expect(ledger.history("T-20261001-01").map((h) => [h.fromStatus, h.toStatus])).toEqual([["review", "working"]]);
+	});
+
+	test("AC-5: core-land closes review → done only; other moves and other non-human done are refused", () => {
+		const ledger = ledgerAt({ ms: Date.parse("2026-11-16T00:00:00Z") });
+		const working = ledger.register(base);
+		expect(() => ledger.transition(working.taskId, "done", "core-land")).toThrow(TaskTransitionError);
+		expect(() => ledger.transition(working.taskId, "review", "core-land")).toThrow(TaskTransitionError);
+		ledger.transition(working.taskId, "review", "bot");
+		expect(() => ledger.transition(working.taskId, "cancelled", "core-land")).toThrow(TaskTransitionError);
+		expect(() => ledger.transition(working.taskId, "working", "core-land")).toThrow(TaskTransitionError);
+		expect(() => ledger.transition(working.taskId, "done", "bot")).toThrow(TaskTransitionError);
+		expect(ledger.require(working.taskId).status).toBe("review");
+		const done = ledger.transition(working.taskId, "done", "core-land", "core land");
+		expect(done.status).toBe("done");
+		expect(done.closedAt).not.toBeNull();
+		expect(ledger.history(working.taskId).at(-1)).toMatchObject({
+			fromStatus: "review",
+			toStatus: "done",
+			actor: "core-land",
+		});
+		expect(() => ledger.transition(working.taskId, "cancelled", "human")).toThrow(TaskTransitionError);
+	});
+
+	test("AC-5: a ledger with the old actor CHECK keeps its history rows and takes core-land after migration", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run("PRAGMA foreign_keys = ON");
+		db.run(TASK_SCHEMA.replace("'bot','human','core-land'", "'bot','human'"));
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+		);
+		db.run(
+			`INSERT INTO task_transitions (task_id, from_status, to_status, actor, reason, at) VALUES
+				('T-20261001-01', NULL, 'working', 'bot', 'registered', 5), ('T-20261001-01', 'working', 'review', 'bot', 'reached', 6)`,
+		);
+		expect(() =>
+			db.run(
+				"INSERT INTO task_transitions (task_id, from_status, to_status, actor, reason, at) VALUES ('T-20261001-01', 'review', 'done', 'core-land', 'x', 7)",
+			),
+		).toThrow();
+		const before = db.query("SELECT * FROM task_transitions ORDER BY transition_id").all();
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 8 } });
+		expect(db.query("SELECT * FROM task_transitions ORDER BY transition_id").all()).toEqual(before);
+		ledger.transition("T-20261001-01", "done", "core-land", "core land");
+		expect(ledger.history("T-20261001-01").map((h) => [h.transitionId, h.toStatus, h.actor])).toEqual([
+			[1, "working", "bot"],
+			[2, "review", "bot"],
+			[3, "done", "core-land"],
+		]);
+		// Idempotent: the migrated table is left as it is.
+		migrateTaskSchema(db);
+		expect(ledger.history("T-20261001-01")).toHaveLength(3);
+		expect(db.query("SELECT name FROM sqlite_master WHERE name = 'task_transitions_task'").get()).toEqual({
+			name: "task_transitions_task",
+		});
+	});
+
+	test("worker tier: register keeps model, tier and reason; a row without one reads three nulls", () => {
+		const ledger = ledgerAt({ ms: Date.parse("2026-11-15T00:00:00Z") });
+		const tiered = ledger.register({
+			...base,
+			worker: { tier: "middle", tierReason: "일반 구현", model: "anthropic/claude-sonnet-5-5" },
+		});
+		expect(ledger.require(tiered.taskId)).toMatchObject({
+			workerModel: "anthropic/claude-sonnet-5-5",
+			tier: "middle",
+			tierReason: "일반 구현",
+		});
+		const plain = ledger.register(base);
+		expect(ledger.require(plain.taskId)).toMatchObject({ workerModel: null, tier: null, tierReason: null });
+	});
+
+	test("migration adds the worker tier columns to a tasks table that predates them; old rows read null", () => {
+		const db = new Database(":memory:", { strict: true });
+		db.run(PRE_TIER_TASKS);
+		db.run(OLD_ROW);
+		const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => 7 } });
+		const columns = (db.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+		expect(columns).toEqual(expect.arrayContaining(["worker_model", "tier", "tier_reason"]));
+		expect(ledger.require("T-20261001-01")).toMatchObject({ workerModel: null, tier: null, tierReason: null });
+		// Idempotent: a second migration over the migrated table adds nothing.
+		migrateTaskSchema(db);
+		expect((db.query("PRAGMA table_info(tasks)").all() as unknown[]).length).toBe(columns.length);
+	});
+
+	describe("land_json (the task's own PR landing)", () => {
+		const record: TaskLandRecord = {
+			mode: "pr",
+			state: "held",
+			requestedBy: "owner",
+			sha: "a".repeat(40),
+			baseBranch: "main",
+			reason: "CI가 1시간 안에 초록이 되지 않았습니다.",
+			prLand: { branch: "task/T-20261001-01", number: 7, url: "https://x/pull/7", step: "pr-created", pushedAt: 5 },
+		};
+		let dir: string;
+		beforeEach(() => {
+			dir = mkdtempSync(join(tmpdir(), "ompbot-task-land-"));
+		});
+		afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+		test("a database without land_json gains the column, a second open is a no-op, old rows read land null", () => {
+			const path = join(dir, "old.db");
+			const old = new Database(path, { create: true, strict: true });
+			old.run(TASK_SCHEMA);
+			old.run("ALTER TABLE tasks DROP COLUMN land_json");
+			old.run(
+				`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+					acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '1:2', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`,
+			);
+			old.close();
+			const columnsOf = (ledgerPath: string): string[] => {
+				const db = new Database(ledgerPath, { readonly: true });
+				const names = (db.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+				db.close();
+				return names;
+			};
+			expect(columnsOf(path)).not.toContain("land_json");
+			openTaskLedger(path, "Asia/Seoul").close();
+			expect(columnsOf(path)).toContain("land_json");
+			const again = openTaskLedger(path, "Asia/Seoul");
+			expect(again.require("T-20261001-01").land).toBeNull();
+			again.close();
+		});
+
+		test("setLand survives a close and reopen as deep-equal, setLand(null) clears it, a damaged value reads null", () => {
+			const path = join(dir, "ledger.db");
+			const first = openTaskLedger(path, "Asia/Seoul");
+			const { taskId } = first.register(base);
+			expect(first.require(taskId).land).toBeNull();
+			first.setLand(taskId, record);
+			first.close();
+			const second = openTaskLedger(path, "Asia/Seoul");
+			expect(second.require(taskId).land).toEqual(record);
+			second.setLand(taskId, null);
+			expect(second.require(taskId).land).toBeNull();
+			second.close();
+			const raw = new Database(path, { strict: true });
+			raw.run("UPDATE tasks SET land_json = '{broken'");
+			raw.close();
+			const third = openTaskLedger(path, "Asia/Seoul");
+			expect(third.require(taskId).land).toBeNull();
+			third.close();
+		});
+
+		test("the status set is unchanged", () => {
+			expect([...TASK_STATUSES]).toEqual(["working", "blocked", "review", "done", "cancelled"]);
+			expect(TASK_SCHEMA).toContain("CHECK (status IN ('working','blocked','review','done','cancelled'))");
+		});
+	});
+});
+
+/** The `tasks` table as it was before the worker tier columns. */
+const PRE_TIER_TASKS = `CREATE TABLE tasks (
+	task_id TEXT PRIMARY KEY, title TEXT NOT NULL, risk TEXT NOT NULL, origin_key TEXT NOT NULL, thread_ref TEXT NOT NULL,
+	host TEXT, repo TEXT NOT NULL, worktree TEXT NOT NULL, branch TEXT NOT NULL, agent TEXT NOT NULL,
+	status TEXT NOT NULL CHECK (status IN ('working','blocked','review','done','cancelled')),
+	acceptance_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, progress_at INTEGER,
+	reminded_at INTEGER, notices_json TEXT NOT NULL DEFAULT '{}', closed_at INTEGER
+)`;
+const OLD_ROW = `INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+	acceptance_json, created_at, updated_at) VALUES ('T-20261001-01', 't', 'L2', 'o', '111111111111111111:700000000000000001', NULL, '/r', '/r-t', 'b', 'a', 'review', '[]', 5, 6)`;
+
+describe("host ops (fake runner)", () => {
+	function recorder(respond: (cmd: string[]) => { code: number | null; stdout?: string; timedOut?: boolean }) {
+		const commands: string[][] = [];
+		const run: ProcessRunner = async (cmd) => {
+			commands.push(cmd);
+			const result = respond(cmd);
+			return { code: result.code, stdout: result.stdout ?? "", timedOut: result.timedOut ?? false };
+		};
+		return { commands, run };
+	}
+	const BASE = "b".repeat(40);
+	const commitInput = { worktree: "/r/wt", branch: "task/T-20261026-01", baseSha: BASE, hash: "abc1234" };
+
+	test("remote: the commit check runs each git step over ssh; an unreachable host or failing git throws", async () => {
+		const FULL = `abc1234${"0".repeat(33)}`;
+		const answers = (over: Record<string, { code: number | null; stdout?: string; timedOut?: boolean }> = {}) =>
+			recorder((cmd) => {
+				const step = cmd[10] ?? "";
+				const stdout: Record<string, string> = { "rev-parse": `${FULL}\n` };
+				const fallback = stdout[step];
+				return over[step] ?? { code: 0, stdout: fallback };
+			});
+		const { commands, run } = answers();
+		expect(await createTaskHostOps({ sshTarget: "wsl", run }).commitOnTaskBranch(commitInput)).toBe("ok");
+		const ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", "wsl", "git", "-C", "/r/wt"];
+		expect(commands).toEqual([
+			[...ssh, "cat-file", "-e", "abc1234^{commit}", "2>&1"],
+			[...ssh, "rev-parse", "abc1234^{commit}", "2>&1"],
+			[...ssh, "merge-base", "--is-ancestor", BASE, FULL, "2>&1"],
+			[...ssh, "merge-base", "--is-ancestor", FULL, "task/T-20261026-01", "2>&1"],
+		]);
+
+		const check = (over: Parameters<typeof answers>[0]) =>
+			createTaskHostOps({ sshTarget: "wsl", run: answers(over).run }).commitOnTaskBranch(commitInput);
+		for (const step of ["cat-file", "rev-parse", "merge-base"]) {
+			await expect(check({ [step]: { code: 255, stdout: "ssh: no route" } })).rejects.toThrow("host unreachable");
+			await expect(check({ [step]: { code: null, timedOut: true } })).rejects.toThrow("host unreachable");
+		}
+		await expect(check({ "merge-base": { code: 128, stdout: "fatal: bad object" } })).rejects.toThrow(
+			"git merge-base failed",
+		);
+		await expect(check({ "rev-parse": { code: 128, stdout: "fatal: bad revision" } })).rejects.toThrow(
+			"git rev-parse failed",
+		);
+		expect(await check({ "cat-file": { code: 1 } })).toBe("missing");
+		expect(await check({ "merge-base": { code: 1 } })).toBe("not_on_branch");
+		expect(await check({ "rev-parse": { code: 0, stdout: `${BASE}\n` } })).toBe("not_on_branch");
+	});
+
+	test("remote: an ssh that cannot connect reports ssh's own stderr as the unreachable reason", async () => {
+		const stderr = "ssh: connect to host x port 22: Connection refused";
+		const run: ProcessRunner = async () => ({ code: 255, stdout: "", stderr: `${stderr}\n`, timedOut: false });
+		const ops = createTaskHostOps({ sshTarget: "x", run });
+		expect(await ops.pathExists("/r/wt")).toEqual({ ok: false, error: `host unreachable: ${stderr}` });
+		expect(await ops.readFile("/r/wt/spec.md")).toEqual({ ok: false, error: `host unreachable: ${stderr}` });
+	});
+
+	test("remote: ssh command lines for worktree add, existence, write and read", async () => {
+		const { commands, run } = recorder(() => ({ code: 0, stdout: "ok" }));
+		const ops = createTaskHostOps({ sshTarget: "wsl", run });
+		await ops.createWorktree({ repo: "/r/repo", worktree: "/r/repo-t-20261026-01", branch: "task/T-20261026-01" });
+		await ops.pathExists("/r/repo-t-20261026-01");
+		await ops.writeFile("/r/repo-t-20261026-01/docs/tasks/T/spec.md", "안녕");
+		await ops.readFile("/r/x/spec.md");
+		await ops.removeWorktree({ repo: "/r/repo", worktree: "/r/wt", branch: "task/T-20261026-01" });
+		const ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", "wsl"];
+		expect(commands[0]).toEqual([
+			...ssh,
+			"git",
+			"-C",
+			"/r/repo",
+			"worktree",
+			"add",
+			"-b",
+			"task/T-20261026-01",
+			"/r/repo-t-20261026-01",
+			"HEAD",
+			"2>&1",
+		]);
+		expect(commands[1]).toEqual([...ssh, "test", "-e", "/r/repo-t-20261026-01"]);
+		const write = commands[2]?.at(-2) ?? "";
+		expect(write).toBe(
+			`mkdir -p /r/repo-t-20261026-01/docs/tasks/T && test ! -e /r/repo-t-20261026-01/docs/tasks/T/spec.md && echo ${Buffer.from("안녕").toString("base64")} | base64 -d > /r/repo-t-20261026-01/docs/tasks/T/spec.md`,
+		);
+		expect(commands[3]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
+		expect(commands[4]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
+		expect(commands[5]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
+	});
+
+	test("remote: the docs commit quotes its fixed message for the remote shell", async () => {
+		const { commands, run } = recorder((cmd) => ({ code: 0, stdout: cmd.includes("rev-parse") ? "abc1234def\n" : "" }));
+		const ops = createTaskHostOps({ sshTarget: "wsl", run });
+		expect(await ops.commitDocs({ worktree: "/r/wt", taskId: "T-20261026-01" })).toEqual({
+			ok: true,
+			value: "abc1234def",
+		});
+		expect(commands.map((cmd) => cmd.slice(7))).toEqual([
+			["git", "-C", "/r/wt", "add", "--", "docs/tasks/T-20261026-01", "2>&1"],
+			[
+				"git",
+				"-C",
+				"/r/wt",
+				"commit",
+				"-q",
+				"-m",
+				"'docs(task): T-20261026-01 4문서'",
+				"--",
+				"docs/tasks/T-20261026-01",
+				"2>&1",
+			],
+			["git", "-C", "/r/wt", "rev-parse", "HEAD", "2>&1"],
+		]);
+		const refused = createTaskHostOps({
+			sshTarget: "wsl",
+			run: recorder(() => ({ code: 1, stdout: "nothing to commit" })).run,
+		});
+		expect(await refused.commitDocs({ worktree: "/r/wt", taskId: "T-20261026-01" })).toEqual({
+			ok: false,
+			error: "git add failed: nothing to commit",
+		});
+	});
+
+	test("remote: unreachable hosts are failures, not 'missing' or 'no such commit'", async () => {
+		const down = createTaskHostOps({
+			sshTarget: "wsl",
+			run: recorder(() => ({ code: 255, stdout: "ssh: no route" })).run,
+		});
+		expect((await down.readFile("/r/a")).ok).toBe(false);
+		expect((await down.pathExists("/r/a")).ok).toBe(false);
+		await expect(down.commitOnTaskBranch(commitInput)).rejects.toThrow("unreachable");
+		const timedOut = createTaskHostOps({ sshTarget: "wsl", run: recorder(() => ({ code: null, timedOut: true })).run });
+		expect((await timedOut.readFile("/r/a")).ok).toBe(false);
+		const missing = createTaskHostOps({ sshTarget: "wsl", run: recorder(() => ({ code: 1 })).run });
+		expect(await missing.readFile("/r/a")).toEqual({ ok: true, value: undefined });
+		expect(await missing.commitOnTaskBranch(commitInput)).toBe("missing");
+	});
+
+	test("paths and branches that are not shell-inert are refused before any command runs", async () => {
+		const { commands, run } = recorder(() => ({ code: 0 }));
+		const ops = createTaskHostOps({ sshTarget: "wsl", run });
+		await expect(ops.readFile("/r/a; rm -rf /")).rejects.toThrow("unsafe path");
+		await expect(ops.createWorktree({ repo: "/r", worktree: "/r-w", branch: "x;y" })).rejects.toThrow("unsafe branch");
+		expect(await ops.commitOnTaskBranch({ ...commitInput, hash: "HEAD; id" })).toBe("missing");
+		await expect(ops.commitOnTaskBranch({ ...commitInput, branch: "main; id" })).rejects.toThrow("unsafe branch");
+		await expect(ops.commitOnTaskBranch({ ...commitInput, baseSha: "HEAD; id" })).rejects.toThrow("unsafe base sha");
+		await expect(
+			ops.branchDiff({ worktree: "/r/wt", branch: "task/T-20261026-01", baseSha: "main..x" }),
+		).rejects.toThrow("unsafe base sha");
+		expect(commands).toEqual([]);
+	});
+
+	describe("local, real temp git repo", () => {
+		let dir: string;
+		beforeEach(() => {
+			dir = mkdtempSync(join(tmpdir(), "ompbot-task-host-"));
+		});
+		afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+		test("worktree add, docs write/read, docs commit, rollback", async () => {
+			const repo = join(dir, "repo");
+			mkdirSync(repo);
+			const git = (...args: string[]) => {
+				const result = Bun.spawnSync(["git", "-C", repo, ...args], {
+					env: {
+						...process.env,
+						GIT_AUTHOR_NAME: "t",
+						GIT_AUTHOR_EMAIL: "t@t",
+						GIT_COMMITTER_NAME: "t",
+						GIT_COMMITTER_EMAIL: "t@t",
+					},
+				});
+				if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+				return result.stdout.toString().trim();
+			};
+			git("init", "-q");
+			writeFileSync(join(repo, "a.txt"), "a");
+			git("add", "a.txt");
+			git("commit", "-q", "-m", "init");
+			const head = git("rev-parse", "HEAD");
+			const ops = createTaskHostOps({});
+			const worktree = `${repo}-t-20261026-01`;
+			const input = { repo, worktree, branch: "task/T-20261026-01" };
+			expect(await ops.pathExists(worktree)).toEqual({ ok: true, value: false });
+			expect(await ops.createWorktree(input)).toEqual({ ok: true, value: null });
+			expect(await ops.pathExists(worktree)).toEqual({ ok: true, value: true });
+			const again = await ops.createWorktree(input);
+			expect(again.ok).toBe(false);
+
+			const spec = join(worktree, "docs/tasks/T-20261026-01/spec.md");
+			expect(await ops.writeFile(spec, "x")).toEqual({ ok: true, value: null });
+			expect((await ops.writeFile(spec, "y")).ok).toBe(false);
+			expect(await ops.readFile(spec)).toEqual({ ok: true, value: "x" });
+			expect(await ops.readFile(join(worktree, "nope.md"))).toEqual({ ok: true, value: undefined });
+
+			// The docs become the task branch's first commit; ops strips GIT_* env, so identity comes from repo config.
+			git("config", "user.name", "t");
+			git("config", "user.email", "t@t");
+			const committed = await ops.commitDocs({ worktree, taskId: "T-20261026-01" });
+			expect(committed.ok).toBe(true);
+			const wt = (...args: string[]) =>
+				Bun.spawnSync(["git", "-C", worktree, ...args])
+					.stdout.toString()
+					.trim();
+			expect(committed.ok && committed.value).toBe(wt("rev-parse", "HEAD"));
+			expect(wt("log", "-1", "--format=%s")).toBe("docs(task): T-20261026-01 4문서");
+			expect(wt("rev-list", "--count", "task/T-20261026-01", `^${head}`)).toBe("1");
+			expect(wt("status", "--porcelain")).toBe("");
+			await expect(ops.commitDocs({ worktree, taskId: "T-1; id" })).rejects.toThrow("unsafe task id");
+
+			await ops.removeWorktree(input);
+			expect(await ops.pathExists(worktree)).toEqual({ ok: true, value: false });
+			expect(git("branch", "--list", "task/T-20261026-01")).toBe("");
+		});
+
+		test("commit evidence counts only commits on the task branch after its base sha (the docs commit is one of them)", async () => {
+			const repo = join(dir, "repo");
+			mkdirSync(repo);
+			const at =
+				(cwd: string) =>
+				(...args: string[]): string => {
+					const result = Bun.spawnSync(["git", "-C", cwd, ...args]);
+					if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+					return result.stdout.toString().trim();
+				};
+			const git = at(repo);
+			git("init", "-q", "-b", "main");
+			git("config", "user.name", "t");
+			git("config", "user.email", "t@t");
+			writeFileSync(join(repo, "a.txt"), "a");
+			git("add", "a.txt");
+			git("commit", "-q", "-m", "init");
+			const onMain = git("rev-parse", "HEAD");
+			const ops = createTaskHostOps({});
+			const taskId = "T-20261026-01";
+			const branch = `task/${taskId}`;
+			const worktree = `${repo}-t-20261026-01`;
+			expect(await ops.createWorktree({ repo, worktree, branch })).toEqual({ ok: true, value: null });
+			expect(await ops.writeFile(join(worktree, `docs/tasks/${taskId}/spec.md`), "x")).toEqual({
+				ok: true,
+				value: null,
+			});
+			const docs = await ops.commitDocs({ worktree, taskId });
+			const docsHash = docs.ok ? docs.value : "";
+			const wt = at(worktree);
+			writeFileSync(join(worktree, "b.txt"), "b");
+			wt("add", "b.txt");
+			wt("commit", "-q", "-m", "feat");
+			const onTask = wt("rev-parse", "HEAD");
+			git("checkout", "-q", "-b", "other", "main");
+			writeFileSync(join(repo, "c.txt"), "c");
+			git("add", "c.txt");
+			git("commit", "-q", "-m", "elsewhere");
+			const onOther = git("rev-parse", "HEAD");
+			git("branch", "task/T-20261026-02", "main");
+
+			const check = (hash: string, id = taskId) =>
+				ops.commitOnTaskBranch({ worktree, branch: `task/${id}`, baseSha: onMain, hash });
+			expect(await check(onTask)).toBe("ok");
+			expect(await check(onTask.slice(0, 10))).toBe("ok");
+			expect(await check(onMain)).toBe("not_on_branch");
+			expect(await check(docsHash)).toBe("ok");
+			expect(await check(onOther)).toBe("not_on_branch");
+			expect(await check("deadbeefdeadbeef")).toBe("missing");
+			expect(await check("HEAD; id")).toBe("missing");
+			expect(await check(onTask, "T-20261026-02")).toBe("not_on_branch");
+			const diff = await ops.branchDiff({ worktree, branch, baseSha: onMain });
+			expect(diff.ok && diff.value).toContain("+++ b/b.txt");
+		});
+	});
+});
+
+describe("evaluateTask", () => {
+	test("reads the three docs through the host; an unreadable host is a failed evaluation", async () => {
+		const row = new TaskLedger(new Database(":memory:", { strict: true }), {
+			timezone: "Asia/Seoul",
+			clock: { now: () => 1 },
+		}).register(base);
+		const dir = docsDirOf(row);
+		const meta = {
+			taskId: row.taskId,
+			hostLabel: "local",
+			repo: row.repo,
+			worktree: row.worktree,
+			branch: row.branch,
+			agent: row.agent,
+			threadLink: "x",
+			registeredAt: 1,
+			timezone: "Asia/Seoul",
+		};
+		const files: Record<string, string> = {
+			[`${dir}/spec.md`]: renderSpec(
+				meta,
+				{ title: "t", risk: "L2", goal: "g", scope: [], exclusions: [], acceptance: [], repo: row.repo },
+				row.acceptance,
+			),
+			[`${dir}/PROGRESS.md`]: renderProgress(row.taskId, 1, "Asia/Seoul"),
+			[`${dir}/outcome.md`]: renderOutcome(row.taskId),
+		};
+		const ops = createTaskHostOps({
+			sshTarget: "h",
+			run: async (cmd) => ({ code: 0, stdout: files[cmd.at(-1) ?? ""] ?? "", timedOut: false }),
+		});
+		const result = await evaluateTask(row, ops);
+		expect(result.ok && result.judgement).toMatchObject({ reached: false, acChecked: 0, acTotal: 2, stepsTotal: 1 });
+		const down = createTaskHostOps({
+			sshTarget: "h",
+			run: async () => ({ code: 255, stdout: "no route", timedOut: false }),
+		});
+		expect(await evaluateTask(row, down)).toMatchObject({ ok: false });
+	});
+});
+
+describe("ompbot tasks (CLI)", () => {
+	let home: TestHome;
+	beforeEach(() => {
+		home = makeHome("ompbot-tasks-cli-");
+	});
+	afterEach(() => {
+		killSpawned();
+		home.remove();
+	});
+
+	test("list / show / close round trip; close is the only way to done", async () => {
+		const ledger = openTaskLedger(join(home.dir, "ompbot.db"), "Asia/Seoul");
+		const row = ledger.register({ ...base, repo: join(home.dir, "repo") });
+		ledger.close();
+
+		const list = await runMain(home.dir, ["tasks", "list", "--json"]);
+		expect(list.code).toBe(0);
+		expect((JSON.parse(list.stdout) as { tasks: Array<{ taskId: string }> }).tasks.map((t) => t.taskId)).toEqual([
+			row.taskId,
+		]);
+		expect((await runMain(home.dir, ["tasks", "list"])).stdout).toContain(`${row.taskId}  working`);
+
+		// Local worktree docs do not exist: show reports a judgement with problems, never "reached".
+		const show = await runMain(home.dir, ["tasks", "show", row.taskId]);
+		expect(show.code).toBe(0);
+		const shown = JSON.parse(show.stdout) as {
+			judgement: { reached: boolean; problems: string[] };
+			summary: string;
+			history: Array<{ fromStatus: string | null; toStatus: string; actor: string; reason: string | null }>;
+		};
+		expect(shown.judgement.reached).toBe(false);
+		expect(shown.summary).toContain("AC 0/2");
+		expect(shown.history).toMatchObject([
+			{ fromStatus: null, toStatus: "working", actor: "bot", reason: "registered" },
+		]);
+
+		expect((await runMain(home.dir, ["tasks", "close", row.taskId])).code).toBe(2);
+		expect((await runMain(home.dir, ["tasks", "close", "T-19990101-01", "--as", "done"])).code).toBe(1);
+		const closed = await runMain(home.dir, ["tasks", "close", row.taskId, "--as", "cancelled"]);
+		expect(closed.code).toBe(0);
+		expect(JSON.parse(closed.stdout)).toMatchObject({ closed: row.taskId, status: "cancelled" });
+		expect(closed.stderr).toContain("daemon not reachable");
+		const again = await runMain(home.dir, ["tasks", "close", row.taskId, "--as", "done"]);
+		expect(again.code).toBe(1);
+		expect(again.stderr).toContain("이미 cancelled");
+		const history = JSON.parse((await runMain(home.dir, ["tasks", "show", row.taskId])).stdout).history as Array<{
+			transitionId: number;
+			fromStatus: string | null;
+			toStatus: string;
+			actor: string;
+			reason: string | null;
+		}>;
+		expect(history.map((h) => [h.fromStatus, h.toStatus, h.actor, h.reason])).toEqual([
+			[null, "working", "bot", "registered"],
+			["working", "cancelled", "human", "close --as cancelled"],
+		]);
+		expect(history[0]?.transitionId).toBeLessThan(history[1]?.transitionId ?? 0);
+	}, 30_000); // a dozen CLI child processes: slow on a 2-core machine
+
+	test("AC-11: read-only tasks list over a pre-tier ledger succeeds and shows the three tier values as null", async () => {
+		const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+		db.run(PRE_TIER_TASKS);
+		db.run(OLD_ROW);
+		db.close();
+		const list = await runMain(home.dir, ["tasks", "list", "--json"]);
+		expect(list.code).toBe(0);
+		expect((JSON.parse(list.stdout) as { tasks: unknown[] }).tasks).toEqual([
+			expect.objectContaining({ taskId: "T-20261001-01", workerModel: null, tier: null, tierReason: null }),
+		]);
+		// A read never migrates: the ledger file still has the old columns only.
+		const after = new Database(join(home.dir, "ompbot.db"), { readonly: true });
+		const columns = (after.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
+		after.close();
+		expect(columns).not.toContain("tier");
+	});
+});

@@ -1,0 +1,581 @@
+import { afterAll, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type ProcessRunner, realProcessRunner } from "../src/dispatch/omp";
+import { laneDeclared, planPathsIn } from "../src/lanes/declared";
+import { classifyLaneCompletion, LaneDiffUnavailable, laneDiffUnavailableRefusal } from "../src/lanes/integrity";
+import { collectLaneDiff } from "../src/lanes/lane-diff";
+import type { LaneRow } from "../src/lanes/status";
+import { gitRunner } from "../src/lanes/verify";
+import { taskChangedPaths } from "../src/tasks/progress-evidence";
+
+const DIFF = (file: string, ...lines: string[]): string =>
+	[`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -0,0 +1,1 @@", ...lines].join("\n");
+
+function categories(summary: string, diff: string): string[] {
+	return classifyLaneCompletion({ summary, diff }).map((refusal) => refusal.category);
+}
+
+describe("classifyLaneCompletion", () => {
+	test("a clean diff and a claim with a named command pass", () => {
+		const diff = DIFF("src/a.ts", "+export const x = 1;");
+		expect(categories("bun test 통과, 커밋 완료", diff)).toEqual([]);
+	});
+
+	test("TODO markers in added code comments are refused, linked issues exempt", () => {
+		expect(categories("done", DIFF("src/a.ts", "+// TODO: later"))).toEqual(["unfinished_work_marker"]);
+		expect(categories("done", DIFF("src/a.ts", "+// TODO: later — see #123"))).toEqual([]);
+		// Docs paths are exempt entirely.
+		expect(categories("done", DIFF("docs/guide.md", "+<!-- TODO: expand -->"))).toEqual([]);
+	});
+
+	test("skipped or only-tests are refused", () => {
+		expect(categories("done", DIFF("test/a.test.ts", "+test.skip('x', () => {});"))).toEqual(["skipped_test"]);
+		expect(categories("done", DIFF("test/a.test.ts", "+it.only('x', () => {});"))).toEqual(["skipped_test"]);
+	});
+
+	test("stub bodies are refused", () => {
+		expect(categories("done", DIFF("src/a.ts", '+throw new Error("Not implemented");'))).toEqual([
+			"stub_implementation",
+		]);
+	});
+
+	test("deleted comment text naming a guard word is not a guard deletion, code is", () => {
+		const GUARD = "guard_deletion_without_adversarial_regression";
+		const hunk = (...lines: string[]): string =>
+			["diff --git a/src/a.ts b/src/a.ts", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1,5 +1,2 @@", ...lines].join("\n");
+		for (const text of [
+			"-\t// never reject here: the caller validates",
+			"-/* the check refuses empty input */",
+			"-/**\n-\t * never blocked */",
+		]) {
+			expect({ text, refused: categories("done", hunk(text)) }).toEqual({ text, refused: [] });
+		}
+		// The opening `/**` is a context line; the deleted ` * ` line is inside that comment.
+		expect(
+			categories("done", hunk(" /**", "-\t * early. Owner turns are never blocked by the ceiling.", " \t */")),
+		).toEqual([]);
+		expect(categories("done", hunk("-/* note */ if (!ok) reject();"))).toEqual([GUARD]);
+		expect(categories("done", hunk("-\tif (!ok) throw new Error('no'); // never reject"))).toEqual([GUARD]);
+		// No opening `/*` in the hunk: a `* !ok` line is not assumed to be a comment.
+		expect(categories("done", hunk(" const a = b", "-\t* !ok && deny()"))).toEqual([GUARD]);
+	});
+
+	test("guard deletions need an adversarial regression test", () => {
+		const removed = DIFF("src/auth.ts", "-if (!allowlist.has(host)) throw new Error('denied');");
+		expect(categories("done", removed)).toEqual(["guard_deletion_without_adversarial_regression"]);
+		// Re-adding the same line is a move, not a deletion.
+		expect(
+			categories(
+				"done",
+				DIFF(
+					"src/auth.ts",
+					"-if (!allowlist.has(host)) throw new Error('denied');",
+					"+if (!allowlist.has(host)) throw new Error('denied');",
+				),
+			),
+		).toEqual([]);
+		// A negative-case test added alongside exempts the deletion.
+		expect(
+			categories(
+				"done",
+				[
+					DIFF("src/auth.ts", "-if (!allowlist.has(host)) throw new Error('denied');"),
+					DIFF("test/auth.test.ts", "+test('rejects a foreign host', () => {});"),
+				].join("\n"),
+			),
+		).toEqual([]);
+	});
+
+	test("removed `-- x` / added `++ x` lines inside a hunk are not file headers; later lines are still judged (#121)", () => {
+		// run-42/scratch/realhdr.diff (`git diff --unified=0` of `-- counter;` -> `++ counter;`) plus one skipped test.
+		const diff = [
+			"diff --git a/x.ts b/x.ts",
+			"index 741c314..38bbba3 100644",
+			"--- a/x.ts",
+			"+++ b/x.ts",
+			"@@ -3 +3,4 @@ let other = 0;",
+			"--- counter;",
+			"+++ counter;",
+			"+// TODO unfinished",
+			"+let sk = test.skip;",
+			'+test.skip("later", () => {});', // #121 fixture text for the classifier, not a skipped test
+		].join("\n");
+		expect(categories("done", diff)).toEqual(["unfinished_work_marker", "skipped_test"]);
+		// The next file's real header after such a hunk still switches files.
+		const next = [diff, "diff --git a/b.md b/b.md", "--- a/b.md", "+++ b/b.md", "@@ -0,0 +1 @@", "+TODO: write"].join(
+			"\n",
+		);
+		expect(categories("done", next)).toEqual(["unfinished_work_marker", "skipped_test"]);
+	});
+
+	test("a bare TODO inside a multi-line block comment is refused (qa-i-low 55)", () => {
+		const open = DIFF("src/a.ts", "+/*", "+TODO: later", "+*/");
+		expect(categories("done", open)).toEqual(["unfinished_work_marker"]);
+		expect(categories("done", DIFF("src/a.ts", "+/*", "+explains why", "+*/", "+const todo = 1; // fine"))).toEqual([]);
+		// Code after the closer is code again; a closed block does not leak into the next hunk.
+		const hunks = [
+			"diff --git a/src/a.ts b/src/a.ts",
+			"--- a/src/a.ts",
+			"+++ b/src/a.ts",
+			"@@ -0,0 +1 @@",
+			"+/* open",
+			"@@ -9,0 +10 @@",
+			"+TODO_NAME = 1;",
+		].join("\n");
+		expect(categories("done", hunks)).toEqual([]);
+	});
+
+	test("stub detection ignores assertions about stubs but keeps real stub bodies (qa-i-low 120)", () => {
+		// Stub words are assembled from pieces so this file's own added lines do not trip the stub check.
+		const message = ["not", "implemented"].join(" ");
+		const macro = (name: string): string => `${name}!()`;
+		expect(categories("done", DIFF("test/a.test.ts", `+expect(() => run()).toThrow("${message}");`))).toEqual([]);
+		expect(categories("done", DIFF("src/a.ts", `+const msg = "${macro("todo").slice(0, -1)}" + "x";`))).toEqual([]);
+		expect(categories("done", DIFF("src/a.ts", `+\tthrow new Error("${message}");`))).toEqual(["stub_implementation"]);
+		const pyError = `${["Not", "Implemented"].join("")}Error`;
+		expect(categories("done", DIFF("src/a.py", `+    raise ${pyError}`))).toEqual(["stub_implementation"]);
+		expect(categories("done", DIFF("src/a.rs", `+    ${macro("todo")}`))).toEqual(["stub_implementation"]);
+		expect(categories("done", DIFF("src/a.rs", `+    ${macro("unimplemented")}`))).toEqual(["stub_implementation"]);
+	});
+
+	test("a path fragment containing tsc is not a verification command (qa-i-low 121)", () => {
+		expect(categories("변경: src/tsc.ts 문구 정리, 검증 완료", "")).toEqual(["unproven_claim_word"]);
+		expect(categories("tsc --noEmit 통과", "")).toEqual([]);
+		expect(categories("bun x biome check 통과", "")).toEqual([]);
+	});
+
+	test("guard deletions in php, c, c# and vue files are judged (qa-i-low 122)", () => {
+		for (const file of ["src/auth.php", "src/auth.c", "src/Auth.cs", "src/Auth.vue", "src/auth.swift"]) {
+			const diff = `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +0,0 @@\n-if (!allowed) throw denied;`;
+			expect(categories("done", diff)).toEqual(["guard_deletion_without_adversarial_regression"]);
+		}
+	});
+
+	test("chained and option-object skips are refused (qa-i-low 123)", () => {
+		// Assembled from pieces so this file's own added lines do not trip the skipped-test check.
+		const skip = ["sk", "ip"].join("");
+		for (const line of [
+			`+test.concurrent.${skip}("x", () => {});`,
+			`+test("x", { ${skip}: true }, () => {});`,
+			`+it.serial.${["on", "ly"].join("")}("x", () => {});`,
+		]) {
+			expect(categories("done", DIFF("test/a.test.ts", line))).toEqual(["skipped_test"]);
+		}
+		expect(categories("done", DIFF("test/a.test.ts", '+test("x", { timeout: 5 }, () => {});'))).toEqual([]);
+	});
+
+	test("a guard line edited only in its message or trailing comment is no deletion; any code change still is (qa-l #83)", () => {
+		const GUARD = "guard_deletion_without_adversarial_regression";
+		const edit = (...lines: string[]) => categories("done", DIFF("src/a.ts", ...lines));
+		expect(edit('-\tthrow new Error("bad input");', '+\tthrow new Error("bad input: empty");')).toEqual([]);
+		expect(edit("-if (!ok) throw new Error('x'); // old", "+if (!ok) throw new Error('y'); // new")).toEqual([]);
+		// A guard deleted with nothing in its place.
+		expect(edit('-\tthrow new Error("bad input");', "+\treturn;")).toEqual([GUARD]);
+		// The condition changed (and switched off by a constant, which the feature-removal category also names).
+		expect(edit('-if (!auth) throw new Error("no");', '+if (!auth && false) throw new Error("no");')).toEqual([
+			GUARD,
+			"undeclared_feature_removal",
+		]);
+		// Two guards deleted, one similar line added: one stays deleted.
+		expect(edit('-throw new Error("a");', '-throw new Error("b");', '+throw new Error("c");')).toEqual([GUARD]);
+		// An interpolation that only reads a value is message text; one that calls or computes is code.
+		const interpolate = (expression: string): string => ["$", `{${expression}}`].join("");
+		const tpl = (expression: string): string => `throw new Error(\`bad ${interpolate(expression)}\`);`;
+		expect(edit(`-${tpl("input")}`, `+${tpl("other")}`)).toEqual([]);
+		expect(edit(`-${tpl("a.b")}`, `+${tpl("a?.b")}`)).toEqual([]);
+		expect(edit(`-${tpl("input")}`, `+${tpl("fn()")}`)).toEqual([GUARD]);
+		expect(edit(`-${tpl("fn()")}`, `+${tpl("other()")}`)).toEqual([GUARD]);
+		// Another hunk is no counterpart.
+		const twoHunks = [
+			"diff --git a/src/a.ts b/src/a.ts",
+			"--- a/src/a.ts",
+			"+++ b/src/a.ts",
+			"@@ -1,1 +1,0 @@",
+			'-throw new Error("bad input");',
+			"@@ -9,0 +9,1 @@",
+			'+throw new Error("bad input: empty");',
+		].join("\n");
+		expect(categories("done", twoHunks)).toEqual([GUARD]);
+	});
+
+	test("verification words without a command are refused", () => {
+		expect(categories("테스트 통과, 수정 완료", "")).toEqual(["unproven_claim_word"]);
+		expect(categories("bun test 통과, 수정 완료", "")).toEqual([]);
+		expect(categories("평범한 요약", "")).toEqual([]);
+	});
+});
+
+describe("collectLaneDiff after a rebase (qa50b H-5)", () => {
+	const roots: string[] = [];
+	afterAll(() => {
+		for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+	});
+	const git = (cwd: string, ...args: string[]): string =>
+		execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], {
+			cwd,
+			encoding: "utf8",
+			env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: cwd, GIT_CONFIG_NOSYSTEM: "1" },
+		}).trim();
+	const commit = (dir: string, file: string, text: string, message: string): string => {
+		writeFileSync(join(dir, file), text);
+		git(dir, "add", file);
+		git(dir, "commit", "-q", "-m", message);
+		return git(dir, "rev-parse", "HEAD");
+	};
+	/** main with one commit, a lane branch with `feature.ts`, then main gains a skipped test and the lane rebases. */
+	function rebasedLane(): { dir: string; base0: string; head: string } {
+		const dir = mkdtempSync(join(tmpdir(), "ompbot-integrity-"));
+		roots.push(dir);
+		git(dir, "init", "-q", "-b", "main");
+		const base0 = commit(dir, "README.md", "base\n", "base");
+		git(dir, "checkout", "-q", "-b", "lane/L-20260101-01");
+		commit(dir, "feature.ts", "export const feature = 1;\n", "lane work");
+		git(dir, "checkout", "-q", "main");
+		commit(dir, "basework.test.ts", "import { test } from 'bun:test';\ntest.skip('later', () => {});\n", "main moved");
+		git(dir, "checkout", "-q", "lane/L-20260101-01");
+		git(dir, "rebase", "-q", "main");
+		return { dir, base0, head: git(dir, "rev-parse", "HEAD") };
+	}
+
+	test("the range starts at the merge-base with the base branch tip: base commits are not judged", async () => {
+		const { dir, base0, head } = rebasedLane();
+		const { diff } = await collectLaneDiff(dir, { baseSha: base0, baseBranch: "main" }, head);
+		expect(diff).toContain("+++ b/feature.ts");
+		expect(diff).not.toContain("basework.test.ts");
+		expect(classifyLaneCompletion({ summary: "feature added", diff })).toEqual([]);
+	});
+
+	test("the lane's own skipped test, even in a base-side file, is still judged", async () => {
+		const { dir, base0 } = rebasedLane();
+		const head = commit(
+			dir,
+			"basework.test.ts",
+			"import { test } from 'bun:test';\ntest.skip('later', () => {});\ntest.only('mine', () => {});\n",
+			"lane touches a base file",
+		);
+		const { diff } = await collectLaneDiff(dir, { baseSha: base0, baseBranch: "main" }, head);
+		expect(classifyLaneCompletion({ summary: "x", diff }).map((r) => r.category)).toEqual(["skipped_test"]);
+	});
+
+	test("a reopened lane (baseSha = its previous claim, still in history) judges only the work after it", async () => {
+		const { dir, head: previous } = rebasedLane();
+		const head = commit(dir, "more.ts", "export const more = 2;\n", "after reopen");
+		const { diff } = await collectLaneDiff(dir, { baseSha: previous, baseBranch: "main" }, head);
+		expect(diff).toContain("+++ b/more.ts");
+		expect(diff).not.toContain("feature.ts");
+	});
+
+	test("a base branch whose tip cannot be read fails closed with the reason", async () => {
+		const { dir, base0, head } = rebasedLane();
+		const refused = collectLaneDiff(dir, { baseSha: base0, baseBranch: "gone" }, head);
+		await expect(refused).rejects.toBeInstanceOf(LaneDiffUnavailable);
+		await expect(refused).rejects.toThrow("gone");
+	});
+
+	test("qa-z #106: a file past 512KB is left unread by name; the rest of the diff is still read", async () => {
+		const { dir, base0 } = rebasedLane();
+		const head = commit(dir, "big.ts", `${"// filler line of the big file\n".repeat(20_000)}`, "a very large file");
+		const read = await collectLaneDiff(dir, { baseSha: base0, baseBranch: "main" }, head);
+		expect(read.unread).toEqual(["big.ts"]);
+		expect(read.diff).toContain("+++ b/feature.ts");
+		expect(read.diff).not.toContain("filler line");
+		// A diff of ordinary size is still read whole.
+		const small = commit(dir, "small.ts", "export const small = 1;\n", "small");
+		const whole = await collectLaneDiff(dir, { baseSha: head }, small);
+		expect(whole.diff).toContain("+++ b/small.ts");
+		expect(whole.unread).toEqual([]);
+	});
+
+	test("an unreadable base is a lane_diff_unavailable refusal, not a silent pass", () => {
+		const refusal = laneDiffUnavailableRefusal(new LaneDiffUnavailable("base 브랜치 gone의 tip을 읽지 못했습니다"));
+		expect(refusal).toMatchObject({ category: "lane_diff_unavailable" });
+		expect(refusal.excerpt).toContain("gone");
+	});
+});
+
+describe("lane and task diffs never run diff.external (qa-d M-3)", () => {
+	const roots: string[] = [];
+	afterAll(() => {
+		for (const dir of roots) rmSync(dir, { recursive: true, force: true });
+	});
+	const git = (cwd: string, ...args: string[]): string =>
+		execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], {
+			cwd,
+			encoding: "utf8",
+			env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: cwd, GIT_CONFIG_NOSYSTEM: "1" },
+		}).trim();
+	/** A repository on `main` with two commits of `f.txt` whose `diff.external` runs `script` (written executable). */
+	function externalDiffRepo(script: (root: string) => string): { root: string; dir: string; first: string } {
+		const root = mkdtempSync(join(tmpdir(), "ompbot-extdiff-"));
+		roots.push(root);
+		const dir = join(root, "repo");
+		mkdirSync(dir);
+		git(dir, "init", "-q", "-b", "main");
+		writeFileSync(join(dir, "f.txt"), "one\n");
+		git(dir, "add", "f.txt");
+		git(dir, "commit", "-q", "-m", "one");
+		const first = git(dir, "rev-parse", "HEAD");
+		writeFileSync(join(dir, "f.txt"), "two\n");
+		git(dir, "commit", "-q", "-am", "two");
+		const ext = join(root, "ext.sh");
+		writeFileSync(ext, script(root));
+		chmodSync(ext, 0o755);
+		git(dir, "config", "diff.external", ext);
+		return { root, dir, first };
+	}
+	const markerScript = (root: string): string => `#!/bin/sh\ntouch '${join(root, "ran")}'\n`;
+	/**
+	 * Resolves with "settled"/"rejected", or "hung" when `promise` is still pending after `ms`. Real time on purpose: the
+	 * bound is the acceptance itself (real git and its external program in their own process group), and a hang must
+	 * fail the test instead of stalling it; nothing waits on it when the awaited signal comes first.
+	 */
+	const within = async (promise: Promise<unknown>, ms: number): Promise<string> => {
+		const deadline = Promise.withResolvers<string>();
+		const timer = setTimeout(() => deadline.resolve("hung"), ms);
+		try {
+			return await Promise.race([
+				promise.then(
+					() => "settled",
+					() => "rejected",
+				),
+				deadline.promise,
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+
+	test("collectLaneDiff reads the patch without the external program", async () => {
+		const { root, dir, first } = externalDiffRepo(markerScript);
+		const { diff } = await collectLaneDiff(dir, { baseSha: first }, git(dir, "rev-parse", "HEAD"));
+		expect(diff).toContain("+two");
+		expect(existsSync(join(root, "ran"))).toBe(false);
+	});
+
+	test("taskChangedPaths lists the files without the external program", async () => {
+		const { root, dir } = externalDiffRepo(markerScript);
+		writeFileSync(join(dir, "f.txt"), "three\n");
+		const commands: string[][] = [];
+		const run: ProcessRunner = (cmd, opts) => {
+			commands.push(cmd);
+			return realProcessRunner(cmd, opts);
+		};
+		expect(await taskChangedPaths(dir, run)).toEqual({ ok: true, paths: ["f.txt"] });
+		expect(existsSync(join(root, "ran"))).toBe(false);
+		const diffs = commands.filter((cmd) => cmd.includes("diff"));
+		expect(diffs.length).toBeGreaterThan(0);
+		for (const cmd of diffs) expect(cmd).toEqual(expect.arrayContaining(["--no-ext-diff", "--no-textconv"]));
+	});
+
+	test("gitRunner's timeout ends the whole process group, a grandchild holding the pipe included", async () => {
+		const { root, dir } = externalDiffRepo((at) => `#!/bin/sh\nexec 3>'${join(at, "held")}'\nexec sleep 120\n`);
+		const held = join(root, "held");
+		execFileSync("mkfifo", [held]);
+		// `cat` sees end of file only when the last writer (the external program) is gone.
+		const reader = Bun.spawn(["cat", held], { stdout: "ignore", stderr: "ignore" });
+		try {
+			expect(await within(gitRunner(1_000)(["-C", dir, "diff", "HEAD~1", "HEAD"]), 3_000)).toBe("rejected");
+			expect(await within(reader.exited, 3_000)).toBe("settled");
+		} finally {
+			reader.kill("SIGKILL");
+		}
+	});
+});
+
+// 무결성 판정.
+describe("qa-l low A: adversarial test lines", () => {
+	const GUARD = "guard_deletion_without_adversarial_regression";
+	const guardDeleted = DIFF("src/auth.ts", "-if (!allowlist.has(host)) throw new Error('denied');");
+	const withTest = (...lines: string[]): string => `${guardDeleted}\n${DIFF("test/auth.test.ts", ...lines)}`;
+
+	test("#84 a comment naming invalid and assert is no adversarial test", () => {
+		for (const lines of [
+			["+// invalid hosts are no longer guarded; asserts were dropped"],
+			["+# invalid hosts: assert dropped"],
+			["+/* invalid hosts: expect( removed */"],
+			["+/*", "+ * invalid hosts: assert dropped", "+ */"],
+			["+/*", "+invalid hosts: assert dropped", "+*/"],
+		])
+			expect({ lines, refused: categories("done", withTest(...lines)) }).toEqual({ lines, refused: [GUARD] });
+		expect(categories("done", withTest('+test("rejects invalid hosts", () => {});'))).toEqual([]);
+		expect(categories("done", withTest('+\texpect(check("bad")).toBe("invalid"); // was dropped'))).toEqual([]);
+	});
+});
+
+describe("undeclared_feature_removal", () => {
+	const CAT = "undeclared_feature_removal";
+	const diffOf = (file: string, ...lines: string[]): string =>
+		[`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -1,1 +1,1 @@", ...lines].join("\n");
+
+	test("an exported function deleted without a word in the report is refused, with file and line as excerpt", () => {
+		const refused = classifyLaneCompletion({ summary: "done", diff: diffOf("src/a.ts", "-export function foo() {") });
+		expect(refused.map((r) => r.category)).toEqual([CAT]);
+		expect(refused[0]?.excerpt).toBe("src/a.ts: export function foo() {");
+	});
+
+	test("a deletion the spec or plan names is declared; a name elsewhere in the declared text is not enough", () => {
+		const removed = diffOf("src/a.ts", "-export const DEFAULT_NUDGES = 2;");
+		const declared = (text: string) =>
+			classifyLaneCompletion({ summary: "done", diff: removed, declared: text }).map((r) => r.category);
+		expect(declared("- 삭제: `DEFAULT_NUDGES`, 설정 키")).toEqual([]);
+		expect(declared("DEFAULT_NUDGES_MAX만 남긴다")).toEqual([CAT]);
+		expect(declared("")).toEqual([CAT]);
+	});
+
+	test("planPathsIn takes repository plan paths once, not other paths or a longer suffix", () => {
+		expect(
+			planPathsIn(
+				"스펙 doc/plans/a-b.md 와 doc/plans/a-b.md, ../doc/plans/x.md, doc/plans/sub/y.md, doc/plans/c.md.bak, doc/plans/d.md.",
+			),
+		).toEqual(["doc/plans/a-b.md", "doc/plans/d.md"]);
+	});
+
+	test("a deletion the report names is declared; a signature edit or a move keeps the name", () => {
+		const removed = diffOf("src/a.ts", "-export function foo() {");
+		expect(categories("foo 제거", removed)).toEqual([]);
+		expect(categories("done", diffOf("src/a.ts", "-export function foo(a) {", "+export function foo(a, b) {"))).toEqual(
+			[],
+		);
+		expect(categories("done", `${removed}\n${diffOf("src/b.ts", "+export function foo() {")}`)).toEqual([]);
+	});
+
+	test("every export declaration form counts; a longer name in the report does not declare it", () => {
+		for (const line of [
+			"-export default async function* foo() {",
+			"-export abstract class foo {",
+			"-export const foo = 1;",
+			"-export interface foo {",
+			"-export type foo = string;",
+			"-export enum foo {",
+		])
+			expect({ line, refused: categories("done", diffOf("src/a.ts", line)) }).toEqual({ line, refused: [CAT] });
+		expect(categories("foobar removed", diffOf("src/a.ts", "-export const foo = 1;"))).toEqual([CAT]);
+	});
+
+	test("exports deleted from test files are not judged", () => {
+		expect(categories("done", diffOf("test/a.test.ts", "-export function foo() {"))).toEqual([]);
+	});
+
+	test("conditions that switch a feature off are refused", () => {
+		for (const line of ["+{false && <Feature />}", "+if (false) {", "+if (0) {", "+if (ok && false) {"])
+			expect({ line, refused: categories("done", diffOf("src/a.tsx", line)) }).toEqual({ line, refused: [CAT] });
+	});
+
+	test("comparisons against false are not a switch-off", () => {
+		for (const line of [
+			"+if (x === false && y) {",
+			"+if (a !== false && b) {",
+			"+if (a == false && b) {",
+			"+if (a && false == b) {",
+			"+\t\t\tdelivery.finishUntracked === false && finisher.tracks?.(threadRef) === false",
+		])
+			expect({ line, refused: categories("done", diffOf("src/channel/pump.ts", line)) }).toEqual({ line, refused: [] });
+	});
+
+	test("an issue link, a comment and a string literal are not a switch-off", () => {
+		for (const line of ["+if (false) { // #123", "+// if (false) {", '+const s = "false && x";'])
+			expect({ line, refused: categories("done", diffOf("src/a.ts", line)) }).toEqual({ line, refused: [] });
+	});
+
+	test("only the first candidate of the category is reported", () => {
+		const diff = diffOf("src/a.ts", "-export const a = 1;", "-export const b = 2;", "+if (false) {");
+		expect(categories("done", diff)).toEqual([CAT]);
+	});
+});
+
+describe("qa-z lane integrity edges", () => {
+	const GUARD = "guard_deletion_without_adversarial_regression";
+	const hunkOf = (file: string, ...lines: string[]): string =>
+		[`diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, "@@ -1,2 +1,2 @@", ...lines].join("\n");
+
+	test("#48: an export deleted and only 'revived' inside a template string is still an undeclared removal", () => {
+		const diff = hunkOf("src/a.ts", "-export function foo() {", "+const text = `", "+export function foo() {", "+`;");
+		expect(categories("done", diff)).toEqual(["undeclared_feature_removal"]);
+		// Moved as code, the same line is no removal.
+		expect(categories("done", hunkOf("src/a.ts", "-export function foo() {", "+export function foo() {"))).toEqual([]);
+	});
+
+	test("#103: a Korean negative test counts as the adversarial regression for a deleted guard", () => {
+		const removed = hunkOf("src/auth.ts", "-if (!ok) throw new Error('x');");
+		for (const title of ["권한 없음 사용자는 거부된다", "거부된다"]) {
+			const test = hunkOf("test/auth.test.ts", `+it("${title}", () => {`);
+			expect({ title, refused: categories("done", `${removed}\n${test}`) }).toEqual({ title, refused: [] });
+		}
+		expect(categories("done", removed)).toEqual([GUARD]);
+	});
+
+	test("#104: a deleted log or message string is no guard; a deleted check still is", () => {
+		expect(categories("done", hunkOf("src/a.ts", '-console.log("invalid input, retrying");'))).toEqual([]);
+		expect(categories("done", hunkOf("src/a.ts", '-console.error("permission denied");'))).toEqual([]);
+		expect(categories("done", hunkOf("src/a.ts", '-if (!ok) throw new Error("no");'))).toEqual([GUARD]);
+		// A deleted negative test keeps counting: its name is its string.
+		expect(categories("done", hunkOf("test/a.test.ts", '-it("rejects bad input", () => {'))).toEqual([GUARD]);
+	});
+
+	test("the fixed negative-test pattern is cheap on a 64KB worst-case line", () => {
+		const line = `+it("${"거부 ".repeat(10_900)}", () => {`;
+		const started = performance.now();
+		categories("done", hunkOf("test/a.test.ts", line));
+		expect(performance.now() - started).toBeLessThan(50);
+	});
+
+	test("#105: a plan path the worker turned into a FIFO, a symlink or a link out of the tree declares nothing and never blocks", async () => {
+		const root = mkdtempSync(join(tmpdir(), "ompbot-declared-"));
+		try {
+			mkdirSync(join(root, "doc", "plans"), { recursive: true });
+			writeFileSync(join(root, "doc", "plans", "ok.md"), "계획 본문");
+			execFileSync("mkfifo", [join(root, "doc", "plans", "fifo.md")]);
+			writeFileSync(join(root, "secret.txt"), "비밀");
+			symlinkSync(join(root, "secret.txt"), join(root, "doc", "plans", "link.md"));
+			const lane = {
+				cwd: root,
+				meta: { brief: "doc/plans/ok.md doc/plans/fifo.md doc/plans/link.md", worktree: root },
+			} as unknown as LaneRow;
+			const declared = await laneDeclared(lane);
+			expect(declared).toContain("계획 본문");
+			expect(declared).not.toContain("비밀");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("plansRoot: a plan named by the brief is read from the records repository, not the worktree", async () => {
+		const worktree = mkdtempSync(join(tmpdir(), "ompbot-declared-wt-"));
+		const records = mkdtempSync(join(tmpdir(), "ompbot-declared-rec-"));
+		try {
+			mkdirSync(join(records, "doc", "plans"), { recursive: true });
+			writeFileSync(join(records, "doc", "plans", "x.md"), "기록 저장소 계획");
+			const lane = { cwd: worktree, meta: { brief: "doc/plans/x.md", worktree } } as unknown as LaneRow;
+			expect(await laneDeclared(lane, records)).toContain("기록 저장소 계획");
+			expect(await laneDeclared(lane)).not.toContain("기록 저장소 계획");
+		} finally {
+			rmSync(worktree, { recursive: true, force: true });
+			rmSync(records, { recursive: true, force: true });
+		}
+	});
+
+	test("plansRoot: a plans directory or file that links out of the records repository declares nothing", async () => {
+		const outside = mkdtempSync(join(tmpdir(), "ompbot-declared-out-"));
+		const records = mkdtempSync(join(tmpdir(), "ompbot-declared-rec-"));
+		try {
+			mkdirSync(join(outside, "plans"), { recursive: true });
+			writeFileSync(join(outside, "plans", "dir.md"), "밖의 디렉터리 비밀");
+			writeFileSync(join(outside, "file.md"), "밖의 파일 비밀");
+			mkdirSync(join(records, "doc"), { recursive: true });
+			symlinkSync(join(outside, "plans"), join(records, "doc", "plans"));
+			const lane = { cwd: records, meta: { brief: "doc/plans/dir.md", worktree: records } } as unknown as LaneRow;
+			expect(await laneDeclared(lane, records)).not.toContain("비밀");
+			rmSync(join(records, "doc", "plans"));
+			mkdirSync(join(records, "doc", "plans"));
+			symlinkSync(join(outside, "file.md"), join(records, "doc", "plans", "f.md"));
+			const fileLane = { cwd: records, meta: { brief: "doc/plans/f.md", worktree: records } } as unknown as LaneRow;
+			expect(await laneDeclared(fileLane, records)).not.toContain("비밀");
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+			rmSync(records, { recursive: true, force: true });
+		}
+	});
+});

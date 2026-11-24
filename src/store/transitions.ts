@@ -1,0 +1,117 @@
+export const BACKOFF_BASE_MS = 2_000;
+export const BACKOFF_CAP_MS = 5 * 60_000;
+export const MAX_DEFINITIVE_FAILURES = 5;
+export const FRESHNESS_MS = 24 * 60 * 60_000;
+
+export type InboundState = "pending" | "dispatched" | "answered" | "failed_notified" | "discarded" | "uncertain";
+
+/** Why a row was parked as `uncertain`: the input may already have reached the omp child, so it is never replayed. */
+export type UncertainReason = "steer_threw" | "turn_ended_after_steer" | "dispatch_record_failed";
+export type DeliveryState = "pending" | "inflight" | "confirmed" | "failed_ambiguous" | "expired";
+
+export type StoreErrorCode = "invalid_transition" | "not_found" | "unknown_origin" | "invalid_argument";
+
+export class StoreError extends Error {
+	readonly code: StoreErrorCode;
+
+	constructor(code: StoreErrorCode, detail: string) {
+		super(`${code}: ${detail}`);
+		this.name = "StoreError";
+		this.code = code;
+	}
+}
+
+/**
+ * Inbound transitions. answered / failed_notified / discarded are terminal. `uncertain` leaves only by the owner:
+ * back to pending (retry) or discarded (close); never straight to dispatched.
+ */
+export const INBOUND_TRANSITIONS: Record<InboundState, readonly InboundState[]> = {
+	pending: ["dispatched", "discarded", "uncertain"],
+	uncertain: ["pending", "discarded"],
+	dispatched: ["answered", "failed_notified", "discarded"],
+	answered: [],
+	failed_notified: [],
+	discarded: [],
+};
+
+export function assertInboundTransition(from: InboundState, to: InboundState): void {
+	if (!INBOUND_TRANSITIONS[from].includes(to)) throw new StoreError("invalid_transition", `inbound ${from} -> ${to}`);
+}
+
+/** Delay before the next try after the n-th (1-based) definitive failure: 2s, 4s, 8s ... capped at 5 min. */
+export function backoffMs(failures: number): number {
+	return Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_CAP_MS);
+}
+
+export interface DeliveryFacts {
+	state: DeliveryState;
+	attempts: number; // definitive failures so far
+	nextAt: number;
+	redelivered: boolean;
+	createdAt: number;
+}
+
+export type DeliveryEvent =
+	| "claim" // pending -> inflight
+	| "confirmed" // inflight -> confirmed
+	| "definitive_failure" // inflight -> pending (backoff) | expired
+	| "rate_limited" // inflight -> pending at the block's end, attempts kept | expired past freshness
+	| "ambiguous" // inflight -> failed_ambiguous
+	| "expire_check" // pending past freshness -> expired
+	| "recover" // inflight left over from a dead process -> pending, redelivered
+	| "ack" // the owner says it did arrive: failed_ambiguous -> confirmed
+	| "resend"; // the owner wants it again: failed_ambiguous -> pending now, redelivered
+
+function requireState(f: DeliveryFacts, event: DeliveryEvent, expected: DeliveryState): void {
+	if (f.state !== expected) throw new StoreError("invalid_transition", `delivery ${f.state} on ${event}`);
+}
+
+/**
+ * Pure delivery state machine. `failed_ambiguous` is sticky to every automatic event: the send may have reached the
+ * platform, so neither failure counts, backoff, nor the 24h freshness window move it; the row stays visible instead of
+ * being resent or dropped. Only the owner moves it by hand: `ack` confirms it arrived, `resend` queues it again.
+ * `rate_limited` (a 429, or the method still blocked by one) is the platform saying "later", not a failed send: it keeps
+ * `attempts` and waits until `retryAt`, so a long block cannot expire an answer — only the freshness window can.
+ */
+export function transitionDelivery(
+	f: DeliveryFacts,
+	event: DeliveryEvent,
+	now: number,
+	retryAt: number = now,
+): DeliveryFacts {
+	// Sticky to the automatic events only: `ack`/`resend` are the owner's manual way out of the held state.
+	if (f.state === "failed_ambiguous" && event !== "ack" && event !== "resend") return f;
+	const stale = now - f.createdAt >= FRESHNESS_MS;
+	switch (event) {
+		case "claim":
+			requireState(f, event, "pending");
+			return { ...f, state: "inflight" };
+		case "confirmed":
+			requireState(f, event, "inflight");
+			return { ...f, state: "confirmed" };
+		case "ambiguous":
+			requireState(f, event, "inflight");
+			return { ...f, state: "failed_ambiguous" };
+		case "definitive_failure": {
+			requireState(f, event, "inflight");
+			const attempts = f.attempts + 1;
+			if (attempts >= MAX_DEFINITIVE_FAILURES || stale) return { ...f, attempts, state: "expired" };
+			return { ...f, attempts, state: "pending", nextAt: now + backoffMs(attempts) };
+		}
+		case "rate_limited":
+			requireState(f, event, "inflight");
+			if (stale) return { ...f, state: "expired" };
+			return { ...f, state: "pending", nextAt: Math.max(now, retryAt) };
+		case "expire_check":
+			return f.state === "pending" && stale ? { ...f, state: "expired" } : f;
+		case "recover":
+			return f.state === "inflight" ? { ...f, state: "pending", redelivered: true, nextAt: now } : f;
+		case "ack":
+			requireState(f, event, "failed_ambiguous");
+			return { ...f, state: "confirmed" };
+		case "resend":
+			requireState(f, event, "failed_ambiguous");
+			// Due now (not after a backoff) and marked redelivered, so the resend carries the duplicate warning header.
+			return { ...f, state: "pending", redelivered: true, nextAt: now };
+	}
+}
