@@ -94,6 +94,34 @@ describe("transitions: the owner's manual way out of a held row", () => {
 		expect(store.claimDue().map((r) => r.deliveryId)).toEqual([id]);
 	});
 
+	test("a row held past the freshness window cannot be resent (the sweep would expire it unsent); ack still closes it", () => {
+		const id = held();
+		const created = only([row(id)].filter((r) => r !== undefined)).createdAt;
+		clock.advance(24 * 60 * 60_000 - 1);
+		// One ms inside the window: the resend is still allowed and is sent by the next claim.
+		expect(store.resolveAmbiguous(id, "resend")).toMatchObject({ state: "pending", createdAt: created });
+		expect(store.claimDue().map((r) => r.deliveryId)).toEqual([id]);
+		store.markAmbiguous(id, "again");
+		clock.advance(1);
+		expect(() => store.resolveAmbiguous(id, "resend")).toThrow("invalid_transition: held past the 24h");
+		// Refused without touching the row: still held, same creation time, never silently expired.
+		expect(store.sweepExpired()).toBe(0);
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", createdAt: created });
+		expect(store.resolveAmbiguous(id, "ack")).toMatchObject({ state: "confirmed", createdAt: created });
+	});
+
+	test("the owner's CLI resend of a stale held row fails with the reason and leaves the row held", async () => {
+		const id = held();
+		clock.advance(25 * 60 * 60_000);
+		const ledger = openDeliveryLedger(dbPath, clock);
+		try {
+			expect(() => ledger.resolveAmbiguous(id, "resend")).toThrow("freshness window");
+		} finally {
+			ledger.close();
+		}
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous" });
+	});
+
 	test("a row that is not held is refused: pending, inflight, confirmed and expired all throw", () => {
 		store.ensureOrigin(DM_ORIGIN, "/s/dm");
 		const pending = only(store.recordAnswer({ originKey: DM_ORIGIN, opRef: "op-p", threadRef: "t", parts: ["x"] }));
