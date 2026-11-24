@@ -80,6 +80,7 @@ import type {
 	LaneRequestOutcome,
 	SettleOutcome,
 } from "./manager-types";
+import { laneRowIdsReportingOrphans } from "./orphans";
 import { type LaneProgressOptions, ownerQuestionOf, tickOwnerSilence } from "./owner-silence";
 import {
 	defaultPrTools,
@@ -451,9 +452,7 @@ export class LaneManager {
 			if (store.countOpenLanes() + this.#starting >= this.#max) throw new LaneCapError(this.#max);
 
 			// No await between picking the id and reserving it: a concurrent start sees the reservation.
-			const rowIds = new Set(
-				store.listLanes().flatMap((lane) => (lane.meta.laneId === undefined ? [] : [lane.meta.laneId])),
-			);
+			const rowIds = laneRowIdsReportingOrphans(store, repo, branchIds, log);
 			const laneId = nextLaneId(
 				localDay(clock.now(), this.#deps.timezone),
 				(id) =>
@@ -3398,4 +3397,4 @@ export class LaneManager {
 	#sync(lane: LaneRow, reason: "transition" | "milestone" | "tick"): Promise<LaneRow> {
 		return syncLane(this.#deps, this.#unroutableWarned, lane, reason);
 	}
-}
+		}
