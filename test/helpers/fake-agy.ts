@@ -1,201 +1,220 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 /**
- * Fake `agy` CLI for wire tests: speaks the stream-json events of agy 1.5.4 headless mode. Driven by env plus
- * prompt markers:
- * - FAKE_AGY_LOG: every argv/in/out frame is appended there as JSON lines.
- * - FAKE_AGY_UNKNOWN_CONVERSATION=1: `--conversation <id>` warns "not found" and starts a new conversation.
- * - `agy models`: prints the model table and exits.
- * - "@error": result status ERROR with error "boom".
- * - "@tool": a run_command tool step (ACTIVE then DONE) before the answer; with "@nooutput" its DONE has no output.
- * - "@hold": the turn stays open until SIGUSR1 (answers HELD-DONE) or SIGINT (interrupted result, then exit 130).
- *   With "@fail" as well, SIGUSR1 answers status ERROR with error "boom" instead.
- * - "@holdtool": emits an ACTIVE run_command tool step and waits until SIGUSR1 (emits DONE + HELD-TOOL-DONE) or SIGINT.
- * - "@linger": answered normally, then a SIGTERM no longer ends the process: it logs `{dir:"term"}`, writes
- *   OLD-CHILD-STDERR to stderr and a tool step frame to stdout, and exits (143) only on SIGUSR2.
- * - anything else: answers `REPLY<n>:<last line of the message>` (n = turns of this process).
- * Lines written while a turn runs are queued and answered after it, like agy.
+ * Fake `agy acp` for wire tests: JSON-RPC 2.0 over stdio as agy 1.5.16 speaks it. Driven by env plus prompt markers:
+ * - FAKE_AGY_LOG: argv, every in/out message and marker events are appended there as JSON lines.
+ * - FAKE_AGY_UNKNOWN_SESSION=1: `session/load` fails like agy for a session it cannot find; a load that works replays
+ *   the conversation as updates (a user chunk, an agent chunk, a tool call, usage 900/1000) before it answers.
+ * - "@quota": streams agy's quota retry notice (RESOURCE_EXHAUSTED, code 429) split over two chunks and holds the
+ *   prompt until `session/cancel`.
+ * - FAKE_AGY_DEAF_CONFIG=1: `session/set_config_option` replies without changing the value.
+ * - Session ids are `fake-<uuid>`; only those resume. The orchestrator model offers no `thought_level`.
+ * - "@tool": a run_command tool call (in_progress, then completed with output) before the answer; with "@nooutput"
+ *   the completion has no output, with "@failtool" it ends `failed`.
+ * - "@hold": the prompt stays open until `session/cancel` (replies `cancelled`) or SIGUSR1 (answers HELD-DONE).
+ * - "@holdtool": a tool call in_progress until SIGUSR1 (completes it, answers HELD-TOOL-DONE) or `session/cancel`.
+ * - "@deaf": starts a grandchild that connects to the unix socket FAKE_AGY_GRAND_SOCK and stays, reports a tool call
+ *   in_progress, and ignores cancel.
+ * - "@ask": sends `session/request_permission` (reject_once, allow_once) and answers ASKED once the client replied.
+ * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@full" / "@half": `usage_update` used
+ *   800 / 500 of size 1000 before the reply (otherwise 100).
+ * - anything else: answers `REPLY<n>:<last line of the prompt>` in two chunks (n = prompts of this process).
  */
 
 const LOG = process.env.FAKE_AGY_LOG;
 const log = (entry: Record<string, unknown>): void => {
 	if (LOG !== undefined) appendFileSync(LOG, `${JSON.stringify(entry)}\n`);
 };
-const out = (frame: Record<string, unknown>): void => {
-	log({ dir: "out", frame });
-	process.stdout.write(`${JSON.stringify(frame)}\n`);
+const send = (message: Record<string, unknown>): void => {
+	log({ dir: "out", message });
+	process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
 };
+log({ dir: "argv", argv: process.argv.slice(2) });
 
-const argv = process.argv.slice(2);
-log({ dir: "argv", argv });
+const MODELS = ["gemini-4-neon", "gemini-pro-orchestrator-neon", "gemini-3.8-flash"];
+const LEVELS = ["low", "medium", "high", "xhigh"];
+let model = "gemini-4-neon";
+let level = "high";
+let sessionId = "";
+let prompts = 0;
+let held: { id: unknown; onSignal: () => void; onCancel?: () => void } | undefined;
 
-if (argv[0] === "models") {
-	process.stdout.write(
-		"Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\ngpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n",
-	);
-	process.exit(0);
+function configOptions(): Array<Record<string, unknown>> {
+	const options: Array<Record<string, unknown>> = [
+		{ id: "model", currentValue: model, options: MODELS.map((value) => ({ value, name: value })) },
+		{ id: "mode", currentValue: "default", options: [{ value: "default", name: "Default" }] },
+	];
+	if (!model.includes("orchestrator")) {
+		options.splice(1, 0, { id: "thought_level", currentValue: level, options: LEVELS.map((value) => ({ value })) });
+	}
+	return options;
+}
+const update = (body: Record<string, unknown>): void =>
+	send({ method: "session/update", params: { sessionId, update: body } });
+const usage = { inputTokens: 100, outputTokens: 7, cachedReadTokens: 40, cachedWriteTokens: 2, totalTokens: 149 };
+const reply = (id: unknown, stopReason: string): void => send({ id, result: { stopReason, usage } });
+
+function prompt(id: unknown, text: string): void {
+	prompts += 1;
+	const used = text.includes("@full") ? 800 : text.includes("@half") ? 500 : 100;
+	const finish = (answer: string, stopReason = "end_turn"): void => {
+		if (answer !== "") update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } });
+		update({ sessionUpdate: "usage_update", used, size: 1000 });
+		reply(id, stopReason);
+	};
+	update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" } });
+	update({ sessionUpdate: "brand_new_kind" });
+	if (text.includes("@die")) process.exit(3);
+	if (text.includes("@refuse")) {
+		finish("", "refusal");
+		return;
+	}
+	const tool = { toolCallId: `call_${prompts}`, name: "run_command", kind: "execute", title: "echo hi" };
+	const rawInput = { CommandLine: "echo hi" };
+	if (text.includes("@holdtool")) {
+		update({ sessionUpdate: "tool_call", ...tool, status: "in_progress", rawInput });
+		held = {
+			id,
+			onSignal: () => {
+				update({ sessionUpdate: "tool_call_update", ...tool, status: "completed", rawOutput: { output: "hi\n" } });
+				finish("HELD-TOOL-DONE");
+			},
+			onCancel: () => reply(id, "cancelled"),
+		};
+		return;
+	}
+	if (text.includes("@quota")) {
+		// agy's own quota retry, split across chunks; it only stops on `session/cancel`.
+		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
+		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Working\n⚠ API error (att" } });
+		update({
+			sessionUpdate: "agent_message_chunk",
+			content: { type: "text", text: "empt 1): RESOURCE_EXHAUSTED (code 429): out" },
+		});
+		return;
+	}
+	if (text.includes("@ask")) {
+		held = { id, onSignal: () => finish("ASKED") };
+		send({
+			id: "perm-1",
+			method: "session/request_permission",
+			params: {
+				sessionId,
+				options: [
+					{ optionId: "no", kind: "reject_once" },
+					{ optionId: "yes-once", kind: "allow_once" },
+				],
+			},
+		});
+		return;
+	}
+	if (text.includes("@hold")) {
+		held = { id, onSignal: () => finish("HELD-DONE"), onCancel: () => reply(id, "cancelled") };
+		return;
+	}
+	if (text.includes("@deaf")) {
+		// The grandchild holds a connection to the test's socket: its close is the test's proof that it died.
+		const grand = spawn(
+			process.execPath,
+			[
+				"-e",
+				"Bun.connect({ unix: process.env.FAKE_AGY_GRAND_SOCK, socket: { data() {} } }); setInterval(() => {}, 1e9);",
+			],
+			{ stdio: "ignore" },
+		);
+		log({ dir: "grand", pid: grand.pid });
+		held = { id, onSignal: () => finish("DEAF-DONE") };
+		update({
+			sessionUpdate: "tool_call",
+			toolCallId: "call_deaf",
+			name: "run_command",
+			status: "in_progress",
+			rawInput: {},
+		});
+		return;
+	}
+	if (text.includes("@tool")) {
+		update({ sessionUpdate: "tool_call", ...tool, status: "in_progress", rawInput, args: rawInput });
+		const status = text.includes("@failtool") ? "failed" : "completed";
+		const output = text.includes("@nooutput") ? {} : { rawOutput: { output: "hi\n", exit_code: 0 } };
+		update({ sessionUpdate: "tool_call_update", ...tool, status, rawInput, ...output });
+	}
+	const last = text.split("\n").at(-1) ?? "";
+	update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `REPLY${prompts}:` } });
+	finish(last);
 }
 
-const flag = (name: string): string | undefined => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
-const resume = flag("--conversation");
-const model = flag("--model") ?? "gemini-default";
-let conversationId = resume ?? randomUUID();
-if (resume !== undefined && process.env.FAKE_AGY_UNKNOWN_CONVERSATION === "1") {
-	process.stderr.write(`warning: conversation "${resume}" not found\n`);
-	conversationId = randomUUID();
-}
-out({ event: "init", conversation_id: conversationId, init: { model, cwd: process.cwd(), permission_mode: "fake" } });
-
-let turns = 0;
-const DEFAULT_CALL = {
-	input_tokens: 100,
-	output_tokens: 7,
-	thinking_tokens: 3,
-	cache_read_tokens: 40,
-	total_tokens: 107,
-};
-/** Model calls of the running turn; `result` sums them like agy. */
-let calls: Array<typeof DEFAULT_CALL> = [DEFAULT_CALL];
-let release: ((how: "done" | "interrupt") => void) | undefined;
-process.on("SIGUSR1", () => release?.("done"));
-process.on("SIGINT", () => {
-	if (release === undefined) process.exit(130);
-	release("interrupt");
+process.on("SIGUSR1", () => {
+	const current = held;
+	held = undefined;
+	current?.onSignal();
 });
 
-function result(status: "SUCCESS" | "ERROR", response: string, error?: string): void {
-	const made = status === "SUCCESS" ? calls : [];
-	for (const [i, call] of made.entries()) {
-		out({
-			event: "step_update",
-			step_update: { step_index: 10 + i, state: "DONE", step_type: "agent_response", usage: call },
-		});
-	}
-	const sum = (key: keyof typeof DEFAULT_CALL): number => made.reduce((total, call) => total + call[key], 0);
-	const usage = {
-		input_tokens: sum("input_tokens"),
-		output_tokens: sum("output_tokens"),
-		thinking_tokens: sum("thinking_tokens"),
-		cache_read_tokens: sum("cache_read_tokens"),
-		total_tokens: sum("total_tokens"),
-	};
-	out({
-		event: "result",
-		result: {
-			conversation_id: conversationId,
-			status,
-			response,
-			num_turns: turns,
-			usage,
-			...(error === undefined ? {} : { error }),
-		},
-	});
-}
-
-async function runTurn(content: string): Promise<void> {
-	turns += 1;
-	const ctx = /@ctx=([\d,]+)/.exec(content)?.[1];
-	calls =
-		ctx === undefined
-			? [DEFAULT_CALL]
-			: ctx.split(",").map((size) => ({
-					input_tokens: 1000,
-					output_tokens: 10,
-					thinking_tokens: 0,
-					cache_read_tokens: Number(size) - 1000,
-					total_tokens: Number(size) + 10,
-				}));
-	out({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type: "user_input" } });
-	if (content.includes("@error")) {
-		result("ERROR", "", "boom");
-		return;
-	}
-	if (content.includes("@tool")) {
-		const tool_info = { name: "run_command", parameters: { CommandLine: "echo hi" } };
-		out({
-			event: "step_update",
-			step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info },
-		});
-		out({
-			event: "step_update",
-			step_update: {
-				step_index: 1,
-				state: "DONE",
-				step_type: "tool",
-				tool_name: "run_command",
-				tool_info: content.includes("@nooutput") ? tool_info : { ...tool_info, output: "hi" },
-			},
-		});
-	}
-	if (content.includes("@holdtool")) {
-		const tool_info = { name: "run_command", parameters: { CommandLine: "bun install" } };
-		out({
-			event: "step_update",
-			step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "run_command", tool_info },
-		});
-		const held = Promise.withResolvers<"done" | "interrupt">();
-		release = held.resolve;
-		const how = await held.promise;
-		release = undefined;
-		if (how === "interrupt") {
-			result("ERROR", "", "interrupted");
-			process.exit(130);
-		}
-		out({
-			event: "step_update",
-			step_update: {
-				step_index: 1,
-				state: "DONE",
-				step_type: "tool",
-				tool_name: "run_command",
-				tool_info: { ...tool_info, output: "done" },
-			},
-		});
-		result("SUCCESS", "HELD-TOOL-DONE");
-		return;
-	}
-	if (content.includes("@hold")) {
-		const held = Promise.withResolvers<"done" | "interrupt">();
-		release = held.resolve;
-		const how = await held.promise;
-		release = undefined;
-		if (how === "interrupt") {
-			result("ERROR", "", "interrupted");
-			process.exit(130);
-		}
-		if (content.includes("@fail")) result("ERROR", "", "boom");
-		else result("SUCCESS", "HELD-DONE");
-		return;
-	}
-	if (content.includes("@linger")) {
-		process.on("SIGTERM", () => {
-			log({ dir: "term" });
-			process.stderr.write("OLD-CHILD-STDERR\n");
-			out({
-				event: "step_update",
-				step_update: { step_index: 9, state: "ACTIVE", step_type: "tool", tool_name: "late_tool", tool_info: {} },
-			});
-		});
-		process.on("SIGUSR2", () => process.exit(143));
-	}
-	result("SUCCESS", `REPLY${turns}:${content.split("\n").at(-1) ?? ""}`);
-}
-
-const inbox: string[] = [];
-let busy = false;
-async function drain(): Promise<void> {
-	if (busy) return;
-	busy = true;
-	for (let next = inbox.shift(); next !== undefined; next = inbox.shift()) await runTurn(next);
-	busy = false;
-}
-
 createInterface({ input: process.stdin }).on("line", (line) => {
-	const frame = JSON.parse(line) as { event?: string; message?: { content?: string } };
-	log({ dir: "in", frame });
-	if (frame.event !== "user") return;
-	inbox.push(String(frame.message?.content ?? ""));
-	void drain();
+	if (line.trim() === "") return;
+	const message = JSON.parse(line) as { id?: unknown; method?: string; params?: Record<string, unknown> };
+	log({ dir: "in", message });
+	const params = message.params ?? {};
+	if (message.method === undefined) {
+		// The client's answer to `@ask`: the held prompt answers once it arrived.
+		const current = held;
+		held = undefined;
+		return current?.onSignal();
+	}
+	switch (message.method) {
+		case "initialize":
+			return send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+		case "session/new":
+			sessionId = `fake-${randomUUID()}`;
+			return send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+		case "session/load": {
+			const wanted = String(params.sessionId);
+			if (!wanted.startsWith("fake-") || process.env.FAKE_AGY_UNKNOWN_SESSION === "1") {
+				return send({ id: message.id, error: { code: -32602, message: `Session not found: ${wanted}` } });
+			}
+			sessionId = wanted;
+			// Like agy, load replays the conversation as updates before it answers.
+			update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "old question" } });
+			update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAYED" } });
+			update({ sessionUpdate: "tool_call", toolCallId: "call_old", name: "run_command", status: "completed" });
+			update({ sessionUpdate: "usage_update", used: 900, size: 1000 });
+			return send({ id: message.id, result: { configOptions: configOptions() } });
+		}
+		case "session/set_config_option": {
+			const value = String(params.value);
+			if (process.env.FAKE_AGY_DEAF_CONFIG !== "1") {
+				if (params.configId === "model") {
+					if (!MODELS.includes(value)) {
+						return send({ id: message.id, error: { code: -32602, message: `Unknown model ID ${value}` } });
+					}
+					model = value;
+				} else if (params.configId === "thought_level") {
+					if (model.includes("orchestrator") || !LEVELS.includes(value)) {
+						return send({
+							id: message.id,
+							error: { code: -32602, message: `Thinking level "${value}" is not offered` },
+						});
+					}
+					level = value;
+				}
+			}
+			update({ sessionUpdate: "config_option_update", configOptions: configOptions() });
+			return send({ id: message.id, result: { configOptions: configOptions() } });
+		}
+		case "session/prompt": {
+			const blocks = Array.isArray(params.prompt) ? (params.prompt as Array<{ text?: string }>) : [];
+			return prompt(message.id, blocks.map((block) => block.text ?? "").join(""));
+		}
+		case "session/cancel": {
+			const current = held;
+			if (current?.onCancel === undefined) return;
+			held = undefined;
+			return current.onCancel();
+		}
+		default:
+			if (message.id !== undefined) send({ id: message.id, error: { code: -32601, message: "method not found" } });
+	}
 });

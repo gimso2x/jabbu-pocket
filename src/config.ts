@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { type AgyMcpServer, agyMcpServersOf, workerAgyOf } from "./config-agy";
 import { SLACK_KEYS } from "./config-removed-keys";
 import {
 	asRecord,
@@ -109,6 +110,7 @@ const ROOT_KEYS = new Set([
 	"workspaceDir",
 	"agent",
 	"agyExecutable",
+	"agyMcpServers",
 	"model",
 	"thinking",
 	"sessionRetentionDays",
@@ -206,6 +208,8 @@ export interface OmpbotConfig {
 	agent?: AgentKind;
 	/** Absolute agy CLI path for `agent: "agy"`; default resolves `agy` on the child PATH. */
 	agyExecutable?: string;
+	/** stdio MCP servers each agy conversation gets on `session/new|resume` (`config-agy.ts`); absent = none. */
+	agyMcpServers?: AgyMcpServer[];
 	model?: string;
 	thinking?: string;
 	sessionRetentionDays?: number;
@@ -819,17 +823,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	checkLaneLandRemotes(configPath, keptLanes.land as Record<string, LaneLandRepoConfig> | undefined, dispatchHosts);
 	if (root.recordsRepo !== undefined && !isRecordsPath(root.recordsRepo)) invalid(configPath, "recordsRepo");
 	const workerOmpArgs = optionalArgList(configPath, root, "workerOmpArgs");
-	let workerAgy: WorkerAgyConfig | undefined;
-	if (root.workerAgy !== undefined) {
-		const record = asRecord(root.workerAgy);
-		if (record === undefined) invalid(configPath, "workerAgy");
-		for (const key of Object.keys(record)) if (key !== "model") invalid(configPath, `workerAgy.${key}`);
-		const model = record.model;
-		// The model goes to agy as one argument: no blank, no leading `-` that would read as an option.
-		if (typeof model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(model))
-			invalid(configPath, "workerAgy.model");
-		workerAgy = { model };
-	}
+	const workerAgy = workerAgyOf(configPath, root.workerAgy);
+	const agyMcpServers = agyMcpServersOf(configPath, root.agyMcpServers);
 
 	const offsiteRaw = root.offsite;
 	let offsite: OmpbotConfig["offsite"];
@@ -1257,6 +1252,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (thinking !== undefined) config.thinking = thinking;
 	if (agent !== undefined) config.agent = agent;
 	if (agyExecutable !== undefined) config.agyExecutable = agyExecutable;
+	if (agyMcpServers !== undefined) config.agyMcpServers = agyMcpServers;
 	if (ompProfile !== undefined) config.ompProfile = ompProfile;
 	if (ompConfigOverlay !== undefined) config.ompConfigOverlay = ompConfigOverlay;
 	if (sessionRetentionDays !== undefined) config.sessionRetentionDays = sessionRetentionDays;
