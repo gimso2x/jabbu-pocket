@@ -420,7 +420,7 @@ Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다 (`init 
 
 ### herdr(선택)
 
-herdr는 config로 켜는 선택 기능입니다. 원격 [TASK](`host`, `dispatchHosts`)와 agy 워커에만 필요합니다. herdr 없이도 데몬·대화·모니터·백업·`jabbu_dispatch` simple(`omp -p`)과 로컬 [TASK](`mode=worker`+`taskSpec`, 데몬 Mailbox의 omp RPC 자식)는 그대로 돕니다. 이미 herdr로 돌던 [TASK](기존 행)는 끝까지 herdr로 돕니다(행의 `tasks.runtime`).
+herdr는 config로 켜는 선택 기능입니다. 원격 [TASK] (`host`, `dispatchHosts`)와 agy 워커에만 필요합니다. herdr 없이도 데몬·대화·모니터·백업·`jabbu_dispatch` simple(`omp -p`)과 로컬 [TASK] (`mode=worker`+`taskSpec`, 데몬 Mailbox의 omp RPC 자식)는 그대로 돕니다. 이미 herdr로 돌던 [TASK] (기존 행)는 끝까지 herdr로 돕니다(행의 `tasks.runtime`).
 
 - 켜기: config에 `"herdr": {}`(PATH의 `herdr`) 또는 `"herdr": {"bin": "/절대경로/herdr"}`. 설치 여부를 자동으로 감지하지 않습니다. 바꾸면 `reload`가 `restart_required=herdr`를 알리고 재시작해야 적용됩니다.
 - 켜짐: 원격 `host` 위임과 agy 워커(`workerAgy`)가 열립니다. `daemon_ready` 로그에 `herdr=on`.
@@ -433,7 +433,7 @@ herdr는 config로 켜는 선택 기능입니다. 원격 [TASK](`host`, `dispatc
 채팅 세션은 host tool `jabbu_dispatch(task, mode?, name?, host?, cwd?, taskSpec?)`로 일을 넘깁니다(레인·모니터 세션에는 없음). `mode`는 `simple`·`worker` 둘이고, `host`는 herdr 켜짐일 때만 있습니다.
 
 - `mode=simple`(기본): 단순 작업. `omp -p`로 한 번 실행하고 최종 출력을 돌려줍니다(10분 상한, 출력 8천자).
-- `mode=worker`: 여러 단계·오래 걸림·계속 추적할 작업. `taskSpec`을 채우면 [TASK]로 등록하고(재개 포함), `name`(TASKID 꼴 `t-YYYYMMDD-NN`)만 주면 그 [TASK]의 진행 조회, `name`과 `task`를 함께 주면 후속 지시입니다. `taskSpec`이 없는 로컬 시작은 오류입니다(로컬 워커는 `taskSpec`으로 등록). 로컬 [TASK](`taskSpec`에 `host` 없음)는 herdr 없이 데몬이 Mailbox origin `jabbu/task/<에이전트>`의 omp RPC 자식으로 돌립니다. 레인과 같은 Mailbox라 재시작하면 이어서 돌고, 워커의 답은 채팅에 직접 가지 않으며 카드·알림만 올라옵니다. 로컬 자유 형식 herdr 에이전트(`taskSpec` 없는 로컬 시작)는 없어졌습니다. `host`를 주면 원격 herdr 자유 형식 시작은 그대로 됩니다.
+- `mode=worker`: 여러 단계·오래 걸림·계속 추적할 작업. `taskSpec`을 채우면 [TASK]로 등록하고(재개 포함), `name`(TASKID 꼴 `t-YYYYMMDD-NN`)만 주면 그 [TASK]의 진행 조회, `name`과 `task`를 함께 주면 후속 지시입니다. `taskSpec`이 없는 로컬 시작은 오류입니다(로컬 워커는 `taskSpec`으로 등록). 로컬 [TASK] (`taskSpec`에 `host` 없음)는 herdr 없이 데몬이 Mailbox origin `jabbu/task/<에이전트>`의 omp RPC 자식으로 돌립니다. 레인과 같은 Mailbox라 재시작하면 이어서 돌고, 워커의 답은 채팅에 직접 가지 않으며 카드·알림만 올라옵니다. 로컬 자유 형식 herdr 에이전트(`taskSpec` 없는 로컬 시작)는 없어졌습니다. `host`를 주면 원격 herdr 자유 형식 시작은 그대로 됩니다.
 - `host`(예: `host=wsl`): 설정의 `dispatchHosts`에 등록된 호스트에서 ssh로 herdr를 구동해 원격 에이전트를 띄웁니다. 원격 호스트로 넘기는 인자(herdr 경로·cwd·작업 지시문)는 하나씩 작은따옴표로 감싸 보내므로 원격 셸이 쪼개거나 해석하지 않습니다. cwd가 정확히 `~`일 때만 원격 홈으로 풀리고, `~/…`는 글자 그대로 전달되니 원격 경로는 절대경로로 주세요.
 - 여러 단계이거나 하루를 넘길 작업은 `taskSpec`을 채워 [TASK] 상태 문서로 추적합니다.
 - **감사 로그**: 데몬 프로세스가 띄우는 외부 호출(원격 ssh, 로컬 herdr·git·`omp -p`, tasks 스윕의 원격 읽기 포함)은 한 지점(`realProcessRunner`)에서 `~/.jabbu/logs/dispatch-audit.jsonl`에 한 줄씩 남습니다(0600, 5MB씩 최대 4개 파일로 회전). 줄 필드: `ts`, `host`(ssh 대상, 로컬이면 `local`), `argv0`, `cmd`(비밀 마스킹 후 300자 제한, ssh는 원격 명령), `cmdSha256`(마스킹된 전체 명령 해시 앞 16자), `rc`(타임아웃이면 `null`), `ms`, `timedOut`, `origin`(`jabbu_dispatch` 호출일 때). 기록 실패는 호출을 막지 않고 `dispatch_audit_write_failed`를 한 번만 남깁니다. 기록은 데몬 프로세스에서만 켜지므로 CLI로 직접 실행한 `jabbu-pocket backup`·`tasks`의 ssh/scp는 남지 않습니다.
