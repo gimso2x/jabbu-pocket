@@ -5,7 +5,6 @@ import { pidAlive } from "../daemon/lock";
 import type { LaneHistoryEntry, LaneMeta, LaneStatus } from "../lanes/status";
 import { ompSessionDirFor } from "../omp/session-dir";
 import { newestSessionFile } from "../omp/session-heal";
-import { isRecord } from "../omp/type-guards";
 import { maskPersonal, redact } from "../redact";
 import { oneLine, readTierConfidence } from "../tasks/docs";
 import type { TaskStatus } from "../tasks/ledger";
@@ -15,6 +14,7 @@ import type { BoardCard } from "./board";
 import { hasSecretsSegment, isAllowedJobCwd, type JobInfo, jobAllowedRoots, readJobFile } from "./snapshot";
 import {
 	BRIEF_PREVIEW_CHARS,
+	lastUserAt,
 	maskText,
 	oneLineText,
 	readBrief,
@@ -139,14 +139,11 @@ function turnRoot(main: Transcript, live: boolean, failed: boolean, workers: Tra
  * `user` message has no turn (`no_session`).
  */
 export function readSessionTrace(file: string, now: number, live: boolean): TurnTrace {
-	let startedAt: number | undefined;
-	for (const entry of readJsonlRecords(file)) {
-		const message = entry.type === "message" && isRecord(entry.message) ? entry.message : undefined;
-		const at = Date.parse(typeof entry.timestamp === "string" ? entry.timestamp : "");
-		if (message?.role === "user" && !Number.isNaN(at)) startedAt = at;
-	}
+	const records = readJsonlRecords(file);
+	const startedAt = lastUserAt(records);
 	if (startedAt === undefined) return { ok: false, error: "no_session" };
-	const main = readTranscript(file, { from: startedAt, to: Number.POSITIVE_INFINITY, live, origin: startedAt });
+	const window = { from: startedAt, to: Number.POSITIVE_INFINITY, live, origin: startedAt };
+	const main = readTranscript(file, window, undefined, records);
 	return {
 		ok: true,
 		startedAt,
