@@ -184,7 +184,7 @@ describe("dispatch tool (#45 repo, #46 name, #97 symlink tail, #98 remote TASKID
 			homeDir: home,
 			workspaceDir: join(home, "workspace"),
 			herdr: {},
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			tasks: {} as NonNullable<DispatchToolDeps["tasks"]>,
 			log: { info() {}, warn() {} },
 			run: async (cmd) => {

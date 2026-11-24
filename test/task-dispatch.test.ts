@@ -215,13 +215,13 @@ function harness(
 		homeDir: "/home",
 		workspaceDir: "/ws",
 		herdr: {},
-		dispatchHosts: {
+		dispatchHosts: () => ({
 			wsl: {
 				ssh: "wsl-ssh",
 				workDir: "/r",
 				...(options.wslOmpArgs === undefined ? {} : { ompArgs: options.wslOmpArgs }),
 			},
-		},
+		}),
 		...(options.workerOmpArgs === undefined ? {} : { workerOmpArgs: options.workerOmpArgs }),
 		...(options.models === undefined ? {} : { laneModels: () => options.models?.current }),
 		...(options.agy === undefined ? {} : { workerAgy: () => options.agy }),

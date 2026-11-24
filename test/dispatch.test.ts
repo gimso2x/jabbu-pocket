@@ -927,7 +927,7 @@ describe("herdr optional (config herdr)", () => {
 
 	test("off: herdr, taskSpec and host arguments are refused before any process runs", async () => {
 		const { built, calls } = dispatchTool({
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			tasks: {} as NonNullable<DispatchToolDeps["tasks"]>,
 		});
 		for (const params of [
@@ -951,7 +951,7 @@ describe("herdr optional (config herdr)", () => {
 	test("local herdr bin (config herdr.bin, set at daemon start): local calls run it, remote ones keep the host's", async () => {
 		setLocalHerdrBin("/opt/herdr/bin/herdr");
 		try {
-			const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: { wsl: { ssh: "wsl" } } });
+			const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: () => ({ wsl: { ssh: "wsl" } }) });
 			await built.execute({ mode: "herdr", name: "x" }, { signal });
 			expect(calls[0]?.[0]).toBe("/opt/herdr/bin/herdr");
 			await built.execute({ host: "wsl", name: "x" }, { signal });
@@ -965,8 +965,24 @@ describe("herdr optional (config herdr)", () => {
 		expect(calls[0]?.[0]).toBe("herdr");
 	});
 
+	test("dispatchHosts is read at every call: a host added after the tool was built is reachable, a removed one is not", async () => {
+		let hosts: Record<string, { ssh: string }> = { wsl: { ssh: "wsl" } };
+		const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: () => hosts });
+		await expect(built.execute({ host: "oci", name: "x", task: "t" }, { signal })).rejects.toThrow(
+			"알 수 없는 호스트: oci (등록된 호스트: wsl)",
+		);
+		expect(calls).toEqual([]);
+		hosts = { wsl: { ssh: "wsl" }, oci: { ssh: "oci-alias" } };
+		await built.execute({ host: "oci", name: "x", task: "t" }, { signal });
+		expect(calls.some((cmd) => cmd.includes("oci-alias"))).toBe(true);
+		hosts = { wsl: { ssh: "wsl" } };
+		await expect(built.execute({ host: "oci", name: "x", task: "t" }, { signal })).rejects.toThrow(
+			"알 수 없는 호스트: oci (등록된 호스트: wsl)",
+		);
+	});
+
 	test("L-12 a host named like an Object.prototype member is unknown, and nothing runs", async () => {
-		const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: { wsl: { ssh: "wsl" } } });
+		const { built, calls } = dispatchTool({ herdr: {}, dispatchHosts: () => ({ wsl: { ssh: "wsl" } }) });
 		for (const host of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
 			await expect(built.execute({ host, name: "x", task: "t" }, { signal })).rejects.toThrow(
 				`알 수 없는 호스트: ${host} (등록된 호스트: wsl)`,
@@ -979,7 +995,7 @@ describe("herdr optional (config herdr)", () => {
 		const calls: string[][] = [];
 		const { built } = dispatchTool({
 			herdr: {},
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			run: async (cmd) => {
 				calls.push(cmd);
 				return { code: 0, stdout: JSON.stringify({ result: { agents: [{ name: "worker-1" }] } }), timedOut: false };
@@ -1229,7 +1245,7 @@ describe("herdr prompts kept for the dashboard (herdr_prompts)", () => {
 			homeDir: dir,
 			workspaceDir: dir,
 			herdr: {},
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			log: { info() {}, warn() {} },
 			run,
 			recordPrompt: (input) => store.recordHerdrPrompt(input),
@@ -1417,7 +1433,7 @@ describe("herdr start guards and agent list shape (qa-l low B)", () => {
 			homeDir: "/h",
 			workspaceDir: "/h/workspace",
 			herdr: {},
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			log: { info() {}, warn() {} },
 			run,
 		});

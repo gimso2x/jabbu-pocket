@@ -192,7 +192,7 @@ describe("ompbot_dispatch under freeze", () => {
 			ompExecutable: "omp",
 			homeDir: dir,
 			workspaceDir: dir,
-			dispatchHosts: { wsl: { ssh: "wsl-ssh" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl-ssh" } }),
 			herdr: {},
 			frozen,
 			run: async (cmd) => {
