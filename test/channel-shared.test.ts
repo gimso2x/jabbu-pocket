@@ -200,3 +200,26 @@ test("SingleFlightBackfill coalesces triggers during a pass into one follow-up a
 	expect(runner.passes).toBe(3);
 	expect(failures).toHaveLength(1);
 });
+
+test("SingleFlightBackfill runs the follow-up a trigger asked for during a pass that then throws", async () => {
+	const failures: unknown[] = [];
+	class Runner extends SingleFlightBackfill {
+		passes = 0;
+		readonly gate = Promise.withResolvers<void>();
+		protected pass(): Promise<void> {
+			this.passes += 1;
+			return this.passes === 1 ? this.gate.promise : Promise.resolve();
+		}
+		protected failed(err: unknown): void {
+			failures.push(err);
+		}
+	}
+	const runner = new Runner();
+	runner.trigger(); // pass 1 starts and parks on the gate
+	runner.trigger(); // coalesced into one follow-up
+	runner.gate.reject(new Error("boom")); // pass 1 throws after the follow-up was asked for
+	await runner.waitForIdle();
+	// The failed pass is reported, and the requested recovery is not dropped with it.
+	expect(failures).toHaveLength(1);
+	expect(runner.passes).toBe(2);
+});
