@@ -34,7 +34,7 @@ export abstract class SingleFlightBackfill {
 	#lastRun: Promise<void> = Promise.resolve();
 
 	protected abstract pass(): Promise<unknown>;
-	/** A pass that threw; must not throw itself. */
+	/** A pass that threw; must not throw itself. A trigger that landed during the failed pass still gets its follow-up. */
 	protected abstract failed(err: unknown): void;
 
 	trigger(): void {
@@ -55,10 +55,9 @@ export abstract class SingleFlightBackfill {
 		try {
 			do {
 				this.#followUp = false;
-				await this.pass();
+				// A throw is reported, not fatal: the recovery a trigger asked for during the failed pass still runs.
+				await this.pass().catch((err: unknown) => this.failed(err));
 			} while (this.#followUp);
-		} catch (err) {
-			this.failed(err);
 		} finally {
 			this.#running = false;
 		}
