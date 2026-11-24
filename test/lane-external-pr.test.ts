@@ -307,6 +307,14 @@ describe("Outcome card buttons", () => {
 		expect((card.buttons ?? []).map((button) => button.label)).toEqual(["머지", "폐기"]);
 	});
 
+	test("③b a lane landing through a PR labels the merge button PR 올리기", () => {
+		const card = buildLaneOutcomeCard(laneRow({ land: { state: "pending", attempts: 0, mode: "pr" } }), {
+			kind: "ask",
+		});
+		expect((card.buttons ?? []).map((button) => button.label)).toEqual(["PR 올리기", "폐기"]);
+		expect(card.note).toStartWith("PR 올리기 = ");
+	});
+
 	test("④ parseLaneActionId reads publish and hold ids and refuses a bad name", () => {
 		expect(parseLaneActionId(lanePublishActionId("cataly-pr-오너-프로필"))).toEqual({
 			kind: "publish",

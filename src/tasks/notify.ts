@@ -168,17 +168,18 @@ export const parseTaskMergeActionId = (actionId: string): string | undefined =>
 export const parseTaskRecommendActionId = (actionId: string): string | undefined =>
 	taskIdOf(actionId, TASK_RECOMMEND_ACTION_PREFIX);
 
-/** What one click on `머지` does: the same as answering "머지해" in the thread. */
+/** What one click on `머지` (`PR 올리기` where the repository lands through a PR) does: the same as answering "머지해". */
 export const MERGE_NOTE = "머지 = close → ff merge → push → 정리 · 재시작은 포함 안 됨";
-const PR_MERGE_NOTE = "머지 = PR → CI → squash 머지 → 정리 · 재시작은 포함 안 됨";
+export const PR_MERGE_LABEL = "PR 올리기";
+const PR_MERGE_NOTE = `${PR_MERGE_LABEL} = PR → CI 초록이면 squash 머지 → 정리 · 재시작은 포함 안 됨`;
 /** What one click on `추천대로` does: the same as answering "추천대로" in the thread. */
 export const RECOMMEND_NOTE = "추천대로 = 위 추천 그대로 진행 · 다른 결정은 이 스레드에 답장";
 /** The recommendation a `추천대로` button carries in its `value` (redacted), so the click can say what it approved. */
 export const RECOMMEND_VALUE_MAX = 300;
 
-const mergeButton = (row: TaskRow): ActionButton => ({
+const mergeButton = (row: TaskRow, prMode = false): ActionButton => ({
 	actionId: taskMergeActionId(row.taskId),
-	label: "머지",
+	label: prMode ? PR_MERGE_LABEL : "머지",
 	value: row.taskId,
 	style: "primary",
 });
@@ -248,10 +249,7 @@ const clip = (text: string, max: number): string => (text.length > max ? `${text
 
 const MAX_SUMMARY_LINES = 3;
 
-/**
- * Criteria that cite the very same commit-only evidence are flagged: the bot checks that the commit exists, not that
- * it meets them.
- */
+/** Flags criteria citing the same commit-only evidence: the bot checks the commit exists, not that it meets them. */
 function sharedCommitWarnings(row: TaskRow, judgement: TaskJudgement): string[] {
 	const shared = new Map<string, string[]>();
 	for (const item of row.acceptance) {
@@ -432,7 +430,7 @@ export function buildReachedCard(
 			branchField(row),
 			workerField(row),
 		],
-		buttons: [mergeButton(row)],
+		buttons: [mergeButton(row, prMode)],
 		...(note === undefined ? {} : { note }),
 	};
 }
