@@ -96,6 +96,7 @@ import {
 import { PR_LAND_POLL_MS } from "./pr-land-steps";
 import { preserveFileEvidence, verifyProgressEvidence } from "./progress-evidence";
 import { cleanQaWorktrees, createGateSlot, type GateSlot, qaDepsOf, runLaneQa, untilAborted } from "./qa";
+import { refusalCardLines } from "./refusal-cap";
 import {
 	blockerMessage,
 	blockerSignature,
@@ -1348,7 +1349,7 @@ export class LaneManager {
 		fromTick: boolean,
 	): Promise<SettleOutcome> {
 		const { log, approvals } = this.#deps;
-		const lines = refusals.map((r) => `- ${r.category}: ${r.excerpt}`);
+		const lines = refusalCardLines(refusals);
 		const channel = parseThreadRef(lane.threadRef)?.channel;
 		let verdict: "approved" | "denied" | "timeout" = "timeout";
 		const ownerEvents = ownerEventCount(lane);

@@ -1,5 +1,6 @@
 import { redactThenClip } from "../redact";
 import { guardCode } from "./guard-code";
+import { capRefusals } from "./refusal-cap";
 import { defaultGit, type GitRunner } from "./verify";
 
 /** One reason a lane's "done" claim is not accepted as evidence of finished work. */
@@ -59,8 +60,6 @@ const EXPORT_DECLARATION =
 	/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function\b\s*\*?|class\b|abstract\s+class\b|const\b|let\b|var\b|interface\b|type\b|enum\b)\s*([A-Za-z_$][\w$]*)/;
 /** `false &&` / `&& false` / `if (false)` / `if (0)` on comment- and string-free code; a comparison with false is no switch-off. */
 const FEATURE_OFF = /\bif\s*\(\s*(?:false|0)\s*\)|(?<![=!]=\s*|[=!]==\s*)\bfalse\b\s*&&|&&\s*false\b(?!\s*[=!]=)/;
-/** How many refusals one verdict reports (a claim is judged again after its remedies are applied). */
-export const MAX_REFUSALS = 8;
 
 interface DiffLine {
 	file: string;
@@ -377,7 +376,7 @@ export function classifyLaneCompletion(input: IntegrityInput): IntegrityRefusal[
 		refusals.push(refusal("unproven_claim_word", "summary", summary));
 	}
 
-	return refusals.slice(0, MAX_REFUSALS);
+	return capRefusals(refusals);
 }
 
 /** Where a lane's diff starts: the commit it started (or was reopened) at, and the branch it lands on. */

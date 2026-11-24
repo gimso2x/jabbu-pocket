@@ -493,10 +493,12 @@ describe("classifyLaneCompletion adversarial", () => {
 		const lines = Array.from({ length: 30 }, (_, i) => `+// TODO item ${i} ${"x".repeat(300)}`);
 		const out = classifyLaneCompletion({ summary: "수정 완료", diff: DIFF("src/a.ts", ...lines) });
 		expect(out).toHaveLength(8);
-		expect(out.every((r) => r.category === "unfinished_work_marker")).toBe(true);
+		// Over the cap the one-off claim refusal is kept first; the other 7 slots are marker lines.
+		expect(out.map((r) => r.category)).toEqual([
+			"unproven_claim_word",
+			...Array.from({ length: 7 }, () => "unfinished_work_marker" as const),
+		]);
 		for (const r of out) expect(r.excerpt.length).toBeLessThanOrEqual("src/a.ts: ".length + 120);
-		// Cap hides the unproven-claim refusal entirely when 8+ marker lines come first.
-		expect(out.some((r) => r.category === "unproven_claim_word")).toBe(false);
 	});
 
 	test("huge diffs classify quickly and CRLF content lines still match", () => {

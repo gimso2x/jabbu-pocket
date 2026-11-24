@@ -19,6 +19,28 @@ function categories(summary: string, diff: string): string[] {
 }
 
 describe("classifyLaneCompletion", () => {
+	test("over the cap, the guard deletion and skipped tests are kept ahead of 12 TODO lines (qa-aa #53)", () => {
+		const todos = Array.from({ length: 12 }, (_, i) => `+// TODO item ${i}`);
+		const skips = ["+test.skip('one', () => {});", "+test.skip('two', () => {});"];
+		const diff = DIFF("src/a.ts", '-  if (!ok) throw new Error("denied");', ...todos, ...skips);
+		const out = classifyLaneCompletion({ summary: "done", diff });
+		expect(out.map((r) => r.category)).toEqual([
+			"guard_deletion_without_adversarial_regression",
+			"skipped_test",
+			"skipped_test",
+			...Array.from({ length: 5 }, () => "unfinished_work_marker" as const),
+		]);
+		expect(out[1]?.excerpt).toContain("one");
+		expect(out[2]?.excerpt).toContain("two");
+		expect(out.slice(3).map((r) => r.excerpt.replace(/^.*TODO /, ""))).toEqual([
+			"item 0",
+			"item 1",
+			"item 2",
+			"item 3",
+			"item 4",
+		]);
+	});
+
 	test("a clean diff and a claim with a named command pass", () => {
 		const diff = DIFF("src/a.ts", "+export const x = 1;");
 		expect(categories("bun test 통과, 커밋 완료", diff)).toEqual([]);
