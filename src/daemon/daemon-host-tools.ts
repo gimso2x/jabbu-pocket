@@ -124,7 +124,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 		...(config.ompProfile === undefined ? {} : { ompProfile: config.ompProfile }),
 		...(config.ompConfigOverlay === undefined ? {} : { ompConfigOverlay: config.ompConfigOverlay }),
 		...(channel === undefined ? {} : { channel }),
-		...(config.dispatchHosts === undefined ? {} : { dispatchHosts: config.dispatchHosts }),
+		dispatchHosts: () => ctx.options.config.dispatchHosts,
 		...(config.workerOmpArgs === undefined ? {} : { workerOmpArgs: config.workerOmpArgs }),
 		// A live setting like the lane manager's: each new [TASK] reads the config the last reload left.
 		laneModels: () => ctx.options.config.lanes?.models,
