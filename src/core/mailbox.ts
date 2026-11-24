@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { isTaskOrigin } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
 import {
@@ -170,16 +171,11 @@ export class OriginMailbox {
 	#skipPeerNotice = false;
 	/** Host tool calls (approval wait, upload, dispatch) running for this origin's child; no omp events come meanwhile. */
 	#hostToolsRunning = 0;
-	/** Set by `stopWhenIdle()` while a turn runs: the child is stopped once that turn has settled. */
-	#stopAfterTurn = false;
-	/** Set by `/queue retry`: the command's end runs a drain so the row it made pending goes out. */
-	#redrain = false;
-	/** `whenTurnEnds` callers, woken where the turn is dropped (final, exit, `/new`). */
-	readonly #turnEndWaiters: Array<() => void> = [];
-	/** Set at shutdown (`stopDispatching`): pending rows stay pending — the drain awaits running turns only. */
-	#acceptingDispatch = true;
-	/** Failed turns in a row; a completed turn resets it (`성공 시 리셋`). */
-	#consecFailures = 0;
+	#stopAfterTurn = false; // set by `stopWhenIdle()` while a turn runs: the child is stopped once that turn has settled
+	#redrain = false; // set by `/queue retry`: the command's end runs a drain so the row it made pending goes out
+	readonly #turnEndWaiters: Array<() => void> = []; // `whenTurnEnds` callers, woken where the turn is dropped (final, exit, `/new`)
+	#acceptingDispatch = true; // cleared at shutdown (`stopDispatching`): pending rows stay pending, the drain awaits running turns only
+	#consecFailures = 0; // failed turns in a row; a completed turn resets it
 	/** Epochs whose session mismatch was already passed to `onSessionMismatch` (memory only: a restart may tell again). */
 	readonly #mismatchNoticed = new Set<number>();
 	/**
@@ -726,7 +722,7 @@ export class OriginMailbox {
 	 * (`tail_wait_start`) is such proof too: the prompt's answer goes out now, not after the background work.
 	 */
 	#sendInterimOf(turn: ActiveTurn, event: OmpEvent): void {
-		if (this.#deps.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) return;
+		if (this.#deps.originKey.startsWith(MONITOR_ORIGIN_PREFIX) || isTaskOrigin(this.#deps.originKey)) return;
 		const flushes = ["message_start", "message_end", "tool_execution_start", TAIL_WAIT_START_EVENT];
 		if (!flushes.includes(event.type)) return;
 		const pending = turn.pendingAnswer;
@@ -1665,6 +1661,8 @@ export class OriginMailbox {
 		if (final.status === "completed") {
 			const answer = await this.#turnAnswer(driver, turn, final.text);
 			store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
+			if (isTaskOrigin(originKey))
+				log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
 			this.#consecFailures = 0;
 		} else if (final.error === OWNER_STOP_ERROR) {
 			// The owner's `!stop`: its answer (the `stop:` op, which took over the turn's rows) is the one message —

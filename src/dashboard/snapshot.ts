@@ -50,6 +50,7 @@ import type { TaskRisk } from "../tasks/docs";
 import { evaluateTask } from "../tasks/evaluate";
 import type { TaskHostOps } from "../tasks/host";
 import { type ReadTask, readTaskSql, type TaskRow, type TaskSql, type TaskStatus } from "../tasks/ledger";
+import { headlessStatusFromLedger } from "../tasks/runtime";
 import { formatLocal, localIso } from "../time";
 import { type BoardPromptRef, type BoardState, type BoardSummary, type BoardTaskRef, summarizeBoard } from "./board";
 import { discordThreadHref } from "./detail";
@@ -139,12 +140,10 @@ export interface TaskInfo {
 	herdr?: HerdrState;
 	/** herdr board card of the task's pane (the board root when the card cannot be resolved). */
 	link?: string;
-	/** Why the task documents could not be judged, and/or which JSON column of the row is damaged (`… 손상`). */
-	error?: string;
+	error?: string; // why the task documents could not be judged, and/or which JSON column of the row is damaged (`… 손상`)
 	/** Registration to first review of past TASKs ({@link taskDurationSamples}); `working` TASKs with enough samples only. */
 	typical?: TypicalDuration;
-	/** Since registration; set together with `typical`. */
-	elapsedMs?: number;
+	elapsedMs?: number; // since registration; set together with `typical`
 }
 
 /** Threads in the flow view: a TASK registered in this window, or any open TASK. */
@@ -163,8 +162,7 @@ export interface FlowStepInfo {
 	closedAt?: string;
 	acTotal: number;
 	stage: TaskStage;
-	/** As on {@link TaskInfo}: `working` TASKs with enough samples only. */
-	typical?: TypicalDuration;
+	typical?: TypicalDuration; // as on {@link TaskInfo}: `working` TASKs with enough samples only
 	elapsedMs?: number;
 }
 
@@ -1570,6 +1568,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		});
 
 		const herdrStateOf = async (row: TaskRow): Promise<HerdrState> => {
+			if (row.runtime === "headless") return { ok: true, status: headlessStatusFromLedger(needDb(), row) };
 			if (config?.herdr === undefined) return { ok: false, error: "herdr is not configured" };
 			const target = targets.find((candidate) => candidate.host === (row.host ?? "local"));
 			if (target === undefined) return { ok: false, error: `unknown host: ${row.host}` };
@@ -1583,7 +1582,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 
 		const linkOf = async (row: TaskRow): Promise<string | undefined> => {
 			const board = config?.herdrBoard;
-			if (board === undefined) return undefined;
+			if (board === undefined || row.runtime === "headless") return undefined;
 			const listing = await listingOf(row.host ?? "local");
 			const paneId =
 				listing?.ok === true ? listing.agents.find((agent) => agent.name === row.agent)?.paneId : undefined;

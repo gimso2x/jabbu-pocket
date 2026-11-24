@@ -11,6 +11,7 @@ import {
 	WINDOW_GATES,
 } from "./daemon-constants";
 import { type DaemonContext, ownerTarget } from "./daemon-context";
+import { taskHeld } from "./daemon-task-resume";
 import type { PendingRetryState } from "./daemon-types";
 import {
 	formatGateClosedNotice,
@@ -121,8 +122,7 @@ export class GateSweep {
 			try {
 				if (gate.state === "open") {
 					const incident = store.recordAlertIncident(`gate:${gate.name}`, "open", now);
-					// `standing` rebuilds the alerted flag after a restart (the in-memory map starts empty); a quiet
-					// repeat inside 24h still counts as "the owner knows".
+					// `standing` rebuilds the alerted flag after a restart (empty map); a quiet repeat inside 24h still counts as "the owner knows".
 					const alerted = incident.notify || incident.standing || (previous?.state === "open" && previous.alerted);
 					if (incident.notify) {
 						await owner.adapter.postNotice(owner.channel, formatGateOpenNotice(gate, incident.firstAt, now));
@@ -215,8 +215,8 @@ export class PendingDispatchSweep {
 		if (!frozen) this.frozenHeldOrigins.clear();
 		for (const originKey of new Set(stale.map((row) => row.originKey))) {
 			if (router.mailbox(originKey).state.busy) continue;
-			// A paused lane holds its owner messages on purpose until `계속`; a retry would count the wait as a failure.
-			if (store.getLaneByOrigin(originKey)?.status === "paused") continue;
+			// A paused lane or [TASK] (or one blocked on the owner) holds its rows on purpose; a retry would count the wait as a failure.
+			if (store.getLaneByOrigin(originKey)?.status === "paused" || taskHeld(store.tasks, originKey, true)) continue;
 			const previous = this.#pendingRetries.get(originKey);
 			if (previous !== undefined && now - previous.at < interval) continue;
 			const oldest = stale

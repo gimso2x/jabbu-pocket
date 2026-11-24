@@ -209,7 +209,7 @@ describe("jabbu_dispatch under freeze", () => {
 		const { built, calls } = tool(() => state.value);
 		state.value = { since: "2026-10-30T01:00:00.000Z", reason: "점검", by: "cli" };
 		const signal = new AbortController().signal;
-		for (const params of [{ task: "빌드" }, { mode: "herdr", name: "a", task: "x" }, { host: "wsl", name: "a" }]) {
+		for (const params of [{ task: "빌드" }, { mode: "worker", name: "a", task: "x" }, { host: "wsl", name: "a" }]) {
 			await expect(built.execute(params, { signal })).rejects.toThrow(/동결/);
 		}
 		expect(calls).toEqual([]);

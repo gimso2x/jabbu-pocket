@@ -1,14 +1,6 @@
 import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { boardCardLink, diffViewLink } from "../dispatch/board";
-import {
-	herdrAgentPane,
-	herdrAgentStatus,
-	herdrPromptExisting,
-	herdrReadAgent,
-	type ProcessRunner,
-	readRemoteLastAssistant,
-	realProcessRunner,
-} from "../dispatch/omp";
+import { herdrAgentPane, type ProcessRunner, readRemoteLastAssistant, realProcessRunner } from "../dispatch/omp";
 import { lastAnswerOf, readLastAssistant } from "../omp/session-tail";
 import { readAutoLandHold } from "../ops/apply";
 import { HerdrHealthProbe } from "../ops/herdr-health";
@@ -24,12 +16,13 @@ import { recordsTicker, taskHostOf } from "../tasks/records";
 import { TaskSweeper } from "../tasks/sweeper";
 import { autoLandPolicy, type DaemonContext } from "./daemon-context";
 import type { DaemonStore } from "./daemon-store";
+import { herdrOptionsOf, ledgerOf, taskRuntimeOf } from "./daemon-task-resume";
 
-/** What the [TASK] sweep needs from the daemon beyond its context (herdr on only). */
+/** What the [TASK] sweep needs from the daemon beyond its context. */
 export interface TaskSweepDeps {
 	store: DaemonStore;
 	config: JabbuConfig;
-	herdr: NonNullable<JabbuConfig["herdr"]>;
+	herdr: JabbuConfig["herdr"];
 	herdrRun: ProcessRunner | undefined;
 	requestTaskSweep: (taskId: string) => void;
 	repoMatches: (row: TaskRow, repos: readonly string[]) => Promise<boolean>;
@@ -39,35 +32,28 @@ export interface TaskSweepDeps {
 	retryPrLand: (row: TaskRow) => Promise<void>;
 }
 
-/** The herdr reachability probe, the local `[check: …]` queue and the [TASK] sweeper of a herdr-on daemon. */
+/** The herdr reachability probe (herdr on only), the local `[check: …]` queue and the [TASK] sweeper. */
 export function createTaskSweep(
 	ctx: DaemonContext,
 	deps: TaskSweepDeps,
-): { herdrHealth: HerdrHealthProbe; checkRunner: TaskCheckRunner; taskSweeper: TaskSweeper } {
+): { herdrHealth: HerdrHealthProbe | undefined; checkRunner: TaskCheckRunner; taskSweeper: TaskSweeper } {
 	const { store, config, herdrRun } = deps;
 	const { log } = ctx;
-	/** The herdr call options of a task's host: a dispatch host's ssh target and herdr binary, the local ones otherwise. */
-	const herdrOpts = (row: TaskRow) => {
-		const entry = row.host === null ? undefined : ctx.options.config.dispatchHosts?.[row.host];
-		return {
-			cwd: config.workspaceDir,
-			...(entry === undefined ? {} : { sshTarget: entry.ssh }),
-			...(entry?.herdrBin === undefined ? {} : { herdrBin: entry.herdrBin }),
-			...(herdrRun === undefined ? {} : { run: herdrRun }),
-		};
-	};
 	const skipSeen = new Set<string>(); // a read a task was left out of is logged once per `<event>:<task>:<reason>`
 	const skipOnce = (event: string, row: TaskRow, reason: string) => {
 		const key = `${event}:${row.taskId}:${reason}`;
 		if (!skipSeen.has(key)) log.info(event, { task: row.taskId, reason });
 		skipSeen.add(key);
 	};
-	const herdrHealth = new HerdrHealthProbe({
-		homeDir: config.homeDir,
-		bin: deps.herdr.bin ?? "herdr",
-		run: herdrRun ?? realProcessRunner,
-		now: () => ctx.clock.now(),
-	});
+	const herdrHealth =
+		deps.herdr === undefined
+			? undefined
+			: new HerdrHealthProbe({
+					homeDir: config.homeDir,
+					bin: deps.herdr.bin ?? "herdr",
+					run: herdrRun ?? realProcessRunner,
+					now: () => ctx.clock.now(),
+				});
 	// `deps.config` is the boot snapshot: reloadable fields (dispatchHosts, recordsRepo, herdrBoard, taskAutoLand) are read live from `ctx.options.config`.
 	const hostOf = (host: string | null) => taskHostOf(ctx.options.config, host);
 	const recordTask = recordsTicker(ctx, (row) => hostOf(row.host));
@@ -84,7 +70,7 @@ export function createTaskSweep(
 		log,
 	});
 	const taskSweeper = new TaskSweeper({
-		ledger: store.tasks,
+		ledger: deps.herdr === undefined ? ledgerOf(store.tasks, (row) => row.runtime === "headless") : store.tasks,
 		frozen: ctx.frozen,
 		checkRunner,
 		evaluate: async (row, checks) => {
@@ -97,7 +83,7 @@ export function createTaskSweep(
 		retryPrLand: (row) => deps.retryPrLand(row),
 		landsViaPr: (row) => landsViaPr(ctx.options.config, row),
 		remind: async (row, text) => {
-			const sent = await herdrPromptExisting(row.agent, text, herdrOpts(row));
+			const sent = await taskRuntimeOf(ctx, row).prompt(row, text);
 			if (sent.ok || sent.unconfirmed === true) {
 				notePrompt(
 					{ recordPrompt: (input) => store.recordHerdrPrompt(input), log },
@@ -106,8 +92,8 @@ export function createTaskSweep(
 			}
 			return sent;
 		},
-		agentStatus: (row) => herdrAgentStatus(row.agent, herdrOpts(row)),
-		readAgent: (row) => herdrReadAgent(row.agent, herdrOpts(row)),
+		agentStatus: (row) => taskRuntimeOf(ctx, row).status(row),
+		readAgent: (row) => taskRuntimeOf(ctx, row).read(row),
 		lastAnswer: async (row, sessionPath) => {
 			if (row.host === null) {
 				const found = readLastAssistant(sessionPath);
@@ -120,8 +106,8 @@ export function createTaskSweep(
 		},
 		boardLink: async (row) => {
 			const board = ctx.options.config.herdrBoard;
-			if (board === undefined) return undefined;
-			const pane = await herdrAgentPane(row.agent, herdrOpts(row));
+			if (board === undefined || row.runtime === "headless") return undefined;
+			const pane = await herdrAgentPane(row.agent, herdrOptionsOf(ctx, row));
 			return boardCardLink(board, row.host, pane, {
 				onError: (error) => log.warn("task_board_link_failed", { task: row.taskId, error }),
 			});

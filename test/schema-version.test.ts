@@ -92,8 +92,8 @@ describe("inbound uncertain migration", () => {
 			}>
 		).map((row) => row.name);
 
-	test("SCHEMA_VERSION is 9", () => {
-		expect(SCHEMA_VERSION).toBe(9);
+	test("SCHEMA_VERSION is 10", () => {
+		expect(SCHEMA_VERSION).toBe(10);
 	});
 
 	test("a pre-uncertain inbound table is rebuilt: rows, inbound_id, all 7 indexes kept, uncertain accepted", () => {

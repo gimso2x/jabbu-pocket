@@ -2140,14 +2140,14 @@ describe("daemon: herdr off (config without herdr)", () => {
 		expect(on.lines.filter((l) => l.includes("event=herdr_health_failed"))).toHaveLength(2);
 	});
 
-	test("chat host tools follow the switch: off has no taskSpec, on matches the full schema", async () => {
+	test("chat host tools: without herdr the dispatch tool still has taskSpec (headless workers), the same schema as herdr on", async () => {
 		const off = await boot(home.config);
 		const offTool = off.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
-		expect(JSON.stringify(offTool?.parameters)).not.toContain("taskSpec");
+		expect(JSON.stringify(offTool?.parameters)).toContain("taskSpec");
 		await off.daemon.stop();
 		const on = await boot({ ...home.config, herdr: {} });
 		const onTool = on.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
-		expect(JSON.stringify(onTool?.parameters)).toContain("taskSpec");
+		expect(JSON.stringify(onTool?.parameters)).toBe(JSON.stringify(offTool?.parameters));
 	});
 
 	test("herdr.bin: the daemon's local herdr calls run that binary", async () => {
@@ -2155,9 +2155,18 @@ describe("daemon: herdr off (config without herdr)", () => {
 		const bin = join(home.dir, "fake-herdr");
 		writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${argvFile}'\necho '{"result":{"agents":[]}}'\n`, { mode: 0o755 });
 		const { daemon: started } = await boot({ ...home.config, herdr: { bin } });
+		const row = started.store.tasks.register({
+			title: "t",
+			risk: "L1",
+			originKey: `discord/ch/${CH}`,
+			threadRef: `${CH}:${T1}`,
+			host: null,
+			repo: "/nonexistent/repo",
+			acceptance: acceptanceItems(["x"]),
+		});
 		const tool = started.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
-		await tool?.execute({ mode: "herdr", name: "x" }, { signal: new AbortController().signal });
-		expect(await Bun.file(argvFile).text()).toBe("agent read x\n");
+		await tool?.execute({ mode: "worker", name: row.agent }, { signal: new AbortController().signal });
+		expect(await Bun.file(argvFile).text()).toBe(`agent read ${row.agent}\n`);
 	});
 });
 

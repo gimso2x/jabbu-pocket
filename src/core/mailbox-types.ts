@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ConversationContext } from "../channel/port";
+import { isTaskOrigin } from "../lanes/status";
 import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { OmpDriverError, type OmpFinal, type OmpSessionDriver, type TodoPhase } from "../omp/driver";
@@ -55,33 +56,35 @@ export interface ProviderLimitInfo {
 /** A large prompt cache miss of a conversation turn (`src/ops/cache-monitor.ts`). */
 export interface CacheMissInfo extends CacheMiss {
 	originKey: string;
-	/** Thread of the turn whose call missed. */
-	threadRef: string;
+	threadRef: string; // thread of the turn whose call missed
 	model: string;
 }
 
 /** A conversation resumed after its cache expired: what the new turn will likely rewrite. */
 export interface ColdCacheInfo {
 	originKey: string;
-	/** Thread of the new turn. */
-	threadRef: string;
+	threadRef: string; // thread of the new turn
 	prefixTokens: number;
-	/** Time since the baseline call. */
-	idleMs: number;
+	idleMs: number; // time since the baseline call
 	/** Dollars to rewrite the prefix at the last known cache write price; absent when the price is unknown. */
 	estimatedCost?: number;
 }
 
 /**
- * Work the bot starts by itself rather than at the owner's word: a peer bot's message, a monitor origin's row, a lane's
+ * Work the bot starts by itself, not at the owner's word: a peer bot's message, a monitor or [TASK] origin's row, a lane's
  * automatic instruction (`lane:<name>:<kind>:<seq>`). A frozen bot holds exactly these. A resume row
- * (`cut-<original id>`) is classed by its original id: it continues the cut row's turn.
+ * (`cut-<original id>`) is classed by its original id.
  */
 export function isAutonomousRow(originKey: string, row: Pick<InboundRow, "peerUserId" | "platformMessageId">): boolean {
 	const id = row.platformMessageId.startsWith(CONTINUE_ID_PREFIX)
 		? row.platformMessageId.slice(CONTINUE_ID_PREFIX.length)
 		: row.platformMessageId;
-	return row.peerUserId !== null || originKey.startsWith(MONITOR_ORIGIN_PREFIX) || id.startsWith("lane:");
+	return (
+		row.peerUserId !== null ||
+		isTaskOrigin(originKey) ||
+		originKey.startsWith(MONITOR_ORIGIN_PREFIX) ||
+		id.startsWith("lane:")
+	);
 }
 
 export function isProviderLimit(message: string): boolean {
@@ -94,14 +97,10 @@ export function isProviderLimit(message: string): boolean {
  */
 export interface TurnFailureEscalation {
 	originKey: string;
-	/** Thread of the last failed turn. */
-	threadRef: string;
-	/** Consecutive failures counted when this fired. */
-	failures: number;
-	/** Last failure sign (raw error text); redact before it reaches the chat. */
-	reason: string;
-	/** True when the live session's stale model was just switched because the sign matched a removed model. */
-	modelHealed: boolean;
+	threadRef: string; // thread of the last failed turn
+	failures: number; // consecutive failures counted when this fired
+	reason: string; // last failure sign (raw error text); redact before it reaches the chat
+	modelHealed: boolean; // the live session's stale model was just switched because the sign matched a removed model
 }
 
 /** A turn that ended through the final path (`MailboxDeps.onTurnSettled`). */

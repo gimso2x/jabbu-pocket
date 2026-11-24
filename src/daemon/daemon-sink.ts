@@ -5,13 +5,12 @@ import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
-import { herdrInterruptAgent } from "../dispatch/omp";
 import { type LaneAction, parseLaneActionId } from "../lanes/card";
 import { classifyLaneControl } from "../lanes/control";
 import type { LaneManager } from "../lanes/manager";
 import { LaneInputError } from "../lanes/manager-constants";
 import { parseReservationActionId, type ReservationAction } from "../lanes/reservations";
-import { isLaneOrigin, type LaneRow } from "../lanes/status";
+import { isLaneOrigin, isTaskOrigin, type LaneRow, taskOriginKey } from "../lanes/status";
 import {
 	buildClosedLaneQuestion,
 	classifyClosedLaneMessage,
@@ -40,6 +39,7 @@ import { approvalOf, type DaemonContext, dispatchPending, postThreadNotices, sta
 import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
+import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { isSideOpRef } from "./restart";
 import { laneChannelOf } from "./thread-target";
 
@@ -448,6 +448,8 @@ export class DaemonInbound {
 			if (!tasks.isPaused(row)) return { ok: true, text: `${taskId}는 멈춘 상태가 아닙니다.` };
 			const after = tasks.unpauseTask(taskId);
 			if (tasks.isPaused(after)) return { ok: false, text: `⚠️ ${taskId} 재개를 확인하지 못했습니다.` };
+			// A headless task's rows the pause held go in now (a herdr task's worker is never prompted here).
+			if (row.runtime === "headless") await taskMailboxPort(this.#ctx).resumePending(taskOriginKey(row.agent));
 			this.#ctx.log.info("task_resumed", { task: taskId });
 			return {
 				ok: true,
@@ -462,17 +464,10 @@ export class DaemonInbound {
 		this.#ctx.log.info("task_paused", { task: taskId });
 		let worker: string;
 		let stopped = false;
-		if (this.#ctx.options.config.herdr === undefined) {
+		if (row.runtime === "herdr" && this.#ctx.options.config.herdr === undefined) {
 			worker = "herdr가 꺼져 있어 Esc를 보내지 않았습니다";
 		} else {
-			const entry = row.host === null ? undefined : this.#ctx.options.config.dispatchHosts?.[row.host];
-			const herdrRun = this.#ctx.options.herdrRun;
-			const interrupted = await herdrInterruptAgent(row.agent, {
-				cwd: this.#ctx.options.config.workspaceDir,
-				...(entry === undefined ? {} : { sshTarget: entry.ssh }),
-				...(entry?.herdrBin === undefined ? {} : { herdrBin: entry.herdrBin }),
-				...(herdrRun === undefined ? {} : { run: herdrRun }),
-			});
+			const interrupted = await taskRuntimeOf(this.#ctx, row).interrupt(row);
 			this.#ctx.log.info("task_interrupt", {
 				task: taskId,
 				confirmed: interrupted.confirmed,
@@ -645,6 +640,7 @@ export function deliverySources(
 		// `!restart` answer or an apply `notify` line (side posts in a thread whose turn may still run).
 		finishUntracked:
 			!isLaneOrigin(row.originKey) &&
+			!isTaskOrigin(row.originKey) &&
 			!row.originKey.startsWith(MONITOR_ORIGIN_PREFIX) &&
 			!row.opRef.endsWith(LOG_COPY_SUFFIX) &&
 			!isSideOpRef(row.opRef),

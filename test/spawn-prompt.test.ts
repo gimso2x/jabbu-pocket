@@ -220,7 +220,7 @@ const sidecarHeader = (dirPath = sessionDir()): string => {
 	return raw.slice(0, raw.indexOf("\n"));
 };
 const sha16 = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 16);
-const HERDR_MARK = "herdr";
+const HERDR_MARK = "워커 위임(`jabbu_dispatch`) 접수";
 
 describe("static floors pinned with the owner docs while the cache is warm (AC-1)", () => {
 	test("a changed static floors input on a warm respawn keeps the first spawn's text byte for byte", () => {

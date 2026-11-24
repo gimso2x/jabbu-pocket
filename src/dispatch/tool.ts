@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 import type { DispatchHostConfig, WorkerAgyConfig } from "../config";
 import { LANE_MODEL_TIERS, type LaneModelTier, type LaneModelTiers } from "../model-tiers";
 import { type FreezeState, frozenMessage } from "../ops/freeze";
@@ -19,6 +19,7 @@ import {
 import { parseTaskSpecInput, TASK_ID_PATTERN } from "../tasks/docs";
 import type { TaskRow } from "../tasks/ledger";
 import { applyRiskFloor } from "../tasks/risk-floor";
+import { releaseHold, runtimeFor } from "../tasks/runtime";
 import { resolveAgyWorker, resolveWorkerTier, type WorkerTier } from "../tasks/worker-tier";
 import { auditContext } from "./audit";
 import { type BoardLinkResolver, boardCardLink, type HerdrBoardConfig } from "./board";
@@ -27,7 +28,6 @@ import {
 	herdrPromptExisting,
 	herdrReadAgent,
 	herdrRemoteStart,
-	herdrStartAgent,
 	MAX_TASK_BYTES,
 	OWNER_NAME_PATTERN,
 	runOmpPrint,
@@ -71,7 +71,7 @@ export interface DispatchToolDeps {
 	>;
 	/** Freeze switch (`<home>/FROZEN`): while it returns a state every call is refused before any command runs. */
 	frozen?: () => FreezeState | undefined;
-	/** Config `herdr`: present → herdr/host/taskSpec dispatch; absent → the tool is simple-only (`omp -p`). */
+	/** Config `herdr`: present → remote hosts and agy workers work (herdr is optional); local [TASK] workers run headless (`tasks.headless`). */
 	herdr?: { bin?: string };
 	/** Keeps every prompt herdr took for the dashboard's 마지막 지시 (`Store.recordHerdrPrompt`); absent → nothing kept. */
 	recordPrompt?: (input: HerdrPromptInput) => void;
@@ -83,7 +83,7 @@ export interface DispatchToolDeps {
 	};
 }
 
-/** With herdr off the tool is simple-only: no herdr, host, name, cwd or taskSpec in what the model sees. */
+/** With no worker runtime (no herdr and no headless port) the tool is simple-only: no host, name, cwd or taskSpec in what the model sees. */
 const SIMPLE_ONLY_DESCRIPTION =
 	"태스크를 실행 계층에 넘긴다. `omp -p`로 한 번 실행하고 최종 출력을 돌려준다(10분 상한). 판단 기준: 조사·분석·회고·체크처럼 한 번의 답으로 끝나는 일은 세션에서 직접 하거나 이 도구로 넘긴다.";
 const SIMPLE_ONLY_PARAMETERS = {
@@ -92,7 +92,7 @@ const SIMPLE_ONLY_PARAMETERS = {
 	required: ["task"],
 	additionalProperties: false,
 };
-const HERDR_OFF_MESSAGE = "herdr가 꺼져 있어 simple만 쓸 수 있습니다";
+const HERDR_OFF_MESSAGE = "herdr가 꺼져 있어 simple만 쓸 수 있습니다(원격 host·agy 워커는 herdr가 필요합니다)";
 /** A [TASK] agent's name (its TASKID, lowercased); an ad hoc local start never takes one. */
 const TASK_AGENT_NAME = new RegExp(TASK_ID_PATTERN.source, "i");
 const taskNameStartRefusal = (name: string): string =>
@@ -125,6 +125,7 @@ function takeWorkerKind(raw: unknown): { worker: "agy" | undefined; rest: unknow
 /** The `jabbu_dispatch` host tool for chat origins; `undefined` when the omp binary is not provided. */
 export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	const herdrOn = deps.herdr !== undefined;
+	const workerOn = herdrOn || deps.tasks?.headless !== undefined;
 	const board = deps.herdrBoard;
 	const boardLink: BoardLinkResolver | undefined =
 		board === undefined
@@ -137,7 +138,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		name: "jabbu_dispatch",
 		label: "Dispatch work",
 		description:
-			'태스크를 실행 계층에 넘긴다. mode=simple(기본)은 단순 작업: `omp -p`로 한 번 실행하고 최종 출력을 돌려준다(10분 상한). mode=herdr는 복잡·장기 작업: herdr 워크스페이스에 omp 에이전트를 띄우고 프롬프트를 넘긴다 — 패널에서 계속 실행되므로 이후 jabbu_dispatch mode=herdr + name 으로 진행을 확인하거나 후속 지시를 보낸다. 판단 기준: 조사·분석·회고·체크처럼 한 번의 답으로 끝나는 일은 세션에서 직접 하거나 simple. 구현은 예상 30분 초과·다단계·새 모듈·스키마 변경 중 하나라도 걸리면 무조건 herdr(+taskSpec) — 세션에서 직접 구현하지 않는다(세션 안 하위 에이전트로 구현하는 것도 직접 구현이다). 직접 구현은 설정값 변경·작은 수선(오너 요청 하나에 src 4개·200줄 이내, 테스트·문서 제외), 세션 컨텍스트 없이는 판단할 수 없는 긴급 디버깅만. 추가 판단: 여러 단계이거나 하루를 넘길 작업이면 taskSpec을 채운다(대상 저장소에 워크트리·4문서(context/spec/PROGRESS/outcome)·상태 파일을 만들고 TASKID로 추적, 수락기준×증거로 jabbu가 Outcome 도달을 판정한다). 단발성 작업은 taskSpec을 비운다. 시작되면 jabbu가 스레드에 접수 카드(맡았습니다·진행 보기 링크·[목표]·[가정])를 올리므로 assumptions에 오너 말을 어떻게 해석했는지 한 줄로 적는다. 막힘·Outcome 알림에 오너가 결정을 답하면 그 원문을 taskSpec:{id}와 task로 넘겨 재개한다. taskSpec 신규는 {title,risk(L0~L4),goal,scope[],exclusions[],acceptance[](1개 이상),repo(대상 호스트의 git 저장소 절대경로),background?}와 task(지시문)를 함께 주고, 재개는 taskSpec:{id:"T-…"}만 준다. taskSpec에는 name을 주지 않는다. 워커가 글로 질문하고 멈추면 스레드에 ❓ 카드가 오고, 오너 답은 봇이 워커에게 넘긴다. 완료 처리·merge는 오너만 한다.',
+			'태스크를 실행 계층에 넘긴다. mode=simple(기본)은 단순 작업: `omp -p`로 한 번 실행하고 최종 출력을 돌려준다(10분 상한). mode=worker는 복잡·장기 작업: [TASK] 워커(omp 에이전트)에 일을 맡긴다 — 계속 실행되므로 이후 jabbu_dispatch mode=worker + name 으로 진행을 확인하거나 후속 지시를 보낸다. 로컬 워커는 taskSpec으로만 시작한다. 판단 기준: 조사·분석·회고·체크처럼 한 번의 답으로 끝나는 일은 세션에서 직접 하거나 simple. 구현은 예상 30분 초과·다단계·새 모듈·스키마 변경 중 하나라도 걸리면 무조건 worker(+taskSpec) — 세션에서 직접 구현하지 않는다(세션 안 하위 에이전트로 구현하는 것도 직접 구현이다). 직접 구현은 설정값 변경·작은 수선(오너 요청 하나에 src 4개·200줄 이내, 테스트·문서 제외), 세션 컨텍스트 없이는 판단할 수 없는 긴급 디버깅만. 추가 판단: 여러 단계이거나 하루를 넘길 작업이면 taskSpec을 채운다(대상 저장소에 워크트리·4문서(context/spec/PROGRESS/outcome)·상태 파일을 만들고 TASKID로 추적, 수락기준×증거로 jabbu가 Outcome 도달을 판정한다). 단발성 작업은 taskSpec을 비운다. 시작되면 jabbu가 스레드에 접수 카드(맡았습니다·진행 보기 링크·[목표]·[가정])를 올리므로 assumptions에 오너 말을 어떻게 해석했는지 한 줄로 적는다. 막힘·Outcome 알림에 오너가 결정을 답하면 그 원문을 taskSpec:{id}와 task로 넘겨 재개한다. taskSpec 신규는 {title,risk(L0~L4),goal,scope[],exclusions[],acceptance[](1개 이상),repo(대상 호스트의 git 저장소 절대경로),background?}와 task(지시문)를 함께 주고, 재개는 taskSpec:{id:"T-…"}만 준다. taskSpec에는 name을 주지 않는다. 워커가 글로 질문하고 멈추면 스레드에 ❓ 카드가 오고, 오너 답은 봇이 워커에게 넘긴다. 완료 처리·merge는 오너만 한다.',
 		parameters: {
 			type: "object",
 			properties: {
@@ -145,11 +146,11 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					type: "string",
 					description: "실행할 작업 지시(그 자체로 완결된 지시문). herdr + name 만 있으면 생략(현재 출력 조회)",
 				},
-				mode: { type: "string", enum: ["simple", "herdr"], description: "실행 방식(기본 simple)" },
+				mode: { type: "string", enum: ["simple", "worker"], description: "실행 방식(기본 simple)" },
 				name: {
 					type: "string",
 					description:
-						"herdr 에이전트 이름. 같은 이름에 task를 다시 보내면 후속 지시가 되고, task 없이 보내면 현재 출력을 돌려준다",
+						"[TASK] 워커 이름(TASKID 소문자). 같은 이름에 task를 다시 보내면 후속 지시가 되고, task 없이 보내면 현재 출력을 돌려준다",
 				},
 				host: {
 					type: "string",
@@ -159,7 +160,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				cwd: {
 					type: "string",
 					description:
-						"새 에이전트의 작업 디렉터리. host 지정 시 기본은 호스트 설정의 workDir, 로컬 mode=herdr는 절대경로만 받고 기본은 jabbu 메인 작업 디렉터리",
+						"원격(host) 새 에이전트의 작업 디렉터리, 기본은 호스트 설정의 workDir. 로컬 워커는 받지 않는다(taskSpec.repo)",
 				},
 				force: {
 					type: "boolean",
@@ -221,7 +222,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			return auditContext.run({ origin: deps.originKey }, () => executeDispatch(params, context.signal));
 		},
 	};
-	return herdrOn ? tool : { ...tool, description: SIMPLE_ONLY_DESCRIPTION, parameters: SIMPLE_ONLY_PARAMETERS };
+	return workerOn ? tool : { ...tool, description: SIMPLE_ONLY_DESCRIPTION, parameters: SIMPLE_ONLY_PARAMETERS };
 
 	/** The worker a resume with `tier` and/or `worker` asks for; an agy request outside the trial's bounds says why. */
 	function resolveResumeWorker(
@@ -241,6 +242,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					host: row.host,
 					agy: deps.workerAgy?.(),
 					busy: agyOccupant(taskDeps.ledger, row.taskId),
+					herdr: herdrOn && row.runtime === "herdr", // a headless row is never turned into an agy one
 				})
 			: omp;
 	}
@@ -305,17 +307,20 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	}
 
 	async function executeDispatch(params: Record<string, unknown>, signal: AbortSignal): Promise<string> {
-		const herdrArgs =
-			params.mode === "herdr" || ["name", "host", "cwd", "taskSpec"].some((key) => params[key] !== undefined);
-		if (!herdrOn && herdrArgs) throw new Error(HERDR_OFF_MESSAGE);
+		if (params.mode !== undefined && params.mode !== "simple" && params.mode !== "worker")
+			throw new Error(`mode는 simple 또는 worker입니다: ${String(params.mode)}`);
+		const workerArgs =
+			params.mode === "worker" || ["name", "host", "cwd", "taskSpec"].some((key) => params[key] !== undefined);
+		if (!workerOn && workerArgs) throw new Error(HERDR_OFF_MESSAGE);
 		const task = typeof params.task === "string" ? params.task.trim() : undefined;
 		const host = typeof params.host === "string" && params.host.trim() !== "" ? params.host.trim() : undefined;
 		const name = typeof params.name === "string" && params.name.trim() !== "" ? params.name.trim() : undefined;
 		const givenCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd.trim() : undefined;
-		// A name or cwd is a herdr argument: dropping it on the simple path would run `omp -p` and forget the agent name.
+		if (host !== undefined && !herdrOn) throw new Error(HERDR_OFF_MESSAGE);
+		// A name or cwd is a worker argument: dropping it on the simple path would run `omp -p` and forget the agent name.
 		if (params.mode === "simple" && (name !== undefined || givenCwd !== undefined))
-			throw new Error("simple 모드는 name·cwd를 받지 않습니다. herdr 에이전트는 mode=herdr로 부르세요");
-		const mode = params.mode === "herdr" || name !== undefined || givenCwd !== undefined ? "herdr" : "simple";
+			throw new Error("simple 모드는 name·cwd를 받지 않습니다. 워커는 mode=worker로 부르세요");
+		const mode = params.mode === "worker" || name !== undefined || givenCwd !== undefined ? "worker" : "simple";
 		// The brief's risk scan never sees the cwd: a worker opened in a secrets directory is refused here, before any process.
 		const cwdProblem =
 			givenCwd === undefined ? undefined : secretsCwdProblem(givenCwd, host !== undefined, deps.homeDir);
@@ -325,9 +330,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			if (problem !== undefined) throw new Error(problem);
 			// herdr's `agent prompt <name> <task>` has no `--` before the task: a leading `-` would be read as an option.
 			// A taskSpec task goes inside the prompt it builds (`buildTaskPrompt`), never first, so it may start with `-`.
-			if (task.startsWith("-") && params.taskSpec === undefined && (mode === "herdr" || host !== undefined))
+			if (task.startsWith("-") && params.taskSpec === undefined && (mode === "worker" || host !== undefined))
 				throw new Error(
-					"herdr로 보내는 task는 `-`로 시작할 수 없습니다(옵션으로 읽힙니다). 첫 글자를 바꿔 다시 보내세요",
+					"워커로 보내는 task는 `-`로 시작할 수 없습니다(옵션으로 읽힙니다). 첫 글자를 바꿔 다시 보내세요",
 				);
 		}
 		// Own keys only: `constructor` or `__proto__` must not find an Object.prototype member.
@@ -398,6 +403,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 							host: host ?? null,
 							agy: deps.workerAgy?.(),
 							busy: agyOccupant(taskDeps.ledger),
+							herdr: herdrOn,
 						})
 					: tier;
 			const started = await startTask(taskDeps, {
@@ -474,62 +480,47 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			);
 		}
 
-		if (mode === "herdr") {
-			if (name === undefined) throw new Error("herdr 모드에는 name이 필요합니다");
-			// A TASKID-shaped name gets its own refusal at a new start; any other bad name is refused for read, follow-up and start alike.
+		if (mode === "worker") {
+			if (name === undefined) throw new Error("worker 모드에는 name이 필요합니다");
+			// A TASKID-shaped name is a [TASK] worker's; any other bad name is refused for read and follow-up alike.
 			if (!OWNER_NAME_PATTERN.test(name) && !TASK_AGENT_NAME.test(name))
 				throw new Error(`name은 소문자·숫자·-·_ 32자 이내여야 합니다: ${name}`);
+			if (givenCwd !== undefined)
+				throw new Error("cwd는 원격(host) 시작에서만 씁니다. 로컬 워커의 저장소는 taskSpec.repo로 주세요");
+			// A local worker is a registered [TASK] (no ad hoc local start): its row says what runs it, herdr or headless.
+			const row = taskDeps?.ledger.getByAgent(name, null);
+			if (taskDeps === undefined || row === undefined)
+				throw new Error(
+					`등록된 로컬 작업이 아닙니다: ${name}. 로컬 워커는 taskSpec으로 등록하세요(자유 형식 시작은 없습니다)`,
+				);
+			const runtime = runtimeFor(row, {
+				herdr: () => herdrOptions,
+				headless: taskDeps.headless,
+				warn: (event, fields) => deps.log.warn(event, fields),
+			});
 			if (task === undefined || task === "") {
-				const read = await herdrReadAgent(name, herdrOptions);
+				const read = await runtime.read(row);
 				if (!read.ok) return `읽기 실패: ${read.error ?? "unknown"}`;
-				const summary = taskDeps === undefined ? undefined : await taskSummaryLine(taskDeps, name, null);
+				const summary = await taskSummaryLine(taskDeps, name, null);
 				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
 			const gate = await gateWork(task, signal);
-			// A name local herdr already runs gets the task as a follow-up; a new one starts an agent, like the remote branch.
-			const existing = await herdrAgentExists(name, herdrOptions);
-			if (!existing.ok) return `시작 실패: ${existing.error}`;
-			if (existing.exists) {
-				const follow = await herdrPromptExisting(name, task, herdrOptions);
-				const check = `진행 확인: jabbu_dispatch {mode:"herdr", name:"${name}"}`;
-				if (follow.ok || follow.unconfirmed === true) {
-					notePrompt(deps, { host: null, agent: name, kind: "followup", text: task, originKey: deps.originKey });
-				}
-				if (follow.unconfirmed === true) {
-					deps.log.warn("dispatch_prompt_unconfirmed", { agent: name, error: follow.error });
-					return `전달은 했지만 작업 시작이 확인되지 않았습니다(${follow.error?.replace("agent prompt unconfirmed: ", "")}). ${check}${gate.suffix}`;
-				}
-				if (!follow.ok) return `전달 실패: ${follow.error ?? "unknown"}`;
-				deps.log.info("dispatch_prompted", { agent: name });
-				return `후속 지시를 ${name}에 전달했습니다. ${check}${gate.suffix}`;
+			const existing = await runtime.exists(row);
+			if (!existing.ok) return `전달 실패: ${existing.error}`;
+			if (!existing.exists) throw new Error(`${name} 워커가 없습니다. taskSpec:{id:"${row.taskId}"}로 재개하세요`);
+			releaseHold(taskDeps.ledger, row);
+			const follow = await runtime.prompt(row, task);
+			const check = `진행 확인: jabbu_dispatch {mode:"worker", name:"${name}"}`;
+			if (follow.ok || follow.unconfirmed === true) {
+				notePrompt(deps, { host: null, agent: name, kind: "followup", text: task, originKey: deps.originKey });
 			}
-			// An ad hoc start has no [TASK] ledger: a TASKID-shaped name would pass for a task agent it is not.
-			if (TASK_AGENT_NAME.test(name)) throw new Error(taskNameStartRefusal(name));
-			if (givenCwd !== undefined && !isAbsolute(givenCwd))
-				throw new Error(`로컬 cwd는 절대경로여야 합니다: ${givenCwd}`);
-			const cwd = givenCwd ?? deps.workspaceDir;
-			const start = await herdrStartAgent({
-				name,
-				task,
-				cwd,
-				...(deps.workerOmpArgs === undefined ? {} : { agentArgs: deps.workerOmpArgs }),
-				options: { ...herdrOptions, signal },
-			});
-			if (!start.ok) return `시작 실패: ${start.error}`;
-			notePrompt(deps, { host: null, agent: name, kind: "start", text: task, originKey: deps.originKey });
-			deps.log.info("dispatch_started", { agent: name, cwd });
-			const link = boardLink === undefined ? undefined : await boardLink(null, start.paneId);
-			return (
-				[
-					`${name} 에이전트를 시작했습니다 (cwd ${cwd}, pane ${start.paneId}).`,
-					...(givenCwd === undefined
-						? ["메인 작업 디렉터리에서 작업합니다 — 저장소 작업은 taskSpec이나 cwd를 주세요."]
-						: []),
-					...(link === undefined ? [] : [`진행 보기: ${link}`]),
-					`오너에게는 이 모양으로 접수를 알린다: 첫 줄 '\`${name}\`(<제목>)가 맡았습니다. 결정이 필요하거나 끝나면 이 스레드로 알려 드립니다.'${link === undefined ? "" : ", 다음 줄 '진행 보기: <위 링크>'"}, 빈 줄 뒤 '[목표] <한 문장>'과 '[가정] <오너 대신 정한 해석, 없으면 없음>'. 그 밖의 과정은 쓰지 않는다.`,
-					`후속 지시·진행 확인은 jabbu_dispatch {mode:"herdr", name:"${name}"} 로.`,
-				].join("\n") + gate.suffix
-			);
+			if (follow.unconfirmed === true) {
+				deps.log.warn("dispatch_prompt_unconfirmed", { agent: name, error: follow.error });
+				return `전달은 했지만 작업 시작이 확인되지 않았습니다(${follow.error?.replace("agent prompt unconfirmed: ", "")}). ${check}${gate.suffix}`;
+			}
+			if (!follow.ok) return `전달 실패: ${follow.error ?? "unknown"}`;
+			deps.log.info("dispatch_prompted", { agent: name });
+			return `후속 지시를 ${name}에 전달했습니다. ${check}${gate.suffix}`;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");

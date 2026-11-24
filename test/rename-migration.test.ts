@@ -147,7 +147,7 @@ describe("schema 9: old names leave the ledger", () => {
 		} finally {
 			store.close();
 		}
-		expect(schemaVersion()).toBe(9);
+		expect(schemaVersion()).toBe(SCHEMA_VERSION);
 
 		const cells = textCells();
 		// The lane origin moved in every origin column, found by a scan of all tables, not a list; bodies keep theirs.
@@ -205,7 +205,7 @@ describe("schema 9: old names leave the ledger", () => {
 		schema8Ledger();
 		open().close();
 		// Schema-8 code refuses a ledger whose user_version is above 8; the same rule here, one version up.
-		expect(schemaVersion()).toBe(9);
+		expect(schemaVersion()).toBe(SCHEMA_VERSION);
 		const db = new Database(path);
 		db.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
 		db.close();
