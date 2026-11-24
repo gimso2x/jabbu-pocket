@@ -343,4 +343,4 @@ function subAgents(dir: string, window: TranscriptWindow, parent: Scope): TraceS
 		});
 	}
 	return out;
-		 }
+}
