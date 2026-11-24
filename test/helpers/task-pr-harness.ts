@@ -83,7 +83,8 @@ export class TaskPrWorld {
 		this.transport.setChannel({ id: THREAD, type: 11, parentId: CHANNEL, guildId: GUILD });
 	}
 
-	static async start(): Promise<TaskPrWorld> {
+	/** `autoLand`: `taskAutoLand` is on for the pr-mode repository (a `blocked` landing is then retried on a new tip). */
+	static async start(options: { autoLand?: boolean } = {}): Promise<TaskPrWorld> {
 		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-task-pr-")));
 		// The bare repository's name ends in `.git`: the core refuses an origin that may be a live checkout.
 		const bare = join(root, "origin.git");
@@ -119,7 +120,7 @@ export class TaskPrWorld {
 		git(records, "add", "--", "release/denylist.txt");
 		git(records, "commit", "-q", "-m", "records init");
 		const world = new TaskPrWorld(root, repo, bare, records, denylistFile);
-		await world.#boot();
+		await world.#boot(options.autoLand === true);
 		return world;
 	}
 
@@ -130,7 +131,7 @@ export class TaskPrWorld {
 		this.#offset += ms;
 	}
 
-	async #boot(): Promise<void> {
+	async #boot(autoLand: boolean): Promise<void> {
 		const gitSeam: GitRunner = async (args) => {
 			this.gitCalls.push(args);
 			return defaultGit(args);
@@ -151,6 +152,7 @@ export class TaskPrWorld {
 				herdr: { bin: "herdr" },
 				recordsRepo: this.records,
 				lanes: { land: { [this.repo]: { mode: "pr" } } },
+				...(autoLand ? { taskAutoLand: { repos: [this.repo] } } : {}),
 			},
 			channels: [discordBinding(this.transport)],
 			log: createLogger({ sink: () => {}, clock: this.clock, redact }),

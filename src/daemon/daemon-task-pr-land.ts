@@ -20,6 +20,7 @@ import {
 import type { TaskRow } from "../tasks/ledger";
 import type { TaskLandRecord } from "../tasks/ledger-schema";
 import { taskLandNote } from "../tasks/notify";
+import { postPrLandStop, prLandNoticeKey } from "../tasks/pr-land-retry";
 import { prepareLocal, reworkPrompt, summaryOf } from "../tasks/pr-land-task";
 import { type DaemonContext, postThreadNotices } from "./daemon-context";
 import { taskResumeDeps } from "./daemon-task-resume";
@@ -33,9 +34,9 @@ type RemoteAt = { mode: RemoteLandMode; sha: string; baseBranch: string; slug?: 
 type LandAt = { requestedBy: TaskLandRecord["requestedBy"]; sha: string; baseBranch: string };
 
 /**
- * The PR landing of a reached [TASK] (local, or on a `dispatchHosts` host: fetched first) in a `lanes.land` pr repository: the
- * landing call (`hook`), the sweep's CI poll (`poll`) and what a run comes to (`tasks.land_json`, thread lines, a
- * worker sent back through `resumeTask`). Shares `DaemonTaskLanding`'s lock: a landing, a click and a poll never overlap.
+ * The PR landing of a reached [TASK] (local, or on a `dispatchHosts` host) in a `lanes.land` pr repository: the landing
+ * call (`hook`), the sweep's CI poll (`poll`) and what a run comes to (`tasks.land_json`, thread lines, a worker sent
+ * back). Shares `DaemonTaskLanding`'s lock: a landing, a click and a poll never overlap.
  */
 export class DaemonTaskPrLand {
 	readonly #ctx: DaemonContext;
@@ -52,12 +53,12 @@ export class DaemonTaskPrLand {
 		this.#afterDone = afterDone;
 	}
 
-	/** The `TaskLandDeps.pr` of one core landing: `deps` are the landing's own (judge, hold, checks, git). */
+	/** The `TaskLandDeps.pr` of one core landing. */
 	hook(mode: "auto" | "button", landMode: LaneLandMode | RemoteLandMode): NonNullable<TaskLandDeps["pr"]> {
 		return (row, deps) => this.#land(row, deps, mode, landMode);
 	}
 
-	/** One poll of a review task's open pull request (the sweep calls it each pass); a task that is not `active` is left alone. */
+	/** One poll of a review task's open pull request; a task that is not `active` is left alone. */
 	async poll(row: TaskRow): Promise<void> {
 		const { taskId } = row;
 		if (this.#locks.has(taskId)) return;
@@ -71,7 +72,7 @@ export class DaemonTaskPrLand {
 		}
 	}
 
-	/** What a task on a `dispatchHosts` host is landed with: the host ops' runner, the network tools and the local git. */
+	/** What a task on a `dispatchHosts` host is landed with. */
 	#remoteEnv(git: GitRunner): RemoteLandEnv {
 		const { options } = this.#ctx;
 		return {
@@ -192,7 +193,7 @@ export class DaemonTaskPrLand {
 		return { state: "blocked", reason: clipped };
 	}
 
-	/** Saves what a run came to: `blocked`/`held` wait for the owner (a poll, `announce`, says why once), `rework` sends the worker back, `pr-open` stays `active`. */
+	/** Saves what a run came to: `blocked`/`held` wait for the owner (`announce` says why once), `rework` sends the worker back, `pr-open` stays `active`. */
 	async #settle(
 		row: TaskRow,
 		at: LandAt,
@@ -226,9 +227,8 @@ export class DaemonTaskPrLand {
 					reason,
 					prLand: latest ?? tasks.get(row.taskId)?.land?.prLand ?? { branch: row.branch },
 				});
-				if (announce && tasks.recordNotice(row.taskId, `land:${outcome.kind}:${Bun.hash(reason).toString(36)}`)) {
-					this.#tell(row, `⛔ PR 착지 ${outcome.kind === "held" ? "보류" : "멈춤"}: ${reason}`);
-				}
+				if (announce && tasks.recordNotice(row.taskId, prLandNoticeKey(outcome.kind, at.sha, reason)))
+					await postPrLandStop(this.#ctx, row, outcome.kind, reason);
 				return { state: "blocked", reason };
 			}
 			case "rework":
@@ -390,6 +390,6 @@ export class DaemonTaskPrLand {
 		this.#errors.delete(taskId);
 		const reason = clip(`${count}번 연속 실패: ${text}`);
 		this.#store().setLand(taskId, { ...row.land, state: "blocked", reason });
-		this.#tell(row, `⛔ PR 착지 멈춤: ${reason}`);
+		await postPrLandStop(this.#ctx, row, "blocked", reason);
 	}
 }

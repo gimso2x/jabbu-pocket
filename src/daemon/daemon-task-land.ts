@@ -17,6 +17,7 @@ import {
 	type TaskCard,
 	taskLandNote,
 } from "../tasks/notify";
+import { isPrRetryable, type PrLandRetry, prLandRetryCard } from "../tasks/pr-land-retry";
 import { recordWithConfig } from "../tasks/records";
 import {
 	AUTO_LAND_MARKER,
@@ -27,6 +28,7 @@ import {
 } from "./daemon-constants";
 import { adapterOfConversation, approvalOf, autoLandPolicy, type DaemonContext } from "./daemon-context";
 import { DaemonTaskPrLand } from "./daemon-task-pr-land";
+import { createPrLandRetry } from "./daemon-task-retry";
 
 /** Feeds `text` as an owner message through the adapter's message path: the bot posts `marker` (in `threadTs`'s thread, or as a root) and the message takes its id; `posted.ts` is set once the marker is up. */
 export async function ingestOwnerText(
@@ -66,21 +68,32 @@ export class DaemonTaskLanding {
 	readonly #ctx: DaemonContext;
 	/** Task cards (`<channel>:<ts>`) whose button (`머지`, `추천대로`) was clicked in this process: a second click does nothing. Never cleared. */
 	readonly #mergeClicks = new Set<string>();
-	/** Approvals (canonical `<channel>:<ts>`) whose `다시 요청` was clicked in this process, on either card. Never cleared. */
+	/** Approvals (`<channel>:<ts>`) whose `다시 요청` was clicked in this process, on either card. Never cleared. */
 	readonly #retryClicks = new Set<string>();
 	/** Tasks being landed (auto-merge, `머지` button and PR poll share it): held through `landTask` and, after a handoff, until the "머지해" turn ended. A call meanwhile is `in_flight`. */
 	readonly #taskLanding = new Set<string>();
-	/** The PR landing of a local task in a `lanes.land` pr repository. */
-	readonly #prLand: DaemonTaskPrLand;
+	readonly #prLand: DaemonTaskPrLand; // the PR landing in a `lanes.land` pr repository
+	readonly #retry: PrLandRetry;
 
 	constructor(ctx: DaemonContext) {
 		this.#ctx = ctx;
 		this.#prLand = new DaemonTaskPrLand(ctx, this.#taskLanding, (task) => this.#afterTaskLanded(task));
+		this.#retry = createPrLandRetry(
+			ctx,
+			() => this.landReady(),
+			(row) => this.autoLand(row),
+		);
 	}
 
 	/** One sweep poll of a review task's open PR (skipped while the task is being landed). */
 	pollPrLand(row: TaskRow): Promise<void> {
 		return this.#prLand.poll(row);
+	}
+
+	/** One sweep step of a `blocked` PR landing: retried once when the task branch got a new tip. */
+	async retryPrLand(row: TaskRow): Promise<void> {
+		const tasks = this.#ctx.store?.tasks;
+		if (tasks !== undefined) await this.#retry.run(row, tasks);
 	}
 
 	/** A `머지` click on a task card: the same as answering "머지해" in the task thread. Only a task in review takes it. */
@@ -106,12 +119,7 @@ export class DaemonTaskLanding {
 		return this.#ctx.router?.draining !== true && this.#ctx.adapters.size > 0 && this.#ctx.store !== undefined;
 	}
 
-	/**
-	 * Auto-merge of a reached task (`taskAutoLand`). A local task is landed by the core (`landTask`); only its `handoff`
-	 * — and every remote task — has the bot answer "머지해" in the task thread under a `🤖 자동 머지` marker.
-	 * `not_accepted`: a draining or unstarted daemon, a top-level or unreadable thread, or a "머지해" that did not go in.
-	 * `in_flight`: the task holds its landing lock. Repeats across sweeps are kept out by the sweep's `reached:<reachKey>` notice key.
-	 */
+	/** Auto-merge of a reached task (`taskAutoLand`): the core lands a local task (`landTask`); only a `handoff` has the bot answer "머지해" in the thread. `not_accepted`: draining or unstarted daemon, bad thread, "머지해" not in. `in_flight`: the landing lock is held. */
 	async autoLand(row: TaskRow, gate?: TaskGateHooks): Promise<TaskLandOutcome> {
 		const log = this.#ctx.log;
 		if (!this.landReady()) {
@@ -225,7 +233,7 @@ export class DaemonTaskLanding {
 		return result;
 	}
 
-	/** After a core landing closed the task: the thread reaction follows the ledger and the herdr agent is closed; a failure becomes a card line. */
+	/** After a core landing closed the task: the reaction follows the ledger, the herdr agent is closed; a failure is a card line. */
 	async #afterTaskLanded(row: TaskRow): Promise<string[]> {
 		const status = this.#ctx.store?.tasks.get(row.taskId)?.status ?? "done";
 		await setStatusReaction(this.#ctx.channels, this.#ctx.log, row.threadRef, status);
@@ -233,11 +241,7 @@ export class DaemonTaskLanding {
 		return failed === undefined ? [] : [`herdr 워커 정리 실패: ${failed.slice(0, 160)}`];
 	}
 
-	/**
-	 * Ends a closed task's herdr agent where it runs (`herdrCloseTaskAgent`: a local task's workspace, a remote task's
-	 * tab over the host's ssh), so a finished worker's omp does not stay up. Undefined when nothing failed; a failure is
-	 * logged (`task_agent_close_failed`) and returned.
-	 */
+	/** Ends a closed task's herdr agent where it runs (`herdrCloseTaskAgent`, over ssh for a remote task). Undefined when nothing failed; a failure is logged (`task_agent_close_failed`) and returned. */
 	async closeTaskAgent(row: TaskRow): Promise<string | undefined> {
 		const config = this.#ctx.options.config; // live: dispatchHosts and recordsRepo are reloadable
 		await recordWithConfig(config, this.#ctx.store?.tasks.get(row.taskId) ?? row); // the closed task's last records commit
@@ -278,11 +282,7 @@ export class DaemonTaskLanding {
 			.finally(() => this.#taskLanding.delete(taskId));
 	}
 
-	/**
-	 * A `추천대로` click on a blocked task's card: the same as answering "추천대로" in the task thread, with the
-	 * recommendation the button carried (its `value`) quoted in the owner text and the card's note. Only a blocked task
-	 * takes it.
-	 */
+	/** A `추천대로` click on a blocked task's card: the same as answering "추천대로" in the thread, the button's `value` (the recommendation) quoted. Only a blocked task takes it. */
 	handleTaskRecommend(
 		taskId: string,
 		value: string | undefined,
@@ -307,11 +307,7 @@ export class DaemonTaskLanding {
 		});
 	}
 
-	/**
-	 * One button on a task card (`머지`, `추천대로`) is the owner answering `ownerText` in the task thread. Only a task in
-	 * `requiredStatus` takes it, and one card takes one click per process — the key goes in before the first await,
-	 * so a quick second click finds it. Every outcome redraws the card without its button.
-	 */
+	/** One button on a task card (`머지`, `추천대로`) is the owner answering `ownerText` in the thread. Only a task in `requiredStatus` takes it; one click per card per process (keyed before the first await), except a stopped PR landing's retry button. Every outcome redraws the card. */
 	async #handleTaskCardButton(button: {
 		kind: "merge" | "recommend";
 		taskId: string;
@@ -374,7 +370,10 @@ export class DaemonTaskLanding {
 				await redraw(button.settledCard(row, `${requested} — 코어 착지 중`));
 				const result = await this.#coreLand(row, "button");
 				if (result.state !== "handoff") {
-					await redraw(button.settledCard(row, taskLandNote(result)));
+					// A PR landing that stopped again leaves the retry button and unlocks the card for another click.
+					const retry = result.state === "blocked" && isPrRetryable(this.#ctx.store?.tasks.get(taskId));
+					if (retry) this.#mergeClicks.delete(key);
+					await redraw((retry ? prLandRetryCard : button.settledCard)(row, taskLandNote(result)));
 					return;
 				}
 				requested = `${requested} — ${taskLandNote(result)}`;
@@ -413,11 +412,7 @@ export class DaemonTaskLanding {
 		}
 	}
 
-	/**
-	 * A `다시 요청` click on a timed-out approval card (canonical or mirror): the same as the owner asking the requesting
-	 * thread to put the request up again. The old tool call is gone, so the click opens a new turn there; approving
-	 * still takes a click on the new card. One approval takes one click per process, keyed before the first await.
-	 */
+	/** A `다시 요청` click on a timed-out approval card: the owner asks the requesting thread to put the request up again (a new turn; approving takes a click on the new card). One click per approval per process. */
 	async handleApprovalRetry(
 		approvalId: string,
 		channel: string | undefined,
