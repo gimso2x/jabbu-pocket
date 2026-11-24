@@ -278,6 +278,26 @@ describe("doctor: core dump limit", () => {
 		expect(check()).toEqual([]);
 	});
 
+	test("a drop-in without a LimitCORE line keeps the unit file's 0", () => {
+		const dropinDir = join(home.dir, "jabbu.service.d");
+		mkdirSync(dropinDir);
+		writeFileSync(join(home.dir, "jabbu.service"), "[Service]\nLimitCORE=0\n");
+		writeFileSync(join(dropinDir, "restart-always.conf"), "[Service]\nRestart=always\n");
+		expect(check()).toEqual([]);
+	});
+
+	test("a jabbu-<x>.service whose ExecStart is not the daemon is not judged", () => {
+		writeFileSync(join(home.dir, "jabbu-apply-batch.service"), "[Service]\nExecStart=/bin/bash /x/apply-batch.sh\n");
+		expect(check()).toEqual([]);
+		writeFileSync(
+			join(home.dir, "jabbu-bot.service"),
+			"[Service]\nExecStart=/usr/bin/bun --no-env-file /repo/src/main.ts daemon\n",
+		);
+		expect(check()).toEqual([
+			"warn core dump limit: jabbu-bot.service has no LimitCORE=0 (run: jabbu-pocket units render, then reload and restart)",
+		]);
+	});
+
 	test("qa-z #60 a FIFO in a daemon unit's place warns, never blocks", async () => {
 		mkfifo(join(home.dir, "jabbu-f.service"));
 		const child = [
