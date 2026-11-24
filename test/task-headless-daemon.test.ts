@@ -9,9 +9,11 @@ import { isTaskOrigin, taskOriginKey } from "../src/lanes/status";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { clearFreeze, writeFreeze } from "../src/ops/freeze";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import type { TaskRow } from "../src/tasks/ledger";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { ROOMY_STATFS } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 
 /** The owner's DM origin and the thread (starter message) the [TASK] cards land in. */
@@ -132,6 +134,9 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 			}),
 			ompVersion: "omp-test 0",
 			bootId: "boot-task-headless",
+			// The [TASK] start gate (memory·disk) never depends on this machine: CI runners refuse on their own numbers.
+			hostLoad: IDLE_HOST_LOAD,
+			statfs: ROOMY_STATFS,
 			taskSweepMs: 0,
 			gateSweepMs: 0,
 			pendingRetryMs: 1,
@@ -184,9 +189,9 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 				const store = daemon.store;
 				store.ensureOrigin(DM, join(home.dir, "sessions", "dm"));
 				store.recordInbound({ originKey: DM, platformMessageId: "dm:1", textRef: "요청", threadRef: THREAD });
-				await rig.dispatch({ taskSpec: { ...SPEC, repo }, task });
+				const reply = await rig.dispatch({ taskSpec: { ...SPEC, repo }, task });
 				const row = store.tasks.list().at(-1);
-				if (row === undefined) throw new Error("no task registered");
+				if (row === undefined) throw new Error(`no task registered: ${reply}`);
 				return row;
 			},
 			dispatch(args) {
