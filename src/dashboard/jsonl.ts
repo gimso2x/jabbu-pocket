@@ -13,17 +13,27 @@ export function* iterJsonlRecords(file: string): Generator<Json> {
 		const decoder = new TextDecoder();
 		const chunk = Buffer.allocUnsafe(JSONL_CHUNK_BYTES);
 		let pending = "";
+		let scanned = 0; // pending has no "\n" before this index, so a search resumes from it
 		for (;;) {
 			const read = readSync(fd, chunk, 0, chunk.length, null);
 			const last = read === 0;
 			pending += last ? decoder.decode() : decoder.decode(chunk.subarray(0, read), { stream: true });
-			const lines = pending.split("\n");
-			pending = last ? "" : (lines.pop() ?? "");
-			for (const line of lines) {
-				const entry = parseJsonlLine(line);
+			let start = 0;
+			for (;;) {
+				const end = pending.indexOf("\n", scanned);
+				if (end === -1) break;
+				const entry = parseJsonlLine(pending.slice(start, end));
 				if (entry !== undefined) yield entry;
+				start = end + 1;
+				scanned = start;
 			}
-			if (last) return;
+			if (last) {
+				const entry = parseJsonlLine(pending.slice(start));
+				if (entry !== undefined) yield entry;
+				return;
+			}
+			pending = pending.slice(start);
+			scanned = pending.length;
 		}
 	} finally {
 		closeSync(fd);
