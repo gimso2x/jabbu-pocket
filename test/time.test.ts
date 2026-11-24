@@ -26,6 +26,14 @@ describe("nextLocalMidnight", () => {
 		expect(nextLocalMidnight(at("2026-11-11T14:59:59Z"), "Asia/Seoul")).toBe(at("2026-11-11T15:00:00Z"));
 		expect(nextLocalMidnight(at("2026-11-11T15:00:00Z"), "Asia/Seoul")).toBe(at("2026-11-12T15:00:00Z"));
 	});
+
+	test("stays on the next day when the zone skips midnight (Santiago 2025-09-07)", () => {
+		// Clocks jump 00:00 -> 01:00, so the day starts at 04:00Z; a fixed two-round settle lands on 03:00Z, still the old day.
+		expect(nextLocalMidnight(at("2025-09-06T19:37:55Z"), "America/Santiago")).toBe(at("2025-09-07T04:00:00Z"));
+		expect(nextLocalMidnight(at("2025-09-06T23:30:00Z"), "America/Santiago")).toBe(at("2025-09-07T04:00:00Z"));
+		// Lord Howe's half-hour fall-back tempts a fixed point 30 minutes into the new day; the boundary is 00:00, not 00:30.
+		expect(nextLocalMidnight(at("2025-04-04T12:00:00Z"), "Australia/Lord_Howe")).toBe(at("2025-04-04T13:00:00Z"));
+	});
 });
 
 describe("localIso / offsetLabel / formatLocal", () => {
