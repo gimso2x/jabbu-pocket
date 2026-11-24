@@ -663,19 +663,11 @@ export class MonitorLedger {
 			if (monitor?.trigger.kind !== "script" || !monitor.enabled) return undefined;
 			this.clearCheckError(monitor.id);
 			const { fire = "edge", once = false } = monitor.trigger;
-			const suppressUnchanged = monitor.trigger.kind === "script" && monitor.trigger.suppressUnchanged === true;
-			let suppressReason = input.suppressReason;
-			if (
-				suppressReason === undefined &&
-				suppressUnchanged &&
-				input.outcome === "met" &&
-				input.hash !== undefined &&
-				monitor.lastOutputHash === input.hash
-			) {
-				suppressReason = `no_change:${input.hash.slice(0, 8)}`;
-			}
-			// The hash persists in the same transaction as the state (hermes: state before the agent), so an agent
-			// failure never turns one change into endless repeat alerts, and a failed source never refreshes it.
+			const suppressUnchanged = monitor.trigger.suppressUnchanged === true;
+			const unchanged = suppressUnchanged && input.outcome === "met" && monitor.lastOutputHash === input.hash;
+			const suppressReason =
+				input.suppressReason ?? (unchanged ? `no_change:${(input.hash ?? "").slice(0, 8)}` : undefined);
+			// The hash persists with the state (hermes: state before the agent): an agent failure never repeats one change.
 			this.#db
 				.query("UPDATE monitors SET last_script_state = ?, last_output_hash = ? WHERE id = ?")
 				.run(
@@ -694,6 +686,9 @@ export class MonitorLedger {
 				payload: input.payload,
 				...(suppressReason === undefined ? {} : { forceSkipReason: suppressReason }),
 			});
+			// An overlap skip never reached the agent: its output is not "seen" (else the next identical one is `no_change`).
+			if (claim.status === "skipped_overlap" && !suppressReason && input.outcome === "met")
+				this.#db.query("UPDATE monitors SET last_output_hash = ? WHERE id = ?").run(monitor.lastOutputHash, monitor.id);
 			if (once && (claim.status === "admitted" || claim.status === "skipped_overlap"))
 				this.setEnabled(monitor.id, false);
 			return claim;
