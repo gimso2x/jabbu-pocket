@@ -111,7 +111,7 @@ export function transitionDelivery(
 			return { ...f, state: "confirmed" };
 		case "resend":
 			requireState(f, event, "failed_ambiguous");
-			// Due now (not after a backoff) and marked redelivered, so the resend carries the duplicate warning header.
-			return { ...f, state: "pending", redelivered: true, nextAt: now };
+			if (stale) throw new StoreError("invalid_transition", "held past the 24h freshness window: resend refused");
+			return { ...f, state: "pending", redelivered: true, nextAt: now }; // due now, with the duplicate warning header
 	}
 }
