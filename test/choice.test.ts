@@ -3,7 +3,7 @@ import type { ActionButton, ChannelPort, MessageRef, OutboundMessage, PostTarget
 import { buttonRows } from "../src/discord/channel";
 import { createLogger } from "../src/log";
 import type { OmpDialogAnswerer, OmpDialogResponse } from "../src/omp/driver";
-import { ExtensionUiTap } from "../src/omp/rpc-driver";
+import { ExtensionUiTap } from "../src/omp/rpc-ui-tap";
 import { redact } from "../src/redact";
 import {
 	ApprovalBroker,

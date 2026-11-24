@@ -169,7 +169,7 @@
 	"src/omp/fake-driver.ts": 446,
 	"src/omp/form.ts": 569,
 	"src/omp/rpc-client.ts": 777,
-	"src/omp/rpc-driver.ts": 768,
+	"src/omp/rpc-driver.ts": 667,
 	"src/omp/runtime-check.ts": 172,
 	"src/omp/session-dir.ts": 36,
 	"src/omp/session-heal.ts": 99,
