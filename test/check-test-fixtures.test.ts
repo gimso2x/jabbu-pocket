@@ -2,7 +2,7 @@
 // 실패한다. e2e가 도구 없이 조용히 skip되면 CI가 초록인 채로 RPC 규약이 깨진 omp를 놓치기 때문이다.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { checkOmpOnly, checkTestFixtures } from "../src/dev/check-test-fixtures";
@@ -131,10 +131,13 @@ describe("check-test-fixtures CLI", () => {
 	});
 
 	test("the real CLI prints the OK marker and exits 0 when both tools are present", () => {
-		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
+		// The real CLI reads the repo's own pin, which dependabot bumps: the stub reports whatever is pinned.
+		const manifest = JSON.parse(readFileSync(join(REPO, "test", "fixtures", "omp-host", "package.json"), "utf8"));
+		const pin: string = manifest.dependencies["@oh-my-pi/pi-coding-agent"];
+		const omp = script(tempDir("fixtures-omp-"), "omp", `omp/${pin}`);
 		const result = cli({ JABBU_OMP_EXECUTABLE: omp });
 		expect(result.code).toBe(0);
-		expect(result.out).toContain("CI_FIXTURES_OK omp=19.0.1 gitleaks=");
+		expect(result.out).toContain(`CI_FIXTURES_OK omp=${pin} gitleaks=`);
 		expect(result.err).toBe("");
 	});
 });
