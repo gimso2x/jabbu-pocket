@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BoardSource } from "../src/dashboard/board";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { SCRIPT } from "../src/dashboard/html";
 import { startDashboardServer } from "../src/dashboard/server";
 import type { DashboardSnapshot } from "../src/dashboard/snapshot";
 import { readTurnTrace, type TraceError, type TraceSpan, type TurnTrace } from "../src/dashboard/trace";
@@ -509,7 +509,7 @@ describe("api/turn/<id>/trace", () => {
 });
 
 describe("dashboard request log", () => {
-	test("hears the page with its view and each detail read once; polls and streams are not heard", async () => {
+	test("hears the page with its view and each detail read once; the snapshot poll is heard, other polls and streams are not", async () => {
 		seed("dispatched");
 		const heard: string[] = [];
 		const server = startDashboardServer({
@@ -545,7 +545,15 @@ describe("dashboard request log", () => {
 			for (const path of ["/api/board/events", "/api/thread/live/events?origin=discord/dm/200000000000000003"]) {
 				await fetch(`${base}${path}`, { method: "HEAD" });
 			}
-			expect(heard).toEqual(["page:turns", "page", "trace", "conversation", "monitor_detail", "board_pane"]);
+			expect(heard).toEqual([
+				"page:turns",
+				"page",
+				"trace",
+				"conversation",
+				"monitor_detail",
+				"board_pane",
+				"snapshot",
+			]);
 		} finally {
 			server.stop(true);
 		}
@@ -633,33 +641,6 @@ describe("waterfall renderer", () => {
 		expect(sig(renderTrace(answer(base), view({ fold: { "agent:S": false } })))).not.toBe(sig(first));
 	});
 });
-
-const off = { ok: false as const, error: "not in this test" };
-const SNAP = {
-	generatedAt: "2026-11-12T10:00:00+09:00",
-	timezone: "Asia/Seoul",
-	daemon: {
-		ok: true,
-		running: true,
-		ompVersion: "1",
-		origins: 1,
-		busy: 0,
-		ledger: { pending: 0, inflight: 0, confirmed: 0, ambiguous: 0, expired: 0 },
-		inbound: { pending: 0, dispatched: 0, answered: 0, failed_notified: 0, discarded: 0, uncertain: 0 },
-		monitors: { count: 0, next: null },
-		openGates: [],
-	},
-	turns: off,
-	tasks: { ok: true, items: [] },
-	lanes: off,
-	herdr: { ok: true, hosts: [] },
-	approvals: off,
-	monitors: off,
-	alerts: off,
-	gates: off,
-	backup: off,
-	jobs: off,
-} as unknown as DashboardSnapshot;
 
 describe("flow view", () => {
 	const worker = (
@@ -855,10 +836,9 @@ describe("flow view", () => {
 		});
 
 		test("the page script carries renderFlow and flowDoing, and the mode toggle", () => {
-			const page = renderDashboardPage(SNAP);
-			expect(page).toContain(`const renderFlow = ${renderFlow.toString()}`);
-			expect(page).toContain(`const flowDoing = ${flowDoing.toString()}`);
-			expect(page).toContain('"trace-mode"');
+			expect(SCRIPT).toContain(`const renderFlow = ${renderFlow.toString()}`);
+			expect(SCRIPT).toContain(`const flowDoing = ${flowDoing.toString()}`);
+			expect(SCRIPT).toContain('"trace-mode"');
 		});
 	});
 });
