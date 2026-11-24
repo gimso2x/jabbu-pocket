@@ -728,4 +728,21 @@ describe("레코드 상태: blocked·held·rework는 스위퍼가 만지지 않�
 		expect(w.record(row.taskId)?.prLand.pushedAt).toBeGreaterThan(startedAt);
 		expect(w.fake.callsOf("gh", "pr", "create")).toHaveLength(1);
 	});
+
+	test("레코드 상태: 같은 tip의 PR이 이미 열려 있으면 다른 카드의 머지 버튼은 다시 착지하지도 알리지도 않는다", async () => {
+		const { row } = await open();
+		const record = w.record(row.taskId);
+		const opened = () => w.posts().filter((text) => text.includes("PR을 열었습니다")).length;
+		const before = { judged: w.judgeCalls.length, calls: w.fake.calls.length, opened: opened() };
+		await w.clickMerge(row.taskId);
+		expect(w.judgeCalls).toHaveLength(before.judged);
+		expect(w.fake.calls).toHaveLength(before.calls);
+		expect(opened()).toBe(before.opened);
+		expect(w.record(row.taskId)).toEqual(record);
+		// A new commit on the branch is landed again by the same button.
+		w.commit(row.worktree, ["b.txt"]);
+		await w.clickMerge(row.taskId);
+		expect(w.judgeCalls).toHaveLength(before.judged + 1);
+		expect(w.record(row.taskId)?.sha).toBe(tipOf(row));
+	});
 });
