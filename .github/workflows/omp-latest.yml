@@ -1,0 +1,58 @@
+name: omp-latest
+
+# Daily check that the newest published omp still speaks the RPC contract (the fixture pin in
+# ci.yml only moves through dependabot). Not a required check, so the PR path filter is fine;
+# the PR trigger exists because workflow_dispatch needs the file on the default branch.
+# test/ci-workflow.test.ts pins the hardening below.
+on:
+  schedule:
+    - cron: "30 18 * * *" # 03:30 KST
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/omp-latest.yml
+      - test/fixtures/omp-host/**
+      - src/dev/check-test-fixtures.ts
+      - test/omp-mock.e2e.test.ts
+      - test/omp-unanswered-tool-call.test.ts
+
+permissions:
+  contents: read
+
+jobs:
+  omp-latest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup
+      - name: Resolve the latest omp version
+        run: |
+          version=$(npm view @oh-my-pi/pi-coding-agent version)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "latest omp version is not an exact x.y.z: '$version'" >&2
+            exit 1
+          fi
+          echo "JABBU_OMP_EXPECT_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install the latest omp outside the fixture
+        run: |
+          dir="$RUNNER_TEMP/omp-latest"
+          mkdir -p "$dir"
+          cd "$dir"
+          echo '{"private":true}' > package.json
+          bun add --exact "@oh-my-pi/pi-coding-agent@$JABBU_OMP_EXPECT_VERSION"
+          echo "JABBU_OMP_EXECUTABLE=$dir/node_modules/.bin/omp" >> "$GITHUB_ENV"
+      - name: Check the omp version
+        run: bun src/dev/check-test-fixtures.ts --omp-only
+      - name: omp mock e2e
+        env:
+          JABBU_E2E_OMP_MOCK: "1"
+        run: |
+          set -o pipefail
+          bun test test/omp-mock.e2e.test.ts test/omp-unanswered-tool-call.test.ts 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+          # bun prints a "N skip" line only when something was skipped.
+          grep -E '^ *[1-9][0-9]* pass$' "$RUNNER_TEMP/e2e.log"
+          if grep -E '^ *[0-9]+ skip$' "$RUNNER_TEMP/e2e.log"; then
+            echo "omp e2e skipped tests" >&2
+            exit 1
+          fi

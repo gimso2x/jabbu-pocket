@@ -5,7 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { checkTestFixtures } from "../src/dev/check-test-fixtures";
+import { checkOmpOnly, checkTestFixtures } from "../src/dev/check-test-fixtures";
 
 const REPO = resolve(import.meta.dir, "..");
 const scratch: string[] = [];
@@ -136,5 +136,54 @@ describe("check-test-fixtures CLI", () => {
 		expect(result.code).toBe(0);
 		expect(result.out).toContain("CI_FIXTURES_OK omp=19.0.1 gitleaks=");
 		expect(result.err).toBe("");
+	});
+});
+
+describe("checkOmpOnly (latest-omp job: no gitleaks, version from JABBU_OMP_EXPECT_VERSION)", () => {
+	test("an omp equal to the expected version passes, even when it differs from the fixture pin and no gitleaks exists", () => {
+		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.1.1");
+		const env = envOf({ JABBU_OMP_EXECUTABLE: omp, JABBU_OMP_EXPECT_VERSION: "19.1.1", PATH: binDir("absent") });
+		expect(checkOmpOnly(env)).toEqual({ omp, version: "19.1.1" });
+	});
+
+	test("an omp of another version fails", () => {
+		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
+		const env = envOf({ JABBU_OMP_EXECUTABLE: omp, JABBU_OMP_EXPECT_VERSION: "19.1.1" });
+		expect(() => checkOmpOnly(env)).toThrow("19.1.1");
+	});
+
+	test.each([undefined, "", "latest", "^19.1.1", "19.1"])(
+		"expected version %p fails without falling back to the pin",
+		(expected) => {
+			const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
+			const env = envOf({ JABBU_OMP_EXECUTABLE: omp, JABBU_OMP_EXPECT_VERSION: expected });
+			expect(() => checkOmpOnly(env)).toThrow("JABBU_OMP_EXPECT_VERSION");
+		},
+	);
+
+	test("a missing omp executable fails", () => {
+		expect(() => checkOmpOnly(envOf({ JABBU_OMP_EXPECT_VERSION: "19.1.1" }))).toThrow("JABBU_OMP_EXECUTABLE");
+	});
+
+	test("the CLI --omp-only exits 0 with an OK marker on a match and 1 on a mismatch or empty input", () => {
+		const run = (env: Record<string, string | undefined>) => {
+			const p = Bun.spawnSync([process.execPath, join(REPO, "src", "dev", "check-test-fixtures.ts"), "--omp-only"], {
+				cwd: REPO,
+				env: { PATH: binDir("absent"), ...env },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			return { code: p.exitCode, out: new TextDecoder().decode(p.stdout), err: new TextDecoder().decode(p.stderr) };
+		};
+		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.1.1");
+		const ok = run({ JABBU_OMP_EXECUTABLE: omp, JABBU_OMP_EXPECT_VERSION: "19.1.1" });
+		expect(ok.code).toBe(0);
+		expect(ok.out).toContain("CI_FIXTURES_OK omp=19.1.1");
+		for (const expected of ["19.0.0", ""]) {
+			const bad = run({ JABBU_OMP_EXECUTABLE: omp, JABBU_OMP_EXPECT_VERSION: expected });
+			expect(bad.code).toBe(1);
+			expect(bad.out).not.toContain("CI_FIXTURES_OK");
+			expect(bad.err).toContain("CI_FIXTURES_FAIL:");
+		}
 	});
 });

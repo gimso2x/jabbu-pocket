@@ -33,6 +33,22 @@ jobs:
       - run: bun run knip
       - run: bun test --parallel=3
 
+  # Same steps as `test` on the arm64 image the daemon runs on (OCI aarch64). Not a required check.
+  test-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/setup
+      # The release leak scanner tests run the real gitleaks; without it they skip.
+      - name: Install gitleaks 8.28.0
+        run: |
+          bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
+          echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+      - run: bun run check
+      - run: bun run knip
+      - run: bun test --parallel=3
+
   # Real `omp --mode rpc` answered by the scripted mock model: an omp release that breaks the RPC
   # contract fails here. The prerequisite check fails the job instead of letting the e2e skip.
   e2e-omp-mock:
