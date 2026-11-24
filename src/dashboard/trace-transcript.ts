@@ -1,4 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { iterJsonlRecords, readJsonlRecords } from "./jsonl";
+
+export { iterJsonlRecords, readJsonlRecords };
+
 import { join } from "node:path";
 import { PURPOSE_HEADER, ROTATION_CONTEXT_HEADER, THREAD_CONTEXT_HEADER } from "../core/mailbox-thread-context";
 import { QUOTED_HEADER } from "../core/normalize";
@@ -49,7 +53,7 @@ export function messageText(message: Json): string {
 
 /** The first user message of a session file (what its agent was told to do): its size and masked first words. */
 export function readBrief(file: string): { text: string; bytes: number; preview: string } | undefined {
-	for (const entry of readJsonlRecords(file)) {
+	for (const entry of iterJsonlRecords(file)) {
 		const message = entry.type === "message" && isRecord(entry.message) ? entry.message : undefined;
 		if (message?.role !== "user") continue;
 		const body = messageText(message);
@@ -143,21 +147,15 @@ export interface Transcript {
 	inputs?: TraceInput[];
 }
 
-/** The object records of a session `.jsonl`, skipping the torn line omp may be writing. */
-export function readJsonlRecords(file: string): Json[] {
-	const out: Json[] = [];
-	for (const line of readFileSync(file, "utf8").split("\n")) {
-		if (line === "") continue;
-		try {
-			const entry: unknown = JSON.parse(line);
-			if (isRecord(entry)) out.push(entry);
-		} catch (error) {
-			// The line omp is writing right now; the next read has it whole.
-			if (error instanceof SyntaxError) continue;
-			throw error;
-		}
+/** When the last `user` message of a session was written (undefined: no such message). */
+export function lastUserAt(records: Json[]): number | undefined {
+	let at: number | undefined;
+	for (const entry of records) {
+		const time = Date.parse(typeof entry.timestamp === "string" ? entry.timestamp : "");
+		if (entry.type === "message" && isRecord(entry.message) && entry.message.role === "user" && !Number.isNaN(time))
+			at = time;
 	}
-	return out;
+	return at;
 }
 
 /** A model call: from its request to its `completedAt` (the record's own time when that is missing). */
@@ -196,6 +194,7 @@ export function readTranscript(
 	file: string,
 	window: TranscriptWindow,
 	scope: Scope = { depth: 0, prefix: "" },
+	parsed?: Json[],
 ): Transcript {
 	const { origin } = window;
 	const result: Transcript = { spans: [], truncated: false };
@@ -203,7 +202,7 @@ export function readTranscript(
 	let tail: "model" | "other" = "other";
 	/** The last message inside the window: where an unanswered tool call stops and the next model call starts. */
 	let lastIn: number | undefined;
-	const records = readJsonlRecords(file);
+	const records = parsed ?? readJsonlRecords(file);
 	/** Entry index (file order) of each answered tool call in the window. */
 	const answeredAt: number[] = [];
 	/** Set by a compaction: the next model call carries how many of the turn's tool results it summarised. */
