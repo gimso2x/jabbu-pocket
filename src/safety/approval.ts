@@ -31,11 +31,11 @@ export type CardReplyResult =
 	| { kind: "duplicate" }
 	/** The card is already settled: deliver the reply as a normal owner message of the asking conversation. */
 	| { kind: "route"; originKey: string }
-	/** An injected message (`ompbot inject`) in a card's thread: the card is not answered and nothing is routed. */
+	/** An injected message (`jabbu-pocket inject`) in a card's thread: the card is not answered and nothing is routed. */
 	| { kind: "injected_rejected" };
 
-export const APPROVAL_ACTION_PREFIX = "ompbot:approval";
-export const CHOICE_ACTION_PREFIX = "ompbot:choice";
+export const APPROVAL_ACTION_PREFIX = "jabbu:approval";
+export const CHOICE_ACTION_PREFIX = "jabbu:choice";
 /** An unanswered card counts as denied after this long; the deadline is shown under its buttons. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60 * 1000;
 const SUMMARY_LIMIT = 2500;
@@ -116,7 +116,7 @@ function renderCard(
 }
 
 /**
- * `ompbot:approval:<approve|deny|retry>:<channel>:<ts>`; channel ids and message ts contain no colon. The key is always
+ * `jabbu:approval:<approve|deny|retry>:<channel>:<ts>`; channel ids and message ts contain no colon. The key is always
  * the canonical card's, also on its mirror in the asking thread, so either card settles the same pending request.
  */
 export function approvalActionId(decision: ApprovalDecision | "retry", channel: string, ts: string): string {
@@ -136,7 +136,7 @@ function retryButton(channel: string, ts: string): ActionButton {
 	return { actionId: approvalActionId("retry", channel, ts), label: "다시 요청", value: "retry" };
 }
 
-/** `ompbot:choice:<n>:<channel>:<ts>`: button `n` of the choice card `<channel>:<ts>` (no colon in either, as above). */
+/** `jabbu:choice:<n>:<channel>:<ts>`: button `n` of the choice card `<channel>:<ts>` (no colon in either, as above). */
 export function choiceActionId(index: number, channel: string, ts: string): string {
 	return `${CHOICE_ACTION_PREFIX}:${index}:${channel}:${ts}`;
 }
@@ -928,7 +928,7 @@ export class ApprovalBroker {
 	 * The owner's reply in the thread of an approval card (`approvalId` = `<card channel>:<card ts>`). A still-pending
 	 * card is settled as `replied` (the waiting tool call returns the text); a settled one hands the reply back as a
 	 * `route` to the asking conversation. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
-	 * An `injected` message (`ompbot inject`, which anyone with the socket can send) never answers a card: in the thread
+	 * An `injected` message (`jabbu-pocket inject`, which anyone with the socket can send) never answers a card: in the thread
 	 * of a real choice card or of any approval row (pending or settled) it is `injected_rejected`, the card untouched.
 	 */
 	handleCardReply(reply: {

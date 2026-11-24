@@ -39,8 +39,8 @@ let router: OriginRouter;
 let drivers: Map<string, DyingDaemonDriver>;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-recovery-prompt-"));
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-recovery-prompt-"));
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	sessions = new FakeSessionStore();
 	drivers = new Map();
 	router = new OriginRouter({

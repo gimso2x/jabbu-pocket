@@ -96,7 +96,7 @@ export function laneHarness(homeDir: string, extra: LaneHarnessExtra = {}): Lane
 	const { driver: laneDriver, routeFails, ...managerExtra } = extra;
 	let now = LANE_START;
 	const clock = { now: () => now };
-	const store = openBotStore(join(homeDir, "ompbot.db"), clock, "Asia/Seoul");
+	const store = openBotStore(join(homeDir, "jabbu.db"), clock, "Asia/Seoul");
 	const transport = new WaitingDiscordTransport();
 	const sessions = new FakeSessionStore();
 	const drivers = new Map<string, FakeOmpDriver>();

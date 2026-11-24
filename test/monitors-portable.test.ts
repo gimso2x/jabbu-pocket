@@ -45,7 +45,7 @@ function tempDir(prefix: string): string {
 }
 
 function ledgerOf(h: TestHome) {
-	const ledger = openMonitorLedger(join(h.dir, "ompbot.db"));
+	const ledger = openMonitorLedger(join(h.dir, "jabbu.db"));
 	cleanups.push(() => ledger.close());
 	return ledger;
 }
@@ -112,13 +112,13 @@ function syncFiles(exportDir: string, target: TestHome): void {
 	cpSync(join(exportDir, "files", "workspace"), target.config.workspaceDir, { recursive: true });
 }
 
-describe("ompbot monitors export/apply", () => {
+describe("jabbu-pocket monitors export/apply", () => {
 	test("AC-1: export -> apply on a home with other paths -> export gives byte-identical *.json", async () => {
-		const a = home("ompbot-portable-a-");
-		const b = home("ompbot-portable-b-");
+		const a = home("jabbu-portable-a-");
+		const b = home("jabbu-portable-b-");
 		seedSource(a);
-		const dirA = tempDir("ompbot-export-a-");
-		const dirB = tempDir("ompbot-export-b-");
+		const dirA = tempDir("jabbu-export-a-");
+		const dirB = tempDir("jabbu-export-b-");
 
 		const exported = await monitors(a, "export", "--dir", dirA, "--with-files");
 		expect(exported.code).toBe(0);
@@ -139,8 +139,8 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("a cron command round-trips as @SCRIPTS@/ with its timeout, and --with-files carries the script", async () => {
-		const a = home("ompbot-portable-a-");
-		const b = home("ompbot-portable-b-");
+		const a = home("jabbu-portable-a-");
+		const b = home("jabbu-portable-b-");
 		const script = join(a.dir, "scripts", "brief.sh");
 		writeFileSync(script, "#!/bin/sh\necho brief\n");
 		chmodSync(script, 0o755);
@@ -150,8 +150,8 @@ describe("ompbot monitors export/apply", () => {
 			instruction: "post the script output",
 			deliver: "verbatim",
 		});
-		const dirA = tempDir("ompbot-export-a-");
-		const dirB = tempDir("ompbot-export-b-");
+		const dirA = tempDir("jabbu-export-a-");
+		const dirB = tempDir("jabbu-export-b-");
 		expect((await monitors(a, "export", "--dir", dirA, "--with-files")).code).toBe(0);
 		const exported = JSON.parse(readFileSync(join(dirA, "brief.json"), "utf8")) as {
 			trigger: Record<string, unknown>;
@@ -181,10 +181,10 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("AC-2: a second apply of the same dir changes nothing and keeps updated_at", async () => {
-		const a = home("ompbot-portable-a-");
-		const b = home("ompbot-portable-b-");
+		const a = home("jabbu-portable-a-");
+		const b = home("jabbu-portable-b-");
 		seedSource(a);
-		const dir = tempDir("ompbot-export-");
+		const dir = tempDir("jabbu-export-");
 		expect((await monitors(a, "export", "--dir", dir, "--with-files")).code).toBe(0);
 		syncFiles(dir, b);
 		expect((await monitors(b, "apply", "--dir", dir)).code).toBe(0);
@@ -200,9 +200,9 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("AC-3: exports carry no home path, token or id; apply keeps an existing webhook's id and token", async () => {
-		const a = home("ompbot-portable-a-");
+		const a = home("jabbu-portable-a-");
 		seedSource(a);
-		const dir = tempDir("ompbot-export-");
+		const dir = tempDir("jabbu-export-");
 		expect((await monitors(a, "export", "--dir", dir)).code).toBe(0);
 		const rows = rowsOf(a);
 		const hook = rows.hook?.trigger;
@@ -227,9 +227,9 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("AC-4: one invalid file fails the whole apply with exit 2 and no row changes", async () => {
-		const a = home("ompbot-portable-a-");
+		const a = home("jabbu-portable-a-");
 		seedSource(a);
-		const dir = tempDir("ompbot-export-");
+		const dir = tempDir("jabbu-export-");
 		expect((await monitors(a, "export", "--dir", dir)).code).toBe(0);
 		const before = rowsOf(a);
 		// A valid change, a valid new monitor and one file whose script does not exist on this host.
@@ -255,9 +255,9 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("AC-5: monitors missing from the dir stay without --prune, go with it; --dry-run only prints", async () => {
-		const a = home("ompbot-portable-a-");
+		const a = home("jabbu-portable-a-");
 		seedSource(a);
-		const dir = tempDir("ompbot-export-");
+		const dir = tempDir("jabbu-export-");
 		expect((await monitors(a, "export", "--dir", dir)).code).toBe(0);
 		addMonitor(a, { name: "local only", trigger: { kind: "cron", schedule: "0 7 * * *" }, instruction: "x" });
 		writeFileSync(
@@ -281,9 +281,9 @@ describe("ompbot monitors export/apply", () => {
 	});
 
 	test("export mirrors the DB: a stale *.json of a removed monitor is deleted", async () => {
-		const a = home("ompbot-portable-a-");
+		const a = home("jabbu-portable-a-");
 		seedSource(a);
-		const dir = tempDir("ompbot-export-");
+		const dir = tempDir("jabbu-export-");
 		writeFileSync(join(dir, "gone.json"), "{}\n");
 		writeFileSync(join(dir, "notes.txt"), "kept\n");
 		expect((await monitors(a, "export", "--dir", dir)).code).toBe(0);
@@ -294,10 +294,10 @@ describe("ompbot monitors export/apply", () => {
 
 describe("monitors export/apply on a home with a broken config.json (qa-y #88)", () => {
 	test("exit 2, nothing copied into the export dir, nothing applied", async () => {
-		const h = home("ompbot-portable-broken-");
+		const h = home("jabbu-portable-broken-");
 		seedSource(h);
-		const dir = tempDir("ompbot-export-broken-");
-		const apply = tempDir("ompbot-apply-broken-");
+		const dir = tempDir("jabbu-export-broken-");
+		const apply = tempDir("jabbu-apply-broken-");
 		writeFileSync(join(apply, "x.json"), "{}");
 		const before = Object.keys(rowsOf(h)).sort();
 		writeFileSync(h.config.configPath, "{ not json");
@@ -313,7 +313,7 @@ describe("monitors export/apply on a home with a broken config.json (qa-y #88)",
 
 describe("monitors export --with-files: arguments with ..", () => {
 	test("E-3: a script argument <scripts>/../../x writes nothing outside the export dir and warns", () => {
-		const base = tempDir("ompbot-e3-");
+		const base = tempDir("jabbu-e3-");
 		const scriptsRoot = join(base, "h", "a", "scripts");
 		const workspaceDir = join(base, "h", "a", "workspace");
 		mkdirSync(scriptsRoot, { recursive: true });
@@ -327,7 +327,7 @@ describe("monitors export --with-files: arguments with ..", () => {
 		mkdirSync(join(base, "out"));
 		writeFileSync(outside, "victim\n");
 		const ctx = { scriptsRoot, workspaceDir, defaultTimezone: "Asia/Seoul" };
-		const ledger = openMonitorLedger(join(base, "ompbot.db"));
+		const ledger = openMonitorLedger(join(base, "jabbu.db"));
 		cleanups.push(() => ledger.close());
 		const dotted = `${scriptsRoot}/../../../src.txt`;
 		ledger.addMonitor(
@@ -352,7 +352,7 @@ describe("monitors export --with-files: arguments with ..", () => {
 
 describe("monitors export --with-files: symlinks", () => {
 	test("qa-h n60: a file under a root linking outside it is not copied and warned; a link inside is copied", () => {
-		const base = tempDir("ompbot-n60-");
+		const base = tempDir("jabbu-n60-");
 		const scriptsRoot = join(base, "h", "scripts");
 		const workspaceDir = join(base, "h", "workspace");
 		mkdirSync(scriptsRoot, { recursive: true });
@@ -365,7 +365,7 @@ describe("monitors export --with-files: symlinks", () => {
 		writeFileSync(secret, "victim\n");
 		for (const name of ["procedure.md", "inner.md", "gone.md"]) writeFileSync(join(workspaceDir, "proc", name), "x\n");
 		const ctx = { scriptsRoot, workspaceDir, defaultTimezone: "Asia/Seoul" };
-		const ledger = openMonitorLedger(join(base, "ompbot.db"));
+		const ledger = openMonitorLedger(join(base, "jabbu.db"));
 		cleanups.push(() => ledger.close());
 		const outArg = join(scriptsRoot, "out.txt");
 		const inArg = join(scriptsRoot, "in.txt");

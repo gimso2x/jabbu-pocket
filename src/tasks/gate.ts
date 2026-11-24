@@ -135,7 +135,7 @@ export interface TaskGateDeps {
 	slot: GateSlot;
 	/** The lanes' reviewer setup; absent: every receipt is `inconclusive`. */
 	reviewer?: Omit<LaneReviewDeps, "headOf" | "now">;
-	/** `<ompbot home>/qa-worktrees`. */
+	/** `<jabbu home>/qa-worktrees`. */
 	qaWorktreesDir?: string;
 	headOf(worktree: string): Promise<{ sha: string; clean: boolean }>;
 	git?: GitRunner;

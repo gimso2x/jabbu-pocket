@@ -1,6 +1,6 @@
 # 기여 안내
 
-이슈와 PR 모두 환영합니다. 저장소는 <https://github.com/gimso2x/jabbu-pocket>(예전 이름 kencrew)이고, 이 저장소가 원본이라 받아들인 PR은 여기서 그대로 머지됩니다. 모든 PR과 main push에서 CI(`.github/workflows/ci.yml`)가 돕니다.
+이슈와 PR 모두 환영합니다. 저장소는 <https://github.com/gimso2x/jabbu-pocket>이고, 이 저장소가 원본이라 받아들인 PR은 여기서 그대로 머지됩니다. 모든 PR과 main push에서 CI(`.github/workflows/ci.yml`)가 돕니다.
 
 ## 개발 환경
 
@@ -12,7 +12,7 @@ bun test          # 0 fail이어야 합니다(실제 omp E2E는 기본으로 건
 bun run check     # biome + tsc
 ```
 
-실제 omp를 띄우는 E2E는 `OMPBOT_E2E_OMP=1 bun test`로 돌리며, 모델 호출 비용이 듭니다.
+실제 omp를 띄우는 E2E는 `JABBU_E2E_OMP=1 bun test`로 돌리며, 모델 호출 비용이 듭니다.
 
 ## PR을 보내기 전에
 
@@ -31,7 +31,7 @@ bun run check     # biome + tsc
    - `loopback`: 진짜 바이너리·진짜 DB를 쓰되 네트워크·플랫폼은 `127.0.0.1` 등 로컬 대역으로 끝낸 실행.
    - `live`: 실제 모델 호출·실제 Discord·Teams·원격 저장소까지 닿은 실행. 토큰·실계정이 필요하고 비용이 듭니다.
    무엇을 가짜로 바꿨는지도 함께 적습니다. "테스트 통과"만으로는 어느 대역인지 알 수 없습니다.
-3. **미확인 표면** — 돌리지 못한 검사, 건너뛴 테스트(예: `OMPBOT_E2E_OMP=1`이 없어 skip된 E2E, root·gitleaks·실 omp가 필요한 것), 손으로 확인하지 않은 화면이나 경로를 사유와 함께 남깁니다. 빈칸은 "확인했음"이 아니라 "확인 안 함"입니다.
+3. **미확인 표면** — 돌리지 못한 검사, 건너뛴 테스트(예: `JABBU_E2E_OMP=1`이 없어 skip된 E2E, root·gitleaks·실 omp가 필요한 것), 손으로 확인하지 않은 화면이나 경로를 사유와 함께 남깁니다. 빈칸은 "확인했음"이 아니라 "확인 안 함"입니다.
 4. **외부 코드 출처** — 다른 저장소에서 가져오거나 변형한 코드·문구·그림이 있으면 원본 URL, 파일 경로, 리비전, 라이선스를 적습니다. 없으면 `없음`이라고 씁니다. 라이선스가 허락하지 않는 재배포는 이 저장소에 들어올 수 없습니다.
 
 ## 보안 문제

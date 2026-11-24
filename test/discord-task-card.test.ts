@@ -35,7 +35,7 @@ let port: DiscordChannel;
 let logs: string[];
 
 beforeEach(async () => {
-	home = makeHome("ompbot-discord-task-card-");
+	home = makeHome("jabbu-discord-task-card-");
 	logs = [];
 	discord = new WaitingDiscordTransport();
 	discord.setChannel({ id: CH, type: 0, guildId: GUILD });

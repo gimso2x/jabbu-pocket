@@ -65,18 +65,18 @@ interface World {
 /** A repository on `main` with a GitHub-address remote backed by a bare repository, and a closed lane worktree. */
 function world(): World {
 	const repo = makeRepo(repos);
-	const bare = tempDir("ompbot-recovery-bare-");
+	const bare = tempDir("jabbu-recovery-bare-");
 	git(bare, "init", "-q", "--bare");
 	git(repo, "remote", "add", "origin", GITHUB_URL);
 	git(repo, "config", `url.${bare}.insteadOf`, GITHUB_URL);
 	git(repo, "push", "-q", "origin", "main");
-	const records = tempDir("ompbot-recovery-records-");
+	const records = tempDir("jabbu-recovery-records-");
 	const denylistFile = join(records, "denylist.txt");
 	writeFileSync(denylistFile, "# none\nplanted-owner-marker-7310\n");
 	const gitleaks = join(records, "gitleaks");
 	writeFileSync(gitleaks, "#!/bin/sh\nexit 0\n");
 	chmodSync(gitleaks, 0o755);
-	const worktree = join(tempDir("ompbot-recovery-wt-"), "lane");
+	const worktree = join(tempDir("jabbu-recovery-wt-"), "lane");
 	const branch = "lane/recovery";
 	git(repo, "worktree", "add", "-q", "-b", branch, worktree, "main");
 	writeFileSync(join(worktree, "a.txt"), "a\n");

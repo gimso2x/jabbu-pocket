@@ -64,7 +64,7 @@ beforeEach(() => {
 	homes = [];
 	daemons = [];
 	// A real `ssh` must never run in this file: the first one on PATH refuses.
-	const bin = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-no-ssh-")));
+	const bin = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-no-ssh-")));
 	scratch.push(bin);
 	writeFileSync(join(bin, "ssh"), "#!/bin/sh\necho 'ssh disabled in tests' >&2\nexit 255\n");
 	chmodSync(join(bin, "ssh"), 0o755);
@@ -115,14 +115,14 @@ interface World {
 /** The bot's clone, the host's clone, one reached [TASK] on the host's repository, a fake GitHub (bare repository + fake `gh`). */
 async function build(): Promise<World> {
 	clockState.skew = 0;
-	const home = makeHome("ompbot-remote-recovery-");
+	const home = makeHome("jabbu-remote-recovery-");
 	homes.push(home);
-	const root = tempDir("ompbot-remote-world-");
+	const root = tempDir("jabbu-remote-world-");
 	// The bare repository's name ends in `.git`: the core refuses an origin that may be a live checkout.
 	const bare = join(root, "origin.git");
 	mkdirSync(bare);
 	git(bare, "init", "-q", "--bare");
-	const local = makeRepo(repos, "ompbot-remote-local-");
+	const local = makeRepo(repos, "jabbu-remote-local-");
 	git(local, "remote", "add", "origin", GITHUB_URL);
 	git(local, "config", `url.${bare}.insteadOf`, GITHUB_URL);
 	git(local, "push", "-q", "origin", "main");
@@ -131,10 +131,10 @@ async function build(): Promise<World> {
 	// The host's origin answers with the GitHub address (a `url.<bare>.insteadOf` would be expanded by `remote get-url`);
 	// the fake ssh applies that rewrite to the host's `fetch` only.
 	git(remote, "remote", "set-url", "origin", GITHUB_URL);
-	const records = makeRepo(repos, "ompbot-remote-records-");
+	const records = makeRepo(repos, "jabbu-remote-records-");
 	mkdirSync(join(records, "release"));
 	writeFileSync(join(records, "release", "denylist.txt"), "# none\nplanted-owner-marker-7310\n");
-	const gitleaks = join(tempDir("ompbot-remote-gitleaks-"), "gitleaks");
+	const gitleaks = join(tempDir("jabbu-remote-gitleaks-"), "gitleaks");
 	writeFileSync(gitleaks, "#!/bin/sh\nexit 0\n");
 	chmodSync(gitleaks, 0o755);
 
@@ -315,7 +315,7 @@ function expectCleanHost(w: World): void {
 	expect(git(w.remote, "worktree", "list", "--porcelain")).not.toContain(w.worktree);
 	expect(git(w.remote, "rev-parse", "main")).toBe(git(w.bare, "rev-parse", "main"));
 	expect(existsSync(join(w.remote, "a.txt"))).toBe(true);
-	expect(git(w.local, "for-each-ref", "refs/ompbot")).toBe("");
+	expect(git(w.local, "for-each-ref", "refs/jabbu")).toBe("");
 }
 
 describe("AC-11e 원격 정리의 순서와 결과", () => {
@@ -327,7 +327,7 @@ describe("AC-11e 원격 정리의 순서와 결과", () => {
 
 		const order = [
 			indexOfEvent(w, /^git -C \S+ merge --ff-only origin\/main$/),
-			indexOfEvent(w, /^git -C \S+ update-ref -d refs\/ompbot\/task\/T-/),
+			indexOfEvent(w, /^git -C \S+ update-ref -d refs\/jabbu\/task\/T-/),
 			indexOfEvent(w, /^ssh git -C \S+ worktree remove --force /),
 			indexOfEvent(w, /^ssh git -C \S+ branch -D task\/T-/),
 			indexOfEvent(w, /^ssh git -C \S+ remote get-url origin$/),
@@ -430,7 +430,7 @@ describe("AC-11e 원격 정리의 순서와 결과", () => {
 		expect(shown).toContain("손으로: git -C");
 		expect(w.fake.prs.filter((pr) => pr.state === "MERGED")).toHaveLength(1);
 		expect(git(w.local, "rev-parse", "main")).toBe(git(w.bare, "rev-parse", "main"));
-		expect(git(w.local, "for-each-ref", "refs/ompbot")).toBe("");
+		expect(git(w.local, "for-each-ref", "refs/jabbu")).toBe("");
 		// Nothing of the host could be touched: the worktree and the old base are still there.
 		expect(existsSync(w.worktree)).toBe(true);
 		expect(git(w.remote, "rev-parse", "main")).not.toBe(git(w.bare, "rev-parse", "main"));

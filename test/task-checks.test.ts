@@ -442,7 +442,7 @@ describe("host runCheck / headOf", () => {
 	});
 
 	test("AC-6: a real local run sees the worktree as cwd and its arguments verbatim (no shell)", async () => {
-		const dir = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-check-")));
+		const dir = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-check-")));
 		try {
 			const ops = createTaskHostOps({});
 			const pwd = await ops.runCheck({ worktree: dir, argv: ["pwd"], timeoutMs: 120_000 });
@@ -553,7 +553,7 @@ const gitAt =
  * (`baseSha`), then the docs commit (complete documents: every AC checked with `test:` evidence) as a non-records `startTask` leaves it.
  */
 async function gitTask(mainFiles: Record<string, string> = {}, docsMessage?: string): Promise<GitTask> {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-integrity-")));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-integrity-")));
 	const repo = join(root, "repo");
 	mkdirSync(repo);
 	const git = gitAt(repo);
@@ -820,7 +820,7 @@ describe("diff integrity of the task branch", () => {
 	});
 
 	test("plansRoot: a remote task's declared removals are read through readPlan from the local recordsRepo, not from the remote worktree", async () => {
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-plans-root-")));
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-plans-root-")));
 		try {
 			const recordsRepo = join(root, "records");
 			mkdirSync(join(recordsRepo, "doc/plans"), { recursive: true });
@@ -921,7 +921,7 @@ describe("[check:] results in the ledger (check_json)", () => {
 	test("AC-2: a new ledger and sweeper over the same disk file reuse the verdict, running nothing", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "task-check-receipts-"));
 		try {
-			const file = join(dir, "ompbot.db");
+			const file = join(dir, "jabbu.db");
 			const db = new Database(file, { strict: true });
 			const t = task(spec, "/r/repo", db);
 			const host = fakeHost(t.files, { run: () => ({ code: 1, output: "1 fail" }) });

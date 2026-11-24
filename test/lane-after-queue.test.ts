@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordBinding } from "../src/discord/binding";
 import { DiscordChannel } from "../src/discord/channel";
@@ -17,7 +17,7 @@ import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
-// Lane start reservations: `ompbot_work_start` with `after` stores the arguments, the
+// Lane start reservations: `jabbu_work_start` with `after` stores the arguments, the
 // lane tick reads the prerequisite lanes again and posts a start card once all have landed; the owner starts or cancels.
 
 const signal = new AbortController().signal;
@@ -29,7 +29,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-after-home-");
+	home = makeHome("jabbu-lane-after-home-");
 	repos = [];
 });
 
@@ -405,7 +405,7 @@ describe("reservations inside the daemon: the tool and the buttons", () => {
 	};
 
 	async function boot(): Promise<Daemon> {
-		const discordConfig = home.config.channels.discord as NonNullable<OmpbotConfig["channels"]["discord"]>;
+		const discordConfig = home.config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
 			config: { ...home.config, channels: { discord: { ...discordConfig, laneChannelId: LANE_CH } } },
@@ -449,7 +449,7 @@ describe("reservations inside the daemon: the tool and the buttons", () => {
 		await discord.waitForPosts((text) => text.includes("작업 레인 `lane-a`을 시작했습니다"));
 
 		const origin = `discord/dm/${DM}`;
-		const tool = daemon.hostToolsFor(origin).find((candidate) => candidate.name === "ompbot_work_start");
+		const tool = daemon.hostToolsFor(origin).find((candidate) => candidate.name === "jabbu_work_start");
 		const reply = await tool?.execute({ title: "lane-b", cwd: repo, brief: "continue", after: ["lane-a"] }, { signal });
 		expect(reply).toContain("예약됨 #1");
 		expect(daemon.store.getLane("lane-b")).toBeUndefined();

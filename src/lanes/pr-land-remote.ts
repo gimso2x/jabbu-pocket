@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import type { LaneLandMode } from "./pr-land-steps";
 
 /** `<recordsRepo>/release/denylist.txt` — the leak-check denylist, as `LaneLandMode.denylistFile` carries it. */
@@ -22,7 +22,7 @@ export interface RemoteLandMode extends LaneLandMode {
  * entry names it or the host is not configured.
  */
 export function landModeOfRemote(
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
 	host: string,
 	repo: string,
 ): RemoteLandMode | undefined {

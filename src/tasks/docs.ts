@@ -22,7 +22,7 @@ export interface AcceptanceItem {
 	text: string;
 }
 
-/** What the session hands to `ompbot_dispatch taskSpec` for a new task. */
+/** What the session hands to `jabbu_dispatch taskSpec` for a new task. */
 export interface NewTaskSpec {
 	title: string;
 	risk: TaskRisk;

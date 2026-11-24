@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
-import type { DiscordChannelConfig, OmpbotConfig } from "../src/config";
+import type { DiscordChannelConfig, JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import type { ProcResult, ProcRunner, PrTools } from "../src/lanes/pr";
 import {
@@ -554,7 +554,7 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 	let scratch: string[];
 
 	beforeEach(() => {
-		home = makeHome("ompbot-lane-prwatch-home-");
+		home = makeHome("jabbu-lane-prwatch-home-");
 		repos = [];
 		scratch = [];
 	});
@@ -675,7 +675,7 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 		const sessions = new FakeSessionStore();
 		const drivers = new Map<string, FakeOmpDriver>();
 		const clock = { now: () => Date.now() };
-		const config: OmpbotConfig = {
+		const config: JabbuConfig = {
 			...home.config,
 			channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
 		};
@@ -707,7 +707,7 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 			await transport.waitForPosts((text) => text.includes("PR 추적을 끕니다"));
 			expect(daemon.store.getLane("watch")?.meta.pr?.watchOff).toBe(true);
 			// 코어가 답했으므로 레인 세션은 이 명령을 프롬프트로 받지 않는다.
-			const prompts = drivers.get("ompbot/work/watch")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
+			const prompts = drivers.get("jabbu/work/watch")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
 			expect(prompts.some((call) => call.includes("prwatch"))).toBe(false);
 		} finally {
 			await daemon.stop();

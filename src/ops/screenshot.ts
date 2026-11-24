@@ -72,7 +72,7 @@ async function capture(
 ): Promise<{ width: number; height: number }> {
 	const run = opts.run ?? realProcessRunner;
 	// A private directory per render: two different callers never share (or delete) each other's page.
-	const dir = await mkdtemp(join(tmpdir(), "ompbot-briefing-"));
+	const dir = await mkdtemp(join(tmpdir(), "jabbu-briefing-"));
 	const page = join(dir, "briefing.html");
 	try {
 		await writeFile(page, html, "utf8");

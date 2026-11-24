@@ -75,7 +75,7 @@ const starter: WatchStarter = (root, onChange, onError) => {
 };
 
 beforeEach(() => {
-	dir = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-watcher-")));
+	dir = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-watcher-")));
 	mkdirSync(join(dir, "scripts"));
 	allowed = join(dir, "allowed");
 	mkdirSync(join(allowed, "proj", ".git"), { recursive: true });
@@ -89,7 +89,7 @@ beforeEach(() => {
 	const log = createLogger({ sink: (line) => logLines.push(line), clock, redact });
 	store = openStore({
 		timezone: "Asia/Seoul",
-		path: join(dir, "ompbot.db"),
+		path: join(dir, "jabbu.db"),
 		clock,
 		redact,
 	});

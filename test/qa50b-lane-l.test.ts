@@ -9,7 +9,7 @@ import { checkOmpRuntime } from "../src/omp/runtime-check";
 import { listsBefore, newestSessionFile } from "../src/omp/session-heal";
 import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 
-const root = mkdtempSync(join(tmpdir(), "ompbot-qa50b-lane-l-"));
+const root = mkdtempSync(join(tmpdir(), "jabbu-qa50b-lane-l-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe("qa50b-low lane L", () => {
@@ -58,14 +58,14 @@ describe("qa50b-low lane L", () => {
 		expect(listsBefore({ ...a, createdMs: 901 }, b)).toBe(true);
 	});
 
-	test("L-이관2 a 0-byte or non-database ompbot.db gives a status report with ledger_unreadable, not an SQLiteError", () => {
+	test("L-이관2 a 0-byte or non-database jabbu.db gives a status report with ledger_unreadable, not an SQLiteError", () => {
 		for (const [name, bytes] of [
 			["empty", ""],
 			["garbage", "this is not a sqlite database at all, just text padding the header out. ".repeat(4)],
 		] as const) {
 			const home = join(root, `status-${name}`);
 			mkdirSync(home);
-			const dbPath = join(home, "ompbot.db");
+			const dbPath = join(home, "jabbu.db");
 			writeFileSync(dbPath, bytes);
 			const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
 			expect(report.daemonRunning).toBe(false);

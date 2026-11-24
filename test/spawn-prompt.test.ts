@@ -44,7 +44,7 @@ const record =
 	};
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-spawn-prompt-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-spawn-prompt-"));
 	records = [];
 	log = { debug: record("debug"), info: record("info"), warn: record("warn"), error: record("error") };
 	const workspace = join(dir, "workspace");
@@ -96,7 +96,7 @@ function sessionWithCall(dirPath: string, ageMs: number, provider = "anthropic")
 
 function spawn(overrides: Partial<SpawnPromptOptions> = {}): string {
 	return spawnSystemPrompt({
-		secretsDir: "/home/test/.ompbot/secrets",
+		secretsDir: "/home/test/.jabbu/secrets",
 		originKey: ORIGIN,
 		sessionDir: sessionDir(),
 		files,
@@ -158,7 +158,7 @@ describe("omp_spawn_prompt log (AC-1)", () => {
 	});
 
 	test("the unpinned text equals floorsSystemPrompt for the same inputs", () => {
-		expect(spawn()).toBe(floorsSystemPrompt("/home/test/.ompbot/secrets", ORIGIN, files));
+		expect(spawn()).toBe(floorsSystemPrompt("/home/test/.jabbu/secrets", ORIGIN, files));
 	});
 });
 
@@ -233,7 +233,7 @@ describe("static floors pinned with the owner docs while the cache is warm (AC-1
 		expect(Buffer.from(second).equals(Buffer.from(first))).toBe(true);
 		expect(second).not.toContain(HERDR_MARK);
 		// The sidecar holds the static floors and the owner docs together.
-		expect(sidecarBody().startsWith("# ompbot 운영 안내 / ompbot operating floors")).toBe(true);
+		expect(sidecarBody().startsWith("# jabbu 운영 안내 / jabbu operating floors")).toBe(true);
 		expect(sidecarBody()).toContain(OWNER_V1);
 	});
 
@@ -243,7 +243,7 @@ describe("static floors pinned with the owner docs while the cache is warm (AC-1
 
 		const text = spawn({ herdr: true });
 		expect(lastSpawnLog().pinned).toBe(false);
-		expect(text).toBe(floorsSystemPrompt("/home/test/.ompbot/secrets", ORIGIN, files, undefined, true));
+		expect(text).toBe(floorsSystemPrompt("/home/test/.jabbu/secrets", ORIGIN, files, undefined, true));
 		expect(sidecarBody()).toContain(HERDR_MARK);
 		expect(text.startsWith(sidecarBody())).toBe(true);
 		expect(statSync(join(sessionDir(), PINNED_OWNER_DOCS_FILE)).mode & 0o777).toBe(0o600);
@@ -302,14 +302,14 @@ describe("dynamic lines are never pinned and always last (AC-2)", () => {
 		const at = text.indexOf(FLOORS_DYNAMIC_HEADING);
 		expect(at).toBeGreaterThan(text.indexOf(PERSONA));
 		expect(at).toBeGreaterThan(text.indexOf("## 답변 형식 / Answer format"));
-		expect(text.slice(at)).toContain("ompbot_work_start");
+		expect(text.slice(at)).toContain("jabbu_work_start");
 		expect(text.indexOf("[자동 후속]")).toBeGreaterThan(at);
 	});
 
 	test("the unpinned text with dynamic lines equals floorsSystemPrompt for the same inputs", () => {
 		const surface = { noLaneChannel: true, ...PEERS };
 		expect(spawn({ herdr: true, peerTouched: true, surface })).toBe(
-			floorsSystemPrompt("/home/test/.ompbot/secrets", ORIGIN, files, undefined, true, false, true, surface),
+			floorsSystemPrompt("/home/test/.jabbu/secrets", ORIGIN, files, undefined, true, false, true, surface),
 		);
 	});
 });
@@ -320,14 +320,14 @@ describe("sidecar format versions (AC-3)", () => {
 		const v1Body = `\n\n[오너 관찰지] old\n${OWNER_V2}`;
 		writeFileSync(
 			join(sessionDir(), PINNED_OWNER_DOCS_FILE),
-			`ompbot-pinned-owner-docs v1 sha256=${createHash("sha256").update(v1Body).digest("hex")}\n${v1Body}`,
+			`jabbu-pinned-owner-docs v1 sha256=${createHash("sha256").update(v1Body).digest("hex")}\n${v1Body}`,
 		);
 		const text = spawn();
 		expect(lastSpawnLog().pinned).toBe(false);
 		expect(text).toContain(OWNER_V1);
 		expect(text).not.toContain(OWNER_V2);
 		expect(records.some((r) => r.level === "warn")).toBe(false);
-		expect(sidecarHeader().startsWith("ompbot-pinned-owner-docs v3 ")).toBe(true);
+		expect(sidecarHeader().startsWith("jabbu-pinned-owner-docs v3 ")).toBe(true);
 	});
 
 	test("an unknown header is replaced without a warning", () => {
@@ -337,7 +337,7 @@ describe("sidecar format versions (AC-3)", () => {
 		expect(lastSpawnLog().pinned).toBe(false);
 		expect(text).not.toContain(OWNER_V2);
 		expect(records.some((r) => r.level === "warn")).toBe(false);
-		expect(sidecarHeader().startsWith("ompbot-pinned-owner-docs v3 ")).toBe(true);
+		expect(sidecarHeader().startsWith("jabbu-pinned-owner-docs v3 ")).toBe(true);
 	});
 });
 
@@ -351,13 +351,13 @@ describe("sidecar forgery (qa-l #77)", () => {
 		const body = forged + OWNER_V1;
 		writeFileSync(
 			sidecar(),
-			`ompbot-pinned-owner-docs v2 static=${forged.length} sha256=${createHash("sha256").update(body).digest("hex")}\n${body}`,
+			`jabbu-pinned-owner-docs v2 static=${forged.length} sha256=${createHash("sha256").update(body).digest("hex")}\n${body}`,
 		);
 		const text = spawn({ herdr: false });
 		expect(lastSpawnLog().pinned).toBe(false);
 		expect(text).not.toContain("FORGED");
 		expect(records.some((r) => r.level === "warn")).toBe(false);
-		expect(sidecarHeader().startsWith("ompbot-pinned-owner-docs v3 ")).toBe(true);
+		expect(sidecarHeader().startsWith("jabbu-pinned-owner-docs v3 ")).toBe(true);
 	});
 
 	test("a tampered body with an arbitrary mac under the current key id is replaced and reported once", () => {
@@ -367,7 +367,7 @@ describe("sidecar forgery (qa-l #77)", () => {
 		expect(keyId).toBeDefined();
 		writeFileSync(
 			sidecar(),
-			`ompbot-pinned-owner-docs v3 static=${forged.length} key=${keyId} mac=${"0".repeat(64)}\n${forged}${OWNER_V1}`,
+			`jabbu-pinned-owner-docs v3 static=${forged.length} key=${keyId} mac=${"0".repeat(64)}\n${forged}${OWNER_V1}`,
 		);
 		const text = spawn({ herdr: false });
 		expect(lastSpawnLog().pinned).toBe(false);
@@ -383,12 +383,12 @@ describe("sidecar forgery (qa-l #77)", () => {
 		const staticLength = /static=(\d+)/.exec(raw)?.[1];
 		writeFileSync(
 			sidecar(),
-			`ompbot-pinned-owner-docs v2 static=${staticLength} sha256=${createHash("sha256").update(body).digest("hex")}\n${body}`,
+			`jabbu-pinned-owner-docs v2 static=${staticLength} sha256=${createHash("sha256").update(body).digest("hex")}\n${body}`,
 		);
 		spawn({ herdr: false });
 		expect(lastSpawnLog().pinned).toBe(false);
 		expect(records.some((r) => r.level === "warn")).toBe(false);
-		expect(sidecarHeader().startsWith("ompbot-pinned-owner-docs v3 ")).toBe(true);
+		expect(sidecarHeader().startsWith("jabbu-pinned-owner-docs v3 ")).toBe(true);
 	});
 
 	test("same key: pinned; another key (daemon restart): rewritten without a report; the key never reaches the file", () => {
@@ -417,7 +417,7 @@ describe("sidecar forgery (qa-l #77)", () => {
 
 describe("callers and hashes (AC-4)", () => {
 	test("buildFloorsPrompt (chat origin, dispatch simple) puts the static floors first and the dynamic block last", () => {
-		const text = buildFloorsPrompt("/home/test/.ompbot/secrets", ORIGIN, false, false, true);
+		const text = buildFloorsPrompt("/home/test/.jabbu/secrets", ORIGIN, false, false, true);
 		const at = text.indexOf(FLOORS_DYNAMIC_HEADING);
 		expect(at).toBeGreaterThan(text.indexOf("## 답변 형식 / Answer format"));
 		expect(text.slice(at)).toContain("[자동 후속]");
@@ -427,7 +427,7 @@ describe("callers and hashes (AC-4)", () => {
 	});
 
 	test("a lane origin with dynamic lines: no sidecar, dynamic block last", () => {
-		const lane = "ompbot/work/lane1";
+		const lane = "jabbu/work/lane1";
 		const laneDir = sessionDir(1, lane);
 		sessionWithCall(laneDir, 10 * MINUTE);
 		const text = spawn({ originKey: lane, sessionDir: laneDir, peerTouched: true });
@@ -529,16 +529,16 @@ describe("qa50b-low lane L", () => {
 	test("L-이관1 hostTools:false leaves out every host tool line (agy and claude children have none)", () => {
 		const hostToolNames = [
 			"discord_send_file",
-			"ompbot_request_approval",
-			"ompbot_monitor_add",
-			"ompbot_dispatch",
-			"ompbot_work_start",
+			"jabbu_request_approval",
+			"jabbu_monitor_add",
+			"jabbu_dispatch",
+			"jabbu_work_start",
 		];
 		const withTools = spawnSystemPrompt(options({ surface: { noLaneChannel: true } }));
-		for (const name of hostToolNames.filter((n) => n !== "ompbot_work_start")) expect(withTools).toContain(name);
+		for (const name of hostToolNames.filter((n) => n !== "jabbu_work_start")) expect(withTools).toContain(name);
 		const without = spawnSystemPrompt(options({ hostTools: false, surface: { noLaneChannel: true } }));
 		for (const name of hostToolNames) expect({ name, found: without.includes(name) }).toEqual({ name, found: false });
-		expect(without).toContain("This session has no ompbot host tools");
+		expect(without).toContain("This session has no jabbu host tools");
 		// The owner docs and the hard floors stay.
 		expect(without).toContain(SOUL);
 		expect(without).toContain("비밀 읽기 금지");
@@ -558,7 +558,7 @@ describe("a FIFO in the session dir (qa-l #78)", () => {
 			`const { spawnSystemPrompt } = await import(${JSON.stringify(join(SRC, "safety", "prompt.ts"))});
 			 const warns = [];
 			 const quiet = () => {};
-			 spawnSystemPrompt({ secretsDir: "/home/test/.ompbot/secrets", originKey: ${JSON.stringify(ORIGIN)},
+			 spawnSystemPrompt({ secretsDir: "/home/test/.jabbu/secrets", originKey: ${JSON.stringify(ORIGIN)},
 			   sessionDir: ${JSON.stringify(sessionDir())}, files: ${JSON.stringify(files)}, now: ${NOW},
 			   log: { debug: quiet, info: quiet, error: quiet, warn: (event, fields) => warns.push(event + " " + fields.error) } });
 			 console.log(["done", ...warns].join("\\n"));`,
@@ -599,20 +599,20 @@ describe("floors tool lines match the session (qa-l low B)", () => {
 	// qa-l #75: only Discord owner DMs register monitor tools, so other sessions must not be told to use them.
 	test("the monitor tools line is for Discord owner DMs only", () => {
 		const secrets = join(dir, "secrets");
-		expect(buildFloorsPrompt(secrets, "discord/dm/1234567890")).toContain("ompbot_monitor_add"); // gitleaks:allow (fake channel id)
-		expect(buildFloorsPrompt(secrets, "discord/ch/111111111111111111")).not.toContain("ompbot_monitor_add");
+		expect(buildFloorsPrompt(secrets, "discord/dm/1234567890")).toContain("jabbu_monitor_add"); // gitleaks:allow (fake channel id)
+		expect(buildFloorsPrompt(secrets, "discord/ch/111111111111111111")).not.toContain("jabbu_monitor_add");
 	});
 
-	// qa-l #76: a lane session runs in the lane's worktree, not the ompbot workspace.
+	// qa-l #76: a lane session runs in the lane's worktree, not the jabbu workspace.
 	test("a lane session's cwd line names the lane directory", () => {
 		const secrets = join(dir, "secrets");
-		const lane = buildFloorsPrompt(secrets, "ompbot/work/lane1", false, false, false, {
+		const lane = buildFloorsPrompt(secrets, "jabbu/work/lane1", false, false, false, {
 			lanePlatform: "discord",
 			laneCwd: "/wt/lane1",
 		});
 		expect(lane).toContain("/wt/lane1");
-		expect(lane).not.toContain("Your cwd is the ompbot workspace");
-		expect(buildFloorsPrompt(secrets, ORIGIN)).toContain("Your cwd is the ompbot workspace");
+		expect(lane).not.toContain("Your cwd is the jabbu workspace");
+		expect(buildFloorsPrompt(secrets, ORIGIN)).toContain("Your cwd is the jabbu workspace");
 	});
 });
 

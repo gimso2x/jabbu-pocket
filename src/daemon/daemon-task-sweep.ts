@@ -1,4 +1,4 @@
-import { type OmpbotConfig, primaryOwnerUserId } from "../config";
+import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { boardCardLink, diffViewLink } from "../dispatch/board";
 import {
 	herdrAgentPane,
@@ -28,8 +28,8 @@ import type { DaemonStore } from "./daemon-store";
 /** What the [TASK] sweep needs from the daemon beyond its context (herdr on only). */
 export interface TaskSweepDeps {
 	store: DaemonStore;
-	config: OmpbotConfig;
-	herdr: NonNullable<OmpbotConfig["herdr"]>;
+	config: JabbuConfig;
+	herdr: NonNullable<JabbuConfig["herdr"]>;
 	herdrRun: ProcessRunner | undefined;
 	requestTaskSweep: (taskId: string) => void;
 	repoMatches: (row: TaskRow, repos: readonly string[]) => Promise<boolean>;

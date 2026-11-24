@@ -19,7 +19,7 @@ export const RESTART_CUT_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 /** The one line the thread of a resumed turn gets instead of the interrupted notice. */
 export const CONTINUE_NOTICE = "⏳ 재시작으로 끊긴 턴을 이어서 진행합니다.";
 export const CONTINUE_PROMPT =
-	"[자동 이어가기] ompbot 재시작으로 직전 턴이 중간에 끊겼습니다. 같은 요청을 이어서 끝내세요. 끊기기 직전 도구 호출은 " +
+	"[자동 이어가기] jabbu 재시작으로 직전 턴이 중간에 끊겼습니다. 같은 요청을 이어서 끝내세요. 끊기기 직전 도구 호출은 " +
 	"결과가 없거나 반쯤 실행됐을 수 있으니, 다시 하기 전에 상태(파일·프로세스·git)를 먼저 확인하세요. 외부로 나가는 " +
 	"동작(push·게시·메일·API 쓰기)은 이미 됐는지 먼저 확인하고 확인할 수 없으면 오너에게 묻습니다. 승인 카드를 기다리던 " +
 	"중이었다면 다시 요청하세요.";

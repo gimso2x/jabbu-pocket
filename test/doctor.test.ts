@@ -1,9 +1,9 @@
-// `ompbot doctor`'s Discord lines: token file mode, GET /users/@me and
+// `jabbu-pocket doctor`'s Discord lines: token file mode, GET /users/@me and
 // GET /gateway/bot, on a fake fetch; nothing when Discord is off.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
 import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole } from "../src/daemon/doctor";
 import { readVersion } from "../src/daemon/tools";
@@ -29,7 +29,7 @@ function fakeFetch(answers: Record<string, () => Response>): typeof fetch {
 }
 
 const healthy = {
-	"/users/@me": () => Response.json({ id: "500000000000000000", username: "ompbot" }),
+	"/users/@me": () => Response.json({ id: "500000000000000000", username: "jabbu" }),
 	"/gateway/bot": () => Response.json({ url: "wss://gateway.discord.gg", shards: 1 }),
 };
 
@@ -53,7 +53,7 @@ function writeOverlay(content: string | undefined): void {
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-doctor-");
+	home = makeHome("jabbu-doctor-");
 	lines = [];
 	seen = [];
 });
@@ -84,7 +84,7 @@ describe("doctor: omp models", () => {
 
 // the `omp --version` probe ran with the daemon's whole env, bot secrets included.
 describe("doctor: omp --version probe env", () => {
-	const FAKE_SECRETS = { SLACK_BOT_TOKEN: "xoxb-TEST-0", SLACK_APP_TOKEN: "xapp-TEST-0", OMPBOT_TEST_SECRET: "fake" };
+	const FAKE_SECRETS = { SLACK_BOT_TOKEN: "xoxb-TEST-0", SLACK_APP_TOKEN: "xapp-TEST-0", JABBU_TEST_SECRET: "fake" };
 	const SRC = join(import.meta.dir, "..", "src");
 
 	/** A stand-in omp that writes the env its `--version` call got to `dump` and answers a version. */
@@ -119,9 +119,9 @@ describe("doctor: omp --version probe env", () => {
 			.filter((name) => name !== "");
 
 	const secretNamesIn = (dump: string): string[] =>
-		namesIn(dump).filter((name) => name.startsWith("SLACK_") || name.startsWith("OMPBOT_"));
+		namesIn(dump).filter((name) => name.startsWith("SLACK_") || name.startsWith("JABBU_"));
 
-	test("readVersion gives the child no SLACK_/OMPBOT_ env by default", async () => {
+	test("readVersion gives the child no SLACK_/JABBU_ env by default", async () => {
 		const omp = join(home.dir, "env-omp");
 		const dump = join(home.dir, "env.txt");
 		envDumpingOmp(omp, dump);
@@ -186,12 +186,12 @@ describe("qa50b I-18: the doctor's bun line", () => {
 
 describe("doctor: discord", () => {
 	test("on: token mode, the bot user and the gateway each give one ok discord line; the token never shows", async () => {
-		const config: OmpbotConfig = home.config;
+		const config: JabbuConfig = home.config;
 		const token = readFileSync(config.channels.discord?.botTokenFile ?? "", "utf8").trim();
 		await checkDiscord(config, report, fakeFetch(healthy));
 		expect(lines).toEqual([
 			"ok discord token: mode=0600 expected=0600",
-			"ok discord users/@me: bot_user_id=500000000000000000 username=ompbot",
+			"ok discord users/@me: bot_user_id=500000000000000000 username=jabbu",
 			"ok discord gateway/bot: url=wss://gateway.discord.gg",
 		]);
 		expect(seen.map((s) => s.auth)).toEqual([`Bot ${token}`, `Bot ${token}`]);
@@ -238,37 +238,37 @@ describe("doctor: core dump limit", () => {
 
 	test("a daemon unit without LimitCORE=0 warns, one with it and the other units say nothing", () => {
 		expect(check()).toEqual([]);
-		writeFileSync(join(home.dir, "ompbot-gc.service"), "[Service]\n");
-		writeFileSync(join(home.dir, "ompbot-dashboard.service"), "[Service]\n");
+		writeFileSync(join(home.dir, "jabbu-gc.service"), "[Service]\n");
+		writeFileSync(join(home.dir, "jabbu-dashboard.service"), "[Service]\n");
 		expect(check()).toEqual([]);
-		writeFileSync(join(home.dir, "ompbot.service"), "[Service]\nTimeoutStopSec=90\n");
+		writeFileSync(join(home.dir, "jabbu.service"), "[Service]\nTimeoutStopSec=90\n");
 		expect(check()).toHaveLength(1);
-		writeFileSync(join(home.dir, "ompbot.service"), "[Service]\nLimitCORE=0\n");
+		writeFileSync(join(home.dir, "jabbu.service"), "[Service]\nLimitCORE=0\n");
 		expect(check()).toEqual([]);
 	});
 
 	test("qa-z #7 an instance name with a dash is checked like the plain unit", () => {
-		writeFileSync(join(home.dir, "ompbot-my-bot.service"), "[Service]\nTimeoutStopSec=90\n");
+		writeFileSync(join(home.dir, "jabbu-my-bot.service"), "[Service]\nTimeoutStopSec=90\n");
 		expect(check()).toEqual([
-			"warn core dump limit: ompbot-my-bot.service has no LimitCORE=0 (run: ompbot units render, then reload and restart)",
+			"warn core dump limit: jabbu-my-bot.service has no LimitCORE=0 (run: jabbu-pocket units render, then reload and restart)",
 		]);
-		writeFileSync(join(home.dir, "ompbot-my-bot.service"), "[Service]\nLimitCORE=0\n");
+		writeFileSync(join(home.dir, "jabbu-my-bot.service"), "[Service]\nLimitCORE=0\n");
 		// the -backup/-gc/-dashboard suffix filter still applies to instance names
-		writeFileSync(join(home.dir, "ompbot-x-gc.service"), "[Service]\n");
+		writeFileSync(join(home.dir, "jabbu-x-gc.service"), "[Service]\n");
 		expect(check()).toEqual([]);
 	});
 
 	test("qa-z #65 the last LimitCORE assignment across drop-ins decides, not the unit file's alone", () => {
-		const dropinDir = join(home.dir, "ompbot.service.d");
+		const dropinDir = join(home.dir, "jabbu.service.d");
 		mkdirSync(dropinDir);
-		writeFileSync(join(home.dir, "ompbot.service"), "[Service]\nLimitCORE=0\n");
+		writeFileSync(join(home.dir, "jabbu.service"), "[Service]\nLimitCORE=0\n");
 		writeFileSync(join(dropinDir, "90-override.conf"), "[Service]\nLimitCORE=infinity\n");
 		expect(check()).toHaveLength(1);
 		writeFileSync(join(dropinDir, "90-override.conf"), "[Service]\nLimitCORE=0\n");
 		expect(check()).toEqual([]);
 		// systemd applies drop-ins after the unit file, in lexical order: the newest assignment wins
 		rmSync(join(dropinDir, "90-override.conf"));
-		writeFileSync(join(home.dir, "ompbot.service"), "[Service]\n");
+		writeFileSync(join(home.dir, "jabbu.service"), "[Service]\n");
 		writeFileSync(join(dropinDir, "10-limit.conf"), "[Service]\nLimitCORE=infinity\n");
 		expect(check()).toHaveLength(1);
 		writeFileSync(join(dropinDir, "10-limit.conf"), "[Service]\nLimitCORE=0\n");
@@ -279,7 +279,7 @@ describe("doctor: core dump limit", () => {
 	});
 
 	test("qa-z #60 a FIFO in a daemon unit's place warns, never blocks", async () => {
-		mkfifo(join(home.dir, "ompbot-f.service"));
+		mkfifo(join(home.dir, "jabbu-f.service"));
 		const child = [
 			`const { checkCoreDumpLimit } = await import(${JSON.stringify(join(import.meta.dir, "..", "src", "daemon", "core-dump.ts"))});`,
 			"const warns = [];",
@@ -288,7 +288,7 @@ describe("doctor: core dump limit", () => {
 		].join("\n");
 		const result = await runBounded(child);
 		expect(result.timedOut).toBe(false);
-		expect(JSON.parse(result.stdout.trim())).toEqual(["warn core dump limit: ompbot-f.service is not a regular file"]);
+		expect(JSON.parse(result.stdout.trim())).toEqual(["warn core dump limit: jabbu-f.service is not a regular file"]);
 	}, 30_000);
 });
 

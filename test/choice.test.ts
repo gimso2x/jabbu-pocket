@@ -229,12 +229,12 @@ const reply = (id: string, body: Record<string, unknown>) => ({ type: "extension
 describe("choice action ids", () => {
 	test("round trip; approval ids and malformed ids are not choice ids, choice ids are not approval ids", () => {
 		const id = choiceActionId(3, DM, "700000000000000007");
-		expect(id).toBe(`ompbot:choice:3:${DM}:700000000000000007`);
+		expect(id).toBe(`jabbu:choice:3:${DM}:700000000000000007`);
 		expect(parseChoiceActionId(id)).toEqual({ index: 3, channel: DM, ts: "700000000000000007" });
 		expect(parseApprovalActionId(id)).toBeUndefined();
-		expect(parseChoiceActionId(`ompbot:approval:approve:${DM}:700000000000000002`)).toBeUndefined();
-		expect(parseChoiceActionId(`ompbot:choice:x:${DM}:700000000000000002`)).toBeUndefined();
-		expect(parseChoiceActionId(`ompbot:choice:1:${DM}`)).toBeUndefined();
+		expect(parseChoiceActionId(`jabbu:approval:approve:${DM}:700000000000000002`)).toBeUndefined();
+		expect(parseChoiceActionId(`jabbu:choice:x:${DM}:700000000000000002`)).toBeUndefined();
+		expect(parseChoiceActionId(`jabbu:choice:1:${DM}`)).toBeUndefined();
 	});
 });
 

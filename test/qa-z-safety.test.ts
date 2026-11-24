@@ -94,7 +94,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 	const DM = "discord/dm/200000000000000001";
 
 	test("#43 a NUL byte in soul.md is dropped from the prompt and the file is reported", () => {
-		const dir = tempDir("ompbot-qaz-nul-");
+		const dir = tempDir("jabbu-qaz-nul-");
 		const soul = join(dir, "soul.md");
 		writeFileSync(soul, "S\0O\0U\0L-BODY");
 		const errors: { code: string | undefined; path: string }[] = [];
@@ -119,7 +119,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 	}
 
 	test("#44 a secrets directory that cannot be listed refuses the injected file instead of passing it", () => {
-		const dir = tempDir("ompbot-qaz-unlist-");
+		const dir = tempDir("jabbu-qaz-unlist-");
 		const secretsDir = join(dir, "secrets");
 		mkdirSync(secretsDir);
 		const token = join(secretsDir, "bot-token");
@@ -134,7 +134,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 	});
 
 	test("#44 a missing secrets directory is not an error: a plain soul.md is injected", () => {
-		const dir = tempDir("ompbot-qaz-nosecrets-");
+		const dir = tempDir("jabbu-qaz-nosecrets-");
 		const soul = join(dir, "soul.md");
 		writeFileSync(soul, "PLAIN-SOUL");
 		const { prompt, errors } = guarded(dir, soul);
@@ -143,7 +143,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 	});
 
 	test("#96 a secrets/ symlink to a token kept outside secrets protects that token's inode", () => {
-		const dir = tempDir("ompbot-qaz-symlink-");
+		const dir = tempDir("jabbu-qaz-symlink-");
 		const secretsDir = join(dir, "secrets");
 		mkdirSync(secretsDir);
 		const real = join(dir, "real-token");
@@ -157,7 +157,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 	});
 
 	test("#96 a dangling symlink in secrets/ neither throws nor blocks a plain soul.md", () => {
-		const dir = tempDir("ompbot-qaz-dangling-");
+		const dir = tempDir("jabbu-qaz-dangling-");
 		const secretsDir = join(dir, "secrets");
 		mkdirSync(secretsDir);
 		symlinkSync(join(dir, "gone"), join(secretsDir, "dangling"));
@@ -171,7 +171,7 @@ describe("persona injection (#43/#94 NUL, #44/#95 unlistable secrets, #96 symlin
 
 describe("dispatch tool (#45 repo, #46 name, #97 symlink tail, #98 remote TASKID)", () => {
 	const signal = new AbortController().signal;
-	const home = tempDir("ompbot-qaz-home-");
+	const home = tempDir("jabbu-qaz-home-");
 	mkdirSync(join(home, "secrets"), { recursive: true });
 	mkdirSync(join(home, "work"), { recursive: true });
 	symlinkSync(join(home, "secrets"), join(home, "work", "link"));

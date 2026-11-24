@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ChannelRegistry } from "../channel/registry";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { HERDR_INTERRUPT_WAIT_MS, type HerdrAgentStatusResult } from "../dispatch/omp";
 import { confidentBand } from "../lanes/land";
 import { type LastAnswer, questionOf } from "../omp/session-tail";
@@ -69,7 +69,7 @@ export const BLOCK_RETRY_HEAD =
 	"막힘으로 보고하기 전에 한 번 더: 지금까지와 다른 접근을 하나 이상 시도하라. 풀리면 `status: working`으로 돌려 이어 가라. 그래도 막히면 시도한 것 2가지와 결과를 `blocked_reason`에 적고 `updated`를 고친 뒤 멈춰라. 승인·자격증명·실계정·오너만 정할 범위 선택이 원인이면 시도하지 말고 `needs_owner: yes`를 쓰고 `updated`를 고쳐라.";
 /** Sent once per block and HEAD when every `[check: …]` passes while PROGRESS still says blocked (records mode: no docs commit). */
 export const blockedChecksPassHead = (recordsInRepo: boolean): string =>
-	`ompbot이 이 HEAD에서 수락기준 \`[check: …]\`를 다시 돌렸고 모두 통과했다. 막힌 원인이 검사 환경(명령을 못 찾음 등)이었다면 해소됐으니 PROGRESS.md를 \`status: working\`(끝났으면 완료 상태)으로 돌리고 \`updated\`를 고쳐 ${recordsInRepo ? "docs만 커밋하라" : "저장하라(기록 문서는 커밋하지 않는다)"}. 다른 이유로 막혔다면 그대로 두라.`;
+	`jabbu가 이 HEAD에서 수락기준 \`[check: …]\`를 다시 돌렸고 모두 통과했다. 막힌 원인이 검사 환경(명령을 못 찾음 등)이었다면 해소됐으니 PROGRESS.md를 \`status: working\`(끝났으면 완료 상태)으로 돌리고 \`updated\`를 고쳐 ${recordsInRepo ? "docs만 커밋하라" : "저장하라(기록 문서는 커밋하지 않는다)"}. 다른 이유로 막혔다면 그대로 두라.`;
 /** Retry prompts per resume window (since the latest resume, else the registration); a block past it goes to the owner. */
 export const BLOCK_RETRY_MAX = 3;
 /** After a retry prompt a block still standing this long goes to the owner, whatever herdr says. */
@@ -205,7 +205,7 @@ export interface TaskSweepDeps {
 	autoLandReady?(): boolean;
 	ownerUserId: string;
 	/** The live config (`ownerSilenceFallbackMinutes`); absent: the silence fallback is off. */
-	ownerSilenceConfig?(): Pick<OmpbotConfig, "ownerSilenceFallbackMinutes">;
+	ownerSilenceConfig?(): Pick<JabbuConfig, "ownerSilenceFallbackMinutes">;
 	now(): number;
 	log: TaskChatLog & { info(event: string, fields?: Record<string, unknown>): void };
 }
@@ -854,7 +854,7 @@ export class TaskSweeper {
 		) {
 			await this.#post(
 				row,
-				`⚠️ 멈춘 TASK ${row.taskId}의 워커가 작업 중입니다(herdr working) — Esc가 듣지 않았을 수 있습니다. 스레드에 \`멈춰\`라고 다시 쓰거나 \`ompbot tasks pause ${row.taskId}\`로 Esc를 다시 보내세요.`,
+				`⚠️ 멈춘 TASK ${row.taskId}의 워커가 작업 중입니다(herdr working) — Esc가 듣지 않았을 수 있습니다. 스레드에 \`멈춰\`라고 다시 쓰거나 \`jabbu-pocket tasks pause ${row.taskId}\`로 Esc를 다시 보내세요.`,
 			);
 			actions.push("working-while-paused notice");
 		}

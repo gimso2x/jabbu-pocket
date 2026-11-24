@@ -163,9 +163,9 @@ const HIGH_RISK_PATTERNS: readonly PatternRule[] = [
 		pattern: new RegExp(`\\bmkfs\\b|\\bdd\\s${SEGMENT}\\bof=/dev/`, "i"),
 		verb: /\b(mkfs(?=\b)|dd(?=\s))/i,
 	},
-	// `/./` and `//` between the two names are the same directory (`~/.ompbot/./secrets`, `$HOME//.ompbot//secrets`);
-	// `$OMPBOT_HOME` is the bot home too.
-	{ rule: "secret_path", pattern: /(?:\.ompbot|\$\{?OMPBOT_HOME\}?)\/(?:\.?\/)*secrets/i },
+	// `/./` and `//` between the two names are the same directory (`~/.jabbu/./secrets`, `$HOME//.jabbu//secrets`);
+	// `$JABBU_HOME` is the bot home too.
+	{ rule: "secret_path", pattern: /(?:\.jabbu|\$\{?JABBU_HOME\}?)\/(?:\.?\/)*secrets/i },
 ];
 
 /** `git push --all` / `--branches` / `--prune`: every local branch, or deleting remote ones without a local one. */
@@ -361,7 +361,7 @@ function removesAbsoluteTree(line: string): Hit[] {
 
 /**
  * A shell word as a `cd` target: escapes (`\ `), `${…}` and `{…}` expansions, and quoted parts stay inside the word
- * (`~/.ompbot${u:+\ }`, `"$OMPBOT_HOME"${x}`), which `botHomePath` folds. A `{…}` never spans an unescaped blank or
+ * (`~/.jabbu${u:+\ }`, `"$JABBU_HOME"${x}`), which `botHomePath` folds. A `{…}` never spans an unescaped blank or
  * a command separator (else `cd {; cat secrets; }` would hide the next command inside the target).
  */
 const CD_WORD = `(?:\\\\.|\\$\\{[^}]*\\}|\\{(?:\\\\.|[^}\\s;&|\`\\\\])*\\}|"[^"\`]*"|'[^']*'|[^\\s;&|\`'"\\\\]|["'])*`;
@@ -374,9 +374,9 @@ const CD_TARGET = new RegExp(
 	"gi",
 );
 /** The bot home in a path word, with what follows it (`rest` is empty or starts with `/`). */
-const BOT_HOME_WORD = /^(.*?)(?:\.ompbot|\$\{?OMPBOT_HOME\}?)((?:\/.*)?)$/is;
+const BOT_HOME_WORD = /^(.*?)(?:\.jabbu|\$\{?JABBU_HOME\}?)((?:\/.*)?)$/is;
 /** A parameter expansion other than the bot home variable: folded away, as if it were empty. */
-const PARAMETER_EXPANSION = /\$\{(?!OMPBOT_HOME\})[^}]*\}/gi;
+const PARAMETER_EXPANSION = /\$\{(?!JABBU_HOME\})[^}]*\}/gi;
 
 /**
  * A cd target word without quotes, escapes and parameter expansions (still holding its brace expansions).
@@ -387,10 +387,10 @@ function foldedWord(word: string): string {
 
 /**
  * Where a cd target word that names the bot home leads, as a path from it (`home`, `home/secrets`), once its `.`, `..`
- * and `//` are folded: `~/.ompbot/logs/..` and `~/.ompbot/../.ompbot` are `home`, `~/.ompbot/secrets` is
- * `home/secrets`. Trailing expansions (`~/.ompbot${u:+\ }`, `~/.ompbot{,\ }`, `"$OMPBOT_HOME"${x}`) are folded first,
- * and an expansion that remains below the bot home (`~/.ompbot/{a,..}`) counts as the bot home itself. A word that does
- * not name the bot home, or climbs out of it (`~/.ompbot/..`), is undefined.
+ * and `//` are folded: `~/.jabbu/logs/..` and `~/.jabbu/../.jabbu` are `home`, `~/.jabbu/secrets` is
+ * `home/secrets`. Trailing expansions (`~/.jabbu${u:+\ }`, `~/.jabbu{,\ }`, `"$JABBU_HOME"${x}`) are folded first,
+ * and an expansion that remains below the bot home (`~/.jabbu/{a,..}`) counts as the bot home itself. A word that does
+ * not name the bot home, or climbs out of it (`~/.jabbu/..`), is undefined.
  */
 function botHomePath(word: string): string | undefined {
 	const folded = foldedWord(word);
@@ -403,10 +403,10 @@ function botHomePath(word: string): string | undefined {
 	return undefined;
 }
 
-/** A path under the bot home with a `..` in it (`~/.ompbot/logs/../secrets`): the rest after the bot home. */
-const BOT_HOME_CLIMB = /(?:\.ompbot|\$\{?OMPBOT_HOME\}?)((?:\/[^\s/;&|`'"]*)*\/\.\.(?:\/[^\s/;&|`'"]*)*)/gi;
+/** A path under the bot home with a `..` in it (`~/.jabbu/logs/../secrets`): the rest after the bot home. */
+const BOT_HOME_CLIMB = /(?:\.jabbu|\$\{?JABBU_HOME\}?)((?:\/[^\s/;&|`'"]*)*\/\.\.(?:\/[^\s/;&|`'"]*)*)/gi;
 
-/** `secret_path` through a `..` that stays inside the bot home: `~/.ompbot/logs/../secrets`, not `~/.ompbot/../secrets`. */
+/** `secret_path` through a `..` that stays inside the bot home: `~/.jabbu/logs/../secrets`, not `~/.jabbu/../secrets`. */
 function climbsIntoSecrets(line: string): Hit[] {
 	const hits: Hit[] = [];
 	for (const match of line.matchAll(BOT_HOME_CLIMB)) {
@@ -483,11 +483,11 @@ function globMaySpellSecrets(glob: string): boolean {
 	}
 }
 
-const BOT_HOME_CHILD = /(?:\.ompbot|\$\{?OMPBOT_HOME\}?)\/(?:\.?\/)*([^\s/;&|`'"]+)/gi;
+const BOT_HOME_CHILD = /(?:\.jabbu|\$\{?JABBU_HOME\}?)\/(?:\.?\/)*([^\s/;&|`'"]+)/gi;
 
 /**
- * `secret_path` spelled with a glob or brace right under the bot home (`~/.ompbot/sec*`, `~/.ompbot/{secrets,logs}`):
- * a hit when that path word can expand to `secrets`; `~/.ompbot/logs/*` cannot.
+ * `secret_path` spelled with a glob or brace right under the bot home (`~/.jabbu/sec*`, `~/.jabbu/{secrets,logs}`):
+ * a hit when that path word can expand to `secrets`; `~/.jabbu/logs/*` cannot.
  */
 function globsIntoSecrets(line: string): Hit[] {
 	const hits: Hit[] = [];

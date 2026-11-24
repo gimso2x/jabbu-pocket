@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
@@ -20,7 +20,7 @@ let daemon: Daemon | undefined;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-turn-undo-daemon-");
+	home = makeHome("jabbu-turn-undo-daemon-");
 	transport = new WaitingDiscordTransport();
 	daemon = undefined;
 	repos = [];
@@ -33,11 +33,11 @@ afterEach(async () => {
 });
 
 /** The test home's config with `turnSnapshot.repos` set, the shape `loadConfig` returns. */
-function withTurnSnapshot(config: OmpbotConfig, list: readonly string[]): OmpbotConfig {
+function withTurnSnapshot(config: JabbuConfig, list: readonly string[]): JabbuConfig {
 	return { ...config, turnSnapshot: { repos: [...list] } };
 }
 
-async function boot(config: OmpbotConfig, driver: FakeOmpDriverOptions = {}): Promise<Daemon> {
+async function boot(config: JabbuConfig, driver: FakeOmpDriverOptions = {}): Promise<Daemon> {
 	const instance = new FakeOmpDriver({ ...driver, sessionDir: join(home.dir, "s"), store: new FakeSessionStore() });
 	const d = new Daemon({
 		config,

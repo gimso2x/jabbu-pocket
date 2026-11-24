@@ -1,4 +1,4 @@
-// `ompbot inject` into a Discord conversation: the marker goes up on the
+// `jabbu-pocket inject` into a Discord conversation: the marker goes up on the
 // Discord port and the owner message is taken through the Discord adapter's own message path.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Daemon } from "../src/daemon/daemon";
@@ -19,7 +19,7 @@ let daemon: Daemon;
 let discord: WaitingDiscordTransport;
 
 beforeEach(async () => {
-	home = makeHome("ompbot-discord-inject-");
+	home = makeHome("jabbu-discord-inject-");
 	discord = new WaitingDiscordTransport();
 	discord.setChannel({ id: DISCORD_CH, type: 0, guildId: GUILD });
 	const sessions = new FakeSessionStore();
@@ -85,7 +85,7 @@ describe("inject into Discord", () => {
 			`discord/ch/${DISCORD_CH}/t/222222222222222222`,
 			"slack/ch/C1/t/100.1",
 			"telegram/dm/1",
-			"ompbot/work/a",
+			"jabbu/work/a",
 		]) {
 			await expect(daemon.inject({ origin, asOwner: true, text: "x" })).rejects.toThrow("inject origin must be");
 		}
@@ -95,8 +95,8 @@ describe("inject into Discord", () => {
 	// AC-2 of T-20261111-03: an inject replying to a pending approval card is refused; the owner's own
 	// Discord reply still settles the card.
 	test("an inject replying to a pending approval card is refused; the card stays pending until the owner replies", async () => {
-		const tool = daemon.hostToolsFor(DM_ORIGIN).find((candidate) => candidate.name === "ompbot_request_approval");
-		if (tool === undefined) throw new Error("ompbot_request_approval missing");
+		const tool = daemon.hostToolsFor(DM_ORIGIN).find((candidate) => candidate.name === "jabbu_request_approval");
+		if (tool === undefined) throw new Error("jabbu_request_approval missing");
 		let finished = false;
 		const result = tool
 			.execute({ summary: "force push main" }, { signal: new AbortController().signal })

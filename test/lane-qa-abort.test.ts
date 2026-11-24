@@ -24,7 +24,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-qa-abort-");
+	home = makeHome("jabbu-lane-qa-abort-");
 	repos = [];
 });
 

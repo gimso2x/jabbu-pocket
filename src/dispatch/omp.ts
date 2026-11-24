@@ -17,7 +17,7 @@ export interface RunProcessOptions {
 	timeoutMs?: number;
 	/** Collects up to this many stdout characters; a longer tail is cut, the run still succeeds. */
 	stdoutCap?: number;
-	/** Drops Slack and bot credential prefixes plus inherited git overrides, like every other child ompbot spawns. */
+	/** Drops Slack and bot credential prefixes plus inherited git overrides, like every other child jabbu spawns. */
 	env?: Record<string, string>;
 	/** Aborting it kills the whole process group like the timeout does (`timedOut` stays false); the run still resolves. */
 	signal?: AbortSignal;
@@ -397,7 +397,7 @@ export async function herdrStartAgent(input: {
 	const options = input.options ?? {};
 	if (options.signal?.aborted === true) return { ok: false, error: "aborted before the agent started" };
 	const cleanup = uncancellable(options);
-	const label = `ompbot · ${name}`;
+	const label = `jabbu · ${name}`;
 	const ws = await herdrCreateWorkspace(cwd, label, options, input.env);
 	if ("error" in ws) return { ok: false, error: ws.error };
 	const started = await herdrRun(agentStartArgs(name, ws.paneId, input.agentArgs, input.kind), options);
@@ -472,7 +472,7 @@ export async function herdrRemoteStart(
 		return { ok: false, error: `herdr already has an agent named ${name}` };
 	}
 
-	const label = "ompbot-owners";
+	const label = "jabbu-owners";
 	const wsList = await herdrRun(["workspace", "list"], runner);
 	if (wsList.code !== 0) return { ok: false, error: `workspace list failed: ${herdrFailure(wsList)}` };
 	const listedWorkspaces = parseHerdrJson<HerdrWorkspaceList>(wsList.stdout);

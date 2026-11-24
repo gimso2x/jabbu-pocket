@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { ConfigError, defaultHomeDir, loadConfig, type OmpbotConfig, timezoneOfHome } from "../config";
+import { ConfigError, defaultHomeDir, type JabbuConfig, loadConfig, timezoneOfHome } from "../config";
 import { escapeControl, runDoctor } from "../daemon/doctor";
 import { callDaemon, callDaemonWhenUp, IpcNoResponse } from "../daemon/ipc";
 import { runDaemon } from "../daemon/run";
@@ -36,14 +36,14 @@ const DISPATCH_HOST_CHECK_MS = 10_000;
 /** How long `inject` keeps trying while no daemon listens (a restart takes up to about two minutes). */
 const INJECT_WAIT_MS = 180_000;
 
-const USAGE = `usage: ompbot <command>
+const USAGE = `usage: jabbu-pocket <command>
 ${INIT_USAGE}${UNITS_USAGE}  daemon                         run the bot (single instance)
   status [--json]                ledger counts, origins, omp version
   doctor                         check home, secrets, omp, omp runtime, bun, Discord auth, backup bundle; then herdr --version and the herdr omp
                                  integration (herdr on), and ssh reach plus the herdr omp integration per dispatchHosts entry (integration
                                  and host lines are warnings and do not change the exit code)
   gc [--dry-run]                 delete previous-epoch session dirs, idle thread origins and deleted-monitor origins older than sessionRetentionDays (default 30)
-  backup [--keep N] [--max-bundle-bytes N]    consistent ompbot.db snapshot (VACUUM INTO), quick_check, retention: 14 days (one per day, all of the run's day) + stamp
+  backup [--keep N] [--max-bundle-bytes N]    consistent jabbu.db snapshot (VACUUM INTO), quick_check, retention: 14 days (one per day, all of the run's day) + stamp
                                  + sessions/config.json/workspace/scripts bundle (tar.gz, sha256 in the stamp) when they exist; the
                                  bundle source-bytes cap (sum of the sources, not the tar.gz size) defaults to 512MB (config maxBundleBytes, --max-bundle-bytes overrides)
                                  with config offsite {ssh, remoteDir, keep?}, a good backup is then copied off-site
@@ -55,7 +55,7 @@ ${INIT_USAGE}${UNITS_USAGE}  daemon                         run the bot (single 
                                  open until unfreeze
   unfreeze                       remove <home>/FROZEN
   gates [--json] [--strict]      read-only health projection; each gate is open, closed or unknown (nothing to judge: no
-                                 heartbeat stamp or no ompbot.db yet); exit 1 if any open, with --strict also if any unknown.
+                                 heartbeat stamp or no jabbu.db yet); exit 1 if any open, with --strict also if any unknown.
                                  gates: backup_age, offsite_age (only with config offsite), sweep_stalled,
                                  discord_disconnected (only with config channels.discord), frozen,
                                  herdr_unreachable (only with a herdr-health stamp), omp_runtime (only with agent omp),
@@ -123,10 +123,10 @@ function gcCommand(args: string[], homeDir: string): number {
 
 /**
  * Config for the CLI levers (bundle cap, off-site target). A home without a config.json keeps the defaults —
- * `ompbot backup` must work on a db-only home (it is the recovery tool) — while a config that exists but is invalid
+ * `jabbu-pocket backup` must work on a db-only home (it is the recovery tool) — while a config that exists but is invalid
  * fails loudly, so a broken `maxBundleBytes` or `offsite` never silently reverts to "off".
  */
-function loadConfigIfPresent(homeDir: string, options: { checkTokens?: boolean } = {}): OmpbotConfig | undefined {
+function loadConfigIfPresent(homeDir: string, options: { checkTokens?: boolean } = {}): JabbuConfig | undefined {
 	return existsSync(join(homeDir, "config.json")) ? loadConfig(homeDir, options) : undefined;
 }
 
@@ -136,7 +136,7 @@ const firstLine = (text: string | undefined): string => text?.trim().split("\n")
  * Reach check per `dispatchHosts` entry, run together: one `ok`/`fail <ssh's first stderr line>` line each, in config
  * order, each followed by that host's herdr omp integration line.
  */
-async function checkDispatchHosts(config: OmpbotConfig, run: ProcessRunner): Promise<string[]> {
+async function checkDispatchHosts(config: JabbuConfig, run: ProcessRunner): Promise<string[]> {
 	const perHost = await Promise.all(
 		Object.entries(config.dispatchHosts ?? {}).map(async ([key, host]) => {
 			// config only warns about a control character in a host name; on a doctor line it must not start a new line.
@@ -195,7 +195,7 @@ async function checkLocalHerdr(herdr: { bin?: string }, run: ProcessRunner): Pro
 }
 
 /**
- * `ompbot doctor`: the doctor checks, then (herdr on) the local herdr version and its omp integration, then per dispatch
+ * `jabbu-pocket doctor`: the doctor checks, then (herdr on) the local herdr version and its omp integration, then per dispatch
  * host one reach line and one omp integration line. A host may be switched off on purpose (a laptop), so its lines are
  * warnings and never change the exit code; an unreadable config was reported above. A local herdr that does not answer
  * while `herdr` is on is a failure (exit 1): dispatch and the [TASK] sweep need it. A missing omp integration is a
@@ -208,7 +208,7 @@ export async function doctorCommand(
 ): Promise<number> {
 	// This checkout (src/cli/index.ts → repo root) holds the daemon's code and any code rollback journal.
 	const code = await (deps.doctor ?? runDoctor)(homeDir, write, resolve(import.meta.dir, "..", ".."));
-	let config: OmpbotConfig | undefined;
+	let config: JabbuConfig | undefined;
 	try {
 		// runDoctor already reports a broken token file; reading it again here would end the herdr and dispatch checks.
 		config = loadConfigIfPresent(homeDir, { checkTokens: false });
@@ -230,7 +230,7 @@ export async function doctorCommand(
 }
 
 /** Runs the off-site copy and prints its lines; 0 on success, 4 on any off-site failure. */
-async function offsiteRun(config: OmpbotConfig, homeDir: string, json: boolean): Promise<number> {
+async function offsiteRun(config: JabbuConfig, homeDir: string, json: boolean): Promise<number> {
 	if (config.offsite === undefined) {
 		process.stderr.write("offsite: config.json has no offsite {ssh, remoteDir} section\n");
 		return 2;
@@ -307,20 +307,20 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 	return config?.offsite === undefined ? 0 : offsiteRun(config, homeDir, false);
 }
 
-/** Test seam of `ompbot gates`: the clock and the host readers `collectGates` would otherwise take from this machine. */
+/** Test seam of `jabbu-pocket gates`: the clock and the host readers `collectGates` would otherwise take from this machine. */
 export type GatesCommandDeps = Pick<GatesOptions, "statfs" | "hostLoad"> & { now?: () => number };
 
-/** The `OMPBOT_TEST_HOOKS=1` host readers as gates deps; none in production. */
+/** The `JABBU_TEST_HOOKS=1` host readers as gates deps; none in production. */
 function hostLoadDeps(env: Record<string, string | undefined>): GatesCommandDeps {
 	const hostLoad = testHostLoad(env);
 	return hostLoad === undefined ? {} : { hostLoad };
 }
 
-/** `ompbot gates`: exit 1 when a gate is open, or with `--strict` also when one cannot be judged (`unknown`); exit 2 when the config cannot be read, so no gate was judged. */
+/** `jabbu-pocket gates`: exit 1 when a gate is open, or with `--strict` also when one cannot be judged (`unknown`); exit 2 when the config cannot be read, so no gate was judged. */
 export function gatesCommand(args: string[], homeDir: string, deps: GatesCommandDeps = {}): number {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" }, strict: { type: "boolean" } } });
 	// A db-only home (no config.json) has no omp to check; the omp_runtime gate is then omitted.
-	let config: OmpbotConfig | undefined;
+	let config: JabbuConfig | undefined;
 	try {
 		config = loadConfigIfPresent(homeDir);
 	} catch (error) {
@@ -361,7 +361,7 @@ export function gatesCommand(args: string[], homeDir: string, deps: GatesCommand
 
 async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial<HostLoadReader>): Promise<number> {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
-	const socketPath = join(homeDir, "ompbot.sock");
+	const socketPath = join(homeDir, "jabbu.sock");
 	let report: StatusReport | undefined;
 	try {
 		const response = await callDaemon(socketPath, { op: "status" }, 10_000);
@@ -370,7 +370,7 @@ async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial
 		report = undefined; // no daemon answering: fall back to the database file
 	}
 	if (!report) {
-		const dbPath = join(homeDir, "ompbot.db");
+		const dbPath = join(homeDir, "jabbu.db");
 		if (!existsSync(dbPath)) {
 			process.stderr.write(`status: no daemon at ${socketPath} and no database at ${dbPath}\n`);
 			// A home before its first boot can still be frozen: the freeze is a file, not a ledger row.
@@ -455,19 +455,17 @@ async function injectCommand(args: string[], homeDir: string): Promise<number> {
 		process.stderr.write("inject: --text is empty; give the message text\n");
 		return 2;
 	}
-	// A detached follow-up started without OMPBOT_HOME lands on the default home, where no daemon will ever come up:
+	// A detached follow-up started without JABBU_HOME lands on the default home, where no daemon will ever come up:
 	// say so now instead of waiting out INJECT_WAIT_MS and failing as if the daemon were restarting.
 	if (!existsSync(join(homeDir, "config.json"))) {
-		process.stderr.write(
-			`inject: ${homeDir} is not an ompbot home (no config.json); set OMPBOT_HOME to the bot's home\n`,
-		);
+		process.stderr.write(`inject: ${homeDir} is not a jabbu home (no config.json); set JABBU_HOME to the bot's home\n`);
 		return 1;
 	}
 	let response: unknown;
 	try {
 		// A detached follow-up may fire while the daemon restarts: wait for the next one instead of losing the message.
 		response = await callDaemonWhenUp(
-			join(homeDir, "ompbot.sock"),
+			join(homeDir, "jabbu.sock"),
 			{
 				op: "inject",
 				origin: values.origin,
@@ -505,11 +503,11 @@ async function injectCommand(args: string[], homeDir: string): Promise<number> {
 	return 1;
 }
 
-/** `ompbot reload`: the running daemon re-reads config.json (same as SIGHUP); exit 1 when it kept the old config. */
+/** `jabbu-pocket reload`: the running daemon re-reads config.json (same as SIGHUP); exit 1 when it kept the old config. */
 async function reloadCommand(homeDir: string): Promise<number> {
 	let answer: unknown;
 	try {
-		answer = await callDaemon(join(homeDir, "ompbot.sock"), { op: "reload" }, 10_000);
+		answer = await callDaemon(join(homeDir, "jabbu.sock"), { op: "reload" }, 10_000);
 	} catch (error) {
 		process.stderr.write(`reload: daemon not reachable (${error instanceof Error ? error.message : String(error)})\n`);
 		return 1;
@@ -541,7 +539,7 @@ async function reloadCommand(homeDir: string): Promise<number> {
 	return 0;
 }
 
-/** Entry point of `ompbot`; resolves with the process exit code. */
+/** Entry point of `jabbu`; resolves with the process exit code. */
 export async function runCli(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
 	const [command, ...rest] = argv;
 	const homeDir = resolve(defaultHomeDir(env));
@@ -603,7 +601,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 	} catch (error) {
 		// node:util parseArgs (unknown option, missing value, `--days -1`): an argument mistake, so a usage error.
 		if (isParseArgsError(error)) {
-			process.stderr.write(`${command}: ${joinLines(error.message)} (ompbot --help)\n`);
+			process.stderr.write(`${command}: ${joinLines(error.message)} (jabbu-pocket --help)\n`);
 			return 2;
 		}
 		process.stderr.write(`${command}: ${error instanceof ConfigError ? error.message : String(error)}\n`);

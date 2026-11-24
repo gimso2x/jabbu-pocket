@@ -23,10 +23,10 @@ let dir: string;
 let store: Store;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-log-routing-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-log-routing-"));
 	store = openStore({
 		timezone: "Asia/Seoul",
-		path: join(dir, "ompbot.db"),
+		path: join(dir, "jabbu.db"),
 		clock,
 		redact,
 		logChannel: { discord: LOG },
@@ -77,7 +77,7 @@ describe("completion copies to the log channel", () => {
 	});
 
 	test("a work lane's answer is copied with the lane name, linking its Discord thread", () => {
-		expect(answer("ompbot/work/demo", `${WORK}:${WORK_THREAD}`, "✅ 완료: 레인 끝")[0]).toStartWith(
+		expect(answer("jabbu/work/demo", `${WORK}:${WORK_THREAD}`, "✅ 완료: 레인 끝")[0]).toStartWith(
 			`📒 완료 보고 사본 · 작업 레인 demo{{thread-link:${WORK}:${WORK_THREAD}}}\n`,
 		);
 	});
@@ -146,7 +146,7 @@ describe("completion copies to the log channel", () => {
 
 	test("a past slack row's answer is never copied: the Slack platform has no log channel", () => {
 		answer("slack/dm/D1", "D1:1700.000001", "✅ 완료 지난 행");
-		answer("ompbot/work/slack-lane", "D1:1700.000002", "✅ 완료: 지난 레인", "op2");
+		answer("jabbu/work/slack-lane", "D1:1700.000002", "✅ 완료: 지난 레인", "op2");
 		expect(copies()).toEqual([]);
 	});
 });
@@ -237,12 +237,12 @@ describe("log channel in the Discord adapter", () => {
 
 describe("the live log file deleted from outside (#43)", () => {
 	test("writes keep landing and no archive is lost", () => {
-		const path = join(dir, "ompbot.log");
+		const path = join(dir, "jabbu.log");
 		const sink = rotatingFileSink(path, { maxBytes: 100, files: 3 });
 		const line = (n: number) => `L${String(n).padStart(2, "0")}${"x".repeat(36)}`; // 39 bytes + newline = 40
 		for (let n = 1; n <= 6; n++) sink(line(n));
-		const logs = () => readdirSync(dir).filter((name) => name.startsWith("ompbot.log"));
-		expect(logs().sort()).toEqual(["ompbot.log", "ompbot.log.1", "ompbot.log.2"]);
+		const logs = () => readdirSync(dir).filter((name) => name.startsWith("jabbu.log"));
+		expect(logs().sort()).toEqual(["jabbu.log", "jabbu.log.1", "jabbu.log.2"]);
 		const archived = [readFileSync(`${path}.1`, "utf8"), readFileSync(`${path}.2`, "utf8")];
 		rmSync(path);
 
@@ -252,7 +252,7 @@ describe("the live log file deleted from outside (#43)", () => {
 		expect([readFileSync(`${path}.1`, "utf8"), readFileSync(`${path}.2`, "utf8")]).toEqual(archived);
 
 		for (let n = 8; n <= 12; n++) sink(line(n));
-		expect(logs().sort()).toEqual(["ompbot.log", "ompbot.log.1", "ompbot.log.2"]);
+		expect(logs().sort()).toEqual(["jabbu.log", "jabbu.log.1", "jabbu.log.2"]);
 		expect(readFileSync(path, "utf8")).toBe(`${line(11)}\n${line(12)}\n`);
 	});
 });

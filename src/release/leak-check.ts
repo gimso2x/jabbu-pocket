@@ -15,9 +15,9 @@ export function readList(file: string): string[] {
 		.filter((line) => line !== "" && !line.startsWith("#"));
 }
 
-/** gitleaks from OMPBOT_GITLEAKS, PATH, or ~/.local/bin. */
+/** gitleaks from JABBU_GITLEAKS, PATH, or ~/.local/bin. */
 export function findGitleaks(): string | undefined {
-	const candidates = [process.env.OMPBOT_GITLEAKS, Bun.which("gitleaks"), join(homedir(), ".local", "bin", "gitleaks")];
+	const candidates = [process.env.JABBU_GITLEAKS, Bun.which("gitleaks"), join(homedir(), ".local", "bin", "gitleaks")];
 	return candidates.find(
 		(candidate): candidate is string => candidate !== undefined && candidate !== null && existsSync(candidate),
 	);
@@ -320,7 +320,7 @@ export async function checkLeaks(input: LeakCheckInput): Promise<LeakCheckResult
 		return { ok: false, hits: [], reason: "denylist를 읽지 못함" };
 	}
 	if (input.gitleaks === undefined) return { ok: false, hits: [], reason: "gitleaks 없음" };
-	const scratch = mkdtempSync(join(tmpdir(), "ompbot-leak-"));
+	const scratch = mkdtempSync(join(tmpdir(), "jabbu-leak-"));
 	try {
 		const hits: string[] = [];
 		const range = `${input.base}..${input.sha}`;

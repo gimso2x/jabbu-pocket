@@ -1,5 +1,5 @@
 [Unit]
-Description=ompbot daily backup timer (04:30 local, catch-up after downtime)
+Description=jabbu daily backup timer (04:30 local, catch-up after downtime)
 
 [Timer]
 OnCalendar=*-*-* 04:30:00

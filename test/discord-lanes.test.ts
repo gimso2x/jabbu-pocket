@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordBinding } from "../src/discord/binding";
 import { DiscordChannel } from "../src/discord/channel";
@@ -41,7 +41,7 @@ let now: number;
 let seq: bigint;
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-lanes-");
+	home = makeHome("jabbu-discord-lanes-");
 	repos = [];
 	daemons = [];
 	now = Date.now();
@@ -65,7 +65,7 @@ function discordTransport(threads: Array<{ id: string; parentId: string }> = [])
 
 async function boot(discord: WaitingDiscordTransport, laneChannelId?: string): Promise<Daemon> {
 	const config = home.config;
-	const discordConfig = config.channels.discord as NonNullable<OmpbotConfig["channels"]["discord"]>;
+	const discordConfig = config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 	const sessions = new FakeSessionStore();
 	const daemon = new Daemon({
 		config: {
@@ -105,8 +105,8 @@ const customIds = (components: unknown): string[] =>
 	);
 
 async function workStart(daemon: Daemon, origin: string, title: string, repo: string): Promise<unknown> {
-	const tool = daemon.hostToolsFor(origin).find((candidate) => candidate.name === "ompbot_work_start");
-	if (!tool) throw new Error(`ompbot_work_start missing for ${origin}`);
+	const tool = daemon.hostToolsFor(origin).find((candidate) => candidate.name === "jabbu_work_start");
+	if (!tool) throw new Error(`jabbu_work_start missing for ${origin}`);
 	return tool.execute({ title, cwd: repo }, { signal });
 }
 
@@ -159,7 +159,7 @@ async function claim(daemon: Daemon, discord: WaitingDiscordTransport, lane: Lan
 	writeFileSync(join(lane.cwd, file), `${file}\n`);
 	git(lane.cwd, "add", "--", file);
 	git(lane.cwd, "commit", "-q", "-m", `add ${file}`);
-	const tool = daemon.hostToolsFor(lane.originKey).find((candidate) => candidate.name === "ompbot_claim_done");
+	const tool = daemon.hostToolsFor(lane.originKey).find((candidate) => candidate.name === "jabbu_claim_done");
 	await tool?.execute({ repo: lane.cwd, commit: "HEAD", summary: `${file} 추가` }, { signal });
 	await discord.waitForPosts((text) => text.includes("머지 대기"), before + 1);
 	const card = cards()[before];
@@ -322,7 +322,7 @@ describe("lanes asked for from a Discord DM", () => {
 	test("with laneChannelId: the lane opens in that channel and the DM gets the lane thread's link", async () => {
 		const discord = discordTransport();
 		const daemon = await boot(discord, LANE_CH);
-		expect(daemon.hostToolsFor(DM_ORIGIN).map((tool) => tool.name)).toContain("ompbot_work_start");
+		expect(daemon.hostToolsFor(DM_ORIGIN).map((tool) => tool.name)).toContain("jabbu_work_start");
 		const repo = makeRepo(repos);
 		const ask = nextId();
 		await discord.emitMessage({
@@ -359,14 +359,14 @@ describe("lanes asked for from a Discord DM", () => {
 		expect(daemon.store.listLanes()).toHaveLength(1);
 	});
 
-	test("without laneChannelId: no ompbot_work_start, the prompt and the 작업: answer name the setting", async () => {
+	test("without laneChannelId: no jabbu_work_start, the prompt and the 작업: answer name the setting", async () => {
 		const discord = discordTransport();
 		const daemon = await boot(discord);
 		const names = daemon.hostToolsFor(DM_ORIGIN).map((tool) => tool.name);
-		expect(names).not.toContain("ompbot_work_start");
-		expect(names).toContain("ompbot_monitor_add");
+		expect(names).not.toContain("jabbu_work_start");
+		expect(names).toContain("jabbu_monitor_add");
 		// A server thread needs no setting: the lane opens in its own channel.
-		expect(daemon.hostToolsFor(THREAD_ORIGIN).map((tool) => tool.name)).toContain("ompbot_work_start");
+		expect(daemon.hostToolsFor(THREAD_ORIGIN).map((tool) => tool.name)).toContain("jabbu_work_start");
 		const prompt = floorsSystemPrompt(
 			"/s",
 			DM_ORIGIN,

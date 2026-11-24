@@ -21,8 +21,8 @@ let home: string;
 let remote: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-offsite-"));
-	remote = join(mkdtempSync(join(tmpdir(), "ompbot-remote-")), "box");
+	home = mkdtempSync(join(tmpdir(), "jabbu-offsite-"));
+	remote = join(mkdtempSync(join(tmpdir(), "jabbu-remote-")), "box");
 });
 afterEach(() => {
 	rmSync(home, { recursive: true, force: true });
@@ -30,8 +30,8 @@ afterEach(() => {
 });
 
 const sha = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
-const DB = "ompbot-20261030-043000.db";
-const BUNDLE = "ompbot-bundle-20261030-043000.tar.gz";
+const DB = "jabbu-20261030-043000.db";
+const BUNDLE = "jabbu-bundle-20261030-043000.tar.gz";
 
 function seedLocal(opts: { stamp?: boolean } = {}): void {
 	const dir = join(home, "backups");
@@ -39,7 +39,7 @@ function seedLocal(opts: { stamp?: boolean } = {}): void {
 	writeFileSync(join(dir, DB), "db-bytes");
 	writeFileSync(join(dir, BUNDLE), "bundle-bytes");
 	// an older pair that must not be the one sent
-	writeFileSync(join(dir, "ompbot-20261029-043000.db"), "old-db");
+	writeFileSync(join(dir, "jabbu-20261029-043000.db"), "old-db");
 	if (opts.stamp !== false) {
 		writeFileSync(
 			join(dir, STAMP_FILE),
@@ -157,7 +157,7 @@ describe("runOffsite", () => {
 		const fake = fakeRemote();
 		await runOffsite({ homeDir: home, target: { ssh: "box", remoteDir: remote }, run: fake.run, env: {} });
 		const before = readFileSync(join(home, "backups", OFFSITE_STAMP_FILE), "utf8");
-		writeFileSync(join(home, "backups", "ompbot-20261031-043000.db"), "newer");
+		writeFileSync(join(home, "backups", "jabbu-20261031-043000.db"), "newer");
 		fake.failCopy = true;
 		const error = await runOffsite({
 			homeDir: home,
@@ -199,13 +199,13 @@ describe("runOffsite", () => {
 	test("retention removes only strict daily names beyond keep; part files, manual copies and strangers stay", async () => {
 		seedLocal();
 		mkdirSync(remote, { recursive: true });
-		const daily = ["20261001", "20261002", "20261003"].map((d) => `ompbot-${d}-043000.db`);
-		const bundles = ["20261001", "20261002"].map((d) => `ompbot-bundle-${d}-043000.tar.gz`);
+		const daily = ["20261001", "20261002", "20261003"].map((d) => `jabbu-${d}-043000.db`);
+		const bundles = ["20261001", "20261002"].map((d) => `jabbu-bundle-${d}-043000.tar.gz`);
 		const keepers = [
-			"ompbot-pre-upgrade-20261001.db",
-			"ompbot-20261001-043000.db.part",
+			"jabbu-pre-upgrade-20261001.db",
+			"jabbu-20261001-043000.db.part",
 			"notes.txt",
-			"ompbot-20261001-043000.db.bak",
+			"jabbu-20261001-043000.db.bak",
 			"last-backup.ok",
 		];
 		for (const name of [...daily, ...bundles, ...keepers]) writeFileSync(join(remote, name), name);
@@ -218,13 +218,13 @@ describe("runOffsite", () => {
 		});
 		// keep=2 per kind: the new snapshot + the newest old one; the new bundle + the newest old one
 		expect(result.removed.sort()).toEqual(
-			["ompbot-20261001-043000.db", "ompbot-20261002-043000.db", "ompbot-bundle-20261001-043000.tar.gz"].sort(),
+			["jabbu-20261001-043000.db", "jabbu-20261002-043000.db", "jabbu-bundle-20261001-043000.tar.gz"].sort(),
 		);
 		const left = readdirSync(remote);
 		for (const name of keepers) expect(left).toContain(name);
 		expect(left).toContain(DB);
 		expect(left).toContain(BUNDLE);
-		expect(left).toContain("ompbot-20261003-043000.db");
+		expect(left).toContain("jabbu-20261003-043000.db");
 	});
 
 	test("retention counts days: every file of the uploaded day, the latest of each other day, nothing past keep days", async () => {
@@ -239,10 +239,10 @@ describe("runOffsite", () => {
 			"20261027-120000",
 		];
 		for (const stamp of stamps) {
-			writeFileSync(join(remote, `ompbot-${stamp}.db`), stamp);
-			writeFileSync(join(remote, `ompbot-bundle-${stamp}.tar.gz`), stamp);
+			writeFileSync(join(remote, `jabbu-${stamp}.db`), stamp);
+			writeFileSync(join(remote, `jabbu-bundle-${stamp}.tar.gz`), stamp);
 		}
-		writeFileSync(join(remote, "ompbot-pre-upgrade-20261001.db"), "manual");
+		writeFileSync(join(remote, "jabbu-pre-upgrade-20261001.db"), "manual");
 		const fake = fakeRemote();
 		const result = await runOffsite({
 			homeDir: home,
@@ -252,20 +252,18 @@ describe("runOffsite", () => {
 		});
 		// keep=3 days: the uploaded day (all of it) + 10-29 (its latest) + 10-28; 10-27 is past the window.
 		expect(result.removed).toEqual([
-			"ompbot-20261029-010000.db",
-			"ompbot-20261027-120000.db",
-			"ompbot-bundle-20261029-010000.tar.gz",
-			"ompbot-bundle-20261027-120000.tar.gz",
+			"jabbu-20261029-010000.db",
+			"jabbu-20261027-120000.db",
+			"jabbu-bundle-20261029-010000.tar.gz",
+			"jabbu-bundle-20261027-120000.tar.gz",
 		]);
 		const survivors = ["20261028-120000", "20261029-230000", "20261030-010000", "20261030-020000", "20261030-043000"];
 		const left = readdirSync(remote).sort();
-		expect(left.filter((name) => /^ompbot-\d{8}-\d{6}\.db$/.test(name))).toEqual(
-			survivors.map((s) => `ompbot-${s}.db`),
+		expect(left.filter((name) => /^jabbu-\d{8}-\d{6}\.db$/.test(name))).toEqual(survivors.map((s) => `jabbu-${s}.db`));
+		expect(left.filter((name) => name.startsWith("jabbu-bundle-"))).toEqual(
+			survivors.map((s) => `jabbu-bundle-${s}.tar.gz`),
 		);
-		expect(left.filter((name) => name.startsWith("ompbot-bundle-"))).toEqual(
-			survivors.map((s) => `ompbot-bundle-${s}.tar.gz`),
-		);
-		expect(left).toContain("ompbot-pre-upgrade-20261001.db");
+		expect(left).toContain("jabbu-pre-upgrade-20261001.db");
 	});
 
 	test("no local snapshot is an error, and a hostile ssh/remoteDir never reaches a process", async () => {

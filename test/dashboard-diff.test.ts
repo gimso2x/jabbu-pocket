@@ -17,10 +17,10 @@ let repos: string[];
 
 beforeEach(() => {
 	repos = [];
-	home = makeHome("ompbot-dash-diff-");
+	home = makeHome("jabbu-dash-diff-");
 	openStore({
 		timezone: "Asia/Seoul",
-		path: join(home.dir, "ompbot.db"),
+		path: join(home.dir, "jabbu.db"),
 		clock: { now: () => Date.now() },
 		redact: (text) => text,
 	}).close();
@@ -42,7 +42,7 @@ function commit(repo: string, message: string): string {
 }
 
 function withDb(fn: (db: Database) => void): void {
-	const db = new Database(join(home.dir, "ompbot.db"));
+	const db = new Database(join(home.dir, "jabbu.db"));
 	try {
 		fn(db);
 	} finally {

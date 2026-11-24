@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { parseChatOrigin } from "../core/origin-key";
 import { dispatchEnv, type ProcessRunner, realProcessRunner } from "../dispatch/omp";
 import type { LaneRow } from "../lanes/status";
@@ -278,7 +278,7 @@ export class WikiNotes {
 	async taskDone(taskId: string, landing?: string[]): Promise<void> {
 		const config = this.#deps.config();
 		if (config === undefined) return;
-		const sourceId = `ompbot-task-${taskId}`;
+		const sourceId = `jabbu-task-${taskId}`;
 		try {
 			const row = this.#deps.store.tasks.get(taskId);
 			if (row?.status !== "done") return;
@@ -290,7 +290,7 @@ export class WikiNotes {
 					: await this.#taskDraftOf(config, row);
 			if (draft === undefined) return;
 			draft.landing = {
-				lines: landing ?? ["코어 착지가 아니라 `ompbot tasks close --as done`으로 닫힘"],
+				lines: landing ?? ["코어 착지가 아니라 `jabbu-pocket tasks close --as done`으로 닫힘"],
 			};
 			this.#write(config, renderNote(draft));
 		} catch (error) {
@@ -432,7 +432,7 @@ export class WikiNotes {
 			for (const rows of groups.values()) {
 				const first = rows[0] as WikiTurnRow;
 				if (first.groupKey.startsWith("thread:") && first.day >= today) continue;
-				const sourceId = `ompbot-turns-${hashOf(first.groupKey)}-${first.day}`;
+				const sourceId = `jabbu-turns-${hashOf(first.groupKey)}-${first.day}`;
 				if (store.wikiNoteState(sourceId)?.state === "sent" || (await this.#writeTurns(config, sourceId, rows))) {
 					store.markWikiTurnsSent(rows.map((row) => row.id));
 				}
@@ -464,7 +464,7 @@ export class WikiNotes {
 			title: `대화 작업: ${oneLine(first.inbound, TITLE_MAX)}`,
 			summary: lines.join("\n"),
 			project: await this.#projectOf(first.repo),
-			tags: ["ompbot", "work-outcome", "turns"],
+			tags: ["jabbu", "work-outcome", "turns"],
 		});
 	}
 }
@@ -475,15 +475,15 @@ export class WikiNotes {
  * repositories `taskAutoLand.repos` (a list of every repository would be unbounded and "all" cannot be read). No
  * `wikiNotes`, no repository: no git.
  */
-export function turnNoteRepos(config: Pick<OmpbotConfig, "wikiNotes" | "taskAutoLand" | "turnSnapshot">): string[] {
+export function turnNoteRepos(config: Pick<JabbuConfig, "wikiNotes" | "taskAutoLand" | "turnSnapshot">): string[] {
 	if (config.wikiNotes === undefined || (config.turnSnapshot?.repos.length ?? 0) > 0) return [];
 	const listed = config.wikiNotes.repos ?? [];
 	return listed.length > 0 ? listed : (config.taskAutoLand?.repos ?? []);
 }
 
 const laneSourceId = (lane: LaneRow): string | undefined =>
-	lane.meta.laneId === undefined ? undefined : `ompbot-lane-${lane.meta.laneId}`;
-const taskSourceId = (row: TaskRow): string => `ompbot-task-${row.taskId}`;
+	lane.meta.laneId === undefined ? undefined : `jabbu-lane-${lane.meta.laneId}`;
+const taskSourceId = (row: TaskRow): string => `jabbu-task-${row.taskId}`;
 
 /** The `# 목표` section of a task's spec.md. */
 function goalOf(spec: string): string | undefined {
@@ -517,6 +517,6 @@ export function renderNote(draft: NoteDraft): WikiNote {
 		title: draft.title,
 		summary: redact(lines.join("\n")),
 		project: draft.project,
-		tags: ["ompbot", "work-outcome", draft.kind],
+		tags: ["jabbu", "work-outcome", draft.kind],
 	};
 }

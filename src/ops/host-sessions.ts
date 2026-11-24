@@ -38,7 +38,7 @@ const isOmpRpcArgv = (argv: readonly string[]): boolean =>
 	argv.some((arg, i) => arg === "--mode" && (argv[i + 1] === "rpc" || argv[i + 1] === "rpc-ui"));
 
 /**
- * Running omp RPC sessions on this host (every user), or `undefined` when `/proc` cannot be listed — a child ompbot
+ * Running omp RPC sessions on this host (every user), or `undefined` when `/proc` cannot be listed — a child jabbu
  * itself spawned (`omp --mode rpc[-ui]`, an exe-named `bun` child included) counts, an `omp -p` run does not.
  */
 export function ompRpcSessions(list: ProcCmdlineReader = realProcCmdlines): number | undefined {
@@ -56,7 +56,7 @@ export interface SessionCeilingGate {
 	onPressure?: () => void;
 }
 
-/** The host-wide session numbers `ompbot status --json` and the dashboard host chip show. */
+/** The host-wide session numbers `jabbu-pocket status --json` and the dashboard host chip show. */
 export interface HostSessionsInfo {
 	/** Every user's `omp --mode rpc`·`rpc-ui` process count; `null` when `/proc` cannot be read. */
 	count: number | null;

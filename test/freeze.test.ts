@@ -21,7 +21,7 @@ import { isRoot } from "./helpers/privileges";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-freeze-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-freeze-"));
 });
 
 afterEach(() => {
@@ -52,7 +52,7 @@ describe("FROZEN file", () => {
 		mkdirSync(join(freezePath(dir), "inner"), { recursive: true });
 		expect(readFreeze(dir)).toBeDefined();
 		expect(() => writeFreeze(dir, { reason: "dir", by: "cli", now: Date.now() })).toThrow(
-			/FROZEN is not a regular file.*ompbot unfreeze/,
+			/FROZEN is not a regular file.*jabbu-pocket unfreeze/,
 		);
 		expect(existsSync(`${freezePath(dir)}.tmp`)).toBe(false);
 		expect(readFreeze(dir)).toBeDefined(); // still frozen (fail closed)
@@ -183,7 +183,7 @@ describe("dispatch audit", () => {
 	});
 });
 
-describe("ompbot_dispatch under freeze", () => {
+describe("jabbu_dispatch under freeze", () => {
 	const noop = { info() {}, warn() {} };
 	function tool(frozen: () => ReturnType<typeof readFreeze>) {
 		const calls: string[][] = [];
@@ -244,7 +244,7 @@ describe("gate and CLI", () => {
 			}) as typeof process.stderr.write;
 			let code: number;
 			try {
-				code = await runCli(["unfreeze"], { OMPBOT_HOME: dir });
+				code = await runCli(["unfreeze"], { JABBU_HOME: dir });
 			} finally {
 				process.stderr.write = write;
 			}
@@ -256,7 +256,7 @@ describe("gate and CLI", () => {
 		}
 	});
 
-	test("ompbot freeze / gates --json / unfreeze round trip", async () => {
+	test("jabbu-pocket freeze / gates --json / unfreeze round trip", async () => {
 		const out: string[] = [];
 		const write = process.stdout.write.bind(process.stdout);
 		process.stdout.write = ((chunk: string) => {
@@ -264,7 +264,7 @@ describe("gate and CLI", () => {
 			return true;
 		}) as typeof process.stdout.write;
 		try {
-			const env = { OMPBOT_HOME: dir };
+			const env = { JABBU_HOME: dir };
 			expect(await runCli(["freeze", "--reason", "test"], env)).toBe(0);
 			expect(readFreeze(dir)?.reason).toBe("test");
 			expect(await runCli(["gates", "--json"], env)).toBe(1);
@@ -283,7 +283,7 @@ describe("daemon under freeze", () => {
 	let home: TestHome;
 	let daemon: Daemon | undefined;
 	beforeEach(() => {
-		home = makeHome("ompbot-freeze-daemon-");
+		home = makeHome("jabbu-freeze-daemon-");
 	});
 	afterEach(async () => {
 		await daemon?.stop();
@@ -370,7 +370,7 @@ describe("autonomous rows under freeze", () => {
 	let t: number;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-freeze-hold-");
+		home = makeHome("jabbu-freeze-hold-");
 		lines = [];
 		started = [];
 		waiters = new Set();
@@ -385,7 +385,7 @@ describe("autonomous rows under freeze", () => {
 	});
 
 	const seed = (rows: Array<{ originKey: string; id: string; text: string }>) => {
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => t }, "Asia/Seoul");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => t }, "Asia/Seoul");
 		for (const row of rows) {
 			store.ensureOrigin(row.originKey, join(home.dir, "sess", row.originKey.replace(/\W/g, "_")));
 			store.recordInbound({

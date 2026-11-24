@@ -3,8 +3,8 @@ import { appendFileSync, chmodSync, type Dirent, lstatSync, mkdtempSync, readdir
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const SCRATCH_DIR_PREFIX = "ompbot-test-";
-const SCRATCH_DIR_PATTERN = /^ompbot-test-(\d+)-/;
+export const SCRATCH_DIR_PREFIX = "jabbu-test-";
+const SCRATCH_DIR_PATTERN = /^jabbu-test-(\d+)-/;
 
 export type CleanupOptions = {
 	uid?: number;
@@ -71,7 +71,7 @@ export function removeScratchDir(dirPath: string, warn: (message: string) => voi
 	}
 }
 
-/** Removes dead-PID `ompbot-test-<pid>-*` directories owned by the current user directly under `baseDir`. */
+/** Removes dead-PID `jabbu-test-<pid>-*` directories owned by the current user directly under `baseDir`. */
 export function cleanupStaleScratchDirs(baseDir: string, options: CleanupOptions = {}): string[] {
 	const warn = options.warn ?? ((message: string) => console.warn(message));
 	const myUid = options.uid ?? process.getuid?.();
@@ -214,8 +214,8 @@ export function installNetworkGuard(
 }
 
 // Stage 1 records only (Cataly's 2단계 plan): the count from a full suite run decides when `block` becomes the
-// default. `OMPBOT_TEST_NET_GUARD=block` opts in today.
-const guardMode: GuardMode = process.env.OMPBOT_TEST_NET_GUARD === "block" ? "block" : "record";
+// default. `JABBU_TEST_NET_GUARD=block` opts in today.
+const guardMode: GuardMode = process.env.JABBU_TEST_NET_GUARD === "block" ? "block" : "record";
 const guardFile = join(scratchDir, "network-attempts.jsonl");
 installNetworkGuard(globalThis, guardMode, (attempt) => {
 	networkAttempts.push(attempt);

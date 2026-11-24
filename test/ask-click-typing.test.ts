@@ -56,8 +56,8 @@ let answered: Array<{ originKey: string; threadRef: string }>;
 let broker: ApprovalBroker;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-ask-click-typing-"));
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 1_000 }, redact });
+	dir = mkdtempSync(join(tmpdir(), "jabbu-ask-click-typing-"));
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 1_000 }, redact });
 	transport = new CardTransport();
 	timers = new ManualTimers();
 	answered = [];

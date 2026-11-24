@@ -39,7 +39,7 @@ let sessions: FakeSessionStore;
 let daemons: Daemon[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-daemon-");
+	home = makeHome("jabbu-daemon-");
 	sessions = new FakeSessionStore();
 	daemons = [];
 });
@@ -93,7 +93,7 @@ describe("opRef namespacing across daemon restarts (answer-loss regression)", ()
 
 describe("startup recovery wiring", () => {
 	test("rule (1): a pending inbound row is dispatched again and answered in its own thread", async () => {
-		const seed = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		seed.recordInbound({
 			originKey: ORIGIN,
@@ -119,7 +119,7 @@ describe("startup recovery wiring", () => {
 		const opRef = await previous.prompt("was-in-flight");
 		await final.promise;
 		await previous.stop();
-		const seed = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		seed.recordInbound({
 			originKey: ORIGIN,
@@ -139,7 +139,7 @@ describe("startup recovery wiring", () => {
 	});
 
 	test("rule (2): a dispatched row with no cursor gets one interrupted notice", async () => {
-		const seed = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		const ref = `${OWNER_DM}:${MSG(7)}`;
 		seed.recordInbound({ originKey: ORIGIN, platformMessageId: ref, textRef: "no-cursor", threadRef: ref });
@@ -155,7 +155,7 @@ describe("startup recovery wiring", () => {
 	});
 
 	test("rule (3): inflight and failed_ambiguous deliveries are sent again with the redelivery header", async () => {
-		const seed = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		for (const [n, op] of [
 			[1, "inflight-op"],
@@ -232,7 +232,7 @@ describe("inject", () => {
 		const daemon = newDaemon(transport);
 		await daemon.start();
 		await expect(daemon.inject({ origin: ORIGIN, asOwner: false, text: "x" })).rejects.toThrow("--as-owner");
-		await expect(daemon.inject({ origin: "ompbot/work/a", asOwner: true, text: "x" })).rejects.toThrow("discord/dm");
+		await expect(daemon.inject({ origin: "jabbu/work/a", asOwner: true, text: "x" })).rejects.toThrow("discord/dm");
 		const ok = await daemon.inject({ origin: ORIGIN, asOwner: true, text: "fine" });
 		expect(ok.threadRef).toMatch(new RegExp(`^${OWNER_DM}:\\d+$`));
 		await transport.waitForPosts(echoes("fine"));
@@ -328,7 +328,7 @@ describe("sweep heartbeat", () => {
 			name: "stuck",
 			title: "stuck lane",
 			threadRef: `${CHANNEL}:${MSG(1)}`,
-			originKey: "ompbot/work/stuck",
+			originKey: "jabbu/work/stuck",
 			cwd: home.dir,
 			sessionDir: join(home.dir, "sessions", "stuck"),
 			meta: {
@@ -446,7 +446,7 @@ describe("unix socket", () => {
 
 describe("single-instance lock", () => {
 	test("a second acquire is refused while the holder lives; the file records pid and boot id", () => {
-		const path = join(home.dir, "ompbot.lock");
+		const path = join(home.dir, "jabbu.lock");
 		const lock = acquireLock(path);
 		expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ pid: process.pid, bootId: currentBootId() });
 		expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -457,7 +457,7 @@ describe("single-instance lock", () => {
 	});
 
 	test("a lock from another boot is stale even when its pid is alive", () => {
-		const path = join(home.dir, "ompbot.lock");
+		const path = join(home.dir, "jabbu.lock");
 		writeFileSync(path, JSON.stringify({ pid: process.pid, bootId: "some-earlier-boot", startedAt: 1 }));
 		const lock = acquireLock(path);
 		expect(lock.info.bootId).toBe(currentBootId());
@@ -465,7 +465,7 @@ describe("single-instance lock", () => {
 	});
 
 	test("qa50b I-21: a fresh unreadable lock (a starter between create and write) is not taken; an old one is", () => {
-		const path = join(home.dir, "ompbot.lock");
+		const path = join(home.dir, "jabbu.lock");
 		writeFileSync(path, "");
 		expect(() => acquireLock(path)).toThrow(LockHeldError);
 		expect(readFileSync(path, "utf8")).toBe("");
@@ -475,7 +475,7 @@ describe("single-instance lock", () => {
 	});
 
 	test("runDaemon refuses with exit 1 and starts nothing while the lock is held", async () => {
-		const lock = acquireLock(join(home.dir, "ompbot.lock"));
+		const lock = acquireLock(join(home.dir, "jabbu.lock"));
 		const written: string[] = [];
 		const original = process.stderr.write;
 		process.stderr.write = ((chunk: string | Uint8Array) => {
@@ -500,10 +500,10 @@ describe("crash hooks", () => {
 		"after_post_before_confirm",
 	] as const;
 
-	test("inert without OMPBOT_TEST_HOOKS=1, whatever OMPBOT_TEST_CRASH_AT says", () => {
+	test("inert without JABBU_TEST_HOOKS=1, whatever JABBU_TEST_CRASH_AT says", () => {
 		const exits: number[] = [];
 		for (const point of points) {
-			const hook = crashHook({ OMPBOT_TEST_CRASH_AT: point }, (code) => {
+			const hook = crashHook({ JABBU_TEST_CRASH_AT: point }, (code) => {
 				exits.push(code);
 				throw new Error("exit");
 			});
@@ -512,10 +512,10 @@ describe("crash hooks", () => {
 		expect(exits).toEqual([]);
 	});
 
-	test("with OMPBOT_TEST_HOOKS=1 only the named point exits with 137", () => {
+	test("with JABBU_TEST_HOOKS=1 only the named point exits with 137", () => {
 		for (const target of points) {
 			const exits: number[] = [];
-			const hook = crashHook({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_CRASH_AT: target }, (code) => {
+			const hook = crashHook({ JABBU_TEST_HOOKS: "1", JABBU_TEST_CRASH_AT: target }, (code) => {
 				exits.push(code);
 				return undefined as never;
 			});
@@ -525,7 +525,7 @@ describe("crash hooks", () => {
 	});
 
 	test("an unknown crash point is rejected when hooks are enabled", () => {
-		expect(() => crashHook({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_CRASH_AT: "nowhere" })).toThrow("unknown crash point");
+		expect(() => crashHook({ JABBU_TEST_HOOKS: "1", JABBU_TEST_CRASH_AT: "nowhere" })).toThrow("unknown crash point");
 	});
 });
 
@@ -599,7 +599,7 @@ describe("stop() drains running turns before stopping the children", () => {
 		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50); // the bound was waited out
 		expect(Date.now() - startedAt).toBeLessThan(4_000); // not the 20 s default
 		expect(lines.some((line) => line.includes("event=stop_drain_timeout"))).toBe(true);
-		const after = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
+		const after = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
 		expect(after.listInbound({ originKey: ORIGIN, state: "answered" })).toHaveLength(0);
 		expect(after.listInbound({ originKey: ORIGIN, state: "dispatched" })).toHaveLength(1);
 		after.close();
@@ -615,7 +615,7 @@ describe("stop() drains running turns before stopping the children", () => {
 		await d1.inject({ origin: ORIGIN, asOwner: true, text: "long job" });
 		await untilTurnStart(lines);
 		// A followup waits behind the running turn: pending until the turn settles.
-		await d1.inject({ origin: ORIGIN, asOwner: true, text: "/followup-ompbot queued job" });
+		await d1.inject({ origin: ORIGIN, asOwner: true, text: "/followup-jabbu queued job" });
 
 		const stopped = d1.stop();
 		await new Promise<void>((resolve) => setTimeout(resolve, 50));
@@ -624,9 +624,9 @@ describe("stop() drains running turns before stopping the children", () => {
 		expect(lines.some((line) => line.includes("event=stop_drained"))).toBe(true);
 
 		// The queued followup was never dispatched into the shutdown window: it stays pending for rule (1).
-		const after = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
+		const after = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
 		expect(after.listInbound({ originKey: ORIGIN, state: "pending" }).map((row) => row.textRef)).toEqual([
-			"/followup-ompbot queued job",
+			"/followup-jabbu queued job",
 		]);
 		after.close();
 
@@ -720,13 +720,13 @@ describe("sweep retry for stranded pending rows (dispatch_pending_failed follow-
 		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "warmup" });
 		await transport.waitForPosts(echoes("warmup"));
 
-		// A ledger that cannot bump the epoch throws out of `/new-ompbot`'s drain: the row strands pending with only a
+		// A ledger that cannot bump the epoch throws out of `/new-jabbu`'s drain: the row strands pending with only a
 		// log line, no turn failure.
 		const newEpoch = daemon.store.newEpoch.bind(daemon.store);
 		daemon.store.newEpoch = () => {
 			throw new Error("database is locked");
 		};
-		const { threadRef } = await daemon.inject({ origin: ORIGIN, asOwner: true, text: "/new-ompbot" });
+		const { threadRef } = await daemon.inject({ origin: ORIGIN, asOwner: true, text: "/new-jabbu" });
 		await untilLog(lines, "event=dispatch_pending_failed");
 		expect(daemon.store.getInbound(threadRef)?.state).toBe("pending");
 		expect(transport.posts((text) => text.startsWith("[turn failed]"))).toHaveLength(0);
@@ -804,7 +804,7 @@ describe("sweep retry for stranded pending rows (dispatch_pending_failed follow-
 		await daemon.start();
 		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "long job" });
 		await untilLog(lines, "event=turn_start");
-		const { threadRef } = await daemon.inject({ origin: ORIGIN, asOwner: true, text: "/followup-ompbot queued job" });
+		const { threadRef } = await daemon.inject({ origin: ORIGIN, asOwner: true, text: "/followup-jabbu queued job" });
 		expect(daemon.store.getInbound(threadRef)?.state).toBe("pending");
 
 		// Fresh row: the sweep does not touch it (the normal dispatch path owns it).
@@ -825,9 +825,9 @@ describe("sweep retry for stranded pending rows (dispatch_pending_failed follow-
 		await new Promise<void>((resolve) => setTimeout(resolve, 50));
 		drivers[0]?.release();
 		await stopped;
-		const after = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
+		const after = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul"); // daemon.store is closed by stop()
 		expect(after.listInbound({ originKey: ORIGIN, state: "pending" }).map((row) => row.textRef)).toEqual([
-			"/followup-ompbot queued job",
+			"/followup-jabbu queued job",
 		]);
 		after.close();
 		expect(transport.posts((text) => text.includes(INTERRUPTED_NOTICE))).toHaveLength(0);
@@ -945,7 +945,7 @@ describe("inject and owner-message buttons outside card threads (card guard regr
 		});
 		daemon.store.tasks.transition(task.taskId, "review", "bot");
 		const card = await transport.createMessage({ channelId: thread, content: "🔍 머지 대기 카드" });
-		await click(transport, `ompbot:task:merge:${task.taskId}`, card.id, thread, GUILD);
+		await click(transport, `jabbu:task:merge:${task.taskId}`, card.id, thread, GUILD);
 		expect(inbound(daemon, "머지해").map((row) => row.threadRef)).toEqual([`${CHANNEL}:${thread}`]);
 	});
 
@@ -969,7 +969,7 @@ describe("inject and owner-message buttons outside card threads (card guard regr
 			originThreadRef: `${OWNER_DM}:${asking}`,
 		});
 		daemon.store.decideApproval(approvalId, "expired", now);
-		await click(transport, `ompbot:approval:retry:${OWNER_DM}:${card}`, card, OWNER_DM);
+		await click(transport, `jabbu:approval:retry:${OWNER_DM}:${card}`, card, OWNER_DM);
 		// A DM has no threads: the request is an owner message on the DM origin, put in as a reply to the asking message.
 		expect(inbound(daemon, "다시 요청: force push main").map((row) => row.originKey)).toEqual([ORIGIN]);
 		expect(

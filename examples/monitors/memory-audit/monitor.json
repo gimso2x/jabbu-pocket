@@ -4,5 +4,5 @@
 	"instruction": "기억 교정을 한다. 절차 파일의 순서를 그대로 따른다.",
 	"overlap": "skip",
 	"thinking": "high",
-	"procedureFiles": ["@OMPBOT_HOME@/scripts/memory-audit-procedure.md"]
+	"procedureFiles": ["@JABBU_HOME@/scripts/memory-audit-procedure.md"]
 }

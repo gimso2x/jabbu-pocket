@@ -102,7 +102,7 @@ function say(id: string, text: string): Promise<unknown> {
 const inboundState = (ts: string) => daemon.store.getInbound(`${DM}:${ts}`)?.state;
 
 beforeEach(() => {
-	home = makeHome("ompbot-drain-");
+	home = makeHome("jabbu-drain-");
 	drivers = [];
 	logs = [];
 	waiters = [];
@@ -114,7 +114,7 @@ afterEach(async () => {
 	home.remove();
 });
 
-describe("ompbot drain", () => {
+describe("jabbu-pocket drain", () => {
 	test("--wait exits 0 once the running turn ends; meanwhile inbound stays pending and no monitor fires; the next process answers it", async () => {
 		daemon = await boot(true);
 		const started = untilLog("turn_start");
@@ -273,11 +273,11 @@ describe("ompbot drain", () => {
 
 	test("a waiting approval counts as a running host tool and a pending approval", async () => {
 		daemon = await boot(false);
-		const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "ompbot_request_approval");
+		const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "jabbu_request_approval");
 		if (!tool) throw new Error("tool missing");
 		void tool.execute({ summary: "force push main" }, { signal: new AbortController().signal });
 		await transport.waitForPosts((text) => text.startsWith("🔐 승인 요청"));
-		const socket = `${home.dir}/ompbot.sock`;
+		const socket = `${home.dir}/jabbu.sock`;
 		expect(await callDaemon(socket, { op: "drain" })).toEqual({
 			ok: true,
 			draining: true,
@@ -348,7 +348,7 @@ describe("drain_cut", () => {
 		const started = untilLog("turn_start");
 		await say("1700000000000000001", "long job");
 		await started;
-		const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "ompbot_request_approval");
+		const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "jabbu_request_approval");
 		if (!tool) throw new Error("tool missing");
 		for (const [i, summary] of summaries.entries()) {
 			void tool.execute({ summary }, { signal: new AbortController().signal });
@@ -358,7 +358,7 @@ describe("drain_cut", () => {
 
 	test("records the dispatched turn atomically (0600, no temp file left) and withdraws each pending card once", async () => {
 		await busyWithApprovals(["force push main", "delete branch x"]);
-		const socket = join(home.dir, "ompbot.sock");
+		const socket = join(home.dir, "jabbu.sock");
 		expect(await callDaemon(socket, { op: "drain" })).toMatchObject({ draining: true, turns: 1, approvals: 2 });
 		const cut = await callDaemon(socket, { op: "drain_cut", applyStamp: STAMP });
 		expect(cut).toEqual({ ok: true, opRefs: 1, approvals: 2 });
@@ -387,7 +387,7 @@ describe("drain_cut", () => {
 			daemon.store.recordInbound({ originKey: ORIGIN, platformMessageId: id, textRef: "x", threadRef: `${DM}:${id}` });
 			daemon.store.markDispatched(id, { opRef, entryCursor: null });
 		}
-		const socket = join(home.dir, "ompbot.sock");
+		const socket = join(home.dir, "jabbu.sock");
 		await callDaemon(socket, { op: "drain" });
 		expect(await callDaemon(socket, { op: "drain_cut", applyStamp: STAMP })).toMatchObject({ ok: true, opRefs: 1 });
 		const record = JSON.parse(readFileSync(join(home.dir, RESTART_CUT_FILE), "utf8")) as RestartCut;
@@ -398,7 +398,7 @@ describe("drain_cut", () => {
 
 	test("the next process resumes the cut turn once in the same thread instead of the interrupted notice", async () => {
 		await busyWithApprovals([]);
-		const socket = join(home.dir, "ompbot.sock");
+		const socket = join(home.dir, "jabbu.sock");
 		await callDaemon(socket, { op: "drain" });
 		expect(await callDaemon(socket, { op: "drain_cut", applyStamp: STAMP })).toMatchObject({ ok: true, opRefs: 1 });
 		await daemon.stop();
@@ -417,7 +417,7 @@ describe("drain_cut", () => {
 
 	test("a failed write answers no ok and leaves the cards alone; no drain answers no ok either", async () => {
 		await busyWithApprovals(["force push main"]);
-		const socket = join(home.dir, "ompbot.sock");
+		const socket = join(home.dir, "jabbu.sock");
 		expect(await callDaemon(socket, { op: "drain_cut", applyStamp: STAMP })).toEqual({
 			ok: false,
 			error: "not draining",

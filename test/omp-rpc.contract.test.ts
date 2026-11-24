@@ -11,14 +11,14 @@ import { pickE2eModel } from "./helpers/omp-model";
 
 /**
  * Contract test against a REAL `omp --mode rpc` child. Costs tokens, so it only
- * runs with OMPBOT_E2E_OMP=1 and uses a model the omp actually offers (pin with
- * OMPBOT_E2E_OMP_PROVIDER / OMPBOT_E2E_OMP_MODEL; a pin omp does not offer skips).
+ * runs with JABBU_E2E_OMP=1 and uses a model the omp actually offers (pin with
+ * JABBU_E2E_OMP_PROVIDER / JABBU_E2E_OMP_MODEL; a pin omp does not offer skips).
  */
-const enabled = process.env.OMPBOT_E2E_OMP === "1";
+const enabled = process.env.JABBU_E2E_OMP === "1";
 if (!enabled)
-	console.log("[skip] omp-rpc.contract.test.ts: set OMPBOT_E2E_OMP=1 to run against a real omp (costs tokens)");
+	console.log("[skip] omp-rpc.contract.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");
 
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
 const TURN_TIMEOUT_MS = 120_000;
 // Real-process integration test: this timer is only a failure deadline on an awaited event/final, never a wait for time to pass.
 const INTERACTIVE_UI_METHODS = ["select", "confirm", "input", "editor", "ask", "form"];
@@ -136,13 +136,13 @@ describe.skipIf(!enabled || picked?.model === undefined)("omp rpc contract", () 
 	}
 
 	beforeAll(() => {
-		root = mkdtempSync(join(tmpdir(), "ompbot-contract-"));
+		root = mkdtempSync(join(tmpdir(), "jabbu-contract-"));
 		cwd = join(root, "workspace");
 		sessionDir = join(root, "sessions", "origin-a");
 		// Secrets-shaped parent env that MUST NOT reach the child.
-		for (const key of ["SLACK_BOT_TOKEN", "OMPBOT_SECRET_PROBE"]) savedEnv[key] = process.env[key];
+		for (const key of ["SLACK_BOT_TOKEN", "JABBU_SECRET_PROBE"]) savedEnv[key] = process.env[key];
 		process.env.SLACK_BOT_TOKEN = "xoxb-TEST-0";
-		process.env.OMPBOT_SECRET_PROBE = "probe";
+		process.env.JABBU_SECRET_PROBE = "probe";
 		nonce1 = `N1${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 		nonce2 = `N2${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 	});
@@ -176,7 +176,7 @@ describe.skipIf(!enabled || picked?.model === undefined)("omp rpc contract", () 
 	});
 
 	test(
-		"(a) ECHO nonce1 appears in the final text; (f) child env has no SLACK_/OMPBOT_ keys",
+		"(a) ECHO nonce1 appears in the final text; (f) child env has no SLACK_/JABBU_ keys",
 		async () => {
 			const rec = makeDriver();
 			await rec.driver.start();
@@ -195,7 +195,7 @@ describe.skipIf(!enabled || picked?.model === undefined)("omp rpc contract", () 
 				.split("\0")
 				.filter((entry) => entry.length > 0)
 				.map((entry) => entry.slice(0, entry.indexOf("=")));
-			expect(keys.filter((key) => key.startsWith("SLACK_") || key.startsWith("OMPBOT_"))).toEqual([]);
+			expect(keys.filter((key) => key.startsWith("SLACK_") || key.startsWith("JABBU_"))).toEqual([]);
 			expect(keys).toContain("OMP_WIKI_NOTE_DISABLE");
 			expect(keys).toContain("PATH");
 		},

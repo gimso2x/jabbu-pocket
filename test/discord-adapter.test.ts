@@ -162,7 +162,7 @@ describe("owner DM", () => {
 		]);
 	});
 
-	test("ingestOwner of an `ompbot inject` message: the inbound carries `injected` for the ledger", async () => {
+	test("ingestOwner of a `jabbu-pocket inject` message: the inbound carries `injected` for the ledger", async () => {
 		const made = await adapter();
 		transport.setChannel({ id: DM, type: 1 });
 		const marker = nextId();

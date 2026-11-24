@@ -41,19 +41,19 @@ function nextFinal(driver: FakeOmpDriver): Promise<OmpFinal> {
 	return promise;
 }
 
-test("buildChildEnv strips SLACK_/OMPBOT_ and adds extras", () => {
+test("buildChildEnv strips SLACK_/JABBU_ and adds extras", () => {
 	const env = buildChildEnv(
 		{ OMP_WIKI_NOTE_DISABLE: "1" },
-		{ PATH: "/bin", SLACK_BOT_TOKEN: "x", OMPBOT_HOME: "y", OMPBOT: "keep-not-prefixed", HOME: "/h", GONE: undefined },
+		{ PATH: "/bin", SLACK_BOT_TOKEN: "x", JABBU_HOME: "y", JABBU: "keep-not-prefixed", HOME: "/h", GONE: undefined },
 	);
-	expect(env).toEqual({ PATH: "/bin", OMPBOT: "keep-not-prefixed", HOME: "/h", OMP_WIKI_NOTE_DISABLE: "1" });
+	expect(env).toEqual({ PATH: "/bin", JABBU: "keep-not-prefixed", HOME: "/h", OMP_WIKI_NOTE_DISABLE: "1" });
 	expect(() => buildChildEnv({ SLACK_X: "1" }, {})).toThrow(OmpDriverError);
 	expect(buildChildEnv({}, { LD_PRELOAD: "/x.so", DYLD_INSERT_LIBRARIES: "/y", KEEP: "1" })).toEqual({ KEEP: "1" });
 	expect(() => buildChildEnv({ LD_PRELOAD: "/x.so" }, {})).toThrow(OmpDriverError);
 });
 
 test("RpcOmpDriver fails fast with omp_executable_missing (no spawn, no retry)", async () => {
-	const dir = tempDir("ompbot-missing-");
+	const dir = tempDir("jabbu-missing-");
 	const driver = new RpcOmpDriver({ ompExecutable: join(dir, "no-such-omp"), cwd: dir, sessionDir: join(dir, "s") });
 	const started = performance.now();
 	const error = await driver.start().catch((e: unknown) => e);
@@ -64,7 +64,7 @@ test("RpcOmpDriver fails fast with omp_executable_missing (no spawn, no retry)",
 });
 
 test("RpcOmpDriver refuses an executable whose --version is not omp/<x.y.z>, before any spawn", async () => {
-	const dir = tempDir("ompbot-notomp-");
+	const dir = tempDir("jabbu-notomp-");
 	const peer = new FakeOmpPeer();
 	const driver = new RpcOmpDriver({
 		ompExecutable: fakeOmpExecutable(dir, "1.4.4"),
@@ -79,7 +79,7 @@ test("RpcOmpDriver refuses an executable whose --version is not omp/<x.y.z>, bef
 });
 
 test("RpcOmpDriver starts the executable itself (no bun in front) with the RPC argv and the child env", async () => {
-	const dir = tempDir("ompbot-argv-");
+	const dir = tempDir("jabbu-argv-");
 	const peer = new FakeOmpPeer();
 	const ompExecutable = fakeOmpExecutable(dir);
 	const driver = new RpcOmpDriver({
@@ -349,7 +349,7 @@ test("ExtensionUiTap: close() aborts every waiting answer (the child is gone)", 
 
 /** A driver over a fake peer, with its finals, warn log lines and a barrier that proves earlier stdout was read. */
 async function startPeerDriver(peer = new FakeOmpPeer(), extra: Partial<RpcOmpDriverOptions> = {}) {
-	const dir = tempDir("ompbot-peer-");
+	const dir = tempDir("jabbu-peer-");
 	const warns: string[] = [];
 	const driver = new RpcOmpDriver({
 		ompExecutable: fakeOmpExecutable(dir),
@@ -466,7 +466,7 @@ test("RpcOmpDriver forwards retry/fallback session events once and agent events 
 test("RpcOmpDriver opts in to the ask dialog only when an answerer is injected", async () => {
 	const optIns: unknown[] = [];
 	for (const answerDialog of [undefined, async () => ({ value: "x" })] as const) {
-		const dir = tempDir("ompbot-ask-");
+		const dir = tempDir("jabbu-ask-");
 		const peer = new FakeOmpPeer();
 		const driver = new RpcOmpDriver({
 			ompExecutable: fakeOmpExecutable(dir),
@@ -875,9 +875,9 @@ const MAILBOX_ORIGIN = "discord/dm/200000000000000001";
 
 /** A mailbox router whose children are `RpcOmpDriver`s over one fake peer, on a fake clock; log lines can be awaited. */
 function tailRouter(peer: FakeOmpPeer) {
-	const dir = tempDir("ompbot-tail-mailbox-");
+	const dir = tempDir("jabbu-tail-mailbox-");
 	const clock = { t: 1_000_000, now: () => clock.t };
-	const store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	const store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	const lines: string[] = [];
 	const waiters: Array<{ match: (line: string) => boolean; resolve: () => void }> = [];
 	const escalations: StallEscalation[] = [];

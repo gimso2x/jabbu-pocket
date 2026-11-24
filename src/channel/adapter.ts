@@ -1,6 +1,6 @@
 // What the daemon asks of one chat platform's adapter, and how a platform plugs into the daemon (`ChannelBinding`).
 // The daemon knows platforms only through these two interfaces and the `ChannelPort`.
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import type { TurnProgress } from "../core/mailbox";
 import type { ThreadSource } from "../core/mailbox-thread-context";
 import type { ChatPlatform } from "../core/origin-key";
@@ -29,7 +29,7 @@ export interface OwnerIngest {
 	text: string;
 	/** Quoted attachments, fenced like any forwarded text. */
 	quoted?: readonly string[] | undefined;
-	/** Put in by `ompbot inject`, not a button the owner clicked: it may not answer a card (absent/false: the daemon's own). */
+	/** Put in by `jabbu-pocket inject`, not a button the owner clicked: it may not answer a card (absent/false: the daemon's own). */
 	injected?: boolean | undefined;
 }
 
@@ -65,7 +65,7 @@ export interface AdapterDeps {
 	deliveries: DeliverySource;
 	clock: AdapterClock;
 	log: Logger;
-	config: OmpbotConfig;
+	config: JabbuConfig;
 	/** Lookups and cursors (recovery targets and watermarks, task roots). */
 	store: Store;
 	/**

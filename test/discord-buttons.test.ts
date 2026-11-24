@@ -17,7 +17,7 @@ const calls = <M extends FakeDiscordCall["method"]>(method: M) =>
 	transport.calls.filter((c): c is FakeDiscordCall & { method: M } => c.method === method);
 
 const button = (n: number, style?: ActionButton["style"]): ActionButton => ({
-	actionId: `ompbot:test:${n}`,
+	actionId: `jabbu:test:${n}`,
 	label: `버튼 ${n}`,
 	...(style === undefined ? {} : { style }),
 });
@@ -38,9 +38,9 @@ describe("buttons as components", () => {
 			{
 				type: 1,
 				components: [
-					{ type: 2, style: 1, label: "버튼 1", custom_id: "ompbot:test:1" },
-					{ type: 2, style: 4, label: "버튼 2", custom_id: "ompbot:test:2" },
-					{ type: 2, style: 2, label: "버튼 3", custom_id: "ompbot:test:3" },
+					{ type: 2, style: 1, label: "버튼 1", custom_id: "jabbu:test:1" },
+					{ type: 2, style: 4, label: "버튼 2", custom_id: "jabbu:test:2" },
+					{ type: 2, style: 2, label: "버튼 3", custom_id: "jabbu:test:3" },
 				],
 			},
 		]);
@@ -58,14 +58,14 @@ describe("buttons as components", () => {
 	test("a label over 80 characters is cut to 80", async () => {
 		await port.post(
 			{ conversationId: DM },
-			{ text: "긴 라벨", buttons: [{ actionId: "ompbot:test:long", label: "가".repeat(90) }] },
+			{ text: "긴 라벨", buttons: [{ actionId: "jabbu:test:long", label: "가".repeat(90) }] },
 		);
 		const rows = calls("createMessage")[0]?.components as Array<{ components: Array<{ label: string }> }>;
 		expect(rows[0]?.components[0]?.label).toBe("가".repeat(80));
 	});
 
 	test("a custom_id over 100 characters fails before anything is posted", async () => {
-		const tooLong = { actionId: `ompbot:${"x".repeat(100)}`, label: "넘침" };
+		const tooLong = { actionId: `jabbu:${"x".repeat(100)}`, label: "넘침" };
 		await expect(port.post({ conversationId: DM }, { text: "넘침", buttons: [tooLong] })).rejects.toThrow(/custom_id/);
 		expect(calls("createMessage")).toHaveLength(0);
 	});
@@ -76,7 +76,7 @@ describe("buttons as components", () => {
 		expect(calls("editMessage")[0]).toMatchObject({ channelId: DM, messageId: ref.messageId, components: [] });
 		await port.edit(ref, { text: "다시", buttons: [button(2)] });
 		expect(calls("editMessage")[1]?.components).toEqual([
-			{ type: 1, components: [{ type: 2, style: 2, label: "버튼 2", custom_id: "ompbot:test:2" }] },
+			{ type: 1, components: [{ type: 2, style: 2, label: "버튼 2", custom_id: "jabbu:test:2" }] },
 		]);
 	});
 

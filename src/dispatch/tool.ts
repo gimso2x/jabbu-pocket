@@ -122,7 +122,7 @@ function takeWorkerKind(raw: unknown): { worker: "agy" | undefined; rest: unknow
 	return { worker, rest };
 }
 
-/** The `ompbot_dispatch` host tool for chat origins; `undefined` when the omp binary is not provided. */
+/** The `jabbu_dispatch` host tool for chat origins; `undefined` when the omp binary is not provided. */
 export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	const herdrOn = deps.herdr !== undefined;
 	const board = deps.herdrBoard;
@@ -134,10 +134,10 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						onError: (error) => deps.log.warn("dispatch_board_link_failed", { host: host ?? "local", error }),
 					});
 	const tool: HostToolDef = {
-		name: "ompbot_dispatch",
+		name: "jabbu_dispatch",
 		label: "Dispatch work",
 		description:
-			'태스크를 실행 계층에 넘긴다. mode=simple(기본)은 단순 작업: `omp -p`로 한 번 실행하고 최종 출력을 돌려준다(10분 상한). mode=herdr는 복잡·장기 작업: herdr 워크스페이스에 omp 에이전트를 띄우고 프롬프트를 넘긴다 — 패널에서 계속 실행되므로 이후 ompbot_dispatch mode=herdr + name 으로 진행을 확인하거나 후속 지시를 보낸다. 판단 기준: 조사·분석·회고·체크처럼 한 번의 답으로 끝나는 일은 세션에서 직접 하거나 simple. 구현은 예상 30분 초과·다단계·새 모듈·스키마 변경 중 하나라도 걸리면 무조건 herdr(+taskSpec) — 세션에서 직접 구현하지 않는다(세션 안 하위 에이전트로 구현하는 것도 직접 구현이다). 직접 구현은 설정값 변경·작은 수선(오너 요청 하나에 src 4개·200줄 이내, 테스트·문서 제외), 세션 컨텍스트 없이는 판단할 수 없는 긴급 디버깅만. 추가 판단: 여러 단계이거나 하루를 넘길 작업이면 taskSpec을 채운다(대상 저장소에 워크트리·4문서(context/spec/PROGRESS/outcome)·상태 파일을 만들고 TASKID로 추적, 수락기준×증거로 ompbot이 Outcome 도달을 판정한다). 단발성 작업은 taskSpec을 비운다. 시작되면 ompbot이 스레드에 접수 카드(맡았습니다·진행 보기 링크·[목표]·[가정])를 올리므로 assumptions에 오너 말을 어떻게 해석했는지 한 줄로 적는다. 막힘·Outcome 알림에 오너가 결정을 답하면 그 원문을 taskSpec:{id}와 task로 넘겨 재개한다. taskSpec 신규는 {title,risk(L0~L4),goal,scope[],exclusions[],acceptance[](1개 이상),repo(대상 호스트의 git 저장소 절대경로),background?}와 task(지시문)를 함께 주고, 재개는 taskSpec:{id:"T-…"}만 준다. taskSpec에는 name을 주지 않는다. 워커가 글로 질문하고 멈추면 스레드에 ❓ 카드가 오고, 오너 답은 봇이 워커에게 넘긴다. 완료 처리·merge는 오너만 한다.',
+			'태스크를 실행 계층에 넘긴다. mode=simple(기본)은 단순 작업: `omp -p`로 한 번 실행하고 최종 출력을 돌려준다(10분 상한). mode=herdr는 복잡·장기 작업: herdr 워크스페이스에 omp 에이전트를 띄우고 프롬프트를 넘긴다 — 패널에서 계속 실행되므로 이후 jabbu_dispatch mode=herdr + name 으로 진행을 확인하거나 후속 지시를 보낸다. 판단 기준: 조사·분석·회고·체크처럼 한 번의 답으로 끝나는 일은 세션에서 직접 하거나 simple. 구현은 예상 30분 초과·다단계·새 모듈·스키마 변경 중 하나라도 걸리면 무조건 herdr(+taskSpec) — 세션에서 직접 구현하지 않는다(세션 안 하위 에이전트로 구현하는 것도 직접 구현이다). 직접 구현은 설정값 변경·작은 수선(오너 요청 하나에 src 4개·200줄 이내, 테스트·문서 제외), 세션 컨텍스트 없이는 판단할 수 없는 긴급 디버깅만. 추가 판단: 여러 단계이거나 하루를 넘길 작업이면 taskSpec을 채운다(대상 저장소에 워크트리·4문서(context/spec/PROGRESS/outcome)·상태 파일을 만들고 TASKID로 추적, 수락기준×증거로 jabbu가 Outcome 도달을 판정한다). 단발성 작업은 taskSpec을 비운다. 시작되면 jabbu가 스레드에 접수 카드(맡았습니다·진행 보기 링크·[목표]·[가정])를 올리므로 assumptions에 오너 말을 어떻게 해석했는지 한 줄로 적는다. 막힘·Outcome 알림에 오너가 결정을 답하면 그 원문을 taskSpec:{id}와 task로 넘겨 재개한다. taskSpec 신규는 {title,risk(L0~L4),goal,scope[],exclusions[],acceptance[](1개 이상),repo(대상 호스트의 git 저장소 절대경로),background?}와 task(지시문)를 함께 주고, 재개는 taskSpec:{id:"T-…"}만 준다. taskSpec에는 name을 주지 않는다. 워커가 글로 질문하고 멈추면 스레드에 ❓ 카드가 오고, 오너 답은 봇이 워커에게 넘긴다. 완료 처리·merge는 오너만 한다.',
 		parameters: {
 			type: "object",
 			properties: {
@@ -159,7 +159,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				cwd: {
 					type: "string",
 					description:
-						"새 에이전트의 작업 디렉터리. host 지정 시 기본은 호스트 설정의 workDir, 로컬 mode=herdr는 절대경로만 받고 기본은 ompbot 메인 작업 디렉터리",
+						"새 에이전트의 작업 디렉터리. host 지정 시 기본은 호스트 설정의 workDir, 로컬 mode=herdr는 절대경로만 받고 기본은 jabbu 메인 작업 디렉터리",
 				},
 				force: {
 					type: "boolean",
@@ -437,7 +437,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			if (!existing.ok) return `시작 실패: ${existing.error}`;
 			if (existing.exists) {
 				const follow = await herdrPromptExisting(name, task, sshOptions);
-				const check = `진행 확인: ompbot_dispatch {host:"${host}", name:"${name}"}`;
+				const check = `진행 확인: jabbu_dispatch {host:"${host}", name:"${name}"}`;
 				if (follow.ok || follow.unconfirmed === true) {
 					notePrompt(deps, { host, agent: name, kind: "followup", text: task, originKey: deps.originKey });
 				}
@@ -469,7 +469,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					`${host}에서 ${name} 에이전트를 시작했습니다 (cwd ${cwd}, pane ${start.paneId}).`,
 					...(link === undefined ? [] : [`진행 보기: ${link}`]),
 					`오너에게는 이 모양으로 접수를 알린다: 첫 줄 '\`${host}\`에서 \`${name}\`(<제목>)가 맡았습니다. 결정이 필요하거나 끝나면 이 스레드로 알려 드립니다.'${link === undefined ? "" : ", 다음 줄 '진행 보기: <위 링크>'"}, 빈 줄 뒤 '[목표] <한 문장>'과 '[가정] <오너 대신 정한 해석, 없으면 없음>'. 그 밖의 과정은 쓰지 않는다.`,
-					`후속 지시·진행 확인은 ompbot_dispatch {host:"${host}", name:"${name}"} 로.`,
+					`후속 지시·진행 확인은 jabbu_dispatch {host:"${host}", name:"${name}"} 로.`,
 				].join("\n") + gate.suffix
 			);
 		}
@@ -491,7 +491,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			if (!existing.ok) return `시작 실패: ${existing.error}`;
 			if (existing.exists) {
 				const follow = await herdrPromptExisting(name, task, herdrOptions);
-				const check = `진행 확인: ompbot_dispatch {mode:"herdr", name:"${name}"}`;
+				const check = `진행 확인: jabbu_dispatch {mode:"herdr", name:"${name}"}`;
 				if (follow.ok || follow.unconfirmed === true) {
 					notePrompt(deps, { host: null, agent: name, kind: "followup", text: task, originKey: deps.originKey });
 				}
@@ -527,7 +527,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						: []),
 					...(link === undefined ? [] : [`진행 보기: ${link}`]),
 					`오너에게는 이 모양으로 접수를 알린다: 첫 줄 '\`${name}\`(<제목>)가 맡았습니다. 결정이 필요하거나 끝나면 이 스레드로 알려 드립니다.'${link === undefined ? "" : ", 다음 줄 '진행 보기: <위 링크>'"}, 빈 줄 뒤 '[목표] <한 문장>'과 '[가정] <오너 대신 정한 해석, 없으면 없음>'. 그 밖의 과정은 쓰지 않는다.`,
-					`후속 지시·진행 확인은 ompbot_dispatch {mode:"herdr", name:"${name}"} 로.`,
+					`후속 지시·진행 확인은 jabbu_dispatch {mode:"herdr", name:"${name}"} 로.`,
 				].join("\n") + gate.suffix
 			);
 		}

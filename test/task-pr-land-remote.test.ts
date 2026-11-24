@@ -87,7 +87,7 @@ class RemoteWorld {
 		readonly hostRepo: string,
 		readonly records: string,
 	) {
-		this.home = makeHome("ompbot-task-pr-remote-home-");
+		this.home = makeHome("jabbu-task-pr-remote-home-");
 		this.fake = new FakeGh({ slug: SLUG, bare });
 		this.transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
 		this.transport.setChannel({ id: THREAD, type: 11, parentId: CHANNEL, guildId: GUILD });
@@ -104,7 +104,7 @@ class RemoteWorld {
 
 	/** `entry`: the repository's `lanes.land` entry (default: pr with the host's repository as `remotes[h1]`). */
 	static async start(entry?: (hostRepo: string) => LandEntry): Promise<RemoteWorld> {
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-task-pr-remote-")));
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-task-pr-remote-")));
 		const bare = join(root, "origin.git");
 		mkdirSync(bare);
 		git(bare, "init", "-q", "--bare", "-b", "main");
@@ -278,7 +278,7 @@ class RemoteWorld {
 
 	#pushed(work: string, files: string[], content: string | undefined): string {
 		git(work, "config", "user.name", "someone else");
-		git(work, "config", "user.email", "else@ompbot.invalid");
+		git(work, "config", "user.email", "else@jabbu.invalid");
 		const sha = this.commit(work, files, content);
 		git(work, "push", "-q", "origin", "HEAD:refs/heads/main");
 		return sha;
@@ -360,7 +360,7 @@ async function start(entry?: (hostRepo: string) => LandEntry): Promise<RemoteWor
 
 const pushes = (w: RemoteWorld) => w.fake.callsOf("git", "push");
 const ghCalls = (w: RemoteWorld) => w.fake.calls.filter((call) => call.program === "gh");
-const tempRef = (row: TaskRow) => `refs/ompbot/task/${row.taskId}`;
+const tempRef = (row: TaskRow) => `refs/jabbu/task/${row.taskId}`;
 /** The core's own fetch of the task branch (the `--` form), not the base branch's. */
 const branchFetches = (w: RemoteWorld) => w.fake.callsOf("git", "fetch").filter((call) => call.argv.includes("--"));
 
@@ -414,7 +414,7 @@ describe("원격 AC-11: handoff 대신 원격 PR 착지", () => {
 });
 
 describe("원격 fetch: 임시 ref로 가져와 재판정하고 그 sha로 PR을 연다", () => {
-	test("원격 fetch: headOf(깨끗함) → `fetch -- <주소> +refs/heads/<branch>:refs/ompbot/task/<id>` → 원격 재판정 → headOf 재확인 순서로 돌고 로컬 저장소에 임시 ref가 생긴다", async () => {
+	test("원격 fetch: headOf(깨끗함) → `fetch -- <주소> +refs/heads/<branch>:refs/jabbu/task/<id>` → 원격 재판정 → headOf 재확인 순서로 돌고 로컬 저장소에 임시 ref가 생긴다", async () => {
 		const w = await start();
 		const { row, sha } = w.seed();
 		expect(w.fake.callsOf("git", "fetch")).toHaveLength(0);

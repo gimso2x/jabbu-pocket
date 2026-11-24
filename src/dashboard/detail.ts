@@ -158,7 +158,7 @@ export function discordThreadHref(
 	const key = (originKey ?? "").replace(/^[^/:]+:/, "");
 	if (key.startsWith("discord/dm/")) return `https://discord.com/channels/@me/${ref[1]}/${ref[2]}`;
 	if (!guild) return "";
-	if (/^discord\/ch\/\d+\/t\/\d+$/.test(key) || key.startsWith("ompbot/work/")) {
+	if (/^discord\/ch\/\d+\/t\/\d+$/.test(key) || key.startsWith("jabbu/work/")) {
 		return `https://discord.com/channels/${guild}/${ref[2]}`;
 	}
 	if (key.startsWith("discord/ch/")) return `https://discord.com/channels/${guild}/${ref[1]}/${ref[2]}`;
@@ -459,7 +459,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 	// a space, an odd origin key) drops the command rather than show one that breaks. Shown only; nothing runs here.
 	const SHELL_WORD = /^[A-Za-z0-9._/:@=+,-]+$/;
 	const terminal = (args: string[][]): string => {
-		const cli = s.ompbotCli;
+		const cli = s.jabbuCli;
 		if (cli === undefined) return "";
 		const commands = args
 			.map((words) => [...cli, ...words])

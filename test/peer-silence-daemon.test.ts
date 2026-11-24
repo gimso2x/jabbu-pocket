@@ -3,7 +3,7 @@
 // unless the peer posted there meanwhile, even without mentioning this bot. Waits are on log lines and posts (bounded).
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChannelBinding } from "../src/channel/adapter";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { snowflakeAt } from "../src/discord/backfill";
 import { createLogger } from "../src/log";
@@ -44,7 +44,7 @@ function waitForLog(needle: string): Promise<void> {
 	return promise;
 }
 
-function withPeer(minutes?: number): OmpbotConfig {
+function withPeer(minutes?: number): JabbuConfig {
 	const config = home.config;
 	const discord = config.channels.discord;
 	if (discord === undefined) throw new Error("makeHome without channels.discord");
@@ -55,7 +55,7 @@ function withPeer(minutes?: number): OmpbotConfig {
 	};
 }
 
-async function boot(config: OmpbotConfig, discord: WaitingDiscordTransport): Promise<Daemon> {
+async function boot(config: JabbuConfig, discord: WaitingDiscordTransport): Promise<Daemon> {
 	const sessions = new FakeSessionStore();
 	const channels: ChannelBinding[] = [discordBinding(discord, { peerBots: config.channels.discord?.peerBots })];
 	const clock = { now: () => now };
@@ -94,7 +94,7 @@ async function callPeer(made: Daemon, discord: WaitingDiscordTransport, opRef: s
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-peer-silence-");
+	home = makeHome("jabbu-peer-silence-");
 	lines = [];
 	waiters = new Set();
 	daemon = undefined;

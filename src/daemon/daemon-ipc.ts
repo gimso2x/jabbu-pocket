@@ -23,7 +23,7 @@ export interface DaemonIpcHost {
 }
 
 /**
- * `ompbot lanes attach`: `lane_attach {lane, pid, wait?, keepPaused?}` hands the lane's session to the CLI's terminal
+ * `jabbu-pocket lanes attach`: `lane_attach {lane, pid, wait?, keepPaused?}` hands the lane's session to the CLI's terminal
  * omp and answers the file to resume; `lane_detach {lane, sessionFile, newFiles}` gives it back. The request is the
  * signal — nothing is read from marker files or mtimes.
  */
@@ -66,7 +66,7 @@ export async function handleIpc(
 		return { ok: true, live: typeof origin === "string" ? (ctx.router?.liveView(origin) ?? null) : null };
 	}
 	if (request.op === "session_file") {
-		// `ompbot lanes watch`: the file the origin's running child has open; null when no child runs (read-only).
+		// `jabbu-pocket lanes watch`: the file the origin's running child has open; null when no child runs (read-only).
 		const origin = "origin" in request ? request.origin : undefined;
 		if (typeof origin !== "string") return { ok: false, error: "session_file needs an origin string" };
 		return { ok: true, sessionFile: (await ctx.router?.openSessionFile(origin)) ?? null };

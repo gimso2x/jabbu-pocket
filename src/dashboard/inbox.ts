@@ -193,7 +193,7 @@ export function tabSignal(
 ): { count: number; bad: boolean; title: string; favicon: string } {
 	const bad = failed || !s.daemon.ok || !s.daemon.running || (board !== undefined && board !== null && !board.ok);
 	const count = inboxAttention(s, board).length;
-	const title = bad ? "(!) ompbot 현황판" : count > 0 ? `(${count}) 확인 필요 · ompbot 현황판` : "ompbot 현황판";
+	const title = bad ? "(!) jabbu 현황판" : count > 0 ? `(${count}) 확인 필요 · jabbu 현황판` : "jabbu 현황판";
 	return { count, bad, title, favicon: faviconHref(bad ? "bad" : count > 0 ? "attention" : "ok") };
 }
 
@@ -225,7 +225,7 @@ export function replyKeyTarget(input: OrderKeyInput, replyHref: string | null | 
 }
 
 /** The `localStorage` key of the inbox read marks ({@link readUnread}); this browser only. Shipped to the page. */
-export const UNREAD_KEY = "ompbot-inbox-seen";
+export const UNREAD_KEY = "jabbu-inbox-seen";
 /** How long the read mark of an entry no longer in the snapshot is kept, from when it was read. Shipped. */
 export const UNREAD_KEEP_MS = 14 * 86_400_000;
 /** The most read marks kept; past it the longest-read entries no longer in the snapshot go first. Shipped. */

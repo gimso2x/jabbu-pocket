@@ -7,7 +7,7 @@ export interface FreezeState {
 	/** ISO instant the freeze was set. */
 	since: string;
 	reason: string;
-	/** Who set it: `cli` for `ompbot freeze`. */
+	/** Who set it: `cli` for `jabbu-pocket freeze`. */
 	by: string;
 }
 
@@ -72,7 +72,7 @@ export function writeFreeze(homeDir: string, input: { reason?: string; by: strin
 	const path = freezePath(homeDir);
 	// Renaming over a FROZEN directory fails; removing it first would open an unfrozen window. Name the fix instead.
 	if (lstatSync(path, { throwIfNoEntry: false })?.isDirectory() === true) {
-		throw new Error(`${path}: FROZEN is not a regular file; run \`ompbot unfreeze\` first`);
+		throw new Error(`${path}: FROZEN is not a regular file; run \`jabbu-pocket unfreeze\` first`);
 	}
 	// A fresh random temp name each time (`writeAtomic0600`): a link or FIFO left at a predictable name is never opened.
 	// The legacy fixed temp name is still cleaned up: a FIFO there unlinks without opening, a directory is the owner's to clear.
@@ -135,5 +135,5 @@ export function createFreezeProbe(
 }
 
 export function frozenMessage(state: FreezeState): string {
-	return `동결 중입니다(${state.since}${state.reason === "" ? "" : `, 사유: ${state.reason}`}). 원격 위임·모니터·작업 레인은 멈춰 있고, 오너가 \`ompbot unfreeze\`로 풀어야 합니다.`;
+	return `동결 중입니다(${state.since}${state.reason === "" ? "" : `, 사유: ${state.reason}`}). 원격 위임·모니터·작업 레인은 멈춰 있고, 오너가 \`jabbu-pocket unfreeze\`로 풀어야 합니다.`;
 }

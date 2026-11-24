@@ -118,25 +118,25 @@ export function gateText(name: string): { label: string; todo: string } {
 			`레인이 ${span(limits.laneStuckMs)} 넘게 멈춤·머지 대기`,
 			"멈춘 레인 스레드에서 이어 가거나 닫기, 머지 대기 레인은 머지·정리하기",
 		],
-		backup_age: [`백업이 ${span(limits.backupMaxAgeMs)} 넘게 없음`, "백업 타이머·`ompbot backup` 확인"],
+		backup_age: [`백업이 ${span(limits.backupMaxAgeMs)} 넘게 없음`, "백업 타이머·`jabbu-pocket backup` 확인"],
 		offsite_age: [
 			`오프사이트 백업이 ${span(limits.backupMaxAgeMs)} 넘게 없음`,
-			"오프사이트 접속·`ompbot backup` 재실행 확인",
+			"오프사이트 접속·`jabbu-pocket backup` 재실행 확인",
 		],
 		sweep_stalled: [
 			`스윕 하트비트가 ${span(limits.sweepStalledMs)} 넘게 멈춤`,
-			"`systemctl --user status ompbot`으로 데몬 확인",
+			"`systemctl --user status jabbu`로 데몬 확인",
 		],
 		discord_disconnected: [
 			`Discord 게이트웨이가 ${span(limits.socketDownMs)} 넘게 끊김`,
 			"네트워크·Discord 토큰과 데몬 로그 확인",
 		],
-		inbound_starved: [`턴이 ${span(limits.inboundStarvationMs)} 넘게 응답 없음`, "`ompbot status`로 멈춘 턴 확인"],
-		origin_silent: [`받은 메시지가 ${span(limits.originSilentMs)} 넘게 대기`, "`ompbot status`로 대기 중인 대화 확인"],
+		inbound_starved: [`턴이 ${span(limits.inboundStarvationMs)} 넘게 응답 없음`, "`jabbu-pocket status`로 턴 확인"],
+		origin_silent: [`받은 메시지가 ${span(limits.originSilentMs)} 넘게 대기`, "`jabbu-pocket status`로 대화 확인"],
 		deliveries_overdue: [`전달이 ${span(limits.deliveryOverdueMs)} 넘게 밀림`, "데몬 로그에서 전달 실패 사유 확인"],
 		deliveries_ambiguous_stuck: [
 			`모호 전달이 ${span(limits.ambiguousStuckMs)} 넘게 남음`,
-			"`ompbot deliveries list`로 확인한 뒤 `ack` 또는 `resend`로 정리",
+			"`jabbu-pocket deliveries list`로 확인한 뒤 `ack` 또는 `resend`로 정리",
 		],
 		monitors_failed: [
 			`최근 ${span(limits.monitorFailureWindowMs)} 안에 실패한 뒤 아직 성공하지 못한 모니터`,
@@ -144,14 +144,14 @@ export function gateText(name: string): { label: string; todo: string } {
 		],
 		monitors_stalled: [`모니터 실행이 ${span(limits.monitorOverdueMs)} 넘게 밀림`, "모니터 실행·drain 상태 확인"],
 		omp_runtime: ["omp 실행 환경 이상", "`omp --version`이 `omp/<버전>`을 내는지 확인"],
-		frozen: ["동결 켜짐", "동결 사유 확인 뒤 `ompbot unfreeze`"],
+		frozen: ["동결 켜짐", "동결 사유 확인 뒤 `jabbu-pocket unfreeze`"],
 		ledger_unreadable: ["장부(DB)를 읽지 못함", "DB 파일 권한·디스크 확인"],
 		herdr_unreachable: ["herdr에 연결하지 못함", "herdr 서버 상태·`herdr.bin` 설정 확인"],
-		disk_low: ["디스크 여유 공간 부족", "`df -h` 확인·`ompbot gc`·백업 정리"],
+		disk_low: ["디스크 여유 공간 부족", "`df -h` 확인·`jabbu-pocket gc`·백업 정리"],
 		host_pressure: ["호스트 부하·메모리 압박(시스템·cgroup)", "`uptime`·`free -m`·`systemd-cgtop` 확인"],
 		drain_orphaned: [
 			`apply가 죽은 뒤 drain이 ${span(limits.drainOrphanedMs)} 넘게 남음(새 메시지 보류 중)`,
-			"`ompbot drain --cancel`로 풀고 `ompbot apply` 다시 실행",
+			"`jabbu-pocket drain --cancel`로 풀고 `jabbu-pocket apply` 다시 실행",
 		],
 		inbound_identity_conflicts: [
 			"같은 메시지 id가 다른 내용으로 다시 들어옴(기록만, 막지 않음)",
@@ -160,7 +160,7 @@ export function gateText(name: string): { label: string; todo: string } {
 		cost_cap: ["오늘 비용이 하루 상한을 넘음(알림만, 모니터는 계속 돎)", "`!budget`으로 확인, 자정에 닫힘"],
 	};
 	const known = TEXT[name];
-	return known === undefined ? { label: name, todo: "`ompbot gates` 확인" } : { label: known[0], todo: known[1] };
+	return known === undefined ? { label: name, todo: "`jabbu-pocket gates` 확인" } : { label: known[0], todo: known[1] };
 }
 
 /** An alert row in words: its title, the thing to do and, for `gate:` rows, the gate. Shipped to the page. */
@@ -176,7 +176,7 @@ export function alertText(scope: string): { title: string; todo: string; gate?: 
 		return { title: `대화 턴 연속 실패 · ${rest}`, todo: "최근 `turn_failed` 사유를 로그에서 확인" };
 	if (kind === "dispatch") return { title: `턴 전달 실패 · ${rest}`, todo: "데몬 로그에서 전달 재시도 실패 사유 확인" };
 	if (scope === "provider:limit") return { title: "모델 공급자 사용 한도", todo: "공급자 사용량·한도 확인" };
-	return { title: scope, todo: "`ompbot gates` 확인" };
+	return { title: scope, todo: "`jabbu-pocket gates` 확인" };
 }
 
 /**

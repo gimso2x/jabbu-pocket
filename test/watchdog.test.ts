@@ -44,7 +44,7 @@ const dirs: string[] = [];
 const children = new Set<Bun.Subprocess>();
 
 /**
- * Runs one child to its end in a directory of its own (its script and `ompbot.log`: the `block` child's kill line
+ * Runs one child to its end in a directory of its own (its script and `jabbu.log`: the `block` child's kill line
  * must not reach another child's log). Bounded: a child still running after `limitMs` is killed and reported.
  */
 interface ChildResult {
@@ -57,10 +57,10 @@ interface ChildResult {
 }
 
 async function runChild(mode: Mode, limitMs = 15_000, fifoLog = false): Promise<ChildResult> {
-	const dir = mkdtempSync(join(tmpdir(), `ompbot-watchdog-${mode}-`));
+	const dir = mkdtempSync(join(tmpdir(), `jabbu-watchdog-${mode}-`));
 	dirs.push(dir);
 	writeFileSync(join(dir, "child.ts"), CHILD);
-	const logPath = join(dir, "ompbot.log");
+	const logPath = join(dir, "jabbu.log");
 	// A FIFO nobody reads: opening it for the kill record blocks for good.
 	if (fifoLog) expect(Bun.spawnSync(["mkfifo", logPath]).exitCode).toBe(0);
 	const child = Bun.spawn(["bun", join(dir, "child.ts"), mode, logPath], {
@@ -132,28 +132,28 @@ describe("startWatchdog (child bun process)", () => {
 	test("the stall limit is 120 s unless the test hooks set it", () => {
 		expect(watchdogStallMs({})).toBe(WATCHDOG_STALL_MS);
 		expect(WATCHDOG_STALL_MS).toBe(120_000);
-		expect(watchdogStallMs({ OMPBOT_WATCHDOG_STALL_MS: "1000" })).toBe(WATCHDOG_STALL_MS);
-		expect(watchdogStallMs({ OMPBOT_TEST_HOOKS: "1", OMPBOT_WATCHDOG_STALL_MS: "1000" })).toBe(1_000);
+		expect(watchdogStallMs({ JABBU_WATCHDOG_STALL_MS: "1000" })).toBe(WATCHDOG_STALL_MS);
+		expect(watchdogStallMs({ JABBU_TEST_HOOKS: "1", JABBU_WATCHDOG_STALL_MS: "1000" })).toBe(1_000);
 	});
 });
 
 describe("runDaemon exit record (real daemon process)", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-exit-");
+		home = makeHome("jabbu-exit-");
 	});
 	afterEach(() => {
 		killSpawned();
 		home.remove();
 	});
-	const logFile = () => readFileSync(join(home.dir, "logs", "ompbot.log"), "utf8");
+	const logFile = () => readFileSync(join(home.dir, "logs", "jabbu.log"), "utf8");
 
 	for (const [hook, kind] of [
 		["rejection", "unhandledRejection"],
 		["exception", "uncaughtException"],
 	] as const) {
-		test(`an ${kind} leaves one daemon_fatal line in ompbot.log and exits 1`, async () => {
-			const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), { OMPBOT_TEST_FATAL: hook });
+		test(`an ${kind} leaves one daemon_fatal line in jabbu.log and exits 1`, async () => {
+			const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), { JABBU_TEST_FATAL: hook });
 			expect(await daemon.exited).toBe(1);
 			const fatal = logFile()
 				.split("\n")
@@ -168,8 +168,8 @@ describe("runDaemon exit record (real daemon process)", () => {
 
 	test("a main thread stuck while the daemon boots is killed by the watchdog too", async () => {
 		const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), {
-			OMPBOT_TEST_START_STALL: "1",
-			OMPBOT_WATCHDOG_STALL_MS: "1000",
+			JABBU_TEST_START_STALL: "1",
+			JABBU_WATCHDOG_STALL_MS: "1000",
 		});
 		const line = await daemon.waitLog(/watchdog_kill/, 15_000);
 		expect(line).toContain("watchdog_kill");

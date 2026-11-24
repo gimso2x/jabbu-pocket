@@ -24,7 +24,7 @@ const filler = (kb: number, tag: string, ...extra: string[]): string =>
 
 /** A repository with one base commit; `lane(files)` commits the files and returns `{ dir, base, head }`. */
 function repoWith(files: Record<string, string>, before: Record<string, string> = {}, rename?: [string, string]) {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-lane-diff-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-lane-diff-"));
 	roots.push(dir);
 	git(dir, "init", "-q", "-b", "main");
 	const write = (all: Record<string, string>) => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """기억 교정 수집기: '기억 교정' 모니터가 매주 일요일 05:00(봇 시간대)에 한 번 실행한다.
 
-ompbot 세션이 쓰는 Mnemopi 은행(mnemopi.db)을 읽기 전용으로 열어 교정할 기억을 마크다운으로
+jabbu 세션이 쓰는 Mnemopi 은행(mnemopi.db)을 읽기 전용으로 열어 교정할 기억을 마크다운으로
 출력한다. 섹션 순서는 고정이다.
   1. 소스 상태: 은행 경로와 이름, state ok/missing/error
   2. 지표: working·episodic 전체/유효/무효화/회상>0 수, 분류별 유효 수, 검사 안 한 claim 중 회상>0 수,
@@ -13,8 +13,8 @@ ompbot 세션이 쓰는 Mnemopi 은행(mnemopi.db)을 읽기 전용으로 열어
 은행을 못 찾거나 못 열면 '소스 상태'에 missing/error만 쓴다. DB는 mode=ro로만 열고 어떤 파일도 쓰지 않는다.
 
 입력: --bank <mnemopi.db> 또는 --banks-root <dir>(기본 ~/.omp/agent/memories/mnemopi/banks)와
-      --workspace <dir>(기본 ~/.ompbot/workspace; metadata_json cwd가 이 경로인 working 행이 가장 많은 은행),
-      --state <json>(기본 ~/.ompbot/workspace/memory-audit/state.json), --limit N(기본 30, 1..40),
+      --workspace <dir>(기본 ~/.jabbu/workspace; metadata_json cwd가 이 경로인 working 행이 가장 많은 은행),
+      --state <json>(기본 ~/.jabbu/workspace/memory-audit/state.json), --limit N(기본 30, 1..40),
       --recheck-days N(기본 30), --now <ISO8601>(기본 현재 시각; 시간대 없으면 BOT_TZ)
 종료 코드: 0 = 출력함(은행을 못 찾거나 못 열어도 0), 2 = 인자 오류
 """
@@ -32,10 +32,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 def bot_timezone() -> dt.tzinfo:
-    """봇 시간대: OMPBOT_TZ 환경 변수 → <OMPBOT_HOME 또는 ~/.ompbot>/config.json의 timezone → 시스템 시간대."""
-    name = os.environ.get("OMPBOT_TZ", "").strip()
+    """봇 시간대: JABBU_TZ 환경 변수 → <JABBU_HOME 또는 ~/.jabbu>/config.json의 timezone → 시스템 시간대."""
+    name = os.environ.get("JABBU_TZ", "").strip()
     if not name:
-        config = Path(os.environ.get("OMPBOT_HOME") or Path.home() / ".ompbot") / "config.json"
+        config = Path(os.environ.get("JABBU_HOME") or Path.home() / ".jabbu") / "config.json"
         try:
             name = str(json.loads(config.read_text(encoding="utf-8")).get("timezone") or "").strip()
         except (OSError, ValueError, AttributeError):
@@ -46,8 +46,8 @@ def bot_timezone() -> dt.tzinfo:
 BOT_TZ = bot_timezone()
 UTC = dt.timezone.utc
 DEFAULT_BANKS_ROOT = "~/.omp/agent/memories/mnemopi/banks"
-DEFAULT_WORKSPACE = "~/.ompbot/workspace"
-DEFAULT_STATE = "~/.ompbot/workspace/memory-audit/state.json"
+DEFAULT_WORKSPACE = "~/.jabbu/workspace"
+DEFAULT_STATE = "~/.jabbu/workspace/memory-audit/state.json"
 MAX_NOISE = 10
 MAX_LIMIT = 40
 PREVIEW_CHARS = 1500

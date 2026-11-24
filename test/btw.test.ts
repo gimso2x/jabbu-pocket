@@ -38,8 +38,8 @@ let supportsBtw: boolean;
 let counter = 0;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-btw-"));
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-btw-"));
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	drivers = [];
 	driverOptions = { holdTurns: true };
 	supportsBtw = true;
@@ -107,9 +107,9 @@ const steers = (driver: FakeOmpDriver): string[] => driver.calls.filter((call) =
 const prompts = (driver: FakeOmpDriver): string[] => driver.calls.filter((call) => call.startsWith("prompt:"));
 
 describe("AC-1 btw command parsing", () => {
-	test("!btw and /btw-ompbot parse as the btw command and carry the question", () => {
+	test("!btw and /btw-jabbu parse as the btw command and carry the question", () => {
 		expect(parseCommand("!btw 왜 멈췄어?")).toEqual({ kind: "btw", arg: "왜 멈췄어?" });
-		expect(parseCommand("/btw-ompbot 왜")?.kind).toBe("btw");
+		expect(parseCommand("/btw-jabbu 왜")?.kind).toBe("btw");
 		expect(parseCommand("!btw")).toEqual({ kind: "btw", arg: "" });
 		expect(promptTextOf("!btw 왜 멈췄어?")).toBe("왜 멈췄어?");
 	});
@@ -226,7 +226,7 @@ describe("AC-4 no turn, unsupported driver, missing question", () => {
 
 		driverOptions = { holdTurns: true };
 		await router.route(msg("long job"));
-		const busy = msg("/btw-ompbot");
+		const busy = msg("/btw-jabbu");
 		await router.route(busy);
 		expect(replyIn(busy.threadRef)).toContain("사용법: `!btw <질문>`");
 		expect(btwDriver().btwCalls).toEqual([]);
@@ -278,7 +278,7 @@ describe("AC-5 RpcOmpDriver.btw", () => {
 	let client: BtwPeer;
 
 	async function startDriver(btwTimeoutMs?: number): Promise<void> {
-		root = mkdtempSync(join(tmpdir(), "ompbot-btw-rpc-"));
+		root = mkdtempSync(join(tmpdir(), "jabbu-btw-rpc-"));
 		client = new BtwPeer();
 		driver = new RpcOmpDriver({
 			ompExecutable: fakeOmpExecutable(root),

@@ -55,18 +55,18 @@ describe("dispatch tool (qa-i low)", () => {
 		expect(seenSignal).toBe(controller.signal);
 		const appendix = cmdSeen[cmdSeen.indexOf("--append-system-prompt") + 1] ?? "";
 		expect(appendix).not.toContain("discord_send_file");
-		expect(appendix).not.toContain("ompbot_request_approval(");
+		expect(appendix).not.toContain("jabbu_request_approval(");
 	});
 
 	test("buildFloorsPrompt with hostTools false has no tool lines", () => {
 		const text = buildFloorsPrompt("/tmp/h/secrets", undefined, false, false, false, {}, false);
 		expect(text).not.toContain("discord_send_file");
-		expect(text).not.toContain("ompbot_request_approval(");
+		expect(text).not.toContain("jabbu_request_approval(");
 		expect(buildFloorsPrompt("/tmp/h/secrets")).toContain("discord_send_file");
 	});
 
 	test("a Discord lane session gets Discord ask wording and its upload tool", () => {
-		const text = buildFloorsPrompt("/tmp/h/secrets", "ompbot/work/my-lane", false, true, false, {
+		const text = buildFloorsPrompt("/tmp/h/secrets", "jabbu/work/my-lane", false, true, false, {
 			lanePlatform: "discord",
 			laneCwd: "/repo",
 		});
@@ -85,8 +85,8 @@ describe("omp child output and env (qa-i low)", () => {
 	});
 
 	// qa n114: local herdr gets the cleaned child env like every other child.
-	test("herdr runs without SLACK_*, OMPBOT_* and GIT_* from the daemon env", async () => {
-		const keys = ["SLACK_BOT_TOKEN", "OMPBOT_HOME", "GIT_DIR"];
+	test("herdr runs without SLACK_*, JABBU_* and GIT_* from the daemon env", async () => {
+		const keys = ["SLACK_BOT_TOKEN", "JABBU_HOME", "GIT_DIR"];
 		for (const key of keys) process.env[key] = "xoxb-TEST-0";
 		let env: Record<string, string | undefined> | undefined;
 		try {

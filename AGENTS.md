@@ -11,7 +11,7 @@ jabbu-pocket 저장소에서 일하는 에이전트가 지킬 규칙이다. 개�
 
 - omp를 포크하거나 패치하지 않는다. omp는 한 줄도 고치지 않고 공개 stdio RPC로만 말한다.
 - Telegram 어댑터, 다중 사용자, 루프백 밖으로 여는 HTTP 엔드포인트, 쓰기 가능한 웹 UI·데스크톱 앱, 음성 전사.
-- 허용: 루프백에만 여는 읽기 전용 현황판(`ompbot dashboard`)과 webhook 모니터 리스너, 오너 한 명의 DM·서버 채널만 받는 Discord 어댑터.
+- 허용: 루프백에만 여는 읽기 전용 현황판(`jabbu-pocket dashboard`)과 webhook 모니터 리스너, 오너 한 명의 DM·서버 채널만 받는 Discord 어댑터.
 - 사람이 손으로 확인해야 하는 수락 기준.
 
 ## 비밀값

@@ -55,7 +55,7 @@ export interface LanesDeps {
 export type DaemonAnswer = { kind: "open"; file: string } | { kind: "none" } | { kind: "down"; reason: string };
 
 async function askDaemonSocket(homeDir: string, originKey: string): Promise<DaemonAnswer> {
-	const socket = join(homeDir, "ompbot.sock");
+	const socket = join(homeDir, "jabbu.sock");
 	if (!existsSync(socket)) return { kind: "down", reason: "no socket" };
 	let response: unknown;
 	try {
@@ -75,7 +75,7 @@ async function askDaemonSocket(homeDir: string, originKey: string): Promise<Daem
  * so watching never writes the ledger. Undefined when neither matches.
  */
 export function resolveWatchTarget(homeDir: string, target: string): { origin: OriginRow; lane?: string } | undefined {
-	const db = new Database(join(homeDir, "ompbot.db"), { readonly: true, strict: true });
+	const db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
 	try {
 		const lane = db.query("SELECT origin_key FROM lanes WHERE name = ?").get(target) as { origin_key: string } | null;
 		const originKey = lane?.origin_key ?? target;
@@ -91,7 +91,7 @@ export function resolveWatchTarget(homeDir: string, target: string): { origin: O
 	}
 }
 
-/** The file `ompbot lanes watch` follows, how it names the target, and why that file; a string is the one error line. */
+/** The file `jabbu-pocket lanes watch` follows, how it names the target, and why that file; a string is the one error line. */
 type WatchPick = { file: string; label: string; source: string } | string;
 
 async function pickOriginFile(homeDir: string, target: string, deps: LanesDeps): Promise<WatchPick> {
@@ -117,7 +117,7 @@ async function pickOriginFile(homeDir: string, target: string, deps: LanesDeps):
  * writes. Only local TASKs (`host` null); a remote one is watched on its host.
  */
 function pickTaskFile(homeDir: string, taskId: string, deps: LanesDeps): WatchPick {
-	const db = new Database(join(homeDir, "ompbot.db"), { readonly: true, strict: true });
+	const db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
 	let row: { host: string | null; worktree: string } | null;
 	try {
 		const table = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'").get();
@@ -288,7 +288,7 @@ async function watchCommand(args: string[], homeDir: string, deps: LanesDeps): P
 	});
 	const [target, ...extra] = positionals;
 	if (target === undefined || extra.length > 0) {
-		error(`lanes watch: one <lane|origin|T-…> expected (ompbot --help)`);
+		error(`lanes watch: one <lane|origin|T-…> expected (jabbu-pocket --help)`);
 		return 2;
 	}
 	const backlog = values.lines === undefined ? DEFAULT_LINES : Number(values.lines);
@@ -296,8 +296,8 @@ async function watchCommand(args: string[], homeDir: string, deps: LanesDeps): P
 		error(`lanes watch: --lines must be a whole number >= 0`);
 		return 2;
 	}
-	if (!existsSync(join(homeDir, "ompbot.db"))) {
-		error(`lanes watch: no ompbot.db in ${homeDir}`);
+	if (!existsSync(join(homeDir, "jabbu.db"))) {
+		error(`lanes watch: no jabbu.db in ${homeDir}`);
 		return 1;
 	}
 	const picked = TASK_ID_PATTERN.test(target)
@@ -333,7 +333,7 @@ function sessionFilesIn(dir: string): Set<string> {
 }
 
 /**
- * `ompbot lanes attach <lane>`: asks the daemon (`lane_attach`) to release the lane, runs `omp --resume <file>` in this
+ * `jabbu-pocket lanes attach <lane>`: asks the daemon (`lane_attach`) to release the lane, runs `omp --resume <file>` in this
  * terminal in the lane's worktree, then gives the lane back (`lane_detach`) with the session files omp created
  * meanwhile. The daemon's answer is the only signal: nothing is guessed from files or mtimes.
  */
@@ -347,12 +347,12 @@ async function attachCommand(args: string[], homeDir: string, deps: LanesDeps): 
 	});
 	const [lane, ...extra] = positionals;
 	if (lane === undefined || extra.length > 0) {
-		error("lanes attach: one <lane> expected (ompbot --help)");
+		error("lanes attach: one <lane> expected (jabbu-pocket --help)");
 		return 2;
 	}
-	const socket = join(homeDir, "ompbot.sock");
+	const socket = join(homeDir, "jabbu.sock");
 	if (!existsSync(socket)) {
-		error("lanes attach: the daemon is not running (no ompbot.sock); attach needs it to release the lane");
+		error("lanes attach: the daemon is not running (no jabbu.sock); attach needs it to release the lane");
 		return 1;
 	}
 	let ompCommand = deps.ompCommand;
@@ -426,11 +426,11 @@ async function attachCommand(args: string[], homeDir: string, deps: LanesDeps): 
 	return code === 0 ? 0 : 1;
 }
 
-/** `ompbot lanes <sub>`: `watch` and `attach`. */
+/** `jabbu-pocket lanes <sub>`: `watch` and `attach`. */
 export async function lanesCommand(args: string[], homeDir: string, deps: LanesDeps = {}): Promise<number> {
 	const [sub, ...rest] = args;
 	if (sub === "watch") return await watchCommand(rest, homeDir, deps);
 	if (sub === "attach") return await attachCommand(rest, homeDir, deps);
-	process.stderr.write(`usage: ompbot lanes\n${LANES_USAGE}`);
+	process.stderr.write(`usage: jabbu-pocket lanes\n${LANES_USAGE}`);
 	return sub === undefined || sub === "--help" ? 0 : 2;
 }

@@ -31,7 +31,7 @@ export function wikiFixture(
 		repos?: string[];
 	} = {},
 ): WikiFixture {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-wiki-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-wiki-"));
 	const client = join(dir, "client");
 	mkdirSync(join(client, "integrations", "omp"), { recursive: true });
 	writeFileSync(join(client, "integrations", "omp", "omp-wiki-session-note.py"), "# fake client\n");

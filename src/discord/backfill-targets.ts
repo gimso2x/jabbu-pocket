@@ -5,10 +5,10 @@ import type { Store } from "../store/db";
 import { type BackfillTarget, discordCursorKey } from "./backfill";
 
 /**
- * Every Discord channel to read for missed messages: a stored watermark keeps its channel a target after `ompbot gc`
+ * Every Discord channel to read for missed messages: a stored watermark keeps its channel a target after `jabbu-pocket gc`
  * removed the quiet origin (`ch:`/`thr:` watermarks of the removed Slack backfill are never read here); each origin is
  * a DM, a server channel (its roots open threads) or a server thread, which is a channel of its own; and a work lane's
- * thread has the `ompbot/work/<name>` origin, which `listOrigins` never names, so an open lane's `thread_ref`
+ * thread has the `jabbu/work/<name>` origin, which `listOrigins` never names, so an open lane's `thread_ref`
  * (`<channel>:<thread id>`) is read from the lane itself.
  */
 export function discordBackfillTargets(

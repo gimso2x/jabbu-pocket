@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { readDiscordToken } from "../config";
 import type { Logger } from "../log";
 import { indexSecretValue } from "../redact";
@@ -56,17 +56,13 @@ function indexFile(path: string, index: (candidate: string) => void): void {
 
 /**
  * Seeds the redaction value index with everything the daemon can legitimately know at startup: the Discord token
- * file, secret-named environment variables, and extra files listed in `OMPBOT_SECRET_GUARD_FILES`
+ * file, secret-named environment variables, and extra files listed in `JABBU_SECRET_GUARD_FILES`
  * (colon-separated, like upstream's guard-files env). Returns how many values were indexed.
  *
  * Startup-only on purpose: a rotated token invalidates the socket connection anyway, so the daemon restarts and
  * re-reads everything. Nothing here can be turned off per turn — the index lives below the agent.
  */
-export function indexRuntimeSecrets(
-	config: OmpbotConfig,
-	env: Record<string, string | undefined>,
-	log: Logger,
-): number {
+export function indexRuntimeSecrets(config: JabbuConfig, env: Record<string, string | undefined>, log: Logger): number {
 	let known = 0;
 	const index = (candidate: string): void => {
 		if (indexSecretValue(candidate)) known += 1;
@@ -87,7 +83,7 @@ export function indexRuntimeSecrets(
 
 /**
  * The part of {@link indexRuntimeSecrets} that never touches the token files: secret-named environment
- * variables and the files listed in `OMPBOT_SECRET_GUARD_FILES`. The dashboard seeds its index with this alone, so its
+ * variables and the files listed in `JABBU_SECRET_GUARD_FILES`. The dashboard seeds its index with this alone, so its
  * masking goes past the patterns without the dashboard reading the tokens. Returns how many values were indexed.
  */
 export function indexEnvSecrets(env: Record<string, string | undefined>): number {
@@ -101,7 +97,7 @@ export function indexEnvSecrets(env: Record<string, string | undefined>): number
 		index(value);
 	}
 
-	for (const path of (env.OMPBOT_SECRET_GUARD_FILES ?? "").split(":")) {
+	for (const path of (env.JABBU_SECRET_GUARD_FILES ?? "").split(":")) {
 		if (path !== "") indexFile(path, index);
 	}
 	return known;

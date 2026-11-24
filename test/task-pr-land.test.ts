@@ -234,7 +234,7 @@ describe("머지 고정: 검사한 sha에만, 머지 직전 재검사", () => {
 			(call) => call.method === "createMessage" && JSON.stringify(call.embeds ?? "").includes("PR 착지 보류"),
 		);
 		expect(JSON.stringify(card && "components" in card ? card.components : [])).toContain(
-			`ompbot:task:merge:${row.taskId}`,
+			`jabbu:task:merge:${row.taskId}`,
 		);
 	});
 

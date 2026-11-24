@@ -14,9 +14,9 @@ let home: string;
 let path: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-schema-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-schema-"));
 	chmodSync(home, 0o700);
-	path = join(home, "ompbot.db");
+	path = join(home, "jabbu.db");
 });
 
 afterEach(() => {
@@ -180,7 +180,7 @@ describe("newer schema refusal", () => {
 			expect((error as NewerSchemaError).code).toBe("newer_schema");
 			expect(message).toContain(String(newer));
 			expect(message).toContain(String(SCHEMA_VERSION));
-			expect(message).toContain("ompbot restore");
+			expect(message).toContain("jabbu-pocket restore");
 		}
 		expect(readFileSync(path).equals(before)).toBe(true);
 		expect(userVersion(path)).toBe(newer);

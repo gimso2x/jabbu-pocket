@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { isAutonomousRow } from "../core/mailbox";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { holderAlive } from "../daemon/lock";
@@ -52,7 +52,7 @@ import {
 
 /**
  * `unknown`: nothing to judge from (no heartbeat stamp, no ledger file — a home no daemon has run in). It is neither
- * health nor a failure: `ompbot gates` counts it apart and fails on it only with `--strict`, and the daemon's own
+ * health nor a failure: `jabbu-pocket gates` counts it apart and fails on it only with `--strict`, and the daemon's own
  * gate sweep keeps the previous state.
  */
 export type GateState = "open" | "closed" | "unknown";
@@ -99,7 +99,7 @@ export type ConfigGateOptions = Pick<
 >;
 
 /**
- * The config-derived gate options. The daemon's gate sweep, `/status`, `ompbot status`/`gates`/`apply` and the
+ * The config-derived gate options. The daemon's gate sweep, `/status`, `jabbu-pocket status`/`gates`/`apply` and the
  * dashboard all build their gates from this, so a gate the sweep alerts on is never missing from a status view. A
  * db-only home (no config.json) gets none: no omp to check, no offsite target, no ceiling. `timezone` is where the
  * cost ceiling's "today" is: the config's own zone unless the caller (the dashboard's partial config) names it.
@@ -108,7 +108,7 @@ export function gateOptionsFromConfig(
 	config:
 		| (Partial<
 				Pick<
-					OmpbotConfig,
+					JabbuConfig,
 					"agent" | "ompExecutable" | "ompProfile" | "offsite" | "costCap" | "hostSessionCeiling" | "timezone"
 				>
 		  > & {
@@ -136,7 +136,7 @@ function gate(name: string, open: boolean, detail: string): Gate {
 	return { name, state: open ? "open" : "closed", detail };
 }
 
-/** Gates judged from the ledger; all `unknown` while `ompbot.db` does not exist. */
+/** Gates judged from the ledger; all `unknown` while `jabbu.db` does not exist. */
 const LEDGER_GATES = [
 	"inbound_starved",
 	"origin_silent",
@@ -170,7 +170,7 @@ export const GATE_NAMES = [
  * `drain_orphaned`: the heartbeat says draining while `<home>/apply.lock` names an apply that no longer runs. A drain
  * the daemon holds has no expiry, and while it lasts `origin_silent` and `monitors_stalled` stay closed, so without
  * this nothing reports a bot that quietly holds every message. Only judged when there is something to judge (a
- * drain or an apply lock); a drain with no apply lock (`ompbot drain` by hand) has no holder to call dead.
+ * drain or an apply lock); a drain with no apply lock (`jabbu-pocket drain` by hand) has no holder to call dead.
  */
 function drainOrphanedGate(
 	homeDir: string,
@@ -311,11 +311,11 @@ function hostPressureGate(read: Partial<HostLoadReader> | undefined): Gate {
  * Read-only health projection over `<homeDir>`: opens the ledger read-only (never re-queues inflight deliveries,
  * unlike `openStore`) plus the backup stamp, and answers "does anything need a human?". Follows the upstream
  * `ops cycle` contract: any open gate means exit 1, so automation cannot mistake a sick bot for a healthy one. A gate
- * with nothing to judge from is `unknown`, not closed (`ompbot gates --strict` fails on those too).
+ * with nothing to judge from is `unknown`, not closed (`jabbu-pocket gates --strict` fails on those too).
  *
  * Held (`failed_ambiguous`) deliveries gate only once they are past the boot requeue window: the daemon's start puts
  * fresher ones back to pending by itself, and a newer one may just be waiting for the owner's look
- * (`ompbot deliveries ack|resend`). Gating on every held row would alert on each one the moment it happened.
+ * (`jabbu-pocket deliveries ack|resend`). Gating on every held row would alert on each one the moment it happened.
  */
 /**
  * The default `disk_low` paths: the bot home, `~/.omp/agent` and, with `ompProfile`, the profile's agent dir
@@ -426,7 +426,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 	gates.push(diskGate(diskPaths, options.statfs));
 	gates.push(hostPressureGate(options.hostLoad));
 
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) {
 		for (const name of LEDGER_GATES) gates.push(unknownGate(name, "db=missing"));
 		if (options.dailyCap !== undefined) gates.push(unknownGate("cost_cap", "db=missing"));
@@ -514,7 +514,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 		);
 		ledger.push(gate("deliveries_overdue", overdue > 0, `overdue=${overdue}`));
 
-		// The owner's manual path exists (`ompbot deliveries`), so a held row that even a restart can no longer requeue
+		// The owner's manual path exists (`jabbu-pocket deliveries`), so a held row that even a restart can no longer requeue
 		// (older than the 24h freshness window) is a stuck one, not a state that resolves itself.
 		const stuckAmbiguous = columnExists(db, "deliveries", "created_at")
 			? scalar(

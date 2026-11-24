@@ -58,7 +58,7 @@ let transport: WaitingDiscordTransport;
 let logs: string[];
 
 beforeEach(async () => {
-	home = makeHome("ompbot-autoland-");
+	home = makeHome("jabbu-autoland-");
 	logs = [];
 	transport = threadTransport();
 	const sessions = new FakeSessionStore();
@@ -110,29 +110,29 @@ describe("daemon repoMatches (git common directory)", () => {
 	};
 
 	beforeEach(() => {
-		root = mkdtempSync(join(tmpdir(), "ompbot-autoland-git-"));
-		initRepo(join(root, "ompbot"));
-		git("-C", join(root, "ompbot"), "worktree", "add", "-q", join(root, "ompbot-t-1"), "-b", "task/T-1");
-		initRepo(join(root, "ompbotx"));
-		symlinkSync(join(root, "ompbot"), join(root, "ompbot-link"));
+		root = mkdtempSync(join(tmpdir(), "jabbu-autoland-git-"));
+		initRepo(join(root, "jabbu"));
+		git("-C", join(root, "jabbu"), "worktree", "add", "-q", join(root, "jabbu-t-1"), "-b", "task/T-1");
+		initRepo(join(root, "jabbux"));
+		symlinkSync(join(root, "jabbu"), join(root, "jabbu-link"));
 	});
 
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 	test("AC-6: another worktree of the same repository matches; a look-alike separate repository does not", async () => {
-		const worktree = seedTask({ repo: join(root, "ompbot-t-1") });
-		expect(await daemon.repoMatches(worktree, [join(root, "ompbot")])).toBe(true);
-		expect(await daemon.repoMatches(worktree, [join(root, "ompbotx"), join(root, "ompbot")])).toBe(true);
-		expect(await daemon.repoMatches(worktree, [join(root, "ompbotx")])).toBe(false);
-		const lookalike = seedTask({ repo: join(root, "ompbotx") });
-		expect(await daemon.repoMatches(lookalike, [join(root, "ompbot")])).toBe(false);
+		const worktree = seedTask({ repo: join(root, "jabbu-t-1") });
+		expect(await daemon.repoMatches(worktree, [join(root, "jabbu")])).toBe(true);
+		expect(await daemon.repoMatches(worktree, [join(root, "jabbux"), join(root, "jabbu")])).toBe(true);
+		expect(await daemon.repoMatches(worktree, [join(root, "jabbux")])).toBe(false);
+		const lookalike = seedTask({ repo: join(root, "jabbux") });
+		expect(await daemon.repoMatches(lookalike, [join(root, "jabbu")])).toBe(false);
 	});
 
 	test("AC-6: a symlinked repos entry matches; a missing or non-git path never does", async () => {
-		const worktree = seedTask({ repo: join(root, "ompbot-t-1") });
-		expect(await daemon.repoMatches(worktree, [join(root, "ompbot-link")])).toBe(true);
+		const worktree = seedTask({ repo: join(root, "jabbu-t-1") });
+		expect(await daemon.repoMatches(worktree, [join(root, "jabbu-link")])).toBe(true);
 		expect(await daemon.repoMatches(worktree, [join(root, "nowhere")])).toBe(false);
-		expect(await daemon.repoMatches(seedTask({ repo: join(root, "nowhere") }), [join(root, "ompbot")])).toBe(false);
+		expect(await daemon.repoMatches(seedTask({ repo: join(root, "nowhere") }), [join(root, "jabbu")])).toBe(false);
 		expect(await daemon.repoMatches(seedTask({ repo: root }), [root])).toBe(false);
 	});
 });
@@ -198,7 +198,7 @@ describe("daemon autoLand: core landing seam (task-core-land)", () => {
 	let entered: PromiseWithResolvers<void>;
 
 	beforeEach(async () => {
-		gatedHome = makeHome("ompbot-coreland-");
+		gatedHome = makeHome("jabbu-coreland-");
 		gatedTransport = threadTransport();
 		drivers = [];
 		landCalls = [];
@@ -253,7 +253,7 @@ describe("daemon autoLand: core landing seam (task-core-land)", () => {
 
 	async function clickMerge(taskId: string): Promise<string> {
 		const card = await gatedTransport.createMessage({ channelId: THREAD, content: "🔍 머지 대기 카드" });
-		await click(gatedTransport, `ompbot:task:merge:${taskId}`, card.id);
+		await click(gatedTransport, `jabbu:task:merge:${taskId}`, card.id);
 		return card.id;
 	}
 
@@ -385,7 +385,7 @@ describe("[TASK] review·QA gate (task-review-qa-gate)", () => {
 		}) as Partial<TaskJudgement> as TaskJudgement;
 
 	beforeEach(async () => {
-		root = mkdtempSync(join(tmpdir(), "ompbot-gate-"));
+		root = mkdtempSync(join(tmpdir(), "jabbu-gate-"));
 		repo = join(root, "repo");
 		execFileSync("git", ["init", "-q", "-b", "main", repo], { env: dispatchEnv(process.env) });
 		g(repo, "config", "user.name", "t");
@@ -400,7 +400,7 @@ describe("[TASK] review·QA gate (task-review-qa-gate)", () => {
 		answers = { review: ok(CLEAR90), qa: ok(PASS) };
 		hold = undefined;
 		qaEntered = Promise.withResolvers<void>();
-		gh = makeHome("ompbot-gate-home-");
+		gh = makeHome("jabbu-gate-home-");
 		gt = threadTransport();
 		const run: ProcessRunner = async (cmd, opts) => {
 			const isQa = cmd[cmd.indexOf("--model") + 1] === QA_MODEL;
@@ -602,7 +602,7 @@ describe("[TASK] review·QA gate (task-review-qa-gate)", () => {
 		await gd.autoLand(row, h.gate);
 		await qaEntered.promise;
 		const card = await gt.createMessage({ channelId: THREAD, content: "🔍 머지 대기 카드" });
-		await click(gt, `ompbot:task:merge:${row.taskId}`, card.id);
+		await click(gt, `jabbu:task:merge:${row.taskId}`, card.id);
 		release.resolve();
 		expect(order).toEqual(["review", "qa", "land"]);
 		const after = gd.store.tasks.require(row.taskId);
@@ -720,7 +720,7 @@ describe("원격 pr 직접 autoLand·오너 머지 버튼(AC-11f)", () => {
 	let gateCalls: string[];
 
 	beforeEach(async () => {
-		rh = makeHome("ompbot-remote-pr-autoland-");
+		rh = makeHome("jabbu-remote-pr-autoland-");
 		rt = threadTransport();
 		landCalls = [];
 		ghCalls = [];
@@ -835,7 +835,7 @@ describe("원격 pr 직접 autoLand·오너 머지 버튼(AC-11f)", () => {
 	test("원격 pr: 오너의 머지 버튼은 밴드 위험(L3)이어도 코어 착지로 간다 — landTask 1회, '머지해' 없음", async () => {
 		const row = seedRemote("L3");
 		const card = await rt.createMessage({ channelId: THREAD, content: "🔍 머지 대기 카드" });
-		await click(rt, `ompbot:task:merge:${row.taskId}`, card.id);
+		await click(rt, `jabbu:task:merge:${row.taskId}`, card.id);
 		expect(landCalls.map((call) => call.taskId)).toEqual([row.taskId]);
 		expect(landCalls[0]?.host).toBe("wsl");
 		expect(rd.store.listInbound().filter((entry) => entry.textRef.trim().startsWith("머지해"))).toHaveLength(0);

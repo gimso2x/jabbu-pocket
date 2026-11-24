@@ -34,7 +34,7 @@ const baseOf = (repo: string): string => git(repo, "symbolic-ref", "--short", "H
 
 function repoWithOrigin(): { repo: string; bare: string; base: string } {
 	const repo = makeRepo(repos);
-	const bare = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-wiki-bare-")));
+	const bare = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-wiki-bare-")));
 	scratch.push(bare);
 	git(bare, "init", "-q", "--bare");
 	git(repo, "remote", "add", "origin", bare);
@@ -53,7 +53,7 @@ function commitIn(dir: string, file: string): string {
 function withNotes(options: { spawnFails?: boolean } = {}): { h: LaneHarness; wiki: WikiFixture } {
 	let wiki!: WikiFixture;
 	// One bot home (one ledger) per harness: a test may build several.
-	const home = makeHome("ompbot-wiki-lane-home-");
+	const home = makeHome("jabbu-wiki-lane-home-");
 	homes.push(home);
 	const h = laneHarness(home.dir, {
 		wikiNotes: {
@@ -79,7 +79,7 @@ async function closeLane(h: LaneHarness, repo: string, title = "a.txt 추가") {
 }
 
 describe("lane result note", () => {
-	test("AC-1: landed writes ompbot-lane-<id>.json once with goal, criteria and commits, after the worktree is gone; a tick does not write it again", async () => {
+	test("AC-1: landed writes jabbu-lane-<id>.json once with goal, criteria and commits, after the worktree is gone; a tick does not write it again", async () => {
 		const { repo } = repoWithOrigin();
 		const { h, wiki } = withNotes();
 		const lane = await closeLane(h, repo);
@@ -87,12 +87,12 @@ describe("lane result note", () => {
 
 		await h.manager.requestLand(lane.name, "owner");
 		await h.settle();
-		const id = `ompbot-lane-${lane.meta.laneId}`;
+		const id = `jabbu-lane-${lane.meta.laneId}`;
 		expect(existsSync(lane.meta.worktree ?? "")).toBe(false);
 		expect(wiki.outbox()).toEqual([id]);
 		const note = wiki.read(id);
 		expect(note.title).toBe("작업 결과: a.txt 추가");
-		expect(note.tags).toEqual(["ompbot", "work-outcome", "lane"]);
+		expect(note.tags).toEqual(["jabbu", "work-outcome", "lane"]);
 		expect(note.project).toBe(repo.split("/").pop() ?? "");
 		expect(note.summary).toContain("## 목표");
 		expect(note.summary).toContain("AC-1 (통과)");
@@ -114,7 +114,7 @@ describe("lane result note", () => {
 		const { repo, bare, base } = repoWithOrigin();
 		const { h, wiki } = withNotes();
 		const lane = await closeLane(h, repo);
-		const other = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-wiki-clone-")));
+		const other = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-wiki-clone-")));
 		scratch.push(other);
 		git(other, "clone", "-q", bare, ".");
 		commitIn(other, "theirs.txt");
@@ -130,7 +130,7 @@ describe("lane result note", () => {
 		await h.manager.tick();
 		await h.settle();
 		expect(h.store.getLane(lane.name)?.meta.land?.state).toBe("landed");
-		const id = `ompbot-lane-${lane.meta.laneId}`;
+		const id = `jabbu-lane-${lane.meta.laneId}`;
 		expect(wiki.outbox()).toEqual([id]);
 		expect(wiki.read(id).summary).toContain("add a.txt");
 		h.close();
@@ -188,7 +188,7 @@ describe("lane result note", () => {
 		await spawning.h.manager.requestLand(spawned.name, "owner");
 		await spawning.h.settle();
 		expect(spawning.h.store.getLane(spawned.name)?.meta.land?.state).toBe("landed");
-		expect(spawning.wiki.outbox()).toEqual([`ompbot-lane-${spawned.meta.laneId}`]);
+		expect(spawning.wiki.outbox()).toEqual([`jabbu-lane-${spawned.meta.laneId}`]);
 		expect(spawning.wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes("sweep"))).toBe(true);
 		spawning.h.close();
 	});
@@ -199,7 +199,7 @@ describe("lane result note", () => {
 		const lane = await closeLane(h, repo, "키 sk-live1234567890abcdef 와 xoxb-123-abc 정리");
 		await h.manager.requestLand(lane.name, "owner");
 		await h.settle();
-		const raw = JSON.stringify(wiki.read(`ompbot-lane-${lane.meta.laneId}`));
+		const raw = JSON.stringify(wiki.read(`jabbu-lane-${lane.meta.laneId}`));
 		expect(raw).not.toContain("sk-live");
 		expect(raw).not.toContain("xoxb-123");
 		expect(raw).toContain("[REDACTED]");

@@ -32,8 +32,8 @@ let counter = 0;
 const clock = { now: () => 1_000_000 };
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-uncertain-"));
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-uncertain-"));
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	const sessionStore = new FakeSessionStore();
 	router = new OriginRouter({
 		timezone: "Asia/Seoul",
@@ -82,9 +82,9 @@ async function parked(): Promise<InboundRecord> {
 describe("/queue with uncertain rows", () => {
 	test("lists them in their own section, numbered after the waiting rows, with the reason", async () => {
 		await router.route(msg("긴 작업"));
-		await router.route(msg("/followup-ompbot 다음 일"));
+		await router.route(msg("/followup-jabbu 다음 일"));
 		await router.route(msg("이미 읽었을지 모르는 지시"));
-		const queue = await send("/queue-ompbot");
+		const queue = await send("/queue-jabbu");
 		expect(queue).toContain("1. [다음 작업] 다음 일");
 		expect(queue).toContain("⚠ 전달 불확실");
 		expect(queue).toContain("2. [끼워넣기 전송 오류 · 불확실] 이미 읽었을지 모르는 지시");

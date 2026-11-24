@@ -102,8 +102,8 @@ let timers: ManualTimers;
 let broker: ApprovalBroker;
 
 beforeEach(() => {
-	home = makeHome("ompbot-auto-choice-");
-	dbPath = join(home.dir, "ompbot.db");
+	home = makeHome("jabbu-auto-choice-");
+	dbPath = join(home.dir, "jabbu.db");
 	store = openStore({ timezone: "Asia/Seoul", path: dbPath, clock, redact });
 	port = new RecordingPort();
 	timers = new ManualTimers();

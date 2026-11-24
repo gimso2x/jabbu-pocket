@@ -58,7 +58,7 @@ function invalidField(): string {
 }
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-qa-z-cfg-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-qa-z-cfg-"));
 	chmodSync(home, 0o700);
 	mkdirSync(join(home, "secrets"), { mode: 0o700 });
 	writeFileSync(join(home, "secrets", "bot.token"), "TEST-discord-0\n");
@@ -161,7 +161,7 @@ describe("qa-z #52/#54: lock staging and link handling", () => {
 	test("a symlink planted at the staging name is replaced, not written through", () => {
 		const target = join(home, "victim.txt");
 		writeFileSync(target, "keep me");
-		const lockPath = join(home, "ompbot.lock");
+		const lockPath = join(home, "jabbu.lock");
 		symlinkSync(target, `${lockPath}.${process.pid}.tmp`);
 		const lock = acquireLock(lockPath);
 		expect(readFileSync(target, "utf8")).toBe("keep me");
@@ -170,7 +170,7 @@ describe("qa-z #52/#54: lock staging and link handling", () => {
 	});
 
 	test("a dangling symlink at the lock path is a LockHeldError naming the fix", () => {
-		const lockPath = join(home, "ompbot.lock");
+		const lockPath = join(home, "jabbu.lock");
 		symlinkSync(join(home, "nowhere"), lockPath);
 		expect(() => acquireLock(lockPath)).toThrow(LockHeldError);
 		expect(() => acquireLock(lockPath)).toThrow(/not a regular file/);
@@ -207,7 +207,7 @@ describe("qa-z #57/#66: freeze command and its tmp file", () => {
 		}) as typeof process.stderr.write;
 		let code: number;
 		try {
-			code = await runCli(["freeze"], { OMPBOT_HOME: file });
+			code = await runCli(["freeze"], { JABBU_HOME: file });
 		} finally {
 			process.stderr.write = realWrite;
 		}

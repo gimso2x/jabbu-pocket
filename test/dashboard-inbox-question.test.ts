@@ -20,8 +20,8 @@ let home: TestHome;
 let dir: string;
 
 beforeEach(() => {
-	home = makeHome("ompbot-inbox-q-");
-	dir = mkdtempSync(join(tmpdir(), "ompbot-sessions-"));
+	home = makeHome("jabbu-inbox-q-");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-sessions-"));
 });
 afterEach(() => {
 	home.remove();
@@ -103,7 +103,7 @@ function runner(local: Agent[], remote: Agent[] = []): { run: ProcessRunner; cal
 
 const deps = (run: ProcessRunner, board?: BoardState): SnapshotDeps => ({
 	homeDir: home.dir,
-	repoDir: "/srv/ompbot",
+	repoDir: "/srv/jabbu",
 	timezone: "Asia/Seoul",
 	config: { herdr: {}, dispatchHosts: { wsl: { ssh: "wsl-alias" } } },
 	now: () => NOW,

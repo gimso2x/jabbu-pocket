@@ -17,7 +17,7 @@ function fail(message: string): number {
 	return 2;
 }
 
-/** `ompbot init`: every argument is checked before anything is created, so a refused run leaves no trace. */
+/** `jabbu-pocket init`: every argument is checked before anything is created, so a refused run leaves no trace. */
 export function initCommand(args: string[], env: Record<string, string | undefined>): number {
 	let values: {
 		owner?: string;
@@ -114,7 +114,7 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 	chmodSync(configPath, SECRET_MODE);
 
 	const homePrefix =
-		env.OMPBOT_HOME === undefined || env.OMPBOT_HOME === "" ? "" : `OMPBOT_HOME=${remoteShellQuote(homeDir)} `;
+		env.JABBU_HOME === undefined || env.JABBU_HOME === "" ? "" : `JABBU_HOME=${remoteShellQuote(homeDir)} `;
 	process.stdout.write(
 		[
 			`init_done home=${homeDir} config=${configPath} workspace=${workspaceDir}`,

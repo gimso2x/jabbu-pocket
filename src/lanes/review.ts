@@ -94,7 +94,7 @@ export interface LaneReviewDeps {
 	ompProfile?: string;
 	/** The safety floors the daemon's `omp -p` children get (`--append-system-prompt`). */
 	systemPromptAppendix: string;
-	/** `<ompbot home>/reviews`: where the full diff of each review is written (0700 directory, 0600 files). */
+	/** `<jabbu home>/reviews`: where the full diff of each review is written (0700 directory, 0600 files). */
 	reviewsDir: string;
 	/** HEAD of the lane's worktree (it must be the claim commit). */
 	headOf(worktree: string): Promise<{ sha: string; clean: boolean }>;

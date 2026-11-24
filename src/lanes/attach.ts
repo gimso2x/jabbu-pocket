@@ -3,7 +3,7 @@ import { isRecord } from "../omp/type-guards";
 import type { GitRunner } from "./verify";
 
 /**
- * Helpers of the terminal hand-over of a lane (`ompbot lanes attach`): what the
+ * Helpers of the terminal hand-over of a lane (`jabbu-pocket lanes attach`): what the
  * terminal omp did to the session file and the worktree, read once at the hand-back for the thread's summary.
  */
 

@@ -108,7 +108,7 @@ function makeDeps(spec: WorldSpec): ApplyDeps {
 	const backup = (): BackupResult => {
 		const dir = join(spec.home, "backups");
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
-		const file = join(dir, `ompbot-${spec.stamp}-${process.pid}.db`);
+		const file = join(dir, `jabbu-${spec.stamp}-${process.pid}.db`);
 		writeFileSync(file, "backup\n", { mode: 0o600 });
 		return {
 			file,
@@ -125,7 +125,7 @@ function makeDeps(spec: WorldSpec): ApplyDeps {
 	const gates: Gate[] = [];
 	return {
 		homeDir: spec.home,
-		unit: "ompbot",
+		unit: "jabbu",
 		repoDir: spec.repo,
 		pathEnv: `${dirname(bunPath)}:${process.env.PATH ?? ""}`,
 		now: () => Date.now(),

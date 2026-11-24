@@ -1,4 +1,4 @@
-// Text rendering of the status report (the human `ompbot status` lines and a conversation's context line); the
+// Text rendering of the status report (the human `jabbu-pocket status` lines and a conversation's context line); the
 // report types and computation live in ./status, which never renders.
 
 import { isThreadOrigin } from "../core/normalize";
@@ -34,7 +34,7 @@ function renderOriginLines(origins: readonly OriginStatus[]): string[] {
 }
 
 /**
- * First line of a conversation's `!status` / `/status-ompbot`: its context use
+ * First line of a conversation's `!status` / `/status-jabbu`: its context use
  * and model. `idle`: no child runs (its state is read at the next message); `unknown`: the child did not answer.
  */
 export function renderContextLine(state: OmpState | "idle" | "unknown"): string {
@@ -49,11 +49,11 @@ export function renderContextLine(state: OmpState | "idle" | "unknown"): string 
 	return `${head} ${kilo(context.tokens)} / ${kilo(context.window)} (${percent}%)${model}`;
 }
 
-/** Short text for `/status-ompbot` and the human `ompbot status` output. */
+/** Short text for `/status-jabbu` and the human `jabbu-pocket status` output. */
 export function renderStatusText(report: StatusReport): string {
 	const { ledger, inbound } = report;
 	const lines = [
-		`ompbot · omp ${report.ompVersion} · 데몬 ${report.daemonRunning ? "실행 중" : "중지"} · origin ${report.origins.length}개`,
+		`jabbu · omp ${report.ompVersion} · 데몬 ${report.daemonRunning ? "실행 중" : "중지"} · origin ${report.origins.length}개`,
 		...renderOriginLines(report.origins),
 		`장부 p/i/c/a/e: ${ledger.pending}/${ledger.inflight}/${ledger.confirmed}/${ledger.ambiguous}/${ledger.expired}`,
 		`입수 pending=${inbound.pending} dispatched=${inbound.dispatched} answered=${inbound.answered} failed=${inbound.failed_notified} discarded=${inbound.discarded} uncertain=${inbound.uncertain}`,
@@ -62,7 +62,7 @@ export function renderStatusText(report: StatusReport): string {
 	if (report.frozen !== undefined) {
 		const { since, reason, by } = report.frozen;
 		lines.push(
-			`FROZEN · ${since} · ${by}${reason === "" ? "" : ` · ${reason}`} · 모니터·위임·새 레인 시작·실행 중 레인 자동 재프롬프트·스킬 리뷰 중지, 오너 대화만 계속 (ompbot unfreeze로 해제)`,
+			`FROZEN · ${since} · ${by}${reason === "" ? "" : ` · ${reason}`} · 모니터·위임·새 레인 시작·실행 중 레인 자동 재프롬프트·스킬 리뷰 중지, 오너 대화만 계속 (jabbu-pocket unfreeze로 해제)`,
 		);
 	}
 	if (report.drain !== undefined) {

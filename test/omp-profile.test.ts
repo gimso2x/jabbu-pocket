@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, loadConfig, type OmpbotConfig } from "../src/config";
+import { ConfigError, type JabbuConfig, loadConfig } from "../src/config";
 import { RESTART_FIELDS } from "../src/daemon/reload";
 import { botRpcEnv } from "../src/daemon/run";
 import { dispatchEnv, type RunProcessOptions, runOmpPrint } from "../src/dispatch/omp";
@@ -11,7 +11,7 @@ import { buildChildEnv } from "../src/omp/env";
 import { RpcOmpDriver, type RpcOmpDriverOptions } from "../src/omp/rpc-driver";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
 
-const SESSIONS = mkdtempSync(join(tmpdir(), "ompbot-profile-sessions-"));
+const SESSIONS = mkdtempSync(join(tmpdir(), "jabbu-profile-sessions-"));
 const SESSION_DIR = join(SESSIONS, "s");
 afterAll(() => rmSync(SESSIONS, { recursive: true, force: true }));
 
@@ -21,7 +21,7 @@ const BASE = {
 	HOME: "/home/u",
 	PI_CODING_AGENT_DIR: "/custom/agent",
 	SLACK_BOT_TOKEN: "xoxb-TEST-0",
-	OMPBOT_HOME: "/home/u/.ompbot",
+	JABBU_HOME: "/home/u/.jabbu",
 	FOO: "1",
 };
 
@@ -39,7 +39,7 @@ afterEach(() => {
 async function rpcChild(
 	options: Omit<RpcOmpDriverOptions, "ompExecutable" | "cwd" | "sessionDir">,
 ): Promise<{ cmd: string[]; env: Record<string, string> }> {
-	const work = tempDir("ompbot-profile-cwd-");
+	const work = tempDir("jabbu-profile-cwd-");
 	const peer = new FakeOmpPeer();
 	const driver = new RpcOmpDriver({
 		ompExecutable: fakeOmpExecutable(work),
@@ -80,18 +80,18 @@ const PRINT = { task: "요약", cwd: "/ws", systemPromptAppendix: "FLOORS", ompB
 describe("AC-1: without ompProfile the children are what they were", () => {
 	test("the daemon's rpc options are the old literal and the spawned child env/argv match the old options", async () => {
 		expect(botRpcEnv(undefined, BASE)).toEqual({
-			env: { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "kencrew" },
+			env: { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "jabbu-pocket" },
 		});
 		const before = await rpcChild({
 			model: "m",
-			env: { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "kencrew" },
+			env: { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "jabbu-pocket" },
 			extraArgs: ["--x"],
 		});
 		const after = await rpcChild({ model: "m", ...botRpcEnv(undefined, BASE), extraArgs: ["--x"] });
 		expect(after).toEqual(before);
 		// No baseEnv: the child env is the daemon's own process env minus bot secrets, as before.
 		expect(after.env).toEqual(
-			buildChildEnv({ OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "kencrew" }),
+			buildChildEnv({ OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "jabbu-pocket" }),
 		);
 	});
 
@@ -108,36 +108,36 @@ describe("AC-1: without ompProfile the children are what they were", () => {
 describe("AC-2: ompProfile reaches every bot omp child", () => {
 	test("rpc driver (chat, lane and monitor turns): OMP_PROFILE set, PI_CODING_AGENT_DIR and bot secrets gone", async () => {
 		const plain = await rpcChild({ ...botRpcEnv(undefined), baseEnv: BASE });
-		const child = await rpcChild(botRpcEnv("ompbot", BASE));
-		expect(child.env.OMP_PROFILE).toBe("ompbot");
+		const child = await rpcChild(botRpcEnv("jabbu", BASE));
+		expect(child.env.OMP_PROFILE).toBe("jabbu");
 		expect(child.env).not.toHaveProperty("PI_CODING_AGENT_DIR");
 		expect(child.env).not.toHaveProperty("SLACK_BOT_TOKEN");
-		expect(child.env).not.toHaveProperty("OMPBOT_HOME");
+		expect(child.env).not.toHaveProperty("JABBU_HOME");
 		expect(child.env).toMatchObject({ OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", FOO: "1", PATH: BASE.PATH });
 		expect(child.cmd).toEqual(plain.cmd);
 	});
 
 	test("runOmpPrint with ompProfile: OMP_PROFILE set, PI_CODING_AGENT_DIR dropped, argv unchanged", async () => {
 		const { calls, run } = recordingRunner();
-		await runOmpPrint({ ...PRINT, inheritedEnv: BASE, run, ompProfile: "ompbot" });
+		await runOmpPrint({ ...PRINT, inheritedEnv: BASE, run, ompProfile: "jabbu" });
 		await runOmpPrint({ ...PRINT, inheritedEnv: BASE, run });
-		expect(calls[0]?.opts.env?.OMP_PROFILE).toBe("ompbot");
+		expect(calls[0]?.opts.env?.OMP_PROFILE).toBe("jabbu");
 		expect(calls[0]?.opts.env).not.toHaveProperty("PI_CODING_AGENT_DIR");
 		expect(calls[0]?.cmd).toEqual(calls[1]?.cmd as string[]);
 	});
 
 	test("an explicit env (a caller's own agent dir) still wins over the profile", async () => {
 		const { calls, run } = recordingRunner();
-		await runOmpPrint({ ...PRINT, inheritedEnv: BASE, run, ompProfile: "ompbot", env: { PI_CODING_AGENT_DIR: "/qa" } });
+		await runOmpPrint({ ...PRINT, inheritedEnv: BASE, run, ompProfile: "jabbu", env: { PI_CODING_AGENT_DIR: "/qa" } });
 		expect(calls[0]?.opts.env?.PI_CODING_AGENT_DIR).toBe("/qa");
 	});
 
-	test("simple dispatch (ompbot_dispatch omp -p) runs with the configured profile", async () => {
+	test("simple dispatch (jabbu_dispatch omp -p) runs with the configured profile", async () => {
 		const { calls, run } = recordingRunner();
 		const built = buildDispatchTool({
 			originKey: "discord/dm/200000000000000001",
 			ompExecutable: "omp",
-			ompProfile: "ompbot",
+			ompProfile: "jabbu",
 			homeDir: "/h",
 			workspaceDir: "/h/workspace",
 			log: { info() {}, warn() {} },
@@ -152,14 +152,14 @@ describe("AC-2: ompProfile reaches every bot omp child", () => {
 			else process.env.PI_CODING_AGENT_DIR = saved;
 		}
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.opts.env?.OMP_PROFILE).toBe("ompbot");
+		expect(calls[0]?.opts.env?.OMP_PROFILE).toBe("jabbu");
 		expect(calls[0]?.opts.env).not.toHaveProperty("PI_CODING_AGENT_DIR");
 	});
 });
 
 describe("AC-3: ompProfile follows omp's profile name rule", () => {
 	function homeWith(extra: Record<string, unknown>): string {
-		const home = tempDir("ompbot-profile-cfg-");
+		const home = tempDir("jabbu-profile-cfg-");
 		writeFileSync(
 			join(home, "config.json"),
 			JSON.stringify({
@@ -180,7 +180,7 @@ describe("AC-3: ompProfile follows omp's profile name rule", () => {
 	}
 	const load = (home: string) => loadConfig(home, { checkTokens: false });
 
-	test.each([["Ompbot"], [".ompbot"], ["-x"], ["omp bot"], ["a/b"], [""], ["x".repeat(65)], [7]])(
+	test.each([["Jabbu"], [".jabbu"], ["-x"], ["omp bot"], ["a/b"], [""], ["x".repeat(65)], [7]])(
 		"%p is refused naming ompProfile",
 		(value) => {
 			let error: unknown;
@@ -195,7 +195,7 @@ describe("AC-3: ompProfile follows omp's profile name rule", () => {
 	);
 
 	test("a valid name loads, absent stays undefined, and changing it needs a restart", () => {
-		expect(load(homeWith({ ompProfile: "ompbot" })).ompProfile).toBe("ompbot");
+		expect(load(homeWith({ ompProfile: "jabbu" })).ompProfile).toBe("jabbu");
 		expect(load(homeWith({ ompProfile: "a1._-z" })).ompProfile).toBe("a1._-z");
 		expect(load(homeWith({ ompProfile: "x".repeat(64) })).ompProfile).toBe("x".repeat(64));
 		expect(load(homeWith({})).ompProfile).toBeUndefined();
@@ -208,8 +208,8 @@ describe("ompConfigOverlay: one --config for every omp child of the install", ()
 	const OLD_PRINT_ARGV = ["omp", "-p", "--no-session", "--append-system-prompt"];
 
 	/** A loaded config (tokens unchecked) whose home has `overlay` as `glm.omp.yml`, set as `ompConfigOverlay` unless `null`. */
-	function loaded(overlay: string | null, extra: Record<string, unknown> = {}): OmpbotConfig {
-		const home = tempDir("ompbot-overlay-cfg-");
+	function loaded(overlay: string | null, extra: Record<string, unknown> = {}): JabbuConfig {
+		const home = tempDir("jabbu-overlay-cfg-");
 		if (overlay !== null) writeFileSync(join(home, "glm.omp.yml"), overlay);
 		writeFileSync(
 			join(home, "config.json"),

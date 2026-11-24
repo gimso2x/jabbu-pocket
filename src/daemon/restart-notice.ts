@@ -18,9 +18,9 @@ export const RESTART_NOTICE_STALE_MS = 3 * 60 * 60_000;
 
 export const RESTART_NOTICE_TEXT = {
 	draining:
-		"🔄 ompbot을 곧 재시작합니다. 진행 중인 작업이 끝나면 재시작하고, 그 사이 보낸 메시지는 재시작 뒤에 처리합니다.",
-	back: "✅ ompbot이 재시작을 마치고 다시 연결됐습니다.",
-	cancelled: "↩️ ompbot 재시작이 취소됐습니다. 기다리던 메시지를 지금 처리합니다.",
+		"🔄 jabbu를 곧 재시작합니다. 진행 중인 작업이 끝나면 재시작하고, 그 사이 보낸 메시지는 재시작 뒤에 처리합니다.",
+	back: "✅ jabbu가 재시작을 마치고 다시 연결됐습니다.",
+	cancelled: "↩️ jabbu 재시작이 취소됐습니다. 기다리던 메시지를 지금 처리합니다.",
 } as const;
 
 export interface RestartNoticeMarker {

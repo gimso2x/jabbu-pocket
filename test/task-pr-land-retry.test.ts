@@ -146,7 +146,7 @@ describe("retry card (AC-1)", () => {
 		const card = prLandRetryCard(row, "⛔ PR 착지 멈춤: x");
 		const settled = buildMergeSettledCard(row, "⛔ PR 착지 멈춤: x");
 		expect(card.buttons).toEqual([
-			{ actionId: `ompbot:task:merge:${row.taskId}`, label: "다시 시도", value: row.taskId, style: "primary" },
+			{ actionId: `jabbu:task:merge:${row.taskId}`, label: "다시 시도", value: row.taskId, style: "primary" },
 		]);
 		expect({ ...card, buttons: undefined }).toEqual({ ...settled, buttons: undefined });
 		expect(card.note).toContain("PR 착지 멈춤");
@@ -424,7 +424,7 @@ describe("the real daemon: a blocked PR landing and a new tip", () => {
 			(call) =>
 				call.method === "createMessage" &&
 				JSON.stringify(call.embeds ?? "").includes("PR 착지 멈춤") &&
-				JSON.stringify(call.components ?? []).includes(`ompbot:task:merge:${row.taskId}`),
+				JSON.stringify(call.components ?? []).includes(`jabbu:task:merge:${row.taskId}`),
 		);
 		expect(cards).toHaveLength(1);
 		await w.poll();

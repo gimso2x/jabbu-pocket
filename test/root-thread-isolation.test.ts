@@ -181,7 +181,7 @@ describe("daemon: channel roots are isolated sessions", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-root-iso-");
+		home = makeHome("jabbu-root-iso-");
 		logs = new LogLines();
 		drivers = new Map();
 	});
@@ -260,7 +260,7 @@ describe("daemon: channel roots are isolated sessions", () => {
 		});
 		expect(turnCalls(rootOrigin(a))).toEqual(["prompt:배포 준비해줘", "steer:main 브랜치로"]);
 
-		const tool = daemon.hostToolsFor(rootOrigin(a)).find((t) => t.name === "ompbot_request_approval");
+		const tool = daemon.hostToolsFor(rootOrigin(a)).find((t) => t.name === "jabbu_request_approval");
 		if (!tool) throw new Error("approval tool missing");
 		const result = tool.execute({ summary: "force push main" }, { signal: new AbortController().signal });
 		const card = await transport.shown.promise;
@@ -320,7 +320,7 @@ describe("daemon: channel roots are isolated sessions", () => {
 		expect(daemon.store.getInbound(ref(model.id))?.originKey).toBe(CHANNEL_ORIGIN);
 
 		// A lane starts only inside a git repository (it works in its own worktree beside it).
-		const repo = makeRepo([], "ompbot-root-iso-lane-");
+		const repo = makeRepo([], "jabbu-root-iso-lane-");
 		try {
 			const lane = channelMessage(tsAt(20), `작업: 루트 격리 레인 @${repo}`);
 			await transport.emitMessage(lane);
@@ -374,10 +374,10 @@ describe("daemon: channel roots are isolated sessions", () => {
 			registered.push({ originKey: input.originKey, threadRef: input.threadRef });
 			return register(input);
 		};
-		const repo = mkdtempSync(join(tmpdir(), "ompbot-root-iso-task-"));
+		const repo = mkdtempSync(join(tmpdir(), "jabbu-root-iso-task-"));
 		try {
 			const dispatch = (origin: string) => {
-				const tool = daemon.hostToolsFor(origin).find((t) => t.name === "ompbot_dispatch");
+				const tool = daemon.hostToolsFor(origin).find((t) => t.name === "jabbu_dispatch");
 				if (!tool) throw new Error(`dispatch tool missing for ${origin}`);
 				const taskSpec = { title: "루트 격리", risk: "L1", goal: "g", acceptance: ["a"], repo };
 				return tool.execute({ task: "구현", taskSpec }, { signal: new AbortController().signal });
@@ -553,8 +553,8 @@ describe("router: taskSpec thread binding and restart recovery of two roots", ()
 		router.mailbox(originKey).state.threadRef ?? store.latestInboundThread(originKey);
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-root-iso-router-"));
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		dir = mkdtempSync(join(tmpdir(), "jabbu-root-iso-router-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		sessions = new FakeSessionStore();
 		router = new OriginRouter({
 			timezone: "Asia/Seoul",

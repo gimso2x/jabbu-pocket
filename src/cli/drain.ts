@@ -160,7 +160,7 @@ export function socketDrainCall(socketPath: string): DrainWaitOptions["call"] {
 	};
 }
 
-/** `ompbot drain`; resolves with the exit code. */
+/** `jabbu-pocket drain`; resolves with the exit code. */
 export async function drainCommand(args: string[], homeDir: string): Promise<number> {
 	const { values } = parseArgs({
 		args,
@@ -177,7 +177,7 @@ export async function drainCommand(args: string[], homeDir: string): Promise<num
 		process.stderr.write("drain: --timeout must be a non-negative number of minutes\n");
 		return 2;
 	}
-	const socketPath = join(homeDir, "ompbot.sock");
+	const socketPath = join(homeDir, "jabbu.sock");
 	const call = socketDrainCall(socketPath);
 	const unreachable = (error: unknown): number => {
 		process.stderr.write(`drain: daemon not reachable (${error instanceof Error ? error.message : String(error)})\n`);

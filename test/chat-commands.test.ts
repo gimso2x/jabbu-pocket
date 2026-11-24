@@ -47,10 +47,10 @@ function makeRouter(): OriginRouter {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-cmd-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-cmd-"));
 	sessionsRoot = join(dir, "sessions");
 	now = 1_000_000;
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	drivers = [];
 	driverOptions = {};
 	sessionStore = new FakeSessionStore();
@@ -107,60 +107,60 @@ async function untilFinal(driver: FakeOmpDriver, action: () => void): Promise<vo
 
 describe("command parsing", () => {
 	test("slash form and ! form, arguments only for kinds that take one", () => {
-		expect(parseCommand("/model-ompbot fake/beta")).toEqual({ kind: "model", arg: "fake/beta" });
+		expect(parseCommand("/model-jabbu fake/beta")).toEqual({ kind: "model", arg: "fake/beta" });
 		expect(parseCommand("  !thinking   high ")).toEqual({ kind: "thinking", arg: "high" });
 		expect(parseCommand("!followup 다음에\n이것도")).toEqual({ kind: "followup", arg: "다음에\n이것도" });
-		expect(parseCommand("/queue-ompbot")).toEqual({ kind: "queue", arg: "" });
+		expect(parseCommand("/queue-jabbu")).toEqual({ kind: "queue", arg: "" });
 		expect(parseCommand("!queue drop 1")).toEqual({ kind: "queue", arg: "drop 1" });
-		expect(parseCommand("/queue-ompbot drop 2")).toEqual({ kind: "queue", arg: "drop 2" });
+		expect(parseCommand("/queue-jabbu drop 2")).toEqual({ kind: "queue", arg: "drop 2" });
 		expect(parseCommand("!queue now")).toEqual({ kind: "queue", arg: "now" });
 		expect(parseCommand("!queue close 1")).toEqual({ kind: "queue", arg: "close 1" });
-		expect(parseCommand("/queue-ompbot retry 2")).toEqual({ kind: "queue", arg: "retry 2" });
-		expect(parseCommand("/new-ompbot please")).toBeUndefined();
+		expect(parseCommand("/queue-jabbu retry 2")).toEqual({ kind: "queue", arg: "retry 2" });
+		expect(parseCommand("/new-jabbu please")).toBeUndefined();
 		expect(parseCommand("/model 이거 어때")).toBeUndefined();
 		expect(parseCommand("모델 바꿔 !model")).toBeUndefined();
-		expect(promptTextOf("/followup-ompbot 테스트 돌려")).toBe("테스트 돌려");
+		expect(promptTextOf("/followup-jabbu 테스트 돌려")).toBe("테스트 돌려");
 		expect(promptTextOf("그냥 메시지")).toBe("그냥 메시지");
 	});
 
-	test("!undo and /undo-ompbot parse as the undo command and take no argument", () => {
+	test("!undo and /undo-jabbu parse as the undo command and take no argument", () => {
 		expect(parseCommand("!undo")).toEqual({ kind: "undo", arg: "" });
-		expect(parseCommand("/undo-ompbot")).toEqual({ kind: "undo", arg: "" });
+		expect(parseCommand("/undo-jabbu")).toEqual({ kind: "undo", arg: "" });
 		expect(parseCommand("  !undo  ")).toEqual({ kind: "undo", arg: "" });
-		expect(parseCommand("/undo-ompbot now")).toBeUndefined();
+		expect(parseCommand("/undo-jabbu now")).toBeUndefined();
 		expect(parseCommand("undo 해줘")).toBeUndefined();
 	});
 
-	test("!stop and /stop-ompbot parse as the stop command and take no argument", () => {
+	test("!stop and /stop-jabbu parse as the stop command and take no argument", () => {
 		expect(parseCommand("!stop")).toEqual({ kind: "stop", arg: "" });
-		expect(parseCommand("/stop-ompbot")).toEqual({ kind: "stop", arg: "" });
+		expect(parseCommand("/stop-jabbu")).toEqual({ kind: "stop", arg: "" });
 		expect(parseCommand("  !stop  ")).toEqual({ kind: "stop", arg: "" });
 		// No argument: anything after the word is a prompt, not this command.
 		expect(parseCommand("!stop 지금")).toBeUndefined();
 		expect(parseCommand("멈춰 !stop")).toBeUndefined();
 	});
 
-	test("!restart and /restart-ompbot parse as the restart command and take no argument", () => {
+	test("!restart and /restart-jabbu parse as the restart command and take no argument", () => {
 		expect(parseCommand("!restart")).toEqual({ kind: "restart", arg: "" });
-		expect(parseCommand("/restart-ompbot")).toEqual({ kind: "restart", arg: "" });
+		expect(parseCommand("/restart-jabbu")).toEqual({ kind: "restart", arg: "" });
 		expect(parseCommand("!restart 지금")).toBeUndefined();
 		expect(parseCommand("!restart now")).toBeUndefined();
 	});
 
-	test("!brief, /brief-ompbot and !브리핑 parse as the brief command and take no argument", () => {
+	test("!brief, /brief-jabbu and !브리핑 parse as the brief command and take no argument", () => {
 		expect(parseCommand("!brief")).toEqual({ kind: "brief", arg: "" });
-		expect(parseCommand("/brief-ompbot")).toEqual({ kind: "brief", arg: "" });
+		expect(parseCommand("/brief-jabbu")).toEqual({ kind: "brief", arg: "" });
 		expect(parseCommand("!브리핑")).toEqual({ kind: "brief", arg: "" });
 		expect(parseCommand("  !brief  ")).toEqual({ kind: "brief", arg: "" });
 		// No argument: anything after the word is a prompt, not this command.
 		expect(parseCommand("!brief x")).toBeUndefined();
-		expect(parseCommand("/brief-ompbot now")).toBeUndefined();
+		expect(parseCommand("/brief-jabbu now")).toBeUndefined();
 		expect(parseCommand("브리핑 해줘")).toBeUndefined();
 	});
 
-	test("!budget and /budget-ompbot are bare commands; `!budget off` is not a command", () => {
+	test("!budget and /budget-jabbu are bare commands; `!budget off` is not a command", () => {
 		expect(parseCommand("!budget")).toEqual({ kind: "budget", arg: "" });
-		expect(parseCommand("/budget-ompbot")).toEqual({ kind: "budget", arg: "" });
+		expect(parseCommand("/budget-jabbu")).toEqual({ kind: "budget", arg: "" });
 		expect(parseCommand("!budget off")).toBeUndefined();
 		expect(parseCommand("!budget on")).toBeUndefined();
 		// A bare `!budget` in the middle of a sentence is a prompt, not a command.
@@ -170,28 +170,28 @@ describe("command parsing", () => {
 
 describe("① model and thinking", () => {
 	test("list shows the current model; a unique fragment switches it and the choice is stored", async () => {
-		const listed = await send("/model-ompbot");
+		const listed = await send("/model-jabbu");
 		expect(listed).toContain("현재 모델: fake/alpha");
 		expect(listed).toContain("2. fake/beta");
 		await send("!model beta");
 		expect(lastDriver().calls).toContain("setModel:fake/beta");
 		expect(store.getOrigin(ORIGIN)?.model).toBe("fake/beta");
-		expect(await send("/model-ompbot")).toContain("현재 모델: fake/beta");
+		expect(await send("/model-jabbu")).toContain("현재 모델: fake/beta");
 	});
 
 	test("an ambiguous or unknown model changes nothing", async () => {
-		const ambiguous = await send("/model-ompbot fake");
+		const ambiguous = await send("/model-jabbu fake");
 		expect(ambiguous).toContain("하나로 고를 수 없습니다");
 		expect(ambiguous.split("\n").slice(-2)).toEqual(["fake/alpha", "fake/beta"]);
-		expect(await send("/model-ompbot gamma")).toContain("하나로 고를 수 없습니다");
+		expect(await send("/model-jabbu gamma")).toContain("하나로 고를 수 없습니다");
 		expect(lastDriver().calls.some((c) => c.startsWith("setModel:"))).toBe(false);
 		expect(store.getOrigin(ORIGIN)?.model).toBeNull();
 	});
 
 	test("thinking accepts only the model's levels", async () => {
-		expect(await send("/thinking-ompbot")).toContain("가능: off, low, medium, high");
-		expect(await send("/thinking-ompbot ultra")).toContain("지원하지 않습니다");
-		await send("/thinking-ompbot HIGH");
+		expect(await send("/thinking-jabbu")).toContain("가능: off, low, medium, high");
+		expect(await send("/thinking-jabbu ultra")).toContain("지원하지 않습니다");
+		await send("/thinking-jabbu HIGH");
 		expect(lastDriver().calls).toContain("setThinking:high");
 		expect(store.getOrigin(ORIGIN)?.thinking).toBe("high");
 	});
@@ -199,8 +199,8 @@ describe("① model and thinking", () => {
 	test("switching is refused while a turn runs", async () => {
 		driverOptions = { holdTurns: true };
 		await router.route(msg("long job"));
-		expect(await send("/model-ompbot fake/beta")).toContain("작업 중에는");
-		expect(await send("/thinking-ompbot low")).toContain("작업 중에는");
+		expect(await send("/model-jabbu fake/beta")).toContain("작업 중에는");
+		expect(await send("/thinking-jabbu low")).toContain("작업 중에는");
 		expect(lastDriver().calls.filter((c) => c.startsWith("set"))).toEqual([]);
 	});
 });
@@ -209,7 +209,7 @@ describe("② compact and resume", () => {
 	test("compact runs while idle and reports the size before", async () => {
 		await router.route(msg("hello"));
 		await router.mailbox(ORIGIN).sweepIdle();
-		const reply = await send("/compact-ompbot 결정 사항만 남겨");
+		const reply = await send("/compact-jabbu 결정 사항만 남겨");
 		expect(lastDriver().calls).toContain("compact:결정 사항만 남겨");
 		expect(reply).toContain("압축했습니다");
 		expect(reply).toContain("400 토큰"); // seed(2) + user + assistant = 4 entries x 100
@@ -220,7 +220,7 @@ describe("② compact and resume", () => {
 		await router.mailbox(ORIGIN).sweepIdle();
 		lastDriver().compact = () =>
 			Promise.reject(new OmpDriverError("rpc_error", "agy 세션은 compact를 지원하지 않습니다"));
-		const reply = await send("/compact-ompbot");
+		const reply = await send("/compact-jabbu");
 		expect(reply).toContain("agy 세션은 compact를 지원하지 않습니다");
 		expect(reply).not.toContain("[turn failed]");
 	});
@@ -232,7 +232,7 @@ describe("② compact and resume", () => {
 		if (sessionDir === undefined) throw new Error("origin not created");
 		mkdirSync(sessionDir, { recursive: true });
 		writeFileSync(join(sessionDir, "agy-conversation.json"), JSON.stringify({ conversationId: "c1" }));
-		const reply = await send("/resume-ompbot");
+		const reply = await send("/resume-jabbu");
 		expect(reply).toContain("agy 세션은 저장된 세션 목록·이어가기를 지원하지 않습니다");
 		expect(reply).not.toContain("저장된 세션이 없습니다");
 	});
@@ -240,7 +240,7 @@ describe("② compact and resume", () => {
 	test("compact is refused while a turn runs", async () => {
 		driverOptions = { holdTurns: true };
 		await router.route(msg("long job"));
-		expect(await send("/compact-ompbot")).toContain("작업 중에는");
+		expect(await send("/compact-jabbu")).toContain("작업 중에는");
 		expect(lastDriver().calls.some((c) => c.startsWith("compact"))).toBe(false);
 	});
 
@@ -261,7 +261,7 @@ describe("② compact and resume", () => {
 	test("list is newest first; picking one pins its file and the next prompt runs in that session", async () => {
 		const old = writeSession("e1", "11111111-aaaa", "옛날 작업", 1_700_000_000);
 		writeSession("e2", "22222222-bbbb", "최근 작업", 1_800_000_000);
-		const listed = await send("/resume-ompbot");
+		const listed = await send("/resume-jabbu");
 		expect(listed.split("\n").slice(0, 2)).toEqual([
 			expect.stringContaining("1. 22222222"),
 			expect.stringContaining("2. 11111111"),
@@ -269,7 +269,7 @@ describe("② compact and resume", () => {
 		expect(listed).toContain("옛날 작업");
 		const epochBefore = store.getOrigin(ORIGIN)?.epoch ?? 0;
 
-		expect(await send("/resume-ompbot 1111")).toContain("이어갑니다");
+		expect(await send("/resume-jabbu 1111")).toContain("이어갑니다");
 		const origin = store.getOrigin(ORIGIN);
 		expect(origin?.sessionFile).toBe(old);
 		expect(origin?.epoch).toBe(epochBefore + 1);
@@ -282,7 +282,7 @@ describe("② compact and resume", () => {
 
 	test("unknown pick changes nothing", async () => {
 		writeSession("e1", "11111111-aaaa", "옛날 작업", 1_700_000_000);
-		expect(await send("/resume-ompbot 9")).toContain("찾지 못했습니다");
+		expect(await send("/resume-jabbu 9")).toContain("찾지 못했습니다");
 		expect(store.getOrigin(ORIGIN)?.sessionFile).toBeNull();
 	});
 
@@ -304,15 +304,15 @@ describe("③ idle release", () => {
 		idleStopMs = 60_000;
 		await router.close();
 		router = makeRouter();
-		await send("/model-ompbot fake/beta");
-		await send("/thinking-ompbot low");
+		await send("/model-jabbu fake/beta");
+		await send("/thinking-jabbu low");
 		await router.route(msg("first"));
 		const first = lastDriver();
 		const sessionId = (await first.state()).sessionId;
 		now += 60_000;
 		expect(await router.mailbox(ORIGIN).sweepIdle()).toBe(true);
 		expect(router.mailbox(ORIGIN).state.driverRunning).toBe(false);
-		expect(await send("/queue-ompbot")).toContain("쉬는 중");
+		expect(await send("/queue-jabbu")).toContain("쉬는 중");
 
 		await router.route(msg("second"));
 		const second = lastDriver();
@@ -342,7 +342,7 @@ describe("④ queue and followup", () => {
 		driverOptions = { holdTurns: true };
 		const a = msg("A 작업");
 		await router.route(a);
-		const followup = msg("/followup-ompbot B 작업");
+		const followup = msg("/followup-jabbu B 작업");
 		await router.route(followup);
 		await router.route(msg("A에 덧붙임"));
 		const driver = lastDriver();
@@ -352,7 +352,7 @@ describe("④ queue and followup", () => {
 		]);
 		expect(store.getInbound(followup.platformMessageId)?.state).toBe("pending");
 
-		const queue = await send("/queue-ompbot");
+		const queue = await send("/queue-jabbu");
 		expect(queue).toContain("▶ 진행 중");
 		expect(queue).toContain("1. [다음 작업] B 작업");
 
@@ -368,16 +368,16 @@ describe("④ queue and followup", () => {
 		await router.route(record);
 		await router.mailbox(ORIGIN).sweepIdle();
 		expect(replyIn(record.threadRef)).toBe("ECHO 바로 실행");
-		expect(await send("/followup-ompbot")).toContain("사용법");
+		expect(await send("/followup-jabbu")).toContain("사용법");
 	});
 
 	test("queue drop cancels one waiting followup; the rest of the queue still runs", async () => {
 		driverOptions = { holdTurns: true };
 		const a = msg("A 작업");
 		await router.route(a);
-		const keep = msg("/followup-ompbot 남길 작업");
+		const keep = msg("/followup-jabbu 남길 작업");
 		await router.route(keep);
-		const drop = msg("/followup-ompbot 버릴 작업");
+		const drop = msg("/followup-jabbu 버릴 작업");
 		await router.route(drop);
 		const driver = lastDriver();
 
@@ -387,7 +387,7 @@ describe("④ queue and followup", () => {
 		const dropped = store.getInbound(drop.platformMessageId);
 		expect(dropped?.state).toBe("discarded");
 		expect(dropped?.opRef).toContain("queue:");
-		expect(await send("/queue-ompbot")).toContain("1. [다음 작업] 남길 작업");
+		expect(await send("/queue-jabbu")).toContain("1. [다음 작업] 남길 작업");
 
 		await untilFinal(driver, () => driver.release());
 		await untilFinal(driver, () => driver.release());
@@ -399,7 +399,7 @@ describe("④ queue and followup", () => {
 	test("queue drop with an unknown number or a wrong tail explains itself and drops nothing", async () => {
 		driverOptions = { holdTurns: true };
 		await router.route(msg("A 작업"));
-		await router.route(msg("/followup-ompbot B 작업"));
+		await router.route(msg("/followup-jabbu B 작업"));
 		expect(await send("!queue drop 5")).toContain("대기 5번이 없습니다");
 		expect(await send("!queue drop")).toContain("사용법");
 		expect(await send("!queue 지워줘")).toContain("사용법");
@@ -409,9 +409,9 @@ describe("④ queue and followup", () => {
 });
 
 describe("⑤ usage", () => {
-	test("!usage and /usage-ompbot parse without an argument", () => {
+	test("!usage and /usage-jabbu parse without an argument", () => {
 		expect(parseCommand("!usage")).toEqual({ kind: "usage", arg: "" });
-		expect(parseCommand(" /usage-ompbot ")).toEqual({ kind: "usage", arg: "" });
+		expect(parseCommand(" /usage-jabbu ")).toEqual({ kind: "usage", arg: "" });
 		expect(parseCommand("!usage 오늘")).toBeUndefined();
 	});
 
@@ -427,7 +427,7 @@ describe("⑤ usage", () => {
 		await router.route(msg("long job"));
 		const prompts = lastDriver().calls.filter((c) => c.startsWith("prompt:")).length;
 		expect(await send("!usage")).toBe("이 대화: 모델 호출 1회");
-		expect(await send("/usage-ompbot")).toBe("이 대화: 모델 호출 1회");
+		expect(await send("/usage-jabbu")).toBe("이 대화: 모델 호출 1회");
 		expect(asked).toEqual([ORIGIN, ORIGIN]);
 		expect(lastDriver().calls.filter((c) => c.startsWith("prompt:")).length).toBe(prompts);
 		expect(lastDriver().calls.filter((c) => c.startsWith("steer:"))).toEqual([]);
@@ -439,9 +439,9 @@ describe("⑤ usage", () => {
 });
 
 describe("⑥ distill", () => {
-	test("!distill and /distill-ompbot parse without an argument; a peer bot's fenced text never parses as it", () => {
+	test("!distill and /distill-jabbu parse without an argument; a peer bot's fenced text never parses as it", () => {
 		expect(parseCommand("!distill")).toEqual({ kind: "distill", arg: "" });
-		expect(parseCommand(" /distill-ompbot ")).toEqual({ kind: "distill", arg: "" });
+		expect(parseCommand(" /distill-jabbu ")).toEqual({ kind: "distill", arg: "" });
 		expect(parseCommand("!distill 지금")).toBeUndefined();
 		const peer = normalizePeerInbound({
 			peer: { userId: "UPEER00001", name: "떡" },

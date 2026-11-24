@@ -8,7 +8,7 @@ export const DELIVERIES_USAGE = `  deliveries list                held (ambiguou
   deliveries resend <id>         send it again (parts already posted are skipped); the daemon pumps it
 `;
 
-const USAGE_LINE = "usage: ompbot deliveries <list|ack|resend>";
+const USAGE_LINE = "usage: jabbu-pocket deliveries <list|ack|resend>";
 type Verb = "list" | "ack" | "resend";
 
 /** What the owner mistyped, or the verb to run: the two failure shapes the command line may take. */
@@ -21,14 +21,14 @@ function readCall(args: string[]): Verb | { error: string } {
 	return verb;
 }
 
-/** `ompbot deliveries list|ack <id>|resend <id>`: the owner's way out of a held (`failed_ambiguous`) delivery. */
+/** `jabbu-pocket deliveries list|ack <id>|resend <id>`: the owner's way out of a held (`failed_ambiguous`) delivery. */
 export function deliveriesCommand(args: string[], homeDir: string): number {
 	const call = readCall(args);
 	if (typeof call !== "string") {
 		process.stderr.write(`${call.error}\n${DELIVERIES_USAGE}`);
 		return 2;
 	}
-	const path = join(homeDir, "ompbot.db");
+	const path = join(homeDir, "jabbu.db");
 	if (!existsSync(path)) {
 		process.stderr.write(`deliveries: no ledger at ${path} (run the daemon once)\n`);
 		return 1;

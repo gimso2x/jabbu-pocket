@@ -31,7 +31,7 @@ let home: string;
 let now: number;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-gates-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-gates-"));
 	now = Date.now();
 });
 
@@ -99,7 +99,7 @@ CREATE TABLE monitor_events (
 `;
 
 function seedDb(mutate: (db: Database) => void): void {
-	const db = new Database(join(home, "ompbot.db"), { create: true, strict: true });
+	const db = new Database(join(home, "jabbu.db"), { create: true, strict: true });
 	db.run(DDL);
 	mutate(db);
 	db.close();
@@ -116,7 +116,7 @@ function writeStamp(ageMs: number): void {
 	mkdirSync(join(home, "backups"), { recursive: true });
 	writeFileSync(
 		join(home, "backups", STAMP_FILE),
-		`ts=${new Date(now - ageMs).toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
+		`ts=${new Date(now - ageMs).toISOString()} file=jabbu-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
 	);
 }
 
@@ -348,7 +348,7 @@ describe("collectGates", () => {
 	}
 
 	function resetDb(): void {
-		rmSync(join(home, "ompbot.db"), { force: true });
+		rmSync(join(home, "jabbu.db"), { force: true });
 	}
 
 	test("heartbeat round-trip: discord and draining fields parse; malformed or absent fields stay undefined", () => {
@@ -490,7 +490,7 @@ describe("collectGates", () => {
 			expect(gateState("monitors_stalled")).toEqual({ state: "closed", detail: "overdue=0" });
 			resetDb();
 			seedMonitor(2 * 3_600_000);
-			const db = new Database(join(home, "ompbot.db"), { strict: true });
+			const db = new Database(join(home, "jabbu.db"), { strict: true });
 			db.run("UPDATE monitors SET enabled = 0");
 			db.close();
 			expect(gateState("monitors_stalled")).toEqual({ state: "closed", detail: "overdue=0" });
@@ -585,7 +585,7 @@ describe("collectGates", () => {
 		});
 		expect(gateState("inbound_starved")).toEqual({ state: "closed", detail: "silent_old=0" });
 
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run("UPDATE approvals SET status = 'approved' WHERE approval_id = 'E:5.5'");
 		db.close();
 		expect(gateState("inbound_starved")).toEqual({ state: "open", detail: "silent_old=1" });
@@ -606,7 +606,7 @@ describe("collectGates", () => {
 		expect(gateState("deliveries_overdue").state).toBe("open");
 		expect(gateState("deliveries_overdue").detail).toBe("overdue=1");
 		// Only the pending row gates; the ambiguous row is visible in status instead.
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run("UPDATE deliveries SET state = 'confirmed' WHERE op_ref = 'op1'");
 		db.close();
 		expect(gateState("deliveries_overdue").state).toBe("closed");
@@ -665,7 +665,7 @@ describe("collectGates", () => {
 			lane("landed", "landed", 25 * 3_600_000)(db);
 		});
 		expect(gateState("lanes_stuck").state).toBe("closed");
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		lane("old", "pending", 25 * 3_600_000)(db);
 		db.close();
 		expect(gateState("lanes_stuck").state).toBe("open");
@@ -700,7 +700,7 @@ describe("collectGates", () => {
 			return (name, at) =>
 				db.run(
 					"INSERT INTO lanes (name, status, origin_key, history, created_at, updated_at) VALUES (?, 'working', ?, ?, ?, ?)",
-					[name, `ompbot/work/${name}`, JSON.stringify([{ at, event: "created" }]), at, at],
+					[name, `jabbu/work/${name}`, JSON.stringify([{ at, event: "created" }]), at, at],
 				);
 		}
 
@@ -724,9 +724,9 @@ describe("collectGates", () => {
 				seedDb((db) => {
 					const lane = laneLedger(db);
 					lane("running", old());
-					turn(db, "ompbot/work/running", now - 60_000, now - 60_000);
+					turn(db, "jabbu/work/running", now - 60_000, now - 60_000);
 					lane("approval", old());
-					pendingApproval(db, "ompbot/work/approval", now + 10 * 60_000);
+					pendingApproval(db, "jabbu/work/approval", now + 10 * 60_000);
 					if (withOrphan) lane("orphan", old());
 				});
 			seedLanes(true);
@@ -734,7 +734,7 @@ describe("collectGates", () => {
 				state: "open",
 				detail: "working_old=1 running=1 approval_wait=1 unlanded=0",
 			});
-			rmSync(join(home, "ompbot.db"), { force: true });
+			rmSync(join(home, "jabbu.db"), { force: true });
 			seedLanes(false);
 			expect(gateState("lanes_stuck")).toEqual({
 				state: "closed",
@@ -747,7 +747,7 @@ describe("collectGates", () => {
 			writeHeartbeat(0);
 			seedDb((db) => {
 				laneLedger(db)("approval", old());
-				pendingApproval(db, "ompbot/work/approval", now - 60_000);
+				pendingApproval(db, "jabbu/work/approval", now - 60_000);
 				// A chat turn hung behind the same kind of stale card.
 				turn(db, "discord/ch/300000000000000001/t/1700000000000000001", now - 20 * 60_000, now - 20 * 60_000);
 				pendingApproval(db, "discord/ch/300000000000000001/t/1700000000000000001", now - 60_000);
@@ -764,7 +764,7 @@ describe("collectGates", () => {
 			writeStamp(0);
 			seedDb((db) => {
 				laneLedger(db)("busy", old());
-				turn(db, "ompbot/work/busy", old(), now - 60_000);
+				turn(db, "jabbu/work/busy", old(), now - 60_000);
 			});
 			expect(gateState("lanes_stuck")).toEqual({
 				state: "open",
@@ -787,7 +787,7 @@ describe("collectGates", () => {
 		});
 		expect(gateState("monitors_failed").state).toBe("open");
 		// Old failures do not gate: they already notified once.
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run("UPDATE monitor_events SET updated_at = ?", [now - 48 * 3_600_000]);
 		db.close();
 		expect(gateState("monitors_failed").state).toBe("closed");
@@ -807,7 +807,7 @@ describe("collectGates", () => {
 		});
 		expect(gateState("monitors_failed")).toEqual({ state: "closed", detail: "failed_recent=0" });
 		// A failure after the success opens it again.
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(insert, [now - 600_000, "failed_no_retry", now - 600_000, now - 600_000]);
 		db.close();
 		expect(gateState("monitors_failed")).toEqual({ state: "open", detail: "failed_recent=1" });
@@ -825,7 +825,7 @@ describe("collectGates", () => {
 		});
 		expect(gateState("turns_failing")).toEqual({ state: "open", detail: "recent=3" });
 
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run("UPDATE deliveries SET created_at = ? WHERE op_ref = 'op3'", [now - 2 * 3_600_000]);
 		db.close();
 		expect(gateState("turns_failing")).toEqual({ state: "closed", detail: "recent=2" });
@@ -835,7 +835,7 @@ describe("collectGates", () => {
 		writeStamp(0);
 		seedDb(() => {});
 		expect(gateState("inbound_identity_conflicts")).toEqual({ state: "closed", detail: "last24h=0" });
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		{
 			db.run(
 				"CREATE TABLE inbound_conflicts (conflict_id INTEGER PRIMARY KEY AUTOINCREMENT, platform_message_id TEXT NOT NULL, origin_key TEXT NOT NULL, created_at INTEGER NOT NULL)",
@@ -905,7 +905,7 @@ describe("collectGates", () => {
 	});
 });
 
-describe("ompbot gates: open, closed and unknown (판정불가)", () => {
+describe("jabbu-pocket gates: open, closed and unknown (판정불가)", () => {
 	/** Disk and host load injected calm, so the exit code never depends on this machine. */
 	const calm: GatesCommandDeps = {
 		now: () => now,
@@ -952,7 +952,7 @@ describe("ompbot gates: open, closed and unknown (판정불가)", () => {
 		expect(lastLine(strict.out)).toBe("gates_done open=0 unknown=0 total=14");
 		expect(strict.code).toBe(0);
 
-		writeFileSync(join(home, "ompbot.db"), "not a database at all\n".repeat(500));
+		writeFileSync(join(home, "jabbu.db"), "not a database at all\n".repeat(500));
 		const corrupt = runGates([]);
 		expect(corrupt.code).toBe(1);
 		expect(corrupt.out).toContain("gate=ledger_unreadable state=open");
@@ -961,20 +961,20 @@ describe("ompbot gates: open, closed and unknown (판정불가)", () => {
 	});
 });
 
-describe("OMPBOT_TEST_HOST_LOAD test hook", () => {
-	test("inert without OMPBOT_TEST_HOOKS=1, so production always reads this machine", () => {
+describe("JABBU_TEST_HOST_LOAD test hook", () => {
+	test("inert without JABBU_TEST_HOOKS=1, so production always reads this machine", () => {
 		expect(testHostLoad({})).toBeUndefined();
-		expect(testHostLoad({ OMPBOT_TEST_HOST_LOAD: "idle" })).toBeUndefined();
-		expect(testHostLoad({ OMPBOT_TEST_HOOKS: "0", OMPBOT_TEST_HOST_LOAD: "idle" })).toBeUndefined();
-		expect(testHostLoad({ OMPBOT_TEST_HOOKS: "1" })).toBeUndefined();
+		expect(testHostLoad({ JABBU_TEST_HOST_LOAD: "idle" })).toBeUndefined();
+		expect(testHostLoad({ JABBU_TEST_HOOKS: "0", JABBU_TEST_HOST_LOAD: "idle" })).toBeUndefined();
+		expect(testHostLoad({ JABBU_TEST_HOOKS: "1" })).toBeUndefined();
 	});
 
-	test("with OMPBOT_TEST_HOOKS=1, idle closes host_pressure and any other value is refused", () => {
-		const idle = testHostLoad({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_HOST_LOAD: "idle" });
+	test("with JABBU_TEST_HOOKS=1, idle closes host_pressure and any other value is refused", () => {
+		const idle = testHostLoad({ JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "idle" });
 		expect(idle).toBe(IDLE_HOST_LOAD);
 		const gate = collectGates({ homeDir: home, now, hostLoad: idle }).find((g) => g.name === "host_pressure");
 		expect(gate?.state).toBe("closed");
-		expect(() => testHostLoad({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_HOST_LOAD: "busy" })).toThrow("unknown value busy");
+		expect(() => testHostLoad({ JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "busy" })).toThrow("unknown value busy");
 	});
 });
 
@@ -1085,7 +1085,7 @@ describe("herdr_unreachable (herdr-health stamp)", () => {
 	});
 });
 
-describe("gateOptionsFromConfig: the sweep, /status, `ompbot status` and the dashboard judge the same gates", () => {
+describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and the dashboard judge the same gates", () => {
 	test("maps the config to the omp, offsite and cost-cap options; none without a config", () => {
 		const ompExecutable = join(home, "no-such-omp");
 		expect(gateOptionsFromConfig({ timezone: "Asia/Seoul", ompExecutable, costCap: { dailyUsd: 5 } })).toEqual({
@@ -1110,7 +1110,7 @@ describe("gateOptionsFromConfig: the sweep, /status, `ompbot status` and the das
 
 	test("an omp_runtime gate the sweep opens is listed by the status fallback too", () => {
 		const options = gateOptionsFromConfig({ timezone: "Asia/Seoul", ompExecutable: join(home, "no-such-omp") });
-		const report = readStatusFromDb(join(home, "ompbot.db"), "omp-test 0", "Asia/Seoul", options, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", options, IDLE_HOST_LOAD);
 		expect(report.openGates.map((gate) => gate.name)).toContain("omp_runtime");
 	});
 
@@ -1121,13 +1121,13 @@ describe("gateOptionsFromConfig: the sweep, /status, `ompbot status` and the das
 				"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('m1', 'o', 1, 't', '__proto__', 1)",
 			);
 		});
-		const report = readStatusFromDb(join(home, "ompbot.db"), "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
 		expect(Object.getOwnPropertyDescriptor(report.inbound, "__proto__")?.value).toBe(1);
 	});
 });
 
 describe("gateText", () => {
-	test("every gate `ompbot gates` can emit has a real Korean label, not the machine name", () => {
+	test("every gate `jabbu-pocket gates` can emit has a real Korean label, not the machine name", () => {
 		for (const name of GATE_NAMES) {
 			const { label } = gateText(name);
 			expect(label, name).not.toBe(name);

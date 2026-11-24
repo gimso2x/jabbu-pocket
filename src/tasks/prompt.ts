@@ -28,7 +28,7 @@ export function resumeCheckLines(findings: readonly string[] = [], notes: readon
 	return [...(findings.length === 0 ? [] : [fix]), ...(notes.length === 0 ? [] : [`참고: ${notes.join("; ")}.`])];
 }
 
-/** The prompt a task agent starts or resumes with: ompbot's rules header, then the session's instruction. */
+/** The prompt a task agent starts or resumes with: jabbu's rules header, then the session's instruction. */
 export function buildTaskPrompt(input: TaskPromptInput): string {
 	const docs = `${relative(input.worktree, input.docsDir)}/`;
 	const where = input.recordsInRepo ? `${docs} (${input.docsDir})` : `${input.docsDir}/ (저장소 밖 기록 디렉터리)`;
@@ -43,11 +43,11 @@ export function buildTaskPrompt(input: TaskPromptInput): string {
 				]),
 		"규칙:",
 		`1. 단계 전환·커밋·막힘 때마다 PROGRESS.md의 \`updated\`(ISO8601, ${input.timezone} ${offsetLabel(input.now, input.timezone)})·\`current\`·\`next\`를 고친다. \`updated\`에는 그때 \`date -Iseconds\`로 얻은 실제 시각을 그대로 쓴다(어림하거나 앞당겨 쓰지 않는다). 한 단계가 30분을 넘으면 30분마다 중간 갱신한다. \`status\`는 working이나 blocked만 쓴다.`,
-		`2. 단계를 마치면 \`[x]\`로 체크하고 \`증거:\`에 \`commit <hash>\` 또는 \`test <명령> → <결과 줄>\`을 붙인다. ${input.recordsInRepo ? `단계 커밋에는 ${docs} 갱신을 함께 넣는다(문서를 미커밋으로 남기지 않는다).` : "기준 문서는 저장소 밖이라 git 추적이 안 된다. 문서를 커밋하지 말고 저장만 한다 — ompbot이 기록 저장소에 커밋한다."}`,
+		`2. 단계를 마치면 \`[x]\`로 체크하고 \`증거:\`에 \`commit <hash>\` 또는 \`test <명령> → <결과 줄>\`을 붙인다. ${input.recordsInRepo ? `단계 커밋에는 ${docs} 갱신을 함께 넣는다(문서를 미커밋으로 남기지 않는다).` : "기준 문서는 저장소 밖이라 git 추적이 안 된다. 문서를 커밋하지 말고 저장만 한다 — jabbu가 기록 저장소에 커밋한다."}`,
 		"3. 수락기준을 채우면 outcome.md에 AC별 절(`## AC-1`)을 만들어 `- commit: <hash> <커밋 제목>`, `- test: <명령> → <결과 줄>`, `- file: <산출물 경로>`로 증거를 적고, spec.md의 그 AC를 `[x]`로 체크한다. 수락기준 문구는 고치지 않는다. outcome.md 맨 위 `## 요약`에는 오너가 읽을 한국어 2~3줄(① 무엇이 바뀌었나를 사용자 관점에서 ② 검증 결과 숫자 ③ 스펙 밖 예외·남은 위험, 없으면 생략)을 쓴다. Outcome 카드에는 이 요약만 나가므로 코드 식별자 나열·AC 번호 나열은 하지 않는다. 지운 export(함수·상수·타입·클래스)는 스펙이 이름을 적지 않았으면 outcome.md 끝 `## 지운 export` 절에 이름을 한 줄씩 적는다(무결성 검사가 의도한 삭제로 본다).",
-		"4. 오너 결정이 꼭 필요할 때만 멈추고, 결정 없이 할 수 있는 일은 그 전에 모두 끝낸다. 접근을 바꾸거나 여러 안 중 하나를 고를 때는 PROGRESS.md 끝 `# 결정` 절에 `- 고른 것 / 버린 것 / 이유` 한 줄을 덧붙인다. 멈추기 전에 지금까지와 다른 접근을 2가지 이상 시도하고, 시도한 것과 결과를 `blocked_reason`에 적는다. 승인·자격증명·실계정·오너만 정할 범위 선택이 원인이면 시도 없이 `needs_owner: yes`를 쓴다. 멈출 때는 PROGRESS.md에 `status: blocked`, `blocked_reason`(한 줄 사유), `question`(오너에게 물을 것 한 문장), `recommend`(추천과 이유 한 줄), `impact`(영향 한 줄)를 적고 멈춘다. ompbot이 이 값을 그대로 오너 결정 요청으로 보낸다(`needs_owner: yes`가 아니면 먼저 한 번 재도전을 요청한다) 결정이 쉽게 되돌릴 수 있는 것이면 `fallback_ok: yes`도 적는다 — 오너가 일정 시간 답하지 않으면 코어가 `recommend`대로 진행하라고 알린다.. 재개되면 `status: working`으로 돌리고 `needs_owner`와 이 네 칸을 비운다.",
-		"5. 완료 선언·merge·push·배포를 하지 않는다. Outcome 판정은 ompbot이 한다.",
-		"6. `[check: …]`가 붙은 수락기준은 ompbot이 직접 다시 실행한다. 커밋한 뒤 같은 명령으로 직접 확인하라.",
+		"4. 오너 결정이 꼭 필요할 때만 멈추고, 결정 없이 할 수 있는 일은 그 전에 모두 끝낸다. 접근을 바꾸거나 여러 안 중 하나를 고를 때는 PROGRESS.md 끝 `# 결정` 절에 `- 고른 것 / 버린 것 / 이유` 한 줄을 덧붙인다. 멈추기 전에 지금까지와 다른 접근을 2가지 이상 시도하고, 시도한 것과 결과를 `blocked_reason`에 적는다. 승인·자격증명·실계정·오너만 정할 범위 선택이 원인이면 시도 없이 `needs_owner: yes`를 쓴다. 멈출 때는 PROGRESS.md에 `status: blocked`, `blocked_reason`(한 줄 사유), `question`(오너에게 물을 것 한 문장), `recommend`(추천과 이유 한 줄), `impact`(영향 한 줄)를 적고 멈춘다. jabbu가 이 값을 그대로 오너 결정 요청으로 보낸다(`needs_owner: yes`가 아니면 먼저 한 번 재도전을 요청한다) 결정이 쉽게 되돌릴 수 있는 것이면 `fallback_ok: yes`도 적는다 — 오너가 일정 시간 답하지 않으면 코어가 `recommend`대로 진행하라고 알린다.. 재개되면 `status: working`으로 돌리고 `needs_owner`와 이 네 칸을 비운다.",
+		"5. 완료 선언·merge·push·배포를 하지 않는다. Outcome 판정은 jabbu가 한다.",
+		"6. `[check: …]`가 붙은 수락기준은 jabbu가 직접 다시 실행한다. 커밋한 뒤 같은 명령으로 직접 확인하라.",
 		"7. 컨텍스트 예산: 단일 세션 컨텍스트가 200k 토큰을 넘기 전에 단계를 3~5개 안쪽으로 마무리한다(300k 초과 금지). 작업이 커지면 남은 단계를 후속 작업으로 분할할 수 있게 정리한다.",
 		"8. 전체 테스트는 `bun run test`로 한다(호스트에서 한 번에 하나씩 줄을 선다). 수정 중에는 고친 파일의 테스트만 돌린다.",
 		"9. 조사 전용 요청이면 찾은 것과 근거를 보고하고, 하지 않은 변경·돌리지 않은 테스트를 지어내지 않는다. 확실하지 않은 것은 이유와 함께 모른다고 적는다.",

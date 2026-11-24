@@ -4,17 +4,17 @@ import { dirname, join } from "node:path";
 import { CONTINUE_PROMPT } from "../src/daemon/recovery";
 
 /**
- * A turn the planned restart cut leaves its session with an assistant `toolCall` that has no `toolResult`. ompbot does
+ * A turn the planned restart cut leaves its session with an assistant `toolCall` that has no `toolResult`. jabbu does
  * not repair the jsonl: the omp's message transform (pi-ai `providers/transform-messages.ts`) answers such a
  * call with a synthetic result before anything reaches a provider. This pins that behaviour to the omp the bot runs
- * (`OMPBOT_OMP_EXECUTABLE`, else the omp on PATH), so an omp upgrade that drops it fails here first.
+ * (`JABBU_OMP_EXECUTABLE`, else the omp on PATH), so an omp upgrade that drops it fails here first.
  */
 
 type Message = { role: string; toolCallId?: string; content?: Array<{ type: string; text?: string; id?: string }> };
 type TransformMessages = (messages: Message[], model: Record<string, unknown>) => Message[];
 
-/** The omp the bot runs: `OMPBOT_OMP_EXECUTABLE`, else the omp on PATH. */
-const ompExecutable = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? undefined;
+/** The omp the bot runs: `JABBU_OMP_EXECUTABLE`, else the omp on PATH. */
+const ompExecutable = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? undefined;
 
 /**
  * `transform-messages.ts` of the omp's package: its root is the nearest ancestor of the executable's realpath that holds
@@ -22,7 +22,7 @@ const ompExecutable = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? u
  * `node_modules/@oh-my-pi/pi-ai`, then at the hoisted `../pi-ai`. Returns the path, or why there is none.
  */
 function locateTransform(executable: string | undefined): { path: string } | { unavailable: string } {
-	if (executable === undefined) return { unavailable: "no omp executable (OMPBOT_OMP_EXECUTABLE unset, none on PATH)" };
+	if (executable === undefined) return { unavailable: "no omp executable (JABBU_OMP_EXECUTABLE unset, none on PATH)" };
 	let real: string;
 	try {
 		real = realpathSync(executable);

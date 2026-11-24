@@ -610,7 +610,7 @@ export class Store {
 		threadRef?: string;
 		/** Set only for a peer bot's row (taints the origin: see `originHasPeerInbound`). */
 		peerUserId?: string | null;
-		/** An `ompbot inject` row (`InboundRow.injected`). */
+		/** A `jabbu-pocket inject` row (`InboundRow.injected`). */
 		injected?: boolean;
 	}): {
 		inserted: boolean;
@@ -862,7 +862,7 @@ export class Store {
 	}
 
 	/**
-	 * Distinct threads of the op's `discarded` rows — a `/queue-ompbot drop` target, re-linked to the command's op
+	 * Distinct threads of the op's `discarded` rows — a `/queue-jabbu drop` target, re-linked to the command's op
 	 * by `discard()`. The delivery carrying the op finishes these threads' ⏳ status as `🚫 취소됨` instead of ✅/⚠️.
 	 */
 	discardedThreadsOfOp(originKey: string, opRef: string): string[] {
@@ -1851,7 +1851,7 @@ export class Store {
 
 	/**
 	 * A send whose outcome is unknown. Sticky; never resent or expired automatically (the owner resolves it with
-	 * `ompbot deliveries ack|resend`). `sentParts` records how much of a multi-message answer was already out, so a
+	 * `jabbu-pocket deliveries ack|resend`). `sentParts` records how much of a multi-message answer was already out, so a
 	 * `resend` continues after them instead of posting them twice, and `replyTs` (the first part's id of a top-level
 	 * answer) is kept so the resent parts reply under it.
 	 */
@@ -1879,7 +1879,7 @@ export class Store {
 			.run(now, now, FRESHNESS_MS).changes;
 	}
 
-	// ---- owner resolution of held deliveries (`ompbot deliveries`) ----
+	// ---- owner resolution of held deliveries (`jabbu-pocket deliveries`) ----
 
 	/** The held rows waiting for the owner, oldest id first. */
 	listAmbiguous(): DeliveryRow[] {
@@ -1913,7 +1913,7 @@ export class Store {
 			this.insertDelivery(
 				{ originKey: held.originKey, opRef, threadRef: held.threadRef },
 				0,
-				`${at}⚠️ 전달 불확실 — 답장이 나갔는지 확인할 수 없습니다. 이미 도착했다면 \`ompbot deliveries ack ${deliveryId}\`, 다시 보내려면 \`ompbot deliveries resend ${deliveryId}\``,
+				`${at}⚠️ 전달 불확실 — 답장이 나갔는지 확인할 수 없습니다. 이미 도착했다면 \`jabbu-pocket deliveries ack ${deliveryId}\`, 다시 보내려면 \`jabbu-pocket deliveries resend ${deliveryId}\``,
 			);
 			return true;
 		})();
@@ -2403,7 +2403,7 @@ const deliveryFactsOf = (row: DeliverySql): DeliveryFacts => ({
 	createdAt: row.created_at,
 });
 
-/** The `failed_ambiguous` rows waiting for the owner, oldest id first (the `ompbot deliveries list` list). */
+/** The `failed_ambiguous` rows waiting for the owner, oldest id first (the `jabbu-pocket deliveries list` list). */
 export function listAmbiguousDeliveries(db: Database): DeliveryRow[] {
 	return (
 		db.query("SELECT * FROM deliveries WHERE state = 'failed_ambiguous' ORDER BY delivery_id").all() as DeliverySql[]
@@ -2432,7 +2432,7 @@ export function openStore(options: StoreOptions): Store {
 }
 
 /**
- * A second process's view of the ledger for `ompbot deliveries`: it resolves held rows the daemon owns without taking
+ * A second process's view of the ledger for `jabbu-pocket deliveries`: it resolves held rows the daemon owns without taking
  * over its work. The file must already exist (`create: false`), a newer schema is refused, and no boot recovery runs —
  * the daemon's inflight rows and its recovered ones are none of this connection's business.
  */

@@ -48,8 +48,8 @@ const binDir = (gitleaks: "ok" | "broken" | "absent"): string => {
 
 const envOf = (overrides: Record<string, string | undefined>): Record<string, string | undefined> => ({
 	PATH: binDir("ok"),
-	OMPBOT_OMP_EXECUTABLE: undefined,
-	OMPBOT_GITLEAKS: undefined,
+	JABBU_OMP_EXECUTABLE: undefined,
+	JABBU_GITLEAKS: undefined,
 	...overrides,
 });
 
@@ -58,21 +58,21 @@ describe("checkTestFixtures", () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
 		const gitleaks = script(binDir("absent"), "gitleaks", "8.28.0");
 		await expect(
-			checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp, OMPBOT_GITLEAKS: gitleaks })),
+			checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp, JABBU_GITLEAKS: gitleaks })),
 		).resolves.toEqual({ omp, version: "19.0.1", gitleaks });
 	});
 
 	test("the fixture pins omp to an exact version, so the check has one answer", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
-		const env = envOf({ OMPBOT_OMP_EXECUTABLE: omp });
+		const env = envOf({ JABBU_OMP_EXECUTABLE: omp });
 		await expect(checkTestFixtures(fixtureRoot("^19.0.1"), env)).rejects.toThrow("정확한 버전");
 		await expect(checkTestFixtures(fixtureRoot("19.x"), env)).rejects.toThrow("정확한 버전");
 	});
 
-	test("gitleaks on PATH counts when OMPBOT_GITLEAKS is unset", async () => {
+	test("gitleaks on PATH counts when JABBU_GITLEAKS is unset", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
 		const path = binDir("ok");
-		const report = await checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp, PATH: path }));
+		const report = await checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp, PATH: path }));
 		expect(report.gitleaks).toBe(join(path, "gitleaks"));
 	});
 
@@ -80,32 +80,32 @@ describe("checkTestFixtures", () => {
 		const dir = tempDir("fixtures-omp-");
 		const executable =
 			kind === "unset" ? undefined : kind === "relative" ? "omp" : kind === "missing" ? join(dir, "nope") : dir;
-		await expect(checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: executable }))).rejects.toThrow();
+		await expect(checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: executable }))).rejects.toThrow();
 	});
 
 	test("an omp of another version fails", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/18.0.0");
-		await expect(checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp }))).rejects.toThrow(
+		await expect(checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp }))).rejects.toThrow(
 			"픽스처 고정 19.0.1",
 		);
 	});
 
 	test("an omp whose --version fails is refused", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "", 1);
-		await expect(checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp }))).rejects.toThrow("omp/<버전>");
+		await expect(checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp }))).rejects.toThrow("omp/<버전>");
 	});
 
 	test("a missing gitleaks fails instead of letting the release export tests skip", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
 		await expect(
-			checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp, PATH: binDir("absent") })),
+			checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp, PATH: binDir("absent") })),
 		).rejects.toThrow("gitleaks를 찾지 못했습니다");
 	});
 
 	test("a gitleaks that does not run fails", async () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
 		await expect(
-			checkTestFixtures(fixtureRoot(), envOf({ OMPBOT_OMP_EXECUTABLE: omp, PATH: binDir("broken") })),
+			checkTestFixtures(fixtureRoot(), envOf({ JABBU_OMP_EXECUTABLE: omp, PATH: binDir("broken") })),
 		).rejects.toThrow("gitleaks가 실행되지 않습니다");
 	});
 });
@@ -123,7 +123,7 @@ describe("check-test-fixtures CLI", () => {
 
 	test.each(["omp", "gitleaks"])("the real CLI exits nonzero without an OK marker when %s is missing", (missing) => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
-		const env = missing === "omp" ? { PATH: binDir("ok") } : { PATH: binDir("absent"), OMPBOT_OMP_EXECUTABLE: omp };
+		const env = missing === "omp" ? { PATH: binDir("ok") } : { PATH: binDir("absent"), JABBU_OMP_EXECUTABLE: omp };
 		const result = cli(env);
 		expect(result.code).toBe(1);
 		expect(result.out).not.toContain("CI_FIXTURES_OK");
@@ -132,7 +132,7 @@ describe("check-test-fixtures CLI", () => {
 
 	test("the real CLI prints the OK marker and exits 0 when both tools are present", () => {
 		const omp = script(tempDir("fixtures-omp-"), "omp", "omp/19.0.1");
-		const result = cli({ OMPBOT_OMP_EXECUTABLE: omp });
+		const result = cli({ JABBU_OMP_EXECUTABLE: omp });
 		expect(result.code).toBe(0);
 		expect(result.out).toContain("CI_FIXTURES_OK omp=19.0.1 gitleaks=");
 		expect(result.err).toBe("");

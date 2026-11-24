@@ -1,4 +1,4 @@
-// `!restart`: the daemon starts the same detached apply `ompbot apply --detach`
+// `!restart`: the daemon starts the same detached apply `jabbu-pocket apply --detach`
 // starts, without a model turn, after refusing up front what would only end in a SKIP or a second apply. The apply
 // reports back with `--report-plain` (IPC `notify`), so neither the request nor the report needs a working model.
 import { readFileSync } from "node:fs";
@@ -60,7 +60,7 @@ export function reportTargetOf(originKey: string, threadRef: string): ReportTarg
 }
 
 /**
- * How long this process's own launch counts as "in progress" by itself. Past it, the unit (active `ompbot-apply-*`)
+ * How long this process's own launch counts as "in progress" by itself. Past it, the unit (active `jabbu-apply-*`)
  * and the apply lock are what show a restart still going — so an apply that ended without restarting (a late SKIP)
  * does not block the next `!restart` until a restart that never comes.
  */
@@ -72,7 +72,7 @@ export interface RestartLauncherDeps {
 	repoDir: string;
 	/** PATH for git, systemctl and the unit (`applyPathEnv`); bun is looked up on it. */
 	pathEnv: string;
-	/** Passed to the unit as `OMPBOT_HOME` when the daemon itself runs under one (as `apply --detach` does). */
+	/** Passed to the unit as `JABBU_HOME` when the daemon itself runs under one (as `apply --detach` does). */
 	homeEnv?: string;
 	run: Runner;
 	isAlive: (pid: number) => boolean;

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { loadConfig, type OmpbotConfig, timezoneOfHome } from "../config";
+import { type JabbuConfig, loadConfig, timezoneOfHome } from "../config";
 import { escapeControl } from "../daemon/doctor";
 import { callDaemon, IpcNoResponse } from "../daemon/ipc";
 import { summarizeJudgement, taskChecksOf } from "../tasks/checker";
@@ -24,7 +24,7 @@ function describe(row: TaskRow, paused: boolean): string {
 	return `${row.taskId}  ${row.status.padEnd(9)}  ${row.risk}  ${escapeControl(row.title)}  [${where} ${escapeControl(row.branch)}]  agent=${escapeControl(row.agent)}  AC=${row.acceptance.length}${paused ? " (멈춤)" : ""}`;
 }
 
-function taskConfigOf(homeDir: string): Pick<OmpbotConfig, "dispatchHosts" | "recordsRepo"> {
+function taskConfigOf(homeDir: string): Pick<JabbuConfig, "dispatchHosts" | "recordsRepo"> {
 	try {
 		return loadConfig(homeDir);
 	} catch (error) {
@@ -61,14 +61,14 @@ async function askDaemon(
 	timeoutMs = IPC_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | "unreachable" | "no_response"> {
 	try {
-		const response = await callDaemon(join(homeDir, "ompbot.sock"), request, timeoutMs);
+		const response = await callDaemon(join(homeDir, "jabbu.sock"), request, timeoutMs);
 		return typeof response === "object" && response !== null ? (response as Record<string, unknown>) : "no_response";
 	} catch (error) {
 		return error instanceof IpcNoResponse ? "no_response" : "unreachable";
 	}
 }
 
-/** `ompbot tasks ...` against the ledger file directly; chat side effects go through the running daemon. */
+/** `jabbu-pocket tasks ...` against the ledger file directly; chat side effects go through the running daemon. */
 export async function tasksCommand(
 	args: string[],
 	homeDir: string,
@@ -76,7 +76,7 @@ export async function tasksCommand(
 ): Promise<number> {
 	const [sub, ...rest] = args;
 	if (sub !== "list" && sub !== "show" && sub !== "check" && sub !== "close" && sub !== "pause" && sub !== "resume") {
-		process.stderr.write(`usage: ompbot tasks <list|show|check|close|pause|resume>\n${TASKS_USAGE}`);
+		process.stderr.write(`usage: jabbu-pocket tasks <list|show|check|close|pause|resume>\n${TASKS_USAGE}`);
 		return 2;
 	}
 	const { values, positionals } = parseArgs({
@@ -84,7 +84,7 @@ export async function tasksCommand(
 		allowPositionals: true,
 		options: { json: { type: "boolean" }, as: { type: "string" } },
 	});
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	// A read must not create a ledger holding only `tasks`: `gates` and `status` would call it unreadable.
 	const noLedger = (): number => {
 		if (sub === "list") {
@@ -102,7 +102,7 @@ export async function tasksCommand(
 		});
 	} catch (error) {
 		process.stderr.write(
-			`tasks ${sub}: ledger ${dbPath} cannot be opened: ${escapeControl(String(error))} — check the file's permissions and that its directory is writable, or copy ompbot.db to a writable place\n`,
+			`tasks ${sub}: ledger ${dbPath} cannot be opened: ${escapeControl(String(error))} — check the file's permissions and that its directory is writable, or copy jabbu.db to a writable place\n`,
 		);
 		return 1;
 	}

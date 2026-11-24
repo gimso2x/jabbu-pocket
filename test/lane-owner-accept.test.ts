@@ -33,7 +33,7 @@ let repos: string[];
 let daemons: Daemon[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-owner-accept-");
+	home = makeHome("jabbu-lane-owner-accept-");
 	repos = [];
 	daemons = [];
 });
@@ -165,8 +165,8 @@ describe("LaneManager.acceptByOwner and status hints (AC-2)", () => {
 		expect(cardPost).toHaveLength(1);
 		expect(cardPost[0]?.content).toContain("⚠️ 오너 수락으로 닫힌 레인입니다(실패한 검사를 오너가 수락).");
 		expect(cardPost[0]?.content).toContain("오너 수락으로 통과");
-		expect(JSON.stringify(cardPost[0]?.components)).toContain("ompbot:lane:merge:");
-		expect(JSON.stringify(cardPost[0]?.components)).toContain("ompbot:lane:discard:");
+		expect(JSON.stringify(cardPost[0]?.components)).toContain("jabbu:lane:merge:");
+		expect(JSON.stringify(cardPost[0]?.components)).toContain("jabbu:lane:discard:");
 
 		// Owner can still explicitly discard or merge the closed lane.
 		const discarded = await h.manager.discard(lane.name);
@@ -442,12 +442,12 @@ describe("daemon thread '닫아' routing (AC-3)", () => {
 		const workRootId = transport.posts((text) => text === "🔄 work-lane")[0]?.id ?? "";
 		await sendThread("닫아", "7100000000000000100", workRootId);
 		await transport.waitForPosts((text) => text.startsWith("ECHO 닫아"), 1, 1500);
-		const workPrompts = drivers.get("ompbot/work/work-lane")?.calls.filter((c) => c.startsWith("prompt:")) ?? [];
+		const workPrompts = drivers.get("jabbu/work/work-lane")?.calls.filter((c) => c.startsWith("prompt:")) ?? [];
 		expect(workPrompts.some((call) => call === "prompt:닫아")).toBe(true);
 		expect(daemon.store.getLane("work-lane")?.status).toBe("working");
 
 		// 2. not-done lane with failed check: '닫아' settles by core (op_ref lane:), never reaches omp
-		const acceptTool = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "ompbot_work_start");
+		const acceptTool = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "jabbu_work_start");
 		const signal = new AbortController().signal;
 		const startedText = await acceptTool?.execute(
 			{ title: "accept-lane", cwd: repo, acceptance: [CHECK_A, CHECK_B] },
@@ -458,7 +458,7 @@ describe("daemon thread '닫아' routing (AC-3)", () => {
 		const acceptLane = daemon.store.getLane("accept-lane");
 		const acceptRootId = acceptLane?.threadRef.slice(acceptLane.threadRef.indexOf(":") + 1) ?? "";
 		const sha = commitIn(acceptLane?.cwd ?? "", "a.txt");
-		const claimTool = daemon.hostToolsFor("ompbot/work/accept-lane").find((tool) => tool.name === "ompbot_claim_done");
+		const claimTool = daemon.hostToolsFor("jabbu/work/accept-lane").find((tool) => tool.name === "jabbu_claim_done");
 		const claimResult = await claimTool?.execute(
 			{ repo: acceptLane?.cwd ?? "", commit: "HEAD", summary: "a.txt만 추가" },
 			{ signal },
@@ -467,25 +467,25 @@ describe("daemon thread '닫아' routing (AC-3)", () => {
 		expect(daemon.store.getLane("accept-lane")?.status).toBe("not-done");
 		// Wait for the core's not-done steer turn to finish before the owner sends '닫아'.
 		await transport.waitForPosts(
-			(text) => text.startsWith("ECHO [ompbot] 완료 주장이 검증을 통과하지 못했습니다"),
+			(text) => text.startsWith("ECHO [jabbu] 완료 주장이 검증을 통과하지 못했습니다"),
 			1,
 			1500,
 		);
 
 		const promptsBefore =
-			drivers.get("ompbot/work/accept-lane")?.calls.filter((c) => c.startsWith("prompt:") && c === "prompt:닫아") ?? [];
+			drivers.get("jabbu/work/accept-lane")?.calls.filter((c) => c.startsWith("prompt:") && c === "prompt:닫아") ?? [];
 		expect(promptsBefore).toHaveLength(0);
 
 		await sendThread("닫아", "7100000000000000200", acceptRootId);
 		await transport.waitForPosts((text) => text.startsWith("오너 수락으로 닫았습니다"), 1, 1500);
 
 		const inbound = daemon.store.getInbound(`${CHANNEL}:7100000000000000200`);
-		expect(inbound?.originKey).toBe("ompbot/work/accept-lane");
+		expect(inbound?.originKey).toBe("jabbu/work/accept-lane");
 		expect(inbound?.state).toBe("answered");
 		expect(inbound?.opRef).toBe(`lane:${CHANNEL}:7100000000000000200`);
 
 		const promptsAfter =
-			drivers.get("ompbot/work/accept-lane")?.calls.filter((c) => c.startsWith("prompt:") && c.includes("닫아")) ?? [];
+			drivers.get("jabbu/work/accept-lane")?.calls.filter((c) => c.startsWith("prompt:") && c.includes("닫아")) ?? [];
 		expect(promptsAfter).toHaveLength(0);
 
 		const closed = daemon.store.getLane("accept-lane");

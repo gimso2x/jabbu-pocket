@@ -35,7 +35,7 @@ function tempDir(prefix: string): string {
 }
 
 function home(): TestHome {
-	const h = makeHome("ompbot-lane-m-home-");
+	const h = makeHome("jabbu-lane-m-home-");
 	cleanups.push(h.remove);
 	return h;
 }
@@ -107,7 +107,7 @@ describe("M-3·M-5: lane root and status messages", () => {
 
 describe("M-4: a lane does not start inside a submodule", () => {
 	test("resolveLaneRepo refuses a work tree that has a superproject", async () => {
-		const top = tempDir("ompbot-lane-m-sub-");
+		const top = tempDir("jabbu-lane-m-sub-");
 		const git: GitRunner = async (args) => {
 			const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
 			if (args.includes("--show-toplevel")) return ok(`${top}\n`);
@@ -191,8 +191,8 @@ describe("M-8: json: signals see only the file's own fields", () => {
 
 describe("M-11·M-12: monitors export directory", () => {
 	function ledgerWithOne() {
-		const dir = tempDir("ompbot-lane-m-mon-");
-		const ledger = openMonitorLedger(join(dir, "ompbot.db"));
+		const dir = tempDir("jabbu-lane-m-mon-");
+		const ledger = openMonitorLedger(join(dir, "jabbu.db"));
 		cleanups.push(() => ledger.close());
 		const ctx = { scriptsRoot: join(dir, "scripts"), workspaceDir: dir, defaultTimezone: "Asia/Seoul" };
 		ledger.addMonitor(
@@ -231,7 +231,7 @@ describe("M-11·M-12: monitors export directory", () => {
 
 describe("M-16·M-17: dashboard masking", () => {
 	test("M-16: a tool call name holding a token is masked in the conversation", () => {
-		const dir = tempDir("ompbot-lane-m-conv-");
+		const dir = tempDir("jabbu-lane-m-conv-");
 		const file = join(dir, "s.jsonl");
 		const at = (n: number) => new Date(1_800_000_000_000 + n * 1000).toISOString();
 		const records = [

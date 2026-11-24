@@ -5,11 +5,11 @@ import { parseArgs } from "node:util";
 
 export const UNITS_USAGE = `  units render [--out <dir>] [--dry-run] [--instance <name>]
                                  fill packaging/*.service|*.timer with this bun, this checkout and HOME (plus
-                                 OMPBOT_HOME when set) and write them to --out (default ~/.config/systemd/user);
+                                 JABBU_HOME when set) and write them to --out (default ~/.config/systemd/user);
                                  --dry-run prints '# <file>' + content instead; an existing file with other content is
                                  never overwritten (exit 2, nothing written); never runs systemctl;
-                                 --instance <name> (^[a-z][a-z0-9-]{0,23}$, needs OMPBOT_HOME) renders a second install
-                                 as ompbot-<name>[-backup|-gc].service|timer, without the dashboard unit; backup, gc,
+                                 --instance <name> (^[a-z][a-z0-9-]{0,23}$, needs JABBU_HOME) renders a second install
+                                 as jabbu-<name>[-backup|-gc].service|timer, without the dashboard unit; backup, gc,
                                  dashboard and names ending in -backup/-gc/-dashboard are taken by other units' names
 `;
 
@@ -24,8 +24,8 @@ interface UnitValues {
 	bun: string;
 	repoDir: string;
 	home: string;
-	/** Absolute; set only when the caller's environment has OMPBOT_HOME. */
-	ompbotHome?: string;
+	/** Absolute; set only when the caller's environment has JABBU_HOME. */
+	jabbuHome?: string;
 }
 
 interface RenderedUnit {
@@ -36,7 +36,7 @@ interface RenderedUnit {
 /** Characters that need no quoting in a unit file word. */
 const PLAIN_WORD = /^[\w/.,:@+=-]+$/;
 
-/** Fills `@BUN@`, `@REPO_DIR@`, `@HOME@`, `@PATH@`; `.service` units also get `Environment=OMPBOT_HOME=` when set. */
+/** Fills `@BUN@`, `@REPO_DIR@`, `@HOME@`, `@PATH@`; `.service` units also get `Environment=JABBU_HOME=` when set. */
 export function renderUnit(name: string, template: string, values: UnitValues): string {
 	const path = [
 		...new Set([
@@ -76,18 +76,18 @@ export function renderUnit(name: string, template: string, values: UnitValues): 
 			return `Environment=${word(`PATH=${path}`).replaceAll("%", "%%")}`;
 		},
 	);
-	if (values.ompbotHome !== undefined && name.endsWith(".service")) {
+	if (values.jabbuHome !== undefined && name.endsWith(".service")) {
 		// systemd splits an unquoted value at spaces and expands `%`; a plain path stays unquoted so installed units match.
-		const assignment = `OMPBOT_HOME=${values.ompbotHome}`;
+		const assignment = `JABBU_HOME=${values.jabbuHome}`;
 		const line = `Environment=${word(assignment).replaceAll("%", "%%")}`;
 		text = text.replace(/^\[Service\]\n/m, () => `[Service]\n${line}\n`);
 	}
 	return text;
 }
 
-/** `ompbot.service` → `ompbot-<instance>.service`, `ompbot-gc.timer` → `ompbot-<instance>-gc.timer`. */
+/** `jabbu.service` → `jabbu-<instance>.service`, `jabbu-gc.timer` → `jabbu-<instance>-gc.timer`. */
 const instanceUnitName = (name: string, instance: string): string =>
-	name.replace(/^ompbot(?=[-.])/, `ompbot-${instance}`);
+	name.replace(/^jabbu(?=[-.])/, `jabbu-${instance}`);
 
 /**
  * Every unit template under packaging/, rendered, in file-name order. With `instance` the units are renamed
@@ -96,7 +96,7 @@ const instanceUnitName = (name: string, instance: string): string =>
 function renderUnits(values: UnitValues, instance?: string): RenderedUnit[] {
 	return readdirSync(PACKAGING_DIR)
 		.filter((name) => name.endsWith(".service") || name.endsWith(".timer"))
-		.filter((name) => instance === undefined || name !== "ompbot-dashboard.service")
+		.filter((name) => instance === undefined || name !== "jabbu-dashboard.service")
 		.sort()
 		.map((name) => {
 			const text = renderUnit(name, readFileSync(join(PACKAGING_DIR, name), "utf8"), values);
@@ -104,9 +104,9 @@ function renderUnits(values: UnitValues, instance?: string): RenderedUnit[] {
 			return {
 				name: instanceUnitName(name, instance),
 				text: text
-					.replace(/^Description=ompbot(?=[ :])/m, `Description=ompbot-${instance}`)
+					.replace(/^Description=jabbu(?=[ :])/m, `Description=jabbu-${instance}`)
 					.replace(
-						/^(After=|Unit=)(ompbot-\S+)$/gm,
+						/^(After=|Unit=)(jabbu-\S+)$/gm,
 						(_m, key: string, unit: string) => `${key}${instanceUnitName(unit, instance)}`,
 					),
 			};
@@ -127,7 +127,7 @@ function usage(message: string): number {
 	return 2;
 }
 
-/** `ompbot units render`: writes only when no target differs, so an installed unit is never silently replaced. */
+/** `jabbu-pocket units render`: writes only when no target differs, so an installed unit is never silently replaced. */
 export function unitsCommand(args: string[], env: Record<string, string | undefined>): number {
 	const [sub, ...rest] = args;
 	if (sub !== "render") return usage(sub === undefined ? "missing subcommand" : `unknown subcommand ${sub}`);
@@ -140,24 +140,24 @@ export function unitsCommand(args: string[], env: Record<string, string | undefi
 	} catch (error) {
 		return usage(error instanceof Error ? error.message : String(error));
 	}
-	// An empty OMPBOT_HOME is unset, as in config.ts: the default ~/.ompbot, no Environment= line.
-	const ompbotHome = env.OMPBOT_HOME === undefined || env.OMPBOT_HOME === "" ? undefined : resolve(env.OMPBOT_HOME);
-	if (ompbotHome !== undefined && CONTROL_CHARS.test(ompbotHome))
-		return usage("OMPBOT_HOME contains a control character; a unit file cannot carry it");
+	// An empty JABBU_HOME is unset, as in config.ts: the default ~/.jabbu, no Environment= line.
+	const jabbuHome = env.JABBU_HOME === undefined || env.JABBU_HOME === "" ? undefined : resolve(env.JABBU_HOME);
+	if (jabbuHome !== undefined && CONTROL_CHARS.test(jabbuHome))
+		return usage("JABBU_HOME contains a control character; a unit file cannot carry it");
 	if (values.out === "") return usage("--out is empty; leave it out to use ~/.config/systemd/user");
 	const instance = values.instance;
 	if (instance !== undefined) {
 		if (!INSTANCE_NAME.test(instance)) return usage(`--instance must match ${INSTANCE_NAME.source}`);
-		// `ompbot-backup.service` etc. already name the default install's units: such an instance would overwrite them.
+		// `jabbu-backup.service` etc. already name the default install's units: such an instance would overwrite them.
 		if (["backup", "gc", "dashboard"].includes(instance))
-			return usage(`--instance ${instance} collides with the default install's ompbot-${instance} units`);
-		// `ompbot-a-backup.service` is instance `a`'s backup unit: an instance `a-backup` would share its file names.
+			return usage(`--instance ${instance} collides with the default install's jabbu-${instance} units`);
+		// `jabbu-a-backup.service` is instance `a`'s backup unit: an instance `a-backup` would share its file names.
 		const suffix = /-(backup|gc|dashboard)$/.exec(instance)?.[1];
 		if (suffix !== undefined)
 			return usage(`--instance ${instance} ends in -${suffix}, the name of another instance's ${suffix} units`);
-		if (ompbotHome === undefined) return usage("--instance needs OMPBOT_HOME (a second install needs its own home)");
+		if (jabbuHome === undefined) return usage("--instance needs JABBU_HOME (a second install needs its own home)");
 	}
-	// An empty HOME is unset (as OMPBOT_HOME above): a relative one would put PATH entries and --out under the cwd.
+	// An empty HOME is unset (as JABBU_HOME above): a relative one would put PATH entries and --out under the cwd.
 	const home = env.HOME || homedir();
 	if (CONTROL_CHARS.test(home)) return usage("HOME contains a control character; a unit file cannot carry it");
 	// bun and the checkout land in ExecStart= like HOME in Environment=: a line break would split the directive.
@@ -172,7 +172,7 @@ export function unitsCommand(args: string[], env: Record<string, string | undefi
 			bun: process.execPath,
 			repoDir: REPO_DIR,
 			home,
-			...(ompbotHome === undefined ? {} : { ompbotHome }),
+			...(jabbuHome === undefined ? {} : { jabbuHome }),
 		},
 		instance,
 	);
@@ -216,10 +216,10 @@ export function unitsCommand(args: string[], env: Record<string, string | undefi
 	} catch (error) {
 		return usage(`--out ${outDir}: ${(error as NodeJS.ErrnoException).code ?? String(error)}`);
 	}
-	const base = instance === undefined ? "ompbot" : `ompbot-${instance}`;
+	const base = instance === undefined ? "jabbu" : `jabbu-${instance}`;
 	process.stdout.write(
 		[
-			"next (not run by ompbot):",
+			"next (not run by jabbu):",
 			"  systemctl --user daemon-reload",
 			`  systemctl --user enable --now ${base}`,
 			`  systemctl --user enable --now ${base}-backup.timer ${base}-gc.timer`,

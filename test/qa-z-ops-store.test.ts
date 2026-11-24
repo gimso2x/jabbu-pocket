@@ -41,12 +41,12 @@ afterEach(() => {
 	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-/** A home whose `ompbot.db` is a real ledger (what `gc` reads), without a config.json. */
+/** A home whose `jabbu.db` is a real ledger (what `gc` reads), without a config.json. */
 function ledgerHome(): string {
-	const home = tempDir("ompbot-qa-z-store-");
+	const home = tempDir("jabbu-qa-z-store-");
 	const store = openStore({
 		timezone: "Asia/Seoul",
-		path: join(home, "ompbot.db"),
+		path: join(home, "jabbu.db"),
 		clock: { now: () => Date.now() },
 		redact,
 	});
@@ -55,9 +55,9 @@ function ledgerHome(): string {
 }
 
 describe("qa-z #6: gc refuses a FIFO ledger", () => {
-	test("gc on a home whose ompbot.db is a FIFO fails fast instead of blocking", async () => {
-		const home = tempDir("ompbot-qa-z-gc-fifo-");
-		expect(Bun.spawnSync(["mkfifo", join(home, "ompbot.db")]).exitCode).toBe(0);
+	test("gc on a home whose jabbu.db is a FIFO fails fast instead of blocking", async () => {
+		const home = tempDir("jabbu-qa-z-gc-fifo-");
+		expect(Bun.spawnSync(["mkfifo", join(home, "jabbu.db")]).exitCode).toBe(0);
 		const gcModule = join(import.meta.dir, "..", "src", "ops", "gc");
 		const result = await runBounded(
 			`const { gcSessions } = await import(${JSON.stringify(gcModule)});
@@ -73,12 +73,12 @@ describe("qa-z #6: gc refuses a FIFO ledger", () => {
 describe("qa-z backup", () => {
 	let home: string;
 	beforeEach(() => {
-		home = tempDir("ompbot-qa-z-backup-");
+		home = tempDir("jabbu-qa-z-backup-");
 		seedDb(home);
 	});
 
 	test("#17: a symlinked token in secrets/ still guards its inode against a hard link in a source", () => {
-		const real = join(tempDir("ompbot-qa-z-token-"), "real.token");
+		const real = join(tempDir("jabbu-qa-z-token-"), "real.token");
 		writeFileSync(real, "TEST-discord-0\n");
 		mkdirSync(join(home, "secrets"));
 		symlinkSync(real, join(home, "secrets", "bot.token"));
@@ -146,7 +146,7 @@ describe("qa-z monitors export", () => {
 		defaultTimezone: "Asia/Seoul",
 	});
 	const ledger = () => {
-		const opened = openMonitorLedger(join(h.dir, "ompbot.db"));
+		const opened = openMonitorLedger(join(h.dir, "jabbu.db"));
 		cleanups.push(() => opened.close());
 		return opened;
 	};
@@ -218,7 +218,7 @@ describe("qa-z monitors export", () => {
 		cleanups.push(other.remove);
 		mkdirSync(join(other.dir, "scripts"));
 		writeFileSync(join(other.dir, "scripts", "run.sh"), "#!/bin/sh\n", { mode: 0o755 });
-		const target = openMonitorLedger(join(other.dir, "ompbot.db"));
+		const target = openMonitorLedger(join(other.dir, "jabbu.db"));
 		cleanups.push(() => target.close());
 		applyMonitors(target, dir, {
 			scriptsRoot: join(other.dir, "scripts"),

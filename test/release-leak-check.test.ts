@@ -20,8 +20,8 @@ afterEach(() => {
 
 /** A repository on `main` with a denylist file beside it; `base` is the commit the range starts from. */
 function fixture(): { repo: string; base: string; denylistFile: string } {
-	const repo = makeRepo(dirs, "ompbot-leak-");
-	const records = mkdtempSync(join(tmpdir(), "ompbot-leak-records-"));
+	const repo = makeRepo(dirs, "jabbu-leak-");
+	const records = mkdtempSync(join(tmpdir(), "jabbu-leak-records-"));
 	dirs.push(records);
 	const denylistFile = join(records, "denylist.txt");
 	writeFileSync(denylistFile, `# planted\n${PLANTED}\n`);
@@ -79,7 +79,7 @@ describe("checkLeaks: refusals that are no pass", () => {
 	});
 });
 
-// The range check runs the real gitleaks (CI installs it, OMPBOT_GITLEAKS): a host without it fails here, never skips.
+// The range check runs the real gitleaks (CI installs it, JABBU_GITLEAKS): a host without it fails here, never skips.
 describe("checkLeaks over <base>..<sha>", () => {
 	test("gitleaks is installed", () => {
 		expect(gitleaks).toBeDefined();

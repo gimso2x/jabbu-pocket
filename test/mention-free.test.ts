@@ -32,7 +32,7 @@ function makeAdapter(channel: string): {
 	const recorded: string[] = [];
 	const origins: string[] = [];
 	const knownThreads = new Set<string>();
-	const mediaRoot = mkdtempSync(join(tmpdir(), "ompbot-mention-free-"));
+	const mediaRoot = mkdtempSync(join(tmpdir(), "jabbu-mention-free-"));
 	mediaRoots.push(mediaRoot);
 	const adapter = new DiscordAdapter({
 		channel: new DiscordChannel(transport, { ownerUserId: OWNER }),

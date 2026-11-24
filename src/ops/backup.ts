@@ -21,16 +21,16 @@ import { BackupError } from "./backup-error";
 import { refuseSecretHardLink, secretInodes, treeBytes } from "./backup-tree";
 import { parseStampFields, parseStampTs, writeAtomic0600 } from "./stamp";
 
-/** Daily backup files live at `<home>/backups/ompbot-YYYYMMDD-HHMMSS.db`; the stamp sits next to them. */
-export const BACKUP_FILE_PATTERN = /^ompbot-\d{8}-\d{6}\.db$/;
-/** Daily bundle files live next to the db snapshots with the same timestamp: `ompbot-bundle-YYYYMMDD-HHMMSS.tar.gz`. */
-export const BUNDLE_FILE_PATTERN = /^ompbot-bundle-\d{8}-\d{6}\.tar\.gz$/;
+/** Daily backup files live at `<home>/backups/jabbu-YYYYMMDD-HHMMSS.db`; the stamp sits next to them. */
+export const BACKUP_FILE_PATTERN = /^jabbu-\d{8}-\d{6}\.db$/;
+/** Daily bundle files live next to the db snapshots with the same timestamp: `jabbu-bundle-YYYYMMDD-HHMMSS.tar.gz`. */
+export const BUNDLE_FILE_PATTERN = /^jabbu-bundle-\d{8}-\d{6}\.tar\.gz$/;
 export const STAMP_FILE = "last-backup.ok";
 export const DEFAULT_KEEP = 14;
 /**
  * What the daily bundle carries next to the ledger: the omp session originals (the bot's conversation memory), the
  * config, and the non-git `workspace/` (persona, retros) and `scripts/` (monitor collectors). `<home>/secrets` is deliberately NOT on this list — backups must never grow a copy of the tokens.
- * Exported so `ompbot doctor` can tell "nothing to bundle" (a ledger-only home) from "should have bundled".
+ * Exported so `jabbu-pocket doctor` can tell "nothing to bundle" (a ledger-only home) from "should have bundled".
  */
 export const BUNDLE_SOURCES = ["sessions", "config.json", "workspace", "scripts"] as const;
 /** Combined size ceiling of the bundle sources (sessions measured 88MB on 2026-11-03, workspace/ + scripts/ ~120KB; 512MB is two orders of headroom). */
@@ -213,7 +213,7 @@ function createPendingBundle(
 		}
 		if (bytes > maxBytes) throw new BackupError("bundle_too_large", `${bytes} > ${maxBytes}`);
 
-		const target = join(backupsDir, `ompbot-bundle-${stamp}.tar.gz`);
+		const target = join(backupsDir, `jabbu-bundle-${stamp}.tar.gz`);
 		if (existsSync(target)) throw new BackupError("target_exists", target);
 		tmp = `${target}.tmp-${crypto.randomUUID()}`;
 		// No global -h: that would follow links inside the sources too (out of home, into secrets/). A linked source is
@@ -262,7 +262,7 @@ function createPendingBundle(
 }
 
 /**
- * Creates a consistent single-file snapshot of `<homeDir>/ompbot.db` and verifies it before it counts, then bundles
+ * Creates a consistent single-file snapshot of `<homeDir>/jabbu.db` and verifies it before it counts, then bundles
  * `sessions/`, `config.json`, `workspace/` and `scripts/` (conversation memory, persona, collectors) into a verified tar.gz next to it.
  *
  * The snapshot is made with SQLite `VACUUM INTO` from a read-only connection, so the live WAL/SHM sidecars are never
@@ -276,7 +276,7 @@ function createPendingBundle(
 export function runBackup(options: BackupOptions): BackupResult {
 	const keep = options.keep ?? DEFAULT_KEEP;
 	const homeDir = options.homeDir;
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	// A FIFO in the ledger's place would block the read-only open forever: it counts as missing.
 	if (!existsSync(dbPath) || !statSync(dbPath).isFile()) throw new BackupError("db_missing", dbPath);
 
@@ -292,7 +292,7 @@ export function runBackup(options: BackupOptions): BackupResult {
 
 	const now = options.now ?? new Date();
 	const stamp = backupStamp(now);
-	const target = join(backupsDir, `ompbot-${stamp}.db`);
+	const target = join(backupsDir, `jabbu-${stamp}.db`);
 	if (existsSync(target)) throw new BackupError("target_exists", target);
 	const tmp = `${target}.tmp-${crypto.randomUUID()}`;
 
@@ -431,7 +431,7 @@ export function retentionDoomed(
 /**
  * Applies `retentionDoomed` to the db snapshots and the bundles separately (`keep` days per kind, `protect` = the
  * absolute paths this run made), deleting newest-first by name. The patterns only match the timestamped daily
- * names, so manual copies (`ompbot-pre-upgrade-…db`, `.bak-…`) and the stamp are never touched.
+ * names, so manual copies (`jabbu-pre-upgrade-…db`, `.bak-…`) and the stamp are never touched.
  */
 export function pruneBackups(backupsDir: string, keep: number, protect: string | readonly string[]): string[] {
 	const guarded = (typeof protect === "string" ? [protect] : protect).map((path) => basename(path));

@@ -37,7 +37,7 @@ const result = (callId: string, at: number, isError = false, text = "ok") => ({
 
 /** One conversation with turn 1 dispatched at T0 (in `state`) and, when given, turn 2 dispatched at `nextAt`. */
 function seed(state: string, nextAt?: number): void {
-	const dbPath = join(home, "ompbot.db");
+	const dbPath = join(home, "jabbu.db");
 	openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
 	const sessionDir = join(home, "sessions", "o", "e1");
 	mkdirSync(sessionDir, { recursive: true });
@@ -73,7 +73,7 @@ const traceOf = (now = NOW): Extract<TurnTrace, { ok: true }> => {
 };
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-trace-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-trace-"));
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -149,7 +149,7 @@ describe("turn trace reader", () => {
 /** Rows the delegated workers leave: TASKs, their prompts, lanes, and the omp session files they wrote. */
 const ORIGIN = "discord/dm/200000000000000001";
 const withDb = (fn: (db: Database) => void): void => {
-	const db = new Database(join(home, "ompbot.db"), { strict: true });
+	const db = new Database(join(home, "jabbu.db"), { strict: true });
 	try {
 		fn(db);
 	} finally {
@@ -225,7 +225,7 @@ function addLane(
 			[
 				name,
 				`D1:${name}`,
-				`ompbot/work/${name}`,
+				`jabbu/work/${name}`,
 				sessionDir,
 				extra.status ?? "closed",
 				JSON.stringify(history),

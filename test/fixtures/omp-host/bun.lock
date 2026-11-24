@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "ompbot-omp-host-fixture",
+      "name": "jabbu-omp-host-fixture",
       "dependencies": {
         "@oh-my-pi/pi-coding-agent": "19.0.1",
       },

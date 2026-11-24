@@ -123,7 +123,7 @@ describe("AC-1: briefing render", () => {
 	test("head, summary numbers and every section title with an empty state", () => {
 		const html = renderBriefingHtml(snapshot(), NOW);
 		const body = text(html);
-		expect(body).toContain("ompbot 브리핑 · 2026-11-11 07:30");
+		expect(body).toContain("jabbu 브리핑 · 2026-11-11 07:30");
 		expect(body).toContain("데몬 실행 중 · abc1234 · 1시간 30분째");
 		expect(body).toContain("주의 0 · 진행 TASK 0 · 레인 0 · 승인 대기 0 · 게이트 열림 0 · 모니터 실패 0");
 		for (const title of ["주의", "진행 중", "모니터", "바닥"]) expect(body).toContain(title);
@@ -224,14 +224,14 @@ describe("AC-1: briefing render", () => {
 		const body = text(
 			renderBriefingHtml(
 				snapshot({
-					daemon: { ok: false, error: `no database at /tmp/x/ompbot.db ${"z".repeat(200)}` },
+					daemon: { ok: false, error: `no database at /tmp/x/jabbu.db ${"z".repeat(200)}` },
 					gates: { ok: false, error: "ledger unreadable" },
 					monitors: { ok: true, items: [monitor("아침 브리핑")] },
 				}),
 				NOW,
 			),
 		);
-		expect(body).toContain("읽지 못함: no database at /tmp/x/ompbot.db");
+		expect(body).toContain("읽지 못함: no database at /tmp/x/jabbu.db");
 		expect(body).toContain("읽지 못함: ledger unreadable");
 		// The reason is cut at 120 characters.
 		expect(body).not.toContain("z".repeat(150));

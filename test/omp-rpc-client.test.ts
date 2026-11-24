@@ -17,7 +17,7 @@ import { RpcOmpDriver } from "../src/omp/rpc-driver";
 import { redact } from "../src/redact";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
 
-const root = mkdtempSync(join(tmpdir(), "ompbot-rpc-client-"));
+const root = mkdtempSync(join(tmpdir(), "jabbu-rpc-client-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let dirCounter = 0;
 

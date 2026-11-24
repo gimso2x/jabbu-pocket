@@ -1,4 +1,4 @@
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { landModeOf } from "../lanes/manager-pr-land";
 import { defaultPrTools, type PrTools } from "../lanes/pr";
 import { failureOf } from "../lanes/pr-land-steps";
@@ -12,7 +12,7 @@ import type { TaskRow } from "./ledger";
 /** Steered into a worker sent back to work: it stacks new commits on the same branch. */
 export const reworkPrompt = (branch: string, reason: string, notice: string): string =>
 	[
-		`[ompbot] PR 착지를 마치지 못했습니다: ${reason}. TASK를 다시 working으로 돌렸습니다.`,
+		`[jabbu] PR 착지를 마치지 못했습니다: ${reason}. TASK를 다시 working으로 돌렸습니다.`,
 		notice,
 		`- 같은 브랜치 \`${branch}\`에 새 커밋을 쌓으세요. rebase·amend·force push는 하지 마세요(이미 올라간 커밋을 고쳐 쓰면 push가 거절됩니다).`,
 		"- push·머지는 코어가 합니다. 끝나면 PROGRESS.md를 갱신하고 평소대로 Outcome을 선언하세요. 코어가 재판정과 누출 검사를 다시 돌린 뒤 같은 PR에 올립니다.",
@@ -29,7 +29,7 @@ export const summaryOf = (row: TaskRow): string =>
 
 /** Whether the task's repository lands through a PR (`lanes.land` pr; for a task of a `dispatchHosts` host, the entry that names its path there). */
 export async function landsViaPr(
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
 	row: TaskRow,
 ): Promise<boolean> {
 	return (await landModeOfRow(config, row))?.config.mode === "pr";
@@ -89,7 +89,7 @@ export async function prepareLocal(
  * no landing yet, or a git that could not answer). Handed to the judgement lazily: one with problems never fetches.
  */
 export async function integrityBaseOf(
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
 	row: TaskRow,
 	tools: PrTools = defaultPrTools,
 	address?: RemoteLandEnv["address"],

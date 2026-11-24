@@ -83,7 +83,7 @@ const healthy = { anthropic: { stdout: anthropic }, zai: { stdout: zai }, agy: {
 
 let home: string;
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-usage-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-usage-"));
 	chmodSync(home, 0o700);
 	clearUsageLimitsCache();
 });
@@ -210,7 +210,7 @@ describe("AC-1: source isolation and the 15-minute cache", () => {
 		const config: DashboardConfig = { dashboard: { port: 7331, usageLimits: CONFIG } };
 		const base = (extra: Partial<SnapshotDeps>): SnapshotDeps => ({
 			homeDir: home,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			timezone: "Asia/Seoul",
 			config,
 			now: () => NOW,
@@ -286,7 +286,7 @@ describe("AC-1: config validation", () => {
 		const fake = fakeRun(healthy);
 		const snapshot = await buildSnapshot({
 			homeDir: home,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			timezone: "Asia/Seoul",
 			config: { dashboard: { port: 7331 } },
 			now: () => NOW,
@@ -312,7 +312,7 @@ describe("AC-1: html strip", () => {
 		const fake = fakeRun(answers);
 		return buildSnapshot({
 			homeDir: home,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			timezone: "Asia/Seoul",
 			config: { dashboard: { port: 7331, usageLimits: CONFIG } },
 			now: () => NOW,

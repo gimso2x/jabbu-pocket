@@ -1,4 +1,4 @@
-// AC-1 of T-20261111-03: `ompbot inject` must not answer an approval or choice card. An inject into a pending approval card's thread is refused over IPC with
+// AC-1 of T-20261111-03: `jabbu-pocket inject` must not answer an approval or choice card. An inject into a pending approval card's thread is refused over IPC with
 // the card still pending and the waiting request still waiting; the owner's own Discord reply then closes it. The same
 // holds for an `ask` choice card, and a settled card is not routed to the asking conversation either.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -33,7 +33,7 @@ let replySeq: number;
 let clickSeq: number;
 
 beforeEach(async () => {
-	home = makeHome("ompbot-inject-card-guard-");
+	home = makeHome("jabbu-inject-card-guard-");
 	transport = new WaitingDiscordTransport();
 	lines = [];
 	replySeq = 0;
@@ -92,10 +92,10 @@ async function cardWithButtons(head: string): Promise<string> {
 	return postTs(head) ?? "";
 }
 
-/** An approval request of the conversation, as the model's `ompbot_request_approval` call makes it. */
+/** An approval request of the conversation, as the model's `jabbu_request_approval` call makes it. */
 function requestApproval(summary: string): { result: Promise<string>; done: () => boolean } {
-	const tool = daemon.hostToolsFor(ORIGIN).find((candidate) => candidate.name === "ompbot_request_approval");
-	if (tool === undefined) throw new Error("ompbot_request_approval missing");
+	const tool = daemon.hostToolsFor(ORIGIN).find((candidate) => candidate.name === "jabbu_request_approval");
+	if (tool === undefined) throw new Error("jabbu_request_approval missing");
 	let finished = false;
 	const result = tool.execute({ summary }, { signal: new AbortController().signal }).finally(() => {
 		finished = true;
@@ -103,7 +103,7 @@ function requestApproval(summary: string): { result: Promise<string>; done: () =
 	return { result, done: () => finished };
 }
 
-/** An IPC `inject` into the card's thread, exactly as `ompbot inject --as-owner --thread <message id>` sends it. */
+/** An IPC `inject` into the card's thread, exactly as `jabbu-pocket inject --as-owner --thread <message id>` sends it. */
 function injectInto(thread: string, text: string): Promise<unknown> {
 	return callDaemon(daemon.socketPath, { op: "inject", origin: ORIGIN, asOwner: true, thread, text });
 }

@@ -46,7 +46,7 @@ function laneRow(
 		name,
 		title: name,
 		threadRef: "D1:1.1",
-		originKey: `ompbot/work/${name}`,
+		originKey: `jabbu/work/${name}`,
 		cwd: repo,
 		sessionDir: "/tmp/none",
 		status: over.status ?? "closed",
@@ -71,7 +71,7 @@ const BINARY = new Uint8Array([0, 1, 2, 3, 0, 255, 0, 7]);
 
 /** A repository whose base holds `old.ts` (3 lines) and a lane `me` changing 3 files: +10 −2, one binary. */
 function laneRepo(): { repo: string; base: string; sha: string } {
-	const repo = makeRepo(repos, "ompbot-lane-changes-");
+	const repo = makeRepo(repos, "jabbu-lane-changes-");
 	const base = baseOf(repo);
 	commit(repo, { "old.ts": "a\nb\nc\n" });
 	const sha = branchWith(repo, base, "lane/me", {
@@ -109,7 +109,7 @@ describe("computeLaneChanges", () => {
 		branchWith(repo, base, "lane/done", { "new.ts": "landed\n" });
 		branchWith(repo, base, "lane/gone", { "new.ts": "discarded\n" });
 		branchWith(repo, base, "lane/apart", { "solo.ts": "only\n" });
-		const elsewhere = makeRepo(repos, "ompbot-lane-changes-other-");
+		const elsewhere = makeRepo(repos, "jabbu-lane-changes-other-");
 		branchWith(elsewhere, baseOf(elsewhere), "lane/far", { "new.ts": "far\n" });
 		const me = laneRow("me", repo, base, { sha });
 		const others = [
@@ -166,7 +166,7 @@ describe("computeLaneChanges", () => {
 	});
 
 	test("AC-3b: a renamed file reads as a delete and an add even with rename detection configured", async () => {
-		const repo = makeRepo(repos, "ompbot-lane-changes-rename-");
+		const repo = makeRepo(repos, "jabbu-lane-changes-rename-");
 		const base = baseOf(repo);
 		git(repo, "config", "diff.renames", "copies");
 		commit(repo, { "keep.ts": lines(20, "same") });
@@ -186,7 +186,7 @@ describe("computeLaneChanges", () => {
 
 describe("scope check and leftovers", () => {
 	test("AC-2: every changed file is listed (no top-5 cap), and all of them outside the scope are kept", async () => {
-		const repo = makeRepo(repos, "ompbot-lane-scope-");
+		const repo = makeRepo(repos, "jabbu-lane-scope-");
 		const base = baseOf(repo);
 		mkdirSync(join(repo, "src", "lanes"), { recursive: true });
 		mkdirSync(join(repo, "src", "tasks"), { recursive: true });
@@ -208,7 +208,7 @@ describe("scope check and leftovers", () => {
 	});
 
 	test("AC-3: a git failure is scopeError (one line), never an empty violation list", async () => {
-		const repo = makeRepo(repos, "ompbot-lane-scope-");
+		const repo = makeRepo(repos, "jabbu-lane-scope-");
 		const base = baseOf(repo);
 		const sha = branchWith(repo, base, "lane/me", { "a.ts": "a\n" });
 		const failing: GitRunner = async (args) =>

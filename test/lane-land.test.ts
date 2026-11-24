@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { DiscordChannelConfig, OmpbotConfig } from "../src/config";
+import type { DiscordChannelConfig, JabbuConfig } from "../src/config";
 import { parseThreadRef } from "../src/core/normalize";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordCallError } from "../src/discord/transport";
@@ -56,7 +56,7 @@ let scratch: string[];
 let daemons: Daemon[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-land-home-");
+	home = makeHome("jabbu-lane-land-home-");
 	repos = [];
 	scratch = [];
 	daemons = [];
@@ -80,7 +80,7 @@ const headOf = (repo: string, ref = "HEAD"): string => git(repo, "rev-parse", re
 
 /** A local bare repository added to `repo` as `origin`, holding its current branch. */
 function addOrigin(repo: string): string {
-	const bare = tempDir("ompbot-lane-land-bare-");
+	const bare = tempDir("jabbu-lane-land-bare-");
 	git(bare, "init", "-q", "--bare");
 	git(repo, "remote", "add", "origin", bare);
 	git(repo, "push", "-q", "origin", baseOf(repo));
@@ -178,7 +178,7 @@ async function closeLane(
 }
 
 /** The test home's config with lanes opening in the server channel `CHANNEL` (the DM has no lane channel of its own). */
-function laneConfig(): OmpbotConfig {
+function laneConfig(): JabbuConfig {
 	return {
 		...home.config,
 		channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
@@ -228,8 +228,8 @@ function cardRecorded(store: Store, name: string, timeoutMs = 10_000): Promise<v
 	return promise;
 }
 
-const mergeId = (lane: LaneRow): string => `ompbot:lane:merge:${lane.name}`;
-const discardId = (lane: LaneRow): string => `ompbot:lane:discard:${lane.name}`;
+const mergeId = (lane: LaneRow): string => `jabbu:lane:merge:${lane.name}`;
+const discardId = (lane: LaneRow): string => `jabbu:lane:discard:${lane.name}`;
 const rootUpdates = (transport: WaitingDiscordTransport, lane: LaneRow): string[] =>
 	transport.calls.flatMap((call) =>
 		call.method === "editMessage" && call.messageId === rootIdOf(lane) ? [call.content ?? ""] : [],
@@ -423,7 +423,7 @@ function expectSteered(h: LaneHarness, lane: LaneRow, base: string): void {
 	expect(steers).toHaveLength(1);
 	expect(steers[0]).toContain("rebase");
 	expect(steers[0]).toContain(base);
-	expect(steers[0]).toContain("ompbot_claim_done");
+	expect(steers[0]).toContain("jabbu_claim_done");
 	expect(requireLane(h, lane.name).status).toBe("working");
 	expect(requireLane(h, lane.name).history.some((entry) => entry.event === "core_rebased")).toBe(false);
 }
@@ -687,7 +687,7 @@ describe("landLane: push policy, refusal, serial landings, resume (AC-4)", () =>
 		const h = laneHarness(home.dir);
 		const { lane, sha } = await closeLane(h, repo);
 		// Somebody else pushed to origin meanwhile: this push is not a fast-forward there.
-		const other = tempDir("ompbot-lane-land-clone-");
+		const other = tempDir("jabbu-lane-land-clone-");
 		git(other, "clone", "-q", bare, ".");
 		const theirs = commitIn(other, "theirs.txt");
 		git(other, "push", "-q", "origin", `HEAD:refs/heads/${base}`);
@@ -710,7 +710,7 @@ describe("landLane: push policy, refusal, serial landings, resume (AC-4)", () =>
 		const { repo, bare, base } = repoWithOrigin();
 		const h = laneHarness(home.dir);
 		const { lane, sha } = await closeLane(h, repo);
-		const other = tempDir("ompbot-lane-land-clone-");
+		const other = tempDir("jabbu-lane-land-clone-");
 		git(other, "clone", "-q", bare, ".");
 		commitIn(other, "theirs.txt");
 		git(other, "push", "-q", "origin", `HEAD:refs/heads/${base}`);
@@ -760,7 +760,7 @@ describe("landLane: push policy, refusal, serial landings, resume (AC-4)", () =>
 
 	test("an auto-merge whose push is refused tells it on a new card; the first card points to it", async () => {
 		const { repo, bare, base } = repoWithOrigin();
-		const other = tempDir("ompbot-lane-land-clone-");
+		const other = tempDir("jabbu-lane-land-clone-");
 		git(other, "clone", "-q", bare, ".");
 		const theirs = commitIn(other, "theirs.txt");
 		git(other, "push", "-q", "origin", `HEAD:refs/heads/${base}`);
@@ -1198,9 +1198,9 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 		const cards = cardPosts(h.transport, lane);
 		expect(cards).toHaveLength(1);
 		expect(cards[0]?.content).toContain("자동 머지");
-		expect(JSON.stringify(cards[0]?.components ?? [])).not.toContain("ompbot:lane:");
+		expect(JSON.stringify(cards[0]?.components ?? [])).not.toContain("jabbu:lane:");
 		const shown = shownNow(h.transport, cards[0]?.id ?? "");
-		expect(shown.components).not.toContain("ompbot:lane:");
+		expect(shown.components).not.toContain("jabbu:lane:");
 		expect(shown.text).toContain(`origin/${base}`);
 		// A later tick neither lands nor posts again.
 		await h.manager.tick();
@@ -1321,7 +1321,7 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 		expect(counted.calls).toHaveLength(0);
 		const queued = shownNow(h.transport, requireLane(h, lane.name).meta.land?.cardTs ?? "");
 		expect(queued.text).toContain("머지 중");
-		expect(queued.components).not.toContain("ompbot:lane:");
+		expect(queued.components).not.toContain("jabbu:lane:");
 		// A second request while it waits changes nothing.
 		expect((await h.manager.requestLand(lane.name, "owner")).handled).toBe(true);
 		busy = false;
@@ -1585,7 +1585,7 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 		};
 		expect(laneLandBlockers(failed, policy, true, false)).toEqual(["재실행 검사 실패 1/1"]);
 		// A receipt made on another runtime holds the merge; the checks' own runtime never does.
-		const identity = { omp: "omp 18.19.0", kencrew: "unknown", os: process.platform, arch: process.arch };
+		const identity = { omp: "omp 18.19.0", source: "unknown", os: process.platform, arch: process.arch };
 		const reviewPolicy = { ...policy, review: { model: "m", timeoutMs: 1 } };
 		const now = { identity, review: { model: "m", overlay: "0".repeat(16) } };
 		const receipt = (omp: string, over = {}): LaneReview => ({
@@ -1597,7 +1597,7 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 			runtime: {
 				head: sha,
 				omp,
-				kencrew: "unknown",
+				source: "unknown",
 				os: process.platform,
 				arch: process.arch,
 				overlay: "0".repeat(16),
@@ -2079,7 +2079,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 		expect(headOf(repo)).toBe(before);
 		expect(headOf(bare, `refs/heads/${base}`)).toBe(before);
 		expect(counted.calls).toHaveLength(0);
-		expect(shownNow(h.transport, discarded.meta.land?.cardTs ?? "").components).not.toContain("ompbot:lane:");
+		expect(shownNow(h.transport, discarded.meta.land?.cardTs ?? "").components).not.toContain("jabbu:lane:");
 		// Nothing is left to merge or discard.
 		expect((await h.manager.requestLand(lane.name, "owner")).handled).toBe(false);
 		expect((await h.manager.discard(lane.name)).handled).toBe(false);
@@ -2164,7 +2164,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 			await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 			const rootId = transport.posts((text) => text === "🔄 ask")[0]?.id ?? "";
 			laneThread = rootId;
-			const claim = daemon.hostToolsFor("ompbot/work/ask").find((tool) => tool.name === "ompbot_claim_done");
+			const claim = daemon.hostToolsFor("jabbu/work/ask").find((tool) => tool.name === "jabbu_claim_done");
 			const worktree = daemon.store.getLane("ask")?.cwd ?? "";
 			const sha = commitIn(worktree, "a.txt");
 			const signal = new AbortController().signal;
@@ -2198,7 +2198,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 				message: { id: cardId, channel_id: laneThread },
 			});
 		};
-		const lanePrompts = () => drivers.get("ompbot/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
+		const lanePrompts = () => drivers.get("jabbu/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
 		const landState = (daemon: Daemon) => daemon.store.getLane("ask")?.meta.land?.state;
 
 		test("with herdrBoard.url the daemon's Outcome card links the dashboard diff view of the lane", async () => {
@@ -2217,7 +2217,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 			expect(transport.posts((text) => text.includes("머지했습니다"))[0]?.content).toContain(`origin/${base}`);
 			expect(lanePrompts().some((call) => call.includes("머지해"))).toBe(false);
 			expect(daemon.store.getInbound(`${CHANNEL}:7100000000000000100`)).toMatchObject({
-				originKey: "ompbot/work/ask",
+				originKey: "jabbu/work/ask",
 				state: "answered",
 			});
 
@@ -2230,11 +2230,11 @@ describe("merge and discard by the owner (AC-6)", () => {
 		test("after the landing the lane session works from the repository, and `!reopen` is refused by the core", async () => {
 			const { daemon, repo, rootId } = await pendingLane();
 			const worktree = daemon.store.getLane("ask")?.cwd ?? "";
-			expect(daemon.cwdFor("ompbot/work/ask")).toBe(worktree);
+			expect(daemon.cwdFor("jabbu/work/ask")).toBe(worktree);
 			await send("머지해", "7100000000000000100", rootId);
 			await transport.waitForPosts((text) => text.includes("머지했습니다"));
 			expect(existsSync(worktree)).toBe(false);
-			expect(daemon.cwdFor("ompbot/work/ask")).toBe(repo);
+			expect(daemon.cwdFor("jabbu/work/ask")).toBe(repo);
 
 			await send("!reopen 하나만 더", "7100000000000000200", rootId);
 			await transport.waitForPosts((text) => text.includes("worktree가 없습니다"));
@@ -2254,7 +2254,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 			expect(lane?.meta.land).toBeUndefined();
 			expect(existsSync(lane?.meta.worktree ?? "")).toBe(true);
 			// The stale card's button no longer lands anything.
-			await click("ompbot:lane:merge:ask", cardId);
+			await click("jabbu:lane:merge:ask", cardId);
 			expect(counted.calls).toHaveLength(0);
 			expect(daemon.store.getLane("ask")?.status).toBe("working");
 		});
@@ -2275,15 +2275,15 @@ describe("merge and discard by the owner (AC-6)", () => {
 		test("the `머지` button lands once however often it is clicked, and the card loses its buttons", async () => {
 			const { daemon, bare, base, cardId, sha } = await pendingLane();
 			expect(JSON.stringify(transport.posts().find((post) => post.id === cardId)?.components)).toContain(
-				"ompbot:lane:merge:ask",
+				"jabbu:lane:merge:ask",
 			);
-			await Promise.all([click("ompbot:lane:merge:ask", cardId), click("ompbot:lane:merge:ask", cardId)]);
-			await click("ompbot:lane:merge:ask", cardId);
+			await Promise.all([click("jabbu:lane:merge:ask", cardId), click("jabbu:lane:merge:ask", cardId)]);
+			await click("jabbu:lane:merge:ask", cardId);
 			expect(counted.calls).toHaveLength(1);
 			expect(landState(daemon)).toBe("landed");
 			expect(headOf(bare, `refs/heads/${base}`)).toBe(sha);
 			const shown = shownNow(transport, cardId);
-			expect(shown.components).not.toContain("ompbot:lane:");
+			expect(shown.components).not.toContain("jabbu:lane:");
 			expect(shown.text).toContain(`origin/${base}`);
 			expect(logs.some((line) => line.includes("event=action_ignored"))).toBe(false);
 		});
@@ -2292,15 +2292,15 @@ describe("merge and discard by the owner (AC-6)", () => {
 			const { daemon, repo, cardId } = await pendingLane();
 			const lane = daemon.store.getLane("ask");
 			const before = headOf(repo);
-			await click("ompbot:lane:discard:ask", cardId);
+			await click("jabbu:lane:discard:ask", cardId);
 			expect(landState(daemon)).toBe("discarded");
 			expect(existsSync(lane?.meta.worktree ?? "")).toBe(false);
 			expect(git(repo, "branch", "--list", lane?.meta.branch ?? "")).toBe("");
 			expect(headOf(repo)).toBe(before);
 			expect(counted.calls).toHaveLength(0);
-			expect(shownNow(transport, cardId).components).not.toContain("ompbot:lane:");
+			expect(shownNow(transport, cardId).components).not.toContain("jabbu:lane:");
 			// A merge click on the discarded lane lands nothing, and the owner is told why in the lane's thread.
-			await click("ompbot:lane:merge:ask", cardId);
+			await click("jabbu:lane:merge:ask", cardId);
 			expect(counted.calls).toHaveLength(0);
 			expect(transport.posts().some((post) => (post.content ?? "").startsWith("⚠️ 머지할 상태가 아닙니다"))).toBe(true);
 		});
@@ -2319,7 +2319,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 
 		test("a button of a lane that does not exist is settled on the card, not ignored silently", async () => {
 			const { cardId } = await pendingLane();
-			await click("ompbot:lane:merge:nope", cardId);
+			await click("jabbu:lane:merge:nope", cardId);
 			expect(counted.calls).toHaveLength(0);
 			expect(shownNow(transport, cardId).text).toContain("찾을 수 없");
 		});

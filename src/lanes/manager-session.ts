@@ -13,7 +13,7 @@ export interface LaneSessionOps {
 	childRunning(originKey: string): boolean;
 }
 
-/** What `ompbot lanes attach` gets: the file the terminal omp resumes, in the lane's cwd and session dir. */
+/** What `jabbu-pocket lanes attach` gets: the file the terminal omp resumes, in the lane's cwd and session dir. */
 export type LaneAttachOutcome =
 	| { ok: true; sessionFile: string; cwd: string; sessionDir: string }
 	| { ok: false; error: string };

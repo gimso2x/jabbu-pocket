@@ -102,8 +102,8 @@ const KEEP_ALIVE_MS = 15_000;
 /** Web app manifest for "install as app" in Chrome/Edge; URLs are relative so any tunnel prefix keeps working. */
 const WEB_MANIFEST = JSON.stringify({
 	id: "./",
-	name: "ompbot 현황판",
-	short_name: "ompbot",
+	name: "jabbu 현황판",
+	short_name: "jabbu",
 	start_url: "./",
 	scope: "./",
 	display: "standalone",

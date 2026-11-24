@@ -24,7 +24,7 @@ const T = Date.parse("2026-11-12T00:00:00Z");
 
 let home: string;
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-tz-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-tz-"));
 	mkdirSync(join(home, "scripts"));
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -49,7 +49,7 @@ describe("AC-3: a monitor without a zone takes config.timezone at registration",
 		["Asia/Seoul", "2026-11-13T00:00:00.000Z"],
 	] as const) {
 		test(`cron without timezone under ${zone}: stored zone and next fire in it`, () => {
-			const ledger = openMonitorLedger(join(home, "ompbot.db"), { now: () => T });
+			const ledger = openMonitorLedger(join(home, "jabbu.db"), { now: () => T });
 			try {
 				const spec = parseMonitorSpec(
 					{ name: "daily", trigger: { kind: "cron", schedule: "0 9 * * *" }, instruction: "x" },
@@ -166,7 +166,7 @@ describe("AC-6: prompt and tool texts name config.timezone and its offset", () =
 	const persona = chatOriginKey({ platform: "discord", kind: "dm", conversationId: "200000000000000001" });
 
 	test("monitor tool descriptions", () => {
-		const ledger = openMonitorLedger(join(home, "ompbot.db"), { now: () => T });
+		const ledger = openMonitorLedger(join(home, "jabbu.db"), { now: () => T });
 		try {
 			const tools = buildMonitorTools({
 				originKey: persona,
@@ -188,7 +188,7 @@ describe("AC-6: prompt and tool texts name config.timezone and its offset", () =
 	});
 
 	test("floors MONITOR line of a persona session", () => {
-		const floors = buildFloorsPrompt("/home/x/.ompbot/secrets", persona, false, false, false, {
+		const floors = buildFloorsPrompt("/home/x/.jabbu/secrets", persona, false, false, false, {
 			timezone: { name: NY, offset: "-05:00" },
 		});
 		expect(floors).toContain("America/New_York 기준 ISO(-05:00)로 계산하고");

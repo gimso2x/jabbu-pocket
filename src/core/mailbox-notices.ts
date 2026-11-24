@@ -52,10 +52,10 @@ function ownerFailureTail(reason: string): string {
 	switch (kind) {
 		case "provider_limit": {
 			const reset = resetAt === undefined ? "" : `${formatResetHint(resetAt)} `;
-			return `공급자 한도입니다. ${reset}다시 보내거나 다른 모델로 \`/model-ompbot\``;
+			return `공급자 한도입니다. ${reset}다시 보내거나 다른 모델로 \`/model-jabbu\``;
 		}
 		case "context_overflow":
-			return "대화가 너무 길어 이어갈 수 없습니다. `/new-ompbot`(또는 `/compact-ompbot`) 뒤 다시 보내 주세요";
+			return "대화가 너무 길어 이어갈 수 없습니다. `/new-jabbu`(또는 `/compact-jabbu`) 뒤 다시 보내 주세요";
 		case "auth":
 			return "봇 계정 인증 문제입니다. 다시 보내도 같습니다 — 오너가 로그인·키를 확인해야 합니다";
 		case "transient":

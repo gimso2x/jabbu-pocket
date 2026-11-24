@@ -22,7 +22,7 @@ import { openStore, type Store } from "../src/store/db";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
 import { makeRepo } from "./helpers/git-fixtures";
 
-const root = mkdtempSync(join(tmpdir(), "ompbot-qa-x-core-rpc-"));
+const root = mkdtempSync(join(tmpdir(), "jabbu-qa-x-core-rpc-"));
 const repos: string[] = [];
 const stores: Store[] = [];
 afterEach(() => {
@@ -203,9 +203,9 @@ async function turnOf(file: string, extra: Partial<TurnSnapshotRow> = {}) {
 
 describe("!undo", () => {
 	test("#6 gc keeps the ledger row of a turn whose ref could not be deleted, and drops the others", async () => {
-		const home = mkdtempSync(join(tmpdir(), "ompbot-qa-x-gc-"));
+		const home = mkdtempSync(join(tmpdir(), "jabbu-qa-x-gc-"));
 		repos.push(home);
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const now = 100 * 86_400_000;
 		const open = () =>
 			openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => now }, redact: (text) => text });
@@ -228,7 +228,7 @@ describe("!undo", () => {
 		const [first, second] = store.listTurnSnapshots({ originKey: origin }).sort((a, b) => a.id - b.id);
 		if (first === undefined || second === undefined) throw new Error("two rows expected");
 		// A ref lock git cannot take makes `update-ref -d` fail for the first row only.
-		writeFileSync(join(repo, ".git", "refs", "ompbot", "turns", String(first.id), "before.lock"), "");
+		writeFileSync(join(repo, ".git", "refs", "jabbu", "turns", String(first.id), "before.lock"), "");
 		store.close();
 
 		const result = gcSessions({ homeDir: home, retentionDays: 30, now });
@@ -241,7 +241,7 @@ describe("!undo", () => {
 
 	test("#7 undo never deletes a file through a parent directory that became a symlink out of the repository", async () => {
 		const { repo, row } = await turnOf("keep.txt");
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-qa-x-outside-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-qa-x-outside-"));
 		repos.push(outside);
 		// The plan deletes sub/x.txt as turn-created; since then `sub` was swapped for a link to a directory outside.
 		writeFileSync(join(outside, "x.txt"), "precious\n");

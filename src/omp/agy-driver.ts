@@ -31,7 +31,7 @@ import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
 
 /*
- * Boundary between ompbot and one Antigravity CLI ACP child (`agy acp`, see `agy-acp-client.ts`), one per origin.
+ * Boundary between jabbu and one Antigravity CLI ACP child (`agy acp`, see `agy-acp-client.ts`), one per origin.
  *
  * Start: `initialize`, then `session/load` of the pointer's session (`<sessionDir>/agy-conversation.json`; its replayed
  * updates are ignored, as omp's host does) or `session/new` when there is none or agy refuses it. Both carry the system
@@ -72,13 +72,13 @@ export interface AgyOmpDriverOptions {
 	/** Path or name of the agy CLI; names resolve on the child PATH. */
 	agyExecutable: string;
 	cwd: string;
-	/** ompbot-owned per-origin-epoch directory; holds the `agy-conversation.json` resume pointer. */
+	/** jabbu-owned per-origin-epoch directory; holds the `agy-conversation.json` resume pointer. */
 	sessionDir: string;
 	/** agy model id without provider prefix; an effort suffix agy's options lack is cut and read as the thinking level. */
 	model?: string;
 	/** `thought_level` to set (`low|medium|high|xhigh`); other values are ignored. */
 	thinking?: string;
-	/** Extra child env; `SLACK_`/`OMPBOT_` keys are rejected like every driver. */
+	/** Extra child env; `SLACK_`/`JABBU_` keys are rejected like every driver. */
 	env?: Record<string, string>;
 	/** Floors + persona text, appended to agy's system prompt of every session. */
 	systemPrompt?: string;

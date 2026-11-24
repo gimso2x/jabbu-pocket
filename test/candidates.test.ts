@@ -26,7 +26,7 @@ const S = DEFAULT_CANDIDATES;
 
 let dir: string;
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-cand-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-cand-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

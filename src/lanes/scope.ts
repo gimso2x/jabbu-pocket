@@ -20,7 +20,7 @@ const SCOPE_ERROR_CHARS = 200;
 export const LEFTOVERS_MAX = 20;
 export const LEFTOVER_CHARS = 200;
 
-/** `ompbot_work_start` `scope`: repository-relative globs (`src/lanes/**`); absent or empty = no scope check. */
+/** `jabbu_work_start` `scope`: repository-relative globs (`src/lanes/**`); absent or empty = no scope check. */
 export function parseLaneScope(raw: unknown): LaneCheck<string[]> {
 	if (raw === undefined) return { ok: true, value: [] };
 	if (!Array.isArray(raw) || raw.length > SCOPE_PATTERNS_MAX) {
@@ -40,7 +40,7 @@ export function parseLaneScope(raw: unknown): LaneCheck<string[]> {
 	return { ok: true, value };
 }
 
-/** `ompbot_claim_done` `leftovers`: `[{text, blocking}]`, at most 20, each text redacted and cut to 200 characters. */
+/** `jabbu_claim_done` `leftovers`: `[{text, blocking}]`, at most 20, each text redacted and cut to 200 characters. */
 export function parseLaneLeftovers(raw: unknown): LaneCheck<LaneLeftover[]> {
 	if (raw === undefined) return { ok: true, value: [] };
 	const problem = `leftovers는 {text: 문자열, blocking: 참/거짓} 배열이어야 합니다(최대 ${LEFTOVERS_MAX}개)`;
@@ -87,7 +87,7 @@ export async function checkLaneScope(lane: LaneRow, sha: string, git?: GitRunner
 	}
 }
 
-/** One line of `$OMPBOT_HOME/followups.jsonl`: a non-blocking leftover of a lane that was merged. */
+/** One line of `$JABBU_HOME/followups.jsonl`: a non-blocking leftover of a lane that was merged. */
 export interface FollowupRecord {
 	at: number;
 	laneId: string;

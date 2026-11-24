@@ -9,7 +9,7 @@ let dir: string;
 let skill: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-skills-qa-j-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-skills-qa-j-"));
 	skill = join(dir, "managed-skills", "demo");
 	mkdirSync(skill, { recursive: true });
 });

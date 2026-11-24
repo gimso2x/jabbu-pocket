@@ -4,7 +4,7 @@
 // (`sweepIdleMailboxes`). Monitors, lanes and `idleKeepResident: false` keep the plain idle stop (`reason=legacy`).
 
 import { statSync } from "node:fs";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import type { Logger } from "../log";
 import type { OmpState } from "../omp/driver";
 import { type HostLoadReader, resolvedCeiling } from "../ops/host-resources";
@@ -57,7 +57,7 @@ export function ompFileIdentity(path: string): OmpFileIdentity | undefined {
 
 /** The daemon's wiring: agy has no executable whose replacement matters; pressure is `startCapacity`'s two floors. */
 export function idleKeepOptions(
-	config: Pick<OmpbotConfig, "idleKeepResident" | "agent" | "ompExecutable">,
+	config: Pick<JabbuConfig, "idleKeepResident" | "agent" | "ompExecutable">,
 	ceiling: number | undefined,
 	hostLoad: Partial<HostLoadReader> | undefined,
 ): IdleKeepOptions {

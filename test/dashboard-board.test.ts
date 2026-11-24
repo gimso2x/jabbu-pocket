@@ -37,7 +37,7 @@ const MACHINES = [
 		snapshot: {
 			workspaces: [
 				{ workspace_id: "w1", label: "main" },
-				{ workspace_id: "w2", label: "ompbot · t-20261104-09" },
+				{ workspace_id: "w2", label: "jabbu · t-20261104-09" },
 			],
 			tabs: [
 				{ tab_id: "w1:t1", label: "t-20261104-07" },
@@ -334,7 +334,7 @@ describe("agent board", () => {
 		});
 		expect(view.cards.find((card) => card.key === "w1:p3")).toMatchObject({ unknown: true, status: "thinking-hard" });
 		// Prefixed path, same answer.
-		expect((await fetch(`${base}/ompbot/api/board`)).status).toBe(200);
+		expect((await fetch(`${base}/jabbu/api/board`)).status).toBe(200);
 	});
 
 	test("AC-2: a pane-status patch reaches api/board/events subscribers; pane-exited drops the card", async () => {
@@ -416,7 +416,7 @@ describe("agent board", () => {
 	});
 
 	test("api/pane/trace: a local omp card's last turn from its worktree's newest session; the rest 404", async () => {
-		const root = mkdtempSync(join(tmpdir(), "ompbot-card-trace-"));
+		const root = mkdtempSync(join(tmpdir(), "jabbu-card-trace-"));
 		try {
 			const sessionsRoot = join(root, "sessions");
 			const dir = ompSessionDirFor(LOCAL_CWD, root, sessionsRoot);
@@ -536,8 +536,8 @@ describe("agent board", () => {
 	});
 
 	test("AC-7: a card gets the TASK whose agent is its name or whose worktree is its cwd", async () => {
-		home = makeHome("ompbot-board-");
-		const dbPath = join(home.dir, "ompbot.db");
+		home = makeHome("jabbu-board-");
+		const dbPath = join(home.dir, "jabbu.db");
 		openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => 0 }, redact: (text) => text }).close();
 		const db = new Database(dbPath, { strict: true });
 		const task = (id: string, agent: string, worktree: string, status: string) =>
@@ -571,8 +571,8 @@ describe("agent board", () => {
 	});
 
 	test("마지막 지시: a card gets its name's newest prompt (local cards local rows only) and the page draws the line", async () => {
-		home = makeHome("ompbot-board-");
-		const dbPath = join(home.dir, "ompbot.db");
+		home = makeHome("jabbu-board-");
+		const dbPath = join(home.dir, "jabbu.db");
 		expect(readBoardPrompts(home.dir)).toEqual([]);
 		let now = Date.parse("2026-11-12T01:00:00Z");
 		const store = openStore({
@@ -646,11 +646,11 @@ describe("agent board", () => {
 		expect((await fetch(`${base}/api/board`)).status).toBe(404);
 		expect(await (await fetch(`${base}/`)).text()).toContain('data-board="0"');
 		// buildSnapshot without a board source runs `herdr agent list` as before.
-		home = makeHome("ompbot-board-");
+		home = makeHome("jabbu-board-");
 		const calls: string[][] = [];
 		const snapshot = await buildSnapshot({
 			homeDir: home.dir,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			timezone: "Asia/Seoul",
 			config: { herdr: {} },
 			now: () => 0,
@@ -670,10 +670,10 @@ describe("agent board", () => {
 
 	test("live board: the snapshot's herdr section carries column counts and the page draws the board", async () => {
 		const { base, source } = await setup();
-		home = makeHome("ompbot-board-");
+		home = makeHome("jabbu-board-");
 		const snapshot = await buildSnapshot({
 			homeDir: home.dir,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			timezone: "Asia/Seoul",
 			config: { herdr: {} },
 			now: () => 0,
@@ -775,7 +775,7 @@ describe("board since file", () => {
 	const saved = (file: string): Saved => JSON.parse(readFileSync(file, "utf8")) as Saved;
 
 	test("AC-1: a new board source keeps a same-status card's since from the file; a live change starts now", async () => {
-		home = makeHome("ompbot-board-since-");
+		home = makeHome("jabbu-board-since-");
 		const file = join(home.dir, "dashboard-board-since.json");
 		writeFileSync(
 			file,
@@ -838,7 +838,7 @@ describe("board since file", () => {
 	});
 
 	test("AC-1: with no file or a broken one every first-seen card is since 0, and the file is written", async () => {
-		home = makeHome("ompbot-board-since-");
+		home = makeHome("jabbu-board-since-");
 		const file = join(home.dir, "dashboard-board-since.json");
 		for (const content of [undefined, "{not json"]) {
 			if (content !== undefined) writeFileSync(file, content);

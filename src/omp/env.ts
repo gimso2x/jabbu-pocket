@@ -1,10 +1,10 @@
 import { OmpDriverError } from "./driver";
 
-export const RESERVED_ENV_PREFIXES = ["SLACK_", "OMPBOT_", "LD_", "DYLD_"] as const;
+export const RESERVED_ENV_PREFIXES = ["SLACK_", "JABBU_", "LD_", "DYLD_"] as const;
 
 /**
  * Environment for the omp child: parent env minus keys starting with `SLACK_`,
- * `OMPBOT_`, `LD_` or `DYLD_` (loader injection), plus caller extras (e.g. `OMP_WIKI_NOTE_DISABLE=1`).
+ * `JABBU_`, `LD_` or `DYLD_` (loader injection), plus caller extras (e.g. `OMP_WIKI_NOTE_DISABLE=1`).
  * Extras with a stripped prefix are rejected so the invariant cannot be bypassed.
  */
 export function buildChildEnv(

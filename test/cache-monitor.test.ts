@@ -168,10 +168,10 @@ describe("notices", () => {
 
 	test("cold cache line: context size, idle hours, estimated cost when known", () => {
 		expect(formatColdCacheNotice({ prefixTokens: 312_000, idleMs: 3 * 60 * MIN + 5 * MIN, estimatedCost: 2.5 })).toBe(
-			"ℹ️ 캐시가 식은 대화입니다(컨텍스트 312k, 마지막 호출 3시간 전). 이번 턴에 약 $2.50 재작성 — 새로 시작하려면 /new-ompbot",
+			"ℹ️ 캐시가 식은 대화입니다(컨텍스트 312k, 마지막 호출 3시간 전). 이번 턴에 약 $2.50 재작성 — 새로 시작하려면 /new-jabbu",
 		);
 		expect(formatColdCacheNotice({ prefixTokens: 312_000, idleMs: 2 * 60 * MIN })).toBe(
-			"ℹ️ 캐시가 식은 대화입니다(컨텍스트 312k, 마지막 호출 2시간 전). 새로 시작하려면 /new-ompbot",
+			"ℹ️ 캐시가 식은 대화입니다(컨텍스트 312k, 마지막 호출 2시간 전). 새로 시작하려면 /new-jabbu",
 		);
 	});
 

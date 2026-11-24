@@ -20,7 +20,7 @@ export const FAKE_ID_BASE = 900_000_000_000_000_000n;
 /** Calls that mint a message id; their log lines also count the ids already handed out. */
 const ID_METHODS = /"method":"(createMessage|uploadFile)"/;
 
-/** Test-only transport (`OMPBOT_TEST_DISCORD_TRANSPORT=<file>`): calls go to a JSONL file that survives restarts; ids resume from it. */
+/** Test-only transport (`JABBU_TEST_DISCORD_TRANSPORT=<file>`): calls go to a JSONL file that survives restarts; ids resume from it. */
 export class FileFakeDiscordTransport implements DiscordTransport {
 	#seq: bigint;
 

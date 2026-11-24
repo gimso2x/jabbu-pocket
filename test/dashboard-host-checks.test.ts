@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { openBotStore } from "../src/core/origin";
 import { renderBriefingHtml } from "../src/dashboard/briefing";
 import {
@@ -35,10 +35,10 @@ const SECOND_OCI_HOST = ["oci", 2].join("");
 
 let home: string;
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-hostchecks-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-hostchecks-"));
 	// The snapshot's 알림·턴·TASK sections read the home database: since qa-z #23 an unreadable section is a briefing
 	// line of its own, so these tests get a fresh empty store instead of asserting around "읽지 못함" noise.
-	openBotStore(join(home, "ompbot.db"), { now: () => NOW }, "Asia/Seoul").close();
+	openBotStore(join(home, "jabbu.db"), { now: () => NOW }, "Asia/Seoul").close();
 	clearHostChecksCache();
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -133,7 +133,7 @@ const withOps = (url?: string): DashboardConfig => ({
 function deps(overrides: Partial<SnapshotDeps> = {}): SnapshotDeps {
 	return {
 		homeDir: home,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: undefined,
 		now: () => NOW,
@@ -371,13 +371,13 @@ describe("AC-5: one run per command per 60 seconds, module-wide", () => {
 			...withOps(),
 			ompExecutable: "/bin/true",
 			timezone: "Asia/Seoul",
-		} as unknown as OmpbotConfig;
+		} as unknown as JabbuConfig;
 		const options = {
 			homeDir: home,
 			config,
 			now: () => NOW,
 			run: fake.run,
-			repoDir: "/srv/ompbot",
+			repoDir: "/srv/jabbu",
 			callDaemon: async () => {
 				throw new Error("no daemon");
 			},

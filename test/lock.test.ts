@@ -9,7 +9,7 @@ import { acquireLock, currentBootId, LockHeldError } from "../src/daemon/lock";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-lock-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-lock-"));
 });
 
 afterEach(() => {
@@ -23,7 +23,7 @@ function staleLock(path: string): void {
 
 describe("a directory at the lock path", () => {
 	test("an old directory is refused with LockHeldError naming the path and is left in place", () => {
-		const path = join(dir, "ompbot.lock");
+		const path = join(dir, "jabbu.lock");
 		mkdirSync(path);
 		const old = new Date("2020-01-01T00:00:00Z");
 		utimesSync(path, old, old);
@@ -41,7 +41,7 @@ describe("a directory at the lock path", () => {
 
 describe("stale lock reclaim", () => {
 	test("a reclaim barrier left by another starter refuses at once and leaves the stale lock in place", () => {
-		const path = join(dir, "ompbot.lock");
+		const path = join(dir, "jabbu.lock");
 		staleLock(path);
 		writeFileSync(`${path}.reclaim`, "");
 		let refused: unknown;
@@ -57,7 +57,7 @@ describe("stale lock reclaim", () => {
 	});
 
 	test("a reclaim takes the stale lock and removes its barrier", () => {
-		const path = join(dir, "ompbot.lock");
+		const path = join(dir, "jabbu.lock");
 		staleLock(path);
 		const lock = acquireLock(path);
 		expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ pid: process.pid, bootId: currentBootId() });
@@ -67,7 +67,7 @@ describe("stale lock reclaim", () => {
 	});
 
 	test("starters racing over one stale lock: exactly one holds it", async () => {
-		const path = join(dir, "ompbot.lock");
+		const path = join(dir, "jabbu.lock");
 		staleLock(path);
 		const module = resolve(import.meta.dir, "../src/daemon/lock.ts");
 		// Each starter reports once, then holds (or not) until its stdin closes, so no winner releases before all reported.

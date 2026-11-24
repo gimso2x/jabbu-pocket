@@ -102,7 +102,7 @@ describe("buildLaneOutcomeCard and detachSummary cost lines (AC-2 unit)", () => 
 		name: "lane-cost-card",
 		title: "비용 카드 테스트",
 		threadRef: "discord:1234567890:9876543210",
-		originKey: "ompbot/test/cost",
+		originKey: "jabbu/test/cost",
 		cwd: "/tmp/repo",
 		sessionDir: "/tmp/sessions/lane-origin-1/e1",
 		status: "closed",

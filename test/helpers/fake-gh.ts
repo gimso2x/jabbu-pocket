@@ -189,7 +189,7 @@ export class FakeGh {
 
 	/** Squashes the PR branch onto the base branch of the bare repository (a scratch clone does the work). */
 	#squash(pr: FakePr): string {
-		const scratch = mkdtempSync(join(tmpdir(), "ompbot-fake-gh-"));
+		const scratch = mkdtempSync(join(tmpdir(), "jabbu-fake-gh-"));
 		try {
 			git(scratch, "clone", "-q", this.#options.bare, "work");
 			const work = join(scratch, "work");

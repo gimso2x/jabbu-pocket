@@ -100,19 +100,19 @@ export interface TurnSnapshotStore {
 
 /** How long one repository's capture may take before that repository is skipped. */
 export const TURN_SNAPSHOT_TIMEOUT_MS = 5_000;
-/** `ompbot gc` removes turn snapshots (rows and their refs) older than this. */
+/** `jabbu-pocket gc` removes turn snapshots (rows and their refs) older than this. */
 export const TURN_SNAPSHOT_RETENTION_DAYS = 7;
 
 const IDENTITY = {
-	GIT_AUTHOR_NAME: "ompbot",
-	GIT_AUTHOR_EMAIL: "ompbot@localhost",
-	GIT_COMMITTER_NAME: "ompbot",
-	GIT_COMMITTER_EMAIL: "ompbot@localhost",
+	GIT_AUTHOR_NAME: "jabbu",
+	GIT_AUTHOR_EMAIL: "jabbu@localhost",
+	GIT_COMMITTER_NAME: "jabbu",
+	GIT_COMMITTER_EMAIL: "jabbu@localhost",
 };
 
-/** `refs/ompbot/turns/<id>/before` and `/after`: keeps a turn's trees alive across `git gc` until the row goes. */
+/** `refs/jabbu/turns/<id>/before` and `/after`: keeps a turn's trees alive across `git gc` until the row goes. */
 export function turnRefName(id: number, which: "before" | "after"): string {
-	return `refs/ompbot/turns/${id}/${which}`;
+	return `refs/jabbu/turns/${id}/${which}`;
 }
 
 /** No call here means a pathspec pattern: a file named `:(glob)**` is that one file, not every file (qa-d M-1). */
@@ -187,7 +187,7 @@ function temporaryIndexPath(repo: string): string {
 	const base = realpathSync(tmpdir());
 	const root = realpathSync(repo);
 	const chosen = base === root || base.startsWith(`${root}/`) ? "/tmp" : base;
-	return join(chosen, `ompbot-turn-index-${randomUUID()}`);
+	return join(chosen, `jabbu-turn-index-${randomUUID()}`);
 }
 
 /** Head and tree of the work tree as it is now, through a temporary index outside the repository. */
@@ -262,7 +262,7 @@ export async function captureHeads(
 	return heads;
 }
 
-/** Wraps a tree in a commit and points `refs/ompbot/turns/<id>/<which>` at it, so `git gc` keeps it. */
+/** Wraps a tree in a commit and points `refs/jabbu/turns/<id>/<which>` at it, so `git gc` keeps it. */
 async function preserveTree(
 	run: GitRunner,
 	repo: string,
@@ -270,7 +270,7 @@ async function preserveTree(
 	which: "before" | "after",
 	tree: string,
 ): Promise<void> {
-	const commit = await required(run, repo, ["commit-tree", tree, "-m", `ompbot turn ${id} ${which}`], {
+	const commit = await required(run, repo, ["commit-tree", tree, "-m", `jabbu turn ${id} ${which}`], {
 		env: IDENTITY,
 	});
 	await required(run, repo, ["update-ref", turnRefName(id, which), commit]);
@@ -611,7 +611,7 @@ export async function removeTurnRefs(
 }
 
 /**
- * `removeTurnRefs` for `ompbot gc`, which runs synchronously: same refs, one `git update-ref -d` each. A row whose
+ * `removeTurnRefs` for `jabbu-pocket gc`, which runs synchronously: same refs, one `git update-ref -d` each. A row whose
  * repository is gone has nothing left to release and counts as released; a row whose `update-ref` failed for any other
  * reason is passed to `onFailure`, so the caller can keep its ledger row to retry.
  */

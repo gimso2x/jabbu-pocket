@@ -58,7 +58,7 @@ interface World {
 
 /** A fresh world for one apply crash test: a home and a checkout on main, both empty until the child builds them. */
 function makeWorld(): World {
-	const root = scratch("ompbot-crash-apply-");
+	const root = scratch("jabbu-crash-apply-");
 	const spec = { root, home: join(root, "home"), repo: join(root, "repo"), stamp: STAMP };
 	mkdirSync(spec.home, { recursive: true, mode: 0o700 });
 	mkdirSync(spec.repo, { recursive: true });
@@ -78,8 +78,8 @@ describe("an apply killed at a step boundary", () => {
 		test(`${point}: the process dies, the re-run applies, and no lock is left behind`, async () => {
 			const world = makeWorld();
 			const killed = await runChild(APPLY_CHILD, world.arg, {
-				OMPBOT_TEST_HOOKS: "1",
-				OMPBOT_TEST_CRASH_AT: point,
+				JABBU_TEST_HOOKS: "1",
+				JABBU_TEST_CRASH_AT: point,
 			});
 			expect(killed.exitCode).toBe(137);
 			// The dead process never released its lock: the re-run has to take it over instead of waiting on it.
@@ -94,9 +94,9 @@ describe("an apply killed at a step boundary", () => {
 		}, 60_000);
 	}
 
-	test("a stray OMPBOT_TEST_CRASH_AT without OMPBOT_TEST_HOOKS=1 changes nothing", async () => {
+	test("a stray JABBU_TEST_CRASH_AT without JABBU_TEST_HOOKS=1 changes nothing", async () => {
 		const world = makeWorld();
-		const run = await runChild(APPLY_CHILD, world.arg, { OMPBOT_TEST_CRASH_AT: "apply_after_backup" });
+		const run = await runChild(APPLY_CHILD, world.arg, { JABBU_TEST_CRASH_AT: "apply_after_backup" });
 		expect(run.exitCode).toBe(0);
 		expect(JSON.parse(run.stdout.trim())).toEqual({ status: "ok", exitCode: 0 });
 		expect(world.receipt().status).toBe("ok");
@@ -105,8 +105,8 @@ describe("an apply killed at a step boundary", () => {
 	test("an unknown crash point is refused instead of silently never firing", async () => {
 		const world = makeWorld();
 		const run = await runChild(APPLY_CHILD, world.arg, {
-			OMPBOT_TEST_HOOKS: "1",
-			OMPBOT_TEST_CRASH_AT: "apply_after_nothing",
+			JABBU_TEST_HOOKS: "1",
+			JABBU_TEST_CRASH_AT: "apply_after_nothing",
 		});
 		expect(run.exitCode).not.toBe(0);
 		expect(run.stderr).toContain("unknown crash point apply_after_nothing");
@@ -129,7 +129,7 @@ interface Landing {
  * that lands that commit. The lane branch is named as the host's own rule requires.
  */
 function makeLanding(): Landing {
-	const root = scratch("ompbot-crash-land-");
+	const root = scratch("jabbu-crash-land-");
 	const repo = makeRepo([], "repo-");
 	const origin = join(root, "origin.git");
 	git(repo, "init", "-q", "--bare", origin);
@@ -168,8 +168,8 @@ describe("a landing killed between its steps", () => {
 		test(`${point}: the re-run finishes the landing and removes the worktree`, async () => {
 			const landing = makeLanding();
 			const killed = await runChild(LAND_CHILD, landing.request, {
-				OMPBOT_TEST_HOOKS: "1",
-				OMPBOT_TEST_CRASH_AT: point,
+				JABBU_TEST_HOOKS: "1",
+				JABBU_TEST_CRASH_AT: point,
 			});
 			expect(killed.exitCode).toBe(137);
 			expect(git(landing.repo, "rev-parse", "main")).toBe(landing.sha);
@@ -215,19 +215,19 @@ describe("the crash helper itself", () => {
 		"land_after_push_before_cleanup",
 	];
 
-	test("only OMPBOT_TEST_HOOKS=1 arms it, and only for the named point", () => {
+	test("only JABBU_TEST_HOOKS=1 arms it, and only for the named point", () => {
 		const exits: number[] = [];
 		const record = (code: number): never => {
 			exits.push(code);
 			throw new Error(`exit ${code}`);
 		};
-		const armed = crashHook({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_CRASH_AT: "apply_after_drain" }, record);
+		const armed = crashHook({ JABBU_TEST_HOOKS: "1", JABBU_TEST_CRASH_AT: "apply_after_drain" }, record);
 		expect(() => armed("apply_after_backup")).not.toThrow();
 		expect(exits).toEqual([]);
 		expect(() => armed("apply_after_drain")).toThrow("exit 137");
 		expect(exits).toEqual([137]);
 
-		const stray = crashHook({ OMPBOT_TEST_CRASH_AT: "apply_after_drain" }, record);
+		const stray = crashHook({ JABBU_TEST_CRASH_AT: "apply_after_drain" }, record);
 		expect(() => stray("apply_after_drain")).not.toThrow();
 		expect(exits).toEqual([137]);
 	});
@@ -237,9 +237,9 @@ describe("the crash helper itself", () => {
 			throw new Error("must not exit");
 		};
 		for (const point of allPoints) {
-			expect(() => crashHook({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_CRASH_AT: point }, never)).not.toThrow();
+			expect(() => crashHook({ JABBU_TEST_HOOKS: "1", JABBU_TEST_CRASH_AT: point }, never)).not.toThrow();
 		}
-		expect(() => crashHook({ OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_CRASH_AT: "apply_after_nothing" }, never)).toThrow(
+		expect(() => crashHook({ JABBU_TEST_HOOKS: "1", JABBU_TEST_CRASH_AT: "apply_after_nothing" }, never)).toThrow(
 			"unknown crash point apply_after_nothing",
 		);
 	});

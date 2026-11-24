@@ -10,7 +10,7 @@ import type { ApprovalBroker, ApprovalDetail } from "./approval";
 import { isInside } from "./inside";
 import { sendFileToolName } from "./prompt";
 
-/** A tool the host (ompbot) executes for the omp child; mirrors omp's `RpcClientCustomTool`. */
+/** A tool the host (jabbu) executes for the omp child; mirrors omp's `RpcClientCustomTool`. */
 export interface HostToolDef {
 	name: string;
 	label: string;
@@ -160,7 +160,7 @@ export function checkUploadable(
 	}
 	const forbidden = [
 		join(deps.homeDir, "secrets"),
-		join(userHome, ".ompbot", "secrets"),
+		join(userHome, ".jabbu", "secrets"),
 		join(userHome, ".ssh"),
 		join(userHome, ".gnupg"),
 		join(userHome, ".aws"),
@@ -227,7 +227,7 @@ export function buildHostTools(deps: HostToolDeps): HostToolDef[] {
 			? {
 					...deps,
 					ompExecutable: deps.ompExecutable,
-					// A high_risk herdr brief asks the owner on the same card as `ompbot_request_approval`.
+					// A high_risk herdr brief asks the owner on the same card as `jabbu_request_approval`.
 					approve: (summary, detail, signal) => {
 						const target = needChannel();
 						return deps.broker.ask(target, summary, {
@@ -292,7 +292,7 @@ export function buildHostTools(deps: HostToolDeps): HostToolDef[] {
 			? []
 			: [
 					{
-						name: "ompbot_request_approval",
+						name: "jabbu_request_approval",
 						label: "Ask owner for approval",
 						description:
 							"Ask the owner to approve an irreversible or risky action with approve/deny buttons in chat. Waits for the click. Result is `approved`, `denied`, `denied (timeout)` or `replied: <owner text>` (the owner answered in the card's thread instead of clicking); proceed on `approved`, or on a reply only when it plainly approves this exact action — otherwise treat it as not approved.",

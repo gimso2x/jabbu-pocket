@@ -19,7 +19,7 @@ let dir: string;
 let ctx: PortableContext;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-monitors-qa-j-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-monitors-qa-j-"));
 	mkdirSync(join(dir, "scripts"));
 	mkdirSync(join(dir, "workspace"));
 	ctx = { scriptsRoot: join(dir, "scripts"), workspaceDir: join(dir, "workspace"), defaultTimezone: "Asia/Seoul" };
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 function ledger() {
-	return openMonitorLedger(join(dir, "ompbot.db"));
+	return openMonitorLedger(join(dir, "jabbu.db"));
 }
 
 function scriptSpec(name: string, command: string[]) {
@@ -176,7 +176,7 @@ describe("watcher payload (qa-j)", () => {
 describe("monitors test wake gate (qa-j)", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-monitors-qa-j-cli-");
+		home = makeHome("jabbu-monitors-qa-j-cli-");
 		mkdirSync(join(home.dir, "scripts"));
 	});
 	afterEach(() => home.remove());
@@ -200,7 +200,7 @@ describe("monitors test wake gate (qa-j)", () => {
 		const fired = await runCliCapture(home.dir, ["monitors", "test", "gate"]);
 		expect(fired.code).toBe(0);
 		expect(JSON.parse(fired.stdout)).toEqual({ fired: false, suppressed: "wake_gate" });
-		const l = openMonitorLedger(join(home.dir, "ompbot.db"));
+		const l = openMonitorLedger(join(home.dir, "jabbu.db"));
 		expect(l.listEvents()).toHaveLength(0);
 		l.close();
 	});

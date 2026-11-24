@@ -31,9 +31,9 @@ let home: TestHome;
 let ledger: MonitorLedger;
 
 beforeEach(() => {
-	home = makeHome("ompbot-monitor-tools-");
+	home = makeHome("jabbu-monitor-tools-");
 	mkdirSync(join(home.dir, "scripts"));
-	ledger = openMonitorLedger(join(home.dir, "ompbot.db"), { now: () => NOW });
+	ledger = openMonitorLedger(join(home.dir, "jabbu.db"), { now: () => NOW });
 });
 
 afterEach(() => {
@@ -56,9 +56,9 @@ function tools(originKey = ORIGIN) {
 	};
 	return {
 		built,
-		add: get("ompbot_monitor_add"),
-		list: get("ompbot_monitor_list"),
-		remove: get("ompbot_monitor_remove"),
+		add: get("jabbu_monitor_add"),
+		list: get("jabbu_monitor_list"),
+		remove: get("jabbu_monitor_remove"),
 	};
 }
 
@@ -77,12 +77,12 @@ function tools2(webhook: { port: number } | undefined) {
 		if (!tool) throw new Error(`tool missing: ${name}`);
 		return (params: Record<string, unknown>) => tool.execute(params, { signal: new AbortController().signal });
 	};
-	return { add: get("ompbot_monitor_add"), list: get("ompbot_monitor_list") };
+	return { add: get("jabbu_monitor_add"), list: get("jabbu_monitor_list") };
 }
 
 const AT = { kind: "at", at: "2026-10-19T15:05:00+09:00" };
 
-describe("ompbot_monitor_add / list / remove", () => {
+describe("jabbu_monitor_add / list / remove", () => {
 	test("add stores the monitor and returns the id with the next fire in Asia/Seoul", async () => {
 		const { add } = tools();
 		const result = await add({ name: "reminder", trigger: AT, instruction: "알려줘" });
@@ -216,9 +216,9 @@ describe("ompbot_monitor_add / list / remove", () => {
 describe("who gets the tools", () => {
 	test("monitor and lane origins (and non-DM origins) get none, so a monitor cannot register monitors", () => {
 		expect(tools().built.map((tool) => tool.name)).toEqual([
-			"ompbot_monitor_add",
-			"ompbot_monitor_list",
-			"ompbot_monitor_remove",
+			"jabbu_monitor_add",
+			"jabbu_monitor_list",
+			"jabbu_monitor_remove",
 		]);
 		for (const origin of [monitorOrigin("mabc12345"), laneOriginKey("work"), CHANNEL_ORIGIN]) {
 			expect(
@@ -240,9 +240,9 @@ describe("who gets the tools", () => {
 		await daemon.start();
 		try {
 			const names = (origin: string) => daemon.hostToolsFor(origin).map((tool) => tool.name);
-			expect(names(ORIGIN)).toContain("ompbot_monitor_add");
-			expect(names(monitorOrigin("mabc12345"))).not.toContain("ompbot_monitor_add");
-			expect(names(laneOriginKey("work"))).not.toContain("ompbot_monitor_add");
+			expect(names(ORIGIN)).toContain("jabbu_monitor_add");
+			expect(names(monitorOrigin("mabc12345"))).not.toContain("jabbu_monitor_add");
+			expect(names(laneOriginKey("work"))).not.toContain("jabbu_monitor_add");
 		} finally {
 			await daemon.stop();
 		}
@@ -263,13 +263,13 @@ describe("who gets the tools", () => {
 		await daemon.start();
 		try {
 			const names = (origin: string) => daemon.hostToolsFor(origin).map((tool) => tool.name);
-			const monitorNames = ["ompbot_monitor_add", "ompbot_monitor_list", "ompbot_monitor_remove"];
-			const base = ["ompbot_dispatch", "discord_send_file", "ompbot_request_approval"];
+			const monitorNames = ["jabbu_monitor_add", "jabbu_monitor_list", "jabbu_monitor_remove"];
+			const base = ["jabbu_dispatch", "discord_send_file", "jabbu_request_approval"];
 			// A server channel or thread can open a lane; the owner DM cannot without channels.discord.laneChannelId. Every Discord conversation also gets the lane board.
-			const boardNames = ["ompbot_board_post", "ompbot_board_read"];
+			const boardNames = ["jabbu_board_post", "jabbu_board_read"];
 			expect(names(discordDm)).toEqual([...base, ...monitorNames, ...boardNames]);
 			for (const origin of [discordThread, CHANNEL_ORIGIN]) {
-				expect(names(origin)).toEqual([...base, "ompbot_work_start", ...boardNames]);
+				expect(names(origin)).toEqual([...base, "jabbu_work_start", ...boardNames]);
 			}
 		} finally {
 			await daemon.stop();
@@ -277,10 +277,10 @@ describe("who gets the tools", () => {
 	});
 
 	test("the system prompt mentions the monitor tools for persona sessions only", () => {
-		expect(buildFloorsPrompt("/s", ORIGIN)).toContain("ompbot_monitor_add");
-		expect(buildFloorsPrompt("/s", `${CHANNEL_ORIGIN}/t/222222222222222222`)).not.toContain("ompbot_monitor_add");
-		expect(buildFloorsPrompt("/s", monitorOrigin("mabc12345"))).not.toContain("ompbot_monitor_add");
-		expect(buildFloorsPrompt("/s")).not.toContain("ompbot_monitor_add");
+		expect(buildFloorsPrompt("/s", ORIGIN)).toContain("jabbu_monitor_add");
+		expect(buildFloorsPrompt("/s", `${CHANNEL_ORIGIN}/t/222222222222222222`)).not.toContain("jabbu_monitor_add");
+		expect(buildFloorsPrompt("/s", monitorOrigin("mabc12345"))).not.toContain("jabbu_monitor_add");
+		expect(buildFloorsPrompt("/s")).not.toContain("jabbu_monitor_add");
 	});
 });
 

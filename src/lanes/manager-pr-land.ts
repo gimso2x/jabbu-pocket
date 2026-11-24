@@ -1,4 +1,4 @@
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { redact } from "../redact";
 import { repoMatchesCommonDir } from "../tasks/repo-match";
 import type { LaneCardView } from "./card";
@@ -13,7 +13,7 @@ import type { LaneLand, LaneRow } from "./status";
 
 /** `lanes.land` entry of the repository `repo` (live config), matched like `taskAutoLand.repos`; `undefined` = none. */
 export async function landModeOf(
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo">,
 	repo: string,
 	matches: typeof repoMatchesCommonDir = repoMatchesCommonDir,
 ): Promise<LaneLandMode | undefined> {
@@ -40,10 +40,10 @@ export interface PrLandCtx {
 /** Steered into a lane sent back to work: it stacks new commits on the same branch. */
 const reworkPrompt = (branch: string, reason: string, notice: string): string =>
 	[
-		`[ompbot] PR 착지를 마치지 못했습니다: ${reason}. 레인을 다시 working으로 돌렸습니다.`,
+		`[jabbu] PR 착지를 마치지 못했습니다: ${reason}. 레인을 다시 working으로 돌렸습니다.`,
 		notice,
 		`- 같은 브랜치 \`${branch}\`에 새 커밋을 쌓으세요. rebase·amend·force push는 하지 마세요(이미 올라간 커밋을 고쳐 쓰면 push가 거절됩니다).`,
-		"- 머지·push는 코어가 합니다. 끝나면 `ompbot_claim_done`을 다시 호출하세요. 코어가 검사와 누출 검사를 다시 돌린 뒤 같은 PR에 올립니다.",
+		"- 머지·push는 코어가 합니다. 끝나면 `jabbu_claim_done`을 다시 호출하세요. 코어가 검사와 누출 검사를 다시 돌린 뒤 같은 PR에 올립니다.",
 	].join("\n");
 
 /** Runs and settles the PR landings (`land.mode` pr) of the lane manager. */

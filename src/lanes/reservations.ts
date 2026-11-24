@@ -3,7 +3,7 @@ import { mentionToken } from "../channel/port";
 import type { LaneRow } from "./status";
 
 /**
- * Lane start reservations: `ompbot_work_start` with `after` stores the start arguments
+ * Lane start reservations: `jabbu_work_start` with `after` stores the start arguments
  * instead of starting a lane. The lane tick reads the prerequisite lanes' registry rows again; once all have landed the
  * owner gets a "시작 가능" card and starts the lane (or cancels) with a button. Nothing starts by itself.
  */
@@ -22,7 +22,7 @@ export interface LaneReservation {
 	threadRef: string;
 	repo: string;
 	after: string[];
-	/** The `ompbot_work_start` arguments frozen at reservation time (`manager.start` input without `parentOrigin`). */
+	/** The `jabbu_work_start` arguments frozen at reservation time (`manager.start` input without `parentOrigin`). */
 	startArgs: Record<string, unknown>;
 	state: ReservationState;
 	/** Signature of the last blocker notice posted, so one blocker is announced once; null when none stands. */

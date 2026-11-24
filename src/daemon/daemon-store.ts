@@ -1,4 +1,4 @@
-import { type OmpbotConfig, peerSilenceMinutes } from "../config";
+import { type JabbuConfig, peerSilenceMinutes } from "../config";
 import { COMMAND_OP_REF, type MailboxClock } from "../core/types";
 import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
@@ -8,7 +8,7 @@ import type { DeliveryRow, InboundRow } from "../store/db-rows";
 import type { CrashPoint } from "./crash";
 
 /** The peer call policy of a config: Discord peer bots with `peerSilenceAlert` on; `undefined` (off) otherwise. */
-export function peerCallPolicyOf(config: OmpbotConfig): PeerCallPolicy | undefined {
+export function peerCallPolicyOf(config: JabbuConfig): PeerCallPolicy | undefined {
 	const discord = config.channels.discord;
 	const minutes = peerSilenceMinutes(config);
 	if (discord?.peerBots === undefined || discord.peerBots.length === 0 || minutes === 0) return undefined;

@@ -117,9 +117,9 @@ describe("turn duration samples", () => {
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-typical-"));
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
-		raw = new Database(join(dir, "ompbot.db"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-typical-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
+		raw = new Database(join(dir, "jabbu.db"));
 		logLines = [];
 	});
 
@@ -151,11 +151,11 @@ describe("turn duration samples", () => {
 		expect(typicalTurnDuration(store, CHAT, log())).toEqual({ medianMs: 5000, p90Ms: 9000 });
 	});
 
-	test("AC-3: under 10 samples of the origin, all chat origins stand in, without monitor/ and ompbot/ turns", () => {
+	test("AC-3: under 10 samples of the origin, all chat origins stand in, without monitor/ and jabbu/ turns", () => {
 		seedTurns(CHAT, 3, (i) => (i + 1) * 1000); // 1,2,3 s
 		seedTurns("discord/ch/123", 8, (i) => (i + 4) * 1000); // 4..11 s
 		seedTurns("monitor/backup", 5, () => 3_600_000);
-		seedTurns("ompbot/lane/l1", 5, () => 7_200_000);
+		seedTurns("jabbu/lane/l1", 5, () => 7_200_000);
 		expect(store.turnDurationSamples(CHAT)).toHaveLength(3);
 		expect(store.turnDurationSamples()).toHaveLength(11);
 		// 1..11 s: median s[5] = 6 s, p90 s[9] = 10 s
@@ -167,7 +167,7 @@ describe("turn duration samples", () => {
 		seedTurns("monitor/backup", 12, () => 1000);
 		seedTurns(CHAT, 12, () => 1000);
 		expect(typicalTurnDuration(store, "monitor/backup", log())).toBeUndefined();
-		expect(typicalTurnDuration(store, "ompbot/lane/l1", log())).toBeUndefined();
+		expect(typicalTurnDuration(store, "jabbu/lane/l1", log())).toBeUndefined();
 	});
 
 	test("AC-3: a throwing query gives undefined and one typical_duration_query_failed line", () => {
@@ -229,9 +229,9 @@ describe("OriginMailbox first progress", () => {
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-typical-mb-"));
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
-		raw = new Database(join(dir, "ompbot.db"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-typical-mb-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
+		raw = new Database(join(dir, "jabbu.db"));
 		progress = [];
 		logLines = [];
 	});

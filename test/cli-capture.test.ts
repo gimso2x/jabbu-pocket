@@ -4,7 +4,7 @@ import { runCliCapture, runMain } from "./helpers/daemon-process";
 
 let home: TestHome;
 beforeEach(() => {
-	home = makeHome("ompbot-cli-capture-");
+	home = makeHome("jabbu-cli-capture-");
 });
 afterEach(() => home.remove());
 

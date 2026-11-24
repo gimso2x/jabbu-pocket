@@ -1,0 +1,41 @@
+{
+	"_proposal": "Example jabbu checks to MERGE into the `checks` array of your ops-check config (~/.config/ops-check/config.json). Replace @BUN@ (absolute bun path), @REPO_DIR@ (this checkout) and @HOME@ (the home that holds .jabbu) and set host to your host name. Ids are unique and prefixed `jabbu-`.",
+	"host": "@HOST@",
+	"checks": [
+		{
+			"id": "svc-jabbu.service",
+			"label": "jabbu 데몬",
+			"type": "systemd",
+			"unit": "jabbu.service",
+			"user": true,
+			"severity": "alert"
+		},
+		{
+			"id": "jabbu-status",
+			"label": "jabbu 상태 응답",
+			"type": "cmd",
+			"cmd": "@BUN@ @REPO_DIR@/src/main.ts status",
+			"expect": "데몬 실행 중",
+			"timeout": 20,
+			"severity": "alert"
+		},
+		{
+			"id": "jabbu-backup-age",
+			"label": "jabbu DB 백업",
+			"type": "file_age",
+			"path": "@HOME@/.jabbu/backups/last-backup.ok",
+			"max_hours": 36,
+			"min_bytes": 1,
+			"severity": "alert"
+		},
+		{
+			"id": "jabbu-gates",
+			"label": "jabbu 게이트",
+			"type": "cmd",
+			"cmd": "@BUN@ @REPO_DIR@/src/main.ts gates",
+			"expect": "",
+			"timeout": 30,
+			"severity": "alert"
+		}
+	]
+}

@@ -82,20 +82,20 @@ async function boot(): Promise<{ world: World; start: (crashAt: PrLandCrashPoint
 	clockState.skew = 0;
 	judged.calls = 0;
 	deaths.length = 0;
-	const home = makeHome("ompbot-task-pr-recovery-");
+	const home = makeHome("jabbu-task-pr-recovery-");
 	homes.push(home);
 	const repo = makeRepo(repos);
 	// A `.git` suffix: the task landing refuses a `origin` that may be a live checkout.
-	const bare = join(tempDir("ompbot-task-pr-bare-"), "origin.git");
+	const bare = join(tempDir("jabbu-task-pr-bare-"), "origin.git");
 	mkdirSync(bare);
 	git(bare, "init", "-q", "--bare");
 	git(repo, "remote", "add", "origin", GITHUB_URL);
 	git(repo, "config", `url.${bare}.insteadOf`, GITHUB_URL);
 	git(repo, "push", "-q", "origin", "main");
-	const recordsRepo = makeRepo(repos, "ompbot-task-pr-records-");
+	const recordsRepo = makeRepo(repos, "jabbu-task-pr-records-");
 	mkdirSync(join(recordsRepo, "release"));
 	writeFileSync(join(recordsRepo, "release", "denylist.txt"), "# none\nplanted-owner-marker-7310\n");
-	const gitleaks = join(tempDir("ompbot-task-pr-gitleaks-"), "gitleaks");
+	const gitleaks = join(tempDir("jabbu-task-pr-gitleaks-"), "gitleaks");
 	writeFileSync(gitleaks, "#!/bin/sh\nexit 0\n");
 	chmodSync(gitleaks, 0o755);
 	const fake = new FakeGh({ slug: SLUG, bare });

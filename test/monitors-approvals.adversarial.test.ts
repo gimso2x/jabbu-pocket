@@ -45,11 +45,11 @@ let store: Store;
 let scheduler: MonitorScheduler;
 
 const scriptsRoot = () => join(dir, "scripts");
-const dbPath = () => join(dir, "ompbot.db");
+const dbPath = () => join(dir, "jabbu.db");
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-adv-monapp-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-adv-monapp-"));
 	mkdirSync(scriptsRoot());
 	mkdirSync(join(dir, "workspace"));
 	clock = new FakeClock();
@@ -658,7 +658,7 @@ describe("approval action ids", () => {
 
 	test.each([
 		["empty", ""],
-		["wrong prefix", `ompbot:approvalx:approve:${OWNER_DM}:1001`],
+		["wrong prefix", `jabbu:approvalx:approve:${OWNER_DM}:1001`],
 		["upper-case decision", `${APPROVAL_ACTION_PREFIX}:APPROVE:${OWNER_DM}:1001`],
 		["unknown decision", `${APPROVAL_ACTION_PREFIX}:maybe:${OWNER_DM}:1001`],
 		["empty channel", `${APPROVAL_ACTION_PREFIX}:approve::1001`],
@@ -749,7 +749,7 @@ describe("ApprovalBroker races", () => {
 		expect(broker.handleAction(click("approve", ts, "100000000000000099"))).toBe(false);
 		expect(broker.handleAction(click("approve", "999999999999999999"))).toBe(false);
 		expect(broker.handleAction(click("approve", ts, OWNER, "200000000000000002"))).toBe(false);
-		expect(broker.handleAction({ actionId: `ompbot:approval:approve:${OWNER_DM}`, userId: OWNER })).toBe(false);
+		expect(broker.handleAction({ actionId: `jabbu:approval:approve:${OWNER_DM}`, userId: OWNER })).toBe(false);
 		expect(broker.handleAction({ actionId: "something:else", userId: OWNER })).toBe(false);
 		expect(broker.pendingCount).toBe(1);
 		expect(approvalStatus(id)).toBe("pending");

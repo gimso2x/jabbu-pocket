@@ -16,11 +16,11 @@ afterAll(() => {
 	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
-async function render(args: string[], env: Record<string, string>, ompbotHome?: string) {
-	return runCliCapture(ompbotHome, ["units", "render", ...args], env);
+async function render(args: string[], env: Record<string, string>, jabbuHome?: string) {
+	return runCliCapture(jabbuHome, ["units", "render", ...args], env);
 }
 
-describe("units render: HOME and OMPBOT_HOME values", () => {
+describe("units render: HOME and JABBU_HOME values", () => {
 	test("HOME with a newline or other control character is refused (exit 2, nothing printed)", async () => {
 		for (const home of ["/tmp/a\nExecStartPre=/bin/id", "/tmp/a\tb"]) {
 			const run = await render(["--dry-run"], { HOME: home });
@@ -29,14 +29,14 @@ describe("units render: HOME and OMPBOT_HOME values", () => {
 		}
 	});
 
-	test("OMPBOT_HOME with a tab is refused", async () => {
+	test("JABBU_HOME with a tab is refused", async () => {
 		const run = await render(["--dry-run"], { HOME: "/tmp/h" }, "/tmp/a\tb");
 		expect(run.code).toBe(2);
 		expect(run.stdout).toBe("");
 	});
 
 	test("an empty HOME is unset: the default out dir is not relative to the cwd", async () => {
-		const cwd = tempDir("ompbot-units-cwd-");
+		const cwd = tempDir("jabbu-units-cwd-");
 		const before = process.cwd();
 		process.chdir(cwd);
 		try {
@@ -66,16 +66,16 @@ describe("units render: HOME and OMPBOT_HOME values", () => {
 
 describe("units render: dangling symlinks", () => {
 	test("a dangling unit file link is refused and its target is not created", async () => {
-		const out = tempDir("ompbot-units-out-");
-		const outside = join(tempDir("ompbot-units-outside-"), "evil.txt");
-		symlinkSync(outside, join(out, "ompbot.service"));
+		const out = tempDir("jabbu-units-out-");
+		const outside = join(tempDir("jabbu-units-outside-"), "evil.txt");
+		symlinkSync(outside, join(out, "jabbu.service"));
 		const run = await render(["--out", out], { HOME: "/tmp/h" });
 		expect(run.code).toBe(2);
 		expect(existsSync(outside)).toBe(false);
 	});
 
 	test("a dangling --out link is refused with a usage line, not a raw mkdir error", async () => {
-		const base = tempDir("ompbot-units-dl-");
+		const base = tempDir("jabbu-units-dl-");
 		symlinkSync(join(base, "missing"), join(base, "dl"));
 		const run = await render(["--out", join(base, "dl")], { HOME: "/tmp/h" });
 		expect(run.code).toBe(2);
@@ -86,8 +86,8 @@ describe("units render: dangling symlinks", () => {
 
 describe("init --workspace overlapping the home", () => {
 	function init(workspace: (home: string) => string) {
-		const root = tempDir("ompbot-init-ws-");
-		const home = join(root, ".ompbot");
+		const root = tempDir("jabbu-init-ws-");
+		const home = join(root, ".jabbu");
 		const omp = join(root, "omp");
 		writeFileSync(omp, "#!/bin/sh\n", { mode: 0o755 });
 		const run = Bun.spawnSync(
@@ -104,7 +104,7 @@ describe("init --workspace overlapping the home", () => {
 				"--workspace",
 				workspace(home),
 			],
-			{ env: { HOME: root, OMPBOT_HOME: home, PATH: "" }, stdout: "pipe", stderr: "pipe" },
+			{ env: { HOME: root, JABBU_HOME: home, PATH: "" }, stdout: "pipe", stderr: "pipe" },
 		);
 		return { code: run.exitCode, err: run.stderr.toString(), home, root };
 	}

@@ -9,7 +9,7 @@ import type { WorkflowChoice } from "./workflow";
 export type LaneStatus = "working" | "done-claimed" | "not-done" | "paused" | "closed";
 
 /** Origin keys of lane sessions; the key is built here and never parsed afterwards. */
-export const LANE_ORIGIN_PREFIX = "ompbot/work/";
+export const LANE_ORIGIN_PREFIX = "jabbu/work/";
 
 export const laneOriginKey = (name: string): string => `${LANE_ORIGIN_PREFIX}${name}`;
 export const isLaneOrigin = (originKey: string): boolean => originKey.startsWith(LANE_ORIGIN_PREFIX);
@@ -77,10 +77,10 @@ export interface LaneChecksInconclusive {
 	lastAt: number;
 }
 
-/** What this process is: the `omp` version, the kencrew source commit (`+dirty`, `unknown`), OS and arch. */
+/** What this process is: the `omp` version, the source checkout commit (`+dirty`, `unknown`), OS and arch. */
 export interface RuntimeIdentity {
 	omp: string;
-	kencrew: string;
+	source: string;
 	os: string;
 	arch: string;
 }
@@ -290,7 +290,7 @@ export interface LaneMeta {
 	tierReason?: string;
 	/** The judge's confidence in `tier` (0..1) when the starter gave one. */
 	tierConfidence?: number;
-	/** The workflow the head chose at the start (`ompbot_work_start` `workflow`); absent = none, no keyword line. */
+	/** The workflow the head chose at the start (`jabbu_work_start` `workflow`); absent = none, no keyword line. */
 	workflow?: WorkflowChoice;
 	/** Why the lane never began: the chosen workflow's command is not loaded in its omp (closed, worktree removed). */
 	launchFailed?: string;
@@ -300,13 +300,13 @@ export interface LaneMeta {
 	acceptance?: AcceptanceItem[];
 	/** The start's brief (redacted, at most 16000 characters): the spec the independent review reads. */
 	brief?: string;
-	/** Repository-relative globs the lane's changes must stay inside (`ompbot_work_start` `scope`); absent = no check. */
+	/** Repository-relative globs the lane's changes must stay inside (`jabbu_work_start` `scope`); absent = no check. */
 	scope?: string[];
 	/** Claim-commit files outside `scope` (at most `SCOPE_VIOLATIONS_MAX`); set at close, dropped by `!reopen` and a new claim. */
 	scopeViolations?: string[];
 	/** Why the close could not list the claim's changed files (one line): the scope check failed, not passed. */
 	scopeError?: string;
-	/** What the lane left undone (`ompbot_claim_done` `leftovers`) at its last claim; `!reopen` drops it. */
+	/** What the lane left undone (`jabbu_claim_done` `leftovers`) at its last claim; `!reopen` drops it. */
 	leftovers?: LaneLeftover[];
 	/** The independent review of the claim commit (`taskAutoLand.review`); `!reopen` drops it. */
 	review?: LaneReview;
@@ -327,7 +327,7 @@ export interface LaneMeta {
 	};
 	/** The merge of a closed worktree lane (absent without a worktree or before the first close); kept while sent back to work; `!reopen` drops it. */
 	land?: LaneLand;
-	/** This lane's work goes out as a GitHub PR (`ompbot_work_start` `externalPr`, or `!pr` on the closed lane). */
+	/** This lane's work goes out as a GitHub PR (`jabbu_work_start` `externalPr`, or `!pr` on the closed lane). */
 	externalPr?: LaneExternalPr;
 	/** Publishing that PR (`LaneManager.requestPublish`); `!reopen` keeps only a published one. */
 	pr?: LanePr;
@@ -337,7 +337,7 @@ export interface LaneMeta {
 	pausedAt?: number;
 	/** How the pause was asked: an owner message in the lane thread, the ⏸ button, or a terminal attach. */
 	pausedBy?: "owner-message" | "button" | "attach";
-	/** The lane's session is handed to a terminal omp (`ompbot lanes attach`); absent otherwise. */
+	/** The lane's session is handed to a terminal omp (`jabbu-pocket lanes attach`); absent otherwise. */
 	attach?: LaneAttach;
 	/** Terminal hand-back session files the owner picks one from (index 0 = the attached file, pinned) and whether the pick resumes. */
 	sessionChoices?: { files: string[]; resume: boolean };
@@ -345,7 +345,7 @@ export interface LaneMeta {
 
 /** A lane session handed to a terminal omp: who holds it and what to compare the hand-back with. */
 export interface LaneAttach {
-	/** The `ompbot lanes attach` process; when it is gone the lane is taken back (`LaneManager.tick`). */
+	/** The `jabbu-pocket lanes attach` process; when it is gone the lane is taken back (`LaneManager.tick`). */
 	pid: number;
 	at: number;
 	/** The file the lane's child had open (else the one it would resume): the terminal omp resumes exactly this. */

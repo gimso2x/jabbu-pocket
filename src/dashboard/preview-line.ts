@@ -5,11 +5,11 @@ import { INJECTION_WARNING_HEAD } from "../safety/injection";
 /** Longest request line a turn shows. */
 export const PREVIEW_CHARS = 80;
 
-/** Lines ompbot puts around quoted material (`wrapQuoted`): the header and the injection warning. */
+/** Lines jabbu puts around quoted material (`wrapQuoted`): the header and the injection warning. */
 const QUOTE_HEADS = [QUOTED_HEADER.slice(0, QUOTED_HEADER.indexOf("]") + 1), INJECTION_WARNING_HEAD];
 
 /**
- * A request as one masked line: ompbot's quote wrapping removed (every header and warning line and every
+ * A request as one masked line: jabbu's quote wrapping removed (every header and warning line and every
  * `<<<quoted-…>>>` block; an open marker with no end drops the rest), secrets masked, mrkdwn links and attachment notes
  * folded, whitespace collapsed, cut to the limit. With none of the owner's words left (only quotes or attachments) the
  * line is `[첨부]` and `fallback` (a flow's first TASK title), else the attachment file names. `limit`: longest line.

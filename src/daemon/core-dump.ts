@@ -29,14 +29,14 @@ function readLastLimitCore(
 }
 
 /**
- * `warn` line for an installed daemon unit (`ompbot.service`, `ompbot-<instance>.service` under `unitDir`) without
- * `LimitCORE=0` (run from `ompbot doctor`). No unit directory or no daemon unit says nothing.
+ * `warn` line for an installed daemon unit (`jabbu.service`, `jabbu-<instance>.service` under `unitDir`) without
+ * `LimitCORE=0` (run from `jabbu-pocket doctor`). No unit directory or no daemon unit says nothing.
  */
 export function checkCoreDumpLimit(unitDir: string, warn: (name: string, detail: string) => void): void {
 	let names: string[];
 	try {
-		// qa-z #7: an instance name may carry dashes (`ompbot-my-bot.service`), so the instance part is no \w run.
-		names = readdirSync(unitDir).filter((name) => /^ompbot(?:-[a-z0-9.-]+)?\.service$/.test(name));
+		// qa-z #7: an instance name may carry dashes (`jabbu-my-bot.service`), so the instance part is no \w run.
+		names = readdirSync(unitDir).filter((name) => /^jabbu(?:-[a-z0-9.-]+)?\.service$/.test(name));
 	} catch {
 		return;
 	}
@@ -60,6 +60,6 @@ export function checkCoreDumpLimit(unitDir: string, warn: (name: string, detail:
 			if (read !== undefined) last = read.value;
 		}
 		if (last !== "0")
-			warn("core dump limit", `${name} has no LimitCORE=0 (run: ompbot units render, then reload and restart)`);
+			warn("core dump limit", `${name} has no LimitCORE=0 (run: jabbu-pocket units render, then reload and restart)`);
 	}
 }

@@ -12,16 +12,16 @@ const NOW = Date.parse("2026-11-19T03:00:00Z");
 
 let home: string;
 let stateDir: string;
-const saved = process.env.OMPBOT_HEAVY_RUN_DIR;
+const saved = process.env.JABBU_HEAVY_RUN_DIR;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-heavy-dash-"));
-	stateDir = mkdtempSync(join(tmpdir(), "ompbot-heavy-state-"));
-	process.env.OMPBOT_HEAVY_RUN_DIR = stateDir;
+	home = mkdtempSync(join(tmpdir(), "jabbu-heavy-dash-"));
+	stateDir = mkdtempSync(join(tmpdir(), "jabbu-heavy-state-"));
+	process.env.JABBU_HEAVY_RUN_DIR = stateDir;
 });
 afterEach(() => {
-	if (saved === undefined) delete process.env.OMPBOT_HEAVY_RUN_DIR;
-	else process.env.OMPBOT_HEAVY_RUN_DIR = saved;
+	if (saved === undefined) delete process.env.JABBU_HEAVY_RUN_DIR;
+	else process.env.JABBU_HEAVY_RUN_DIR = saved;
 	rmSync(home, { recursive: true, force: true });
 	rmSync(stateDir, { recursive: true, force: true });
 });
@@ -29,7 +29,7 @@ afterEach(() => {
 function deps(): SnapshotDeps {
 	return {
 		homeDir: home,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: undefined,
 		now: () => NOW,
@@ -58,23 +58,23 @@ const state = (pid: number, label: string, kind: "waiting" | "running", agoMs: n
 describe("heavy-run chip", () => {
 	test("one running, two waiting and a dead pid: the chip reads `<label> … · 대기 2`, with no opsStatus configured", async () => {
 		const paths = heavyRunPaths();
-		writeHeavyRunState(paths, state(process.pid, "ompbot-t-run", "running", 125_000));
-		writeHeavyRunState(paths, state(process.ppid, "ompbot-t-wait-a", "waiting", 60_000));
-		writeHeavyRunState(paths, state(1, "ompbot-t-wait-b", "waiting", 30_000));
-		writeHeavyRunState(paths, state(2 ** 22 + 99, "ompbot-t-dead", "waiting", 10_000));
+		writeHeavyRunState(paths, state(process.pid, "jabbu-t-run", "running", 125_000));
+		writeHeavyRunState(paths, state(process.ppid, "jabbu-t-wait-a", "waiting", 60_000));
+		writeHeavyRunState(paths, state(1, "jabbu-t-wait-b", "waiting", 30_000));
+		writeHeavyRunState(paths, state(2 ** 22 + 99, "jabbu-t-dead", "waiting", 10_000));
 
 		const snapshot = await buildSnapshot(deps());
 		expect(snapshot.hostChecks).toBeUndefined();
 		expect(snapshot.heavyRun?.ok && snapshot.heavyRun.waiting.map((w) => w.label)).toEqual([
-			"ompbot-t-wait-a",
-			"ompbot-t-wait-b",
+			"jabbu-t-wait-a",
+			"jabbu-t-wait-b",
 		]);
 
 		const html = renderDashboardMain(snapshot, undefined, NOW, { view: "inbox" });
-		expect(html).toContain("🧪 ompbot-t-run");
-		expect(html).toMatch(/🧪 ompbot-t-run [^<]*· 대기 2</);
-		expect(html).toContain("ompbot-t-wait-a");
-		expect(html).not.toContain("ompbot-t-dead");
+		expect(html).toContain("🧪 jabbu-t-run");
+		expect(html).toMatch(/🧪 jabbu-t-run [^<]*· 대기 2</);
+		expect(html).toContain("jabbu-t-wait-a");
+		expect(html).not.toContain("jabbu-t-dead");
 	});
 
 	test("nothing running or waiting: no chip", async () => {

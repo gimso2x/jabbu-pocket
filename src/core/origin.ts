@@ -28,7 +28,7 @@ export interface OriginRouterDeps {
 	/** Passed to every mailbox: the bot's zone (`config.timezone`); see `MailboxDeps.timezone`. */
 	timezone: string;
 	statusProvider: StatusProvider;
-	/** Passed to every mailbox: the `/usage-ompbot` answer; see `MailboxDeps`. */
+	/** Passed to every mailbox: the `/usage-jabbu` answer; see `MailboxDeps`. */
 	usageProvider?: MailboxDeps["usageProvider"];
 	/** Passed to every mailbox: the `!distill` answer; see `MailboxDeps`. */
 	distillProvider?: MailboxDeps["distillProvider"];
@@ -36,7 +36,7 @@ export interface OriginRouterDeps {
 	conversationContext?: (originKey: string) => ConversationContext | undefined;
 	/** Passed to every mailbox: whether a turn prompt may carry channel-scoped recall; see `MailboxDeps`. */
 	recallEnabled?: MailboxDeps["recallEnabled"];
-	/** Passed to every mailbox: whether a child gets ompbot host tools; see `MailboxDeps.hostTools`. */
+	/** Passed to every mailbox: whether a child gets jabbu host tools; see `MailboxDeps.hostTools`. */
 	hostTools?: MailboxDeps["hostTools"];
 	/** Passed to every mailbox: live `costCap` for the per-turn brake; see `MailboxDeps.costCap`. */
 	costCap?: MailboxDeps["costCap"];

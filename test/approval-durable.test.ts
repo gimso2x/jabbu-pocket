@@ -17,8 +17,8 @@ let dir: string;
 let store: Store;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-approval-durable-"));
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 1_000 }, redact });
+	dir = mkdtempSync(join(tmpdir(), "jabbu-approval-durable-"));
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 1_000 }, redact });
 });
 
 afterEach(() => {
@@ -246,7 +246,7 @@ describe("durable approvals", () => {
 
 	/** The raw ledger row of one card: what the dashboard reads. */
 	const rawRow = (id: string): { detail_json: string | null; card_url: string | null; origin_url: string | null } => {
-		const db = new Database(join(dir, "ompbot.db"), { readonly: true });
+		const db = new Database(join(dir, "jabbu.db"), { readonly: true });
 		try {
 			return db.query("SELECT detail_json, card_url, origin_url FROM approvals WHERE approval_id = ?").get(id) as {
 				detail_json: string | null;
@@ -288,7 +288,7 @@ describe("durable approvals", () => {
 		}
 		timers.fireAll();
 		expect(await done).toBe("timeout");
-		const raw = new Database(join(dir, "ompbot.db"), { readonly: true });
+		const raw = new Database(join(dir, "jabbu.db"), { readonly: true });
 		const dump = JSON.stringify(raw.query("SELECT * FROM approvals").all());
 		raw.close();
 		expect(dump).not.toContain("xoxb-");
@@ -326,7 +326,7 @@ describe("durable approvals", () => {
 			card_url: `https://discord.com/channels/${GUILD}/${CHANNEL}/${ts}`,
 			origin_url: `https://discord.com/channels/${GUILD}/${CHANNEL}/${THREAD_ROOT}`,
 		});
-		expect(broker.handleAction({ actionId: `ompbot:approval:approve:${CHANNEL}:${ts}`, userId: OWNER })).toBe(true);
+		expect(broker.handleAction({ actionId: `jabbu:approval:approve:${CHANNEL}:${ts}`, userId: OWNER })).toBe(true);
 		expect(await done).toBe("approved");
 
 		// A fresh fake transport restarts its id sequence, so each round asks in its own channel.
@@ -344,7 +344,7 @@ describe("durable approvals", () => {
 			expect(failing.count("getChannel")).toBe(2);
 			expect(rawRow(`${channel}:${shown.ts}`)).toEqual({ detail_json: null, card_url: null, origin_url: null });
 			expect(
-				failingBroker.handleAction({ actionId: `ompbot:approval:${decision}:${channel}:${shown.ts}`, userId: OWNER }),
+				failingBroker.handleAction({ actionId: `jabbu:approval:${decision}:${channel}:${shown.ts}`, userId: OWNER }),
 			).toBe(true);
 			expect(await pending).toBe(outcome);
 			expect(store.getApproval(`${channel}:${shown.ts}`)?.status).toBe(outcome);
@@ -359,8 +359,8 @@ describe("durable approvals", () => {
 		store.decideApproval = () => {
 			throw new Error("database is locked");
 		};
-		expect(broker.handleAction({ actionId: `ompbot:approval:approve:${OWNER_DM}:${ts}`, userId: OWNER })).toBe(false);
-		expect(broker.handleAction({ actionId: `ompbot:approval:deny:${OWNER_DM}:${ts}`, userId: OWNER })).toBe(true);
+		expect(broker.handleAction({ actionId: `jabbu:approval:approve:${OWNER_DM}:${ts}`, userId: OWNER })).toBe(false);
+		expect(broker.handleAction({ actionId: `jabbu:approval:deny:${OWNER_DM}:${ts}`, userId: OWNER })).toBe(true);
 		expect(await done).toBe("denied");
 	});
 

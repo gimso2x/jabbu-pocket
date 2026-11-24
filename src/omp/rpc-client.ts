@@ -98,7 +98,7 @@ export interface PromptResultFrame {
 	sessionSettled?: boolean;
 }
 
-/** A side question's record (`btw_record`; only the fields ompbot reads). */
+/** A side question's record (`btw_record`; only the fields jabbu reads). */
 export interface BtwRecord {
 	id: string;
 	status: "running" | "complete" | "cancelled" | "error" | "interrupted";

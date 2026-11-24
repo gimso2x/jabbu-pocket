@@ -19,9 +19,9 @@ function home(): TestHome {
 }
 
 describe("status (qa-i low)", () => {
-	test("a FIFO in the place of ompbot.db reports ledger_unreadable instead of blocking", async () => {
+	test("a FIFO in the place of jabbu.db reports ledger_unreadable instead of blocking", async () => {
 		const h = home();
-		const db = join(h.dir, "ompbot.db");
+		const db = join(h.dir, "jabbu.db");
 		expect(Bun.spawnSync(["mkfifo", db]).exitCode).toBe(0);
 		const src = join(import.meta.dir, "..", "src");
 		const result = await runBounded(

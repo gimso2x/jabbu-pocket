@@ -1,18 +1,18 @@
 // The home a systemd unit runs a daemon with, read back from `systemctl show -p Environment`.
 
-/** A unit whose `Environment=` names `OMPBOT_HOME` in a form `unitOmpbotHome` cannot read: the apply must not guess its home. */
+/** A unit whose `Environment=` names `JABBU_HOME` in a form `unitJabbuHome` cannot read: the apply must not guess its home. */
 export class UnitHomeUnreadableError extends Error {
 	constructor(unit: string) {
-		super(`cannot read OMPBOT_HOME of unit ${unit}: unparseable Environment= (apply stopped; nothing restarted)`);
+		super(`cannot read JABBU_HOME of unit ${unit}: unparseable Environment= (apply stopped; nothing restarted)`);
 		this.name = "UnitHomeUnreadableError";
 	}
 }
 
 /**
- * `OMPBOT_HOME` of a `systemctl show -p Environment` value: whitespace-separated assignments, each possibly quoted
- * like systemd does (`"OMPBOT_HOME=/h/with space"`, backslash escapes inside quotes). Undefined when it is not set.
+ * `JABBU_HOME` of a `systemctl show -p Environment` value: whitespace-separated assignments, each possibly quoted
+ * like systemd does (`"JABBU_HOME=/h/with space"`, backslash escapes inside quotes). Undefined when it is not set.
  */
-export function unitOmpbotHome(unit: string, environment: string): string | undefined {
+export function unitJabbuHome(unit: string, environment: string): string | undefined {
 	const words: string[] = [];
 	let current = "";
 	let quote: string | undefined;
@@ -37,9 +37,9 @@ export function unitOmpbotHome(unit: string, environment: string): string | unde
 	}
 	if (quote !== undefined) throw new UnitHomeUnreadableError(unit);
 	if (started) words.push(current);
-	const found = words.find((word) => word.startsWith("OMPBOT_HOME="));
+	const found = words.find((word) => word.startsWith("JABBU_HOME="));
 	if (found === undefined) return undefined;
-	const home = found.slice("OMPBOT_HOME=".length);
+	const home = found.slice("JABBU_HOME=".length);
 	if (home === "") throw new UnitHomeUnreadableError(unit);
 	return home;
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readVersion } from "../src/daemon/tools";
 
 test("a command that never ends gives `unknown` within 1 s of a 200 ms limit, and its process is gone", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-read-version-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-read-version-"));
 	try {
 		const pidFile = join(dir, "pid");
 		const started = performance.now();
@@ -21,7 +21,7 @@ test("a command that never ends gives `unknown` within 1 s of a 200 ms limit, an
 });
 
 test("a grandchild holding stdout does not hold the call: `unknown` within 1.5 s and the whole group is gone", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-read-version-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-read-version-"));
 	try {
 		const pidFile = join(dir, "pid");
 		const started = performance.now();

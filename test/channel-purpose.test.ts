@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConversationContext } from "../src/channel/port";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { originKeyForMessage } from "../src/core/normalize";
 import { OriginRouter, openBotStore } from "../src/core/origin";
 import { type InboundRecord, parsePurposeCommand, purposeMemoError } from "../src/core/types";
@@ -38,7 +38,7 @@ let nextId: number;
 async function boot(): Promise<void> {
 	const base = home.config.channels.discord;
 	if (base === undefined) throw new Error("makeHome sets channels.discord");
-	const config: OmpbotConfig = {
+	const config: JabbuConfig = {
 		...home.config,
 		channels: {
 			discord: { ...base, mentionFreeChannels: [CH], peerBots: [{ userId: PEER, name: "떡" }] },
@@ -72,7 +72,7 @@ async function say(content: string): Promise<void> {
 const startedThreads = () => discord.calls.filter((call) => call.method === "startThread").length;
 
 beforeEach(() => {
-	home = makeHome("ompbot-purpose-");
+	home = makeHome("jabbu-purpose-");
 	drivers = [];
 	nextId = 1;
 });
@@ -169,8 +169,8 @@ describe("메모가 턴에 들어가는 방식과 거부 (mailbox)", () => {
 	let counter = 0;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-purpose-mb-"));
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		dir = mkdtempSync(join(tmpdir(), "jabbu-purpose-mb-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		made = [];
 		hold = false;
 		place = undefined;

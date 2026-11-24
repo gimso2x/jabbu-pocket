@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { callDaemon } from "../daemon/ipc";
 import { readVersion } from "../daemon/tools";
 import { DEFAULT_BOARD_API } from "../dispatch/board";
@@ -22,7 +22,7 @@ const BOARD_SINCE_FILE = "dashboard-board-since.json";
  * `homeDir` the card times are kept in `<home>/dashboard-board-since.json`.
  */
 export function boardSourceFor(
-	config: Pick<OmpbotConfig, "herdrBoard"> | undefined,
+	config: Pick<JabbuConfig, "herdrBoard"> | undefined,
 	homeDir?: string,
 	Board: typeof BoardSource = BoardSource,
 ): BoardSource | undefined {
@@ -37,7 +37,7 @@ export function boardSourceFor(
 export interface SnapshotAssemblyOptions {
 	homeDir: string;
 	/** The config as booted; absent for a home without config.json. */
-	config: OmpbotConfig | undefined;
+	config: JabbuConfig | undefined;
 	/** Default `Date.now`. */
 	now?: () => number;
 	/** Default the daemon socket IPC; the daemon itself passes its own status instead of calling out. */

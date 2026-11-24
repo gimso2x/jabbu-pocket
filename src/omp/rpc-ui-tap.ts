@@ -9,7 +9,7 @@ import { isRecord } from "./type-guards";
  * throws, or the frame does not parse, the dialog is answered `cancelled` (fail-closed). omp's `method:"cancel"`
  * (its own timeout or an aborted turn) aborts the waiting answer, and nothing is written for that dialog afterwards.
  * A method that is neither an owner dialog nor a fire-and-forget notice (`NOTICE_METHODS`) — e.g. omp 19.1's HTML
- * `form` — is answered `cancelled` too, so a request kind ompbot does not know never leaves omp waiting for a reply.
+ * `form` — is answered `cancelled` too, so a request kind jabbu does not know never leaves omp waiting for a reply.
  *
  * `localCommand` hears about a prompt omp handled as a local slash command: its `prompt` response says
  * `agentInvoked: false` and no `prompt_result` follows. The text is the `command_output` frames written since the

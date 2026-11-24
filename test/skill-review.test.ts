@@ -39,7 +39,7 @@ import { killSpawned, runMain } from "./helpers/daemon-process";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-review-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-review-"));
 });
 
 afterEach(() => {
@@ -88,7 +88,7 @@ const PROPOSAL_JSON = JSON.stringify([
 	{
 		action: "create",
 		name: "release-checklist",
-		description: "Use when cutting an ompbot release",
+		description: "Use when cutting a jabbu release",
 		content: "1. bun test\n2. bun run check\n3. tag",
 		evidence: "이 대화에서 릴리스 절차를 두 번 통과시켰다",
 		checks: [
@@ -104,7 +104,7 @@ describe("extractProposals", () => {
 			{
 				action: "create",
 				name: "release-checklist",
-				description: "Use when cutting an ompbot release",
+				description: "Use when cutting a jabbu release",
 				content: "1. bun test\n2. bun run check\n3. tag",
 				evidence: "이 대화에서 릴리스 절차를 두 번 통과시켰다",
 				checks: [
@@ -178,7 +178,7 @@ describe("renderSkillFile / savePendingProposals", () => {
 		).toBe(true);
 		expect(rendered).toContain("## 채택 검증");
 		expect(rendered).toContain("- 릴리스 요청 → 발동");
-		expect(rendered).toContain("ompbot skills rollback release-checklist");
+		expect(rendered).toContain("jabbu-pocket skills rollback release-checklist");
 		expect(rendered).toContain("다른 경로(예: GLM 크론 모니터)");
 		const paths = savePendingProposals(dir, [gated], 1_700_000_000_000);
 		expect(paths).toHaveLength(1);
@@ -450,7 +450,7 @@ describe("skill revisions (install safety net)", () => {
 	});
 });
 
-describe("ompbot skills rollback (CLI)", () => {
+describe("jabbu-pocket skills rollback (CLI)", () => {
 	afterEach(() => {
 		killSpawned();
 	});
@@ -464,7 +464,7 @@ describe("ompbot skills rollback (CLI)", () => {
 		expect(backupSkillRevision(path, 1_700_000_500_000)).toBeDefined();
 		writeFileSync(join(path, "SKILL.md"), "v2", { mode: 0o600 });
 
-		const env = { OMPBOT_TEST_HOOKS: "1", OMPBOT_SKILLS_DIR: join(dir, ".omp", "agent", "managed-skills") };
+		const env = { JABBU_TEST_HOOKS: "1", JABBU_SKILLS_DIR: join(dir, ".omp", "agent", "managed-skills") };
 		const run = await runMain(dir, ["skills", "rollback", "release-checklist"], env);
 		expect(run.code, run.stderr).toBe(0);
 		expect(run.stdout).toMatch(/^skill rollback name=release-checklist revision=\S+\.md\n$/);
@@ -475,7 +475,7 @@ describe("ompbot skills rollback (CLI)", () => {
 		expect(missing.stderr).toContain("skill not installed");
 		const usage = await runMain(dir, ["skills"], env);
 		expect(usage.code).toBe(2);
-		expect(usage.stderr).toContain("usage: ompbot skills rollback");
+		expect(usage.stderr).toContain("usage: jabbu-pocket skills rollback");
 	}, 30_000);
 });
 
@@ -544,7 +544,7 @@ describe("!distill (daemon)", () => {
 	const reviews = () => built.filter((b) => b.origin === SKILL_REVIEW_ORIGIN);
 
 	beforeEach(() => {
-		home = makeHome("ompbot-distill-");
+		home = makeHome("jabbu-distill-");
 		transport = new WaitingDiscordTransport();
 		lines = [];
 		waiters = [];

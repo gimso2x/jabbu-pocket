@@ -29,10 +29,10 @@ afterAll(() => {
 	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 });
 
-/** `ompbot init` in a child process whose HOME and OMPBOT_HOME both point into a temp dir. */
+/** `jabbu-pocket init` in a child process whose HOME and JABBU_HOME both point into a temp dir. */
 function init(args: string[], home: string, path = ""): { code: number; out: string; err: string } {
 	const run = Bun.spawnSync([process.execPath, MAIN, "init", ...args], {
-		env: { HOME: join(home, ".."), OMPBOT_HOME: home, PATH: path },
+		env: { HOME: join(home, ".."), JABBU_HOME: home, PATH: path },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -48,19 +48,19 @@ function filesUnder(dir: string): string[] {
 }
 
 function freshHome(): string {
-	return join(tempDir("ompbot-init-"), ".ompbot");
+	return join(tempDir("jabbu-init-"), ".jabbu");
 }
 
-describe("ompbot init: the printed next-step commands", () => {
+describe("jabbu-pocket init: the printed next-step commands", () => {
 	test("a home with a space and a quote still parses in bash and unquotes to the same paths", () => {
-		const home = join(tempDir("ompbot-init-"), "a b", "it's");
+		const home = join(tempDir("jabbu-init-"), "a b", "it's");
 		const run = init(["--owner", OWNER, "--app-id", APP, "--omp", process.execPath], home);
 		expect(run.code, run.err).toBe(0);
-		const commands = run.out.split("\n").filter((line) => line.startsWith("  cat >") || line.includes("OMPBOT_HOME="));
+		const commands = run.out.split("\n").filter((line) => line.startsWith("  cat >") || line.includes("JABBU_HOME="));
 		expect(commands.length).toBe(2);
 		const script = commands
 			.map((line) =>
-				line.replace("cat >", "printf '%s\\n'").replace("bun src/main.ts doctor", "/usr/bin/printenv OMPBOT_HOME"),
+				line.replace("cat >", "printf '%s\\n'").replace("bun src/main.ts doctor", "/usr/bin/printenv JABBU_HOME"),
 			)
 			.join("\n");
 		const syntax = Bun.spawnSync(["bash", "-n", "-c", script], { stderr: "pipe" });
@@ -71,7 +71,7 @@ describe("ompbot init: the printed next-step commands", () => {
 	});
 });
 
-describe("ompbot init", () => {
+describe("jabbu-pocket init", () => {
 	test("AC-1: creates home, secrets, workspace, config.json; loadConfig accepts it once tokens exist", () => {
 		const home = freshHome();
 		const run = init(["--owner", OWNER, "--app-id", APP, "--omp", process.execPath], home);
@@ -130,11 +130,11 @@ describe("ompbot init", () => {
 
 	test("AC-1: --workspace is used as an absolute workspaceDir; --omp falls back to omp on PATH", () => {
 		const home = freshHome();
-		const bin = tempDir("ompbot-init-bin-");
+		const bin = tempDir("jabbu-init-bin-");
 		const omp = join(bin, "omp");
 		writeFileSync(omp, "#!/bin/sh\n");
 		chmodSync(omp, 0o755);
-		const workspace = join(tempDir("ompbot-init-ws-"), "work");
+		const workspace = join(tempDir("jabbu-init-ws-"), "work");
 		const run = init(["--owner", OWNER, "--app-id", APP, "--workspace", workspace], home, bin);
 		expect(run.err).toBe("");
 		expect(run.code).toBe(0);
@@ -172,7 +172,7 @@ describe("ompbot init", () => {
 
 	test("a non-executable --omp exits 2 and creates nothing", () => {
 		const home = freshHome();
-		const omp = join(tempDir("ompbot-init-omp-"), "omp");
+		const omp = join(tempDir("jabbu-init-omp-"), "omp");
 		writeFileSync(omp, "#!/bin/sh\n", { mode: 0o644 });
 		const run = init(["--owner", OWNER, "--app-id", APP, "--omp", omp], home);
 		expect(run.code).toBe(2);
@@ -181,7 +181,7 @@ describe("ompbot init", () => {
 	});
 
 	test("a file where the home, the workspace or one of their parents goes exits 2 and creates nothing", () => {
-		const root = tempDir("ompbot-init-files-");
+		const root = tempDir("jabbu-init-files-");
 		const file = join(root, "plain-file");
 		writeFileSync(file, "x");
 		const workspaceCases = [file, join(file, "ws")];
@@ -193,7 +193,7 @@ describe("ompbot init", () => {
 			expect(run.err).not.toContain("Error:");
 			expect(existsSync(home)).toBe(false);
 		}
-		for (const home of [file, join(file, ".ompbot")]) {
+		for (const home of [file, join(file, ".jabbu")]) {
 			const run = init(["--owner", OWNER, "--app-id", APP, "--omp", process.execPath], home);
 			expect(run.code).toBe(2);
 			expect(run.err).toContain(`home ${home}`);
@@ -203,13 +203,13 @@ describe("ompbot init", () => {
 		expect(readdirSync(root).filter((name) => name !== ".bun")).toEqual(["plain-file"]);
 	});
 
-	test("an empty OMPBOT_HOME is unset: the home is ~/.ompbot, nothing lands in the current directory", () => {
-		const cwd = tempDir("ompbot-init-cwd-");
-		const userHome = tempDir("ompbot-init-home-");
+	test("an empty JABBU_HOME is unset: the home is ~/.jabbu, nothing lands in the current directory", () => {
+		const cwd = tempDir("jabbu-init-cwd-");
+		const userHome = tempDir("jabbu-init-home-");
 		const empty = Bun.spawnSync(
 			[process.execPath, MAIN, "init", "--owner", OWNER, "--app-id", APP, "--omp", process.execPath],
 			{
-				env: { HOME: userHome, OMPBOT_HOME: "", PATH: "" },
+				env: { HOME: userHome, JABBU_HOME: "", PATH: "" },
 				cwd,
 				stdout: "pipe",
 				stderr: "pipe",
@@ -217,15 +217,15 @@ describe("ompbot init", () => {
 		);
 		expect(empty.stderr.toString()).toBe("");
 		expect(empty.exitCode).toBe(0);
-		expect(existsSync(join(userHome, ".ompbot", "config.json"))).toBe(true);
-		expect(empty.stdout.toString()).not.toContain("OMPBOT_HOME=");
+		expect(existsSync(join(userHome, ".jabbu", "config.json"))).toBe(true);
+		expect(empty.stdout.toString()).not.toContain("JABBU_HOME=");
 		expect(readdirSync(cwd)).toEqual([]);
 	});
 
 	test("a directory as --omp and an empty --omp or --workspace exit 2 and create nothing", () => {
 		const home = freshHome();
 		const cases: Array<[string[], string]> = [
-			[["--owner", OWNER, "--app-id", APP, "--omp", tempDir("ompbot-init-dir-")], "is a directory"],
+			[["--owner", OWNER, "--app-id", APP, "--omp", tempDir("jabbu-init-dir-")], "is a directory"],
 			[["--owner", OWNER, "--app-id", APP, "--omp", ""], "--omp is empty"],
 			[["--owner", OWNER, "--app-id", APP, "--omp", process.execPath, "--workspace", ""], "--workspace is empty"],
 		];
@@ -247,7 +247,7 @@ describe("ompbot init", () => {
 
 	test("no omp on PATH and no --omp exits 2 and creates nothing", () => {
 		const home = freshHome();
-		const run = init(["--owner", OWNER, "--app-id", APP], home, tempDir("ompbot-init-empty-path-"));
+		const run = init(["--owner", OWNER, "--app-id", APP], home, tempDir("jabbu-init-empty-path-"));
 		expect(run.code).toBe(2);
 		expect(run.err).toContain("omp");
 		expect(existsSync(home)).toBe(false);
@@ -267,7 +267,7 @@ describe("ompbot init", () => {
 
 	test("qa-l #5: a secrets symlink is refused and its target keeps its mode", () => {
 		const home = freshHome();
-		const outside = join(tempDir("ompbot-init-outside-"), "shared");
+		const outside = join(tempDir("jabbu-init-outside-"), "shared");
 		mkdirSync(outside, { mode: 0o755 });
 		chmodSync(outside, 0o755);
 		mkdirSync(home, { recursive: true, mode: 0o700 });

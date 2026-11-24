@@ -146,8 +146,8 @@ const ownerTag = (row: TaskRow): string => `${hostLabelOf(row)}/${row.agent} · 
 const boardFooter = (link: string | undefined): string[] => (link === undefined ? [] : ["", "작업 보드", link]);
 
 /** Button ids of a card's `머지` and `추천대로` buttons; the task id carries no colon. */
-const TASK_MERGE_ACTION_PREFIX = "ompbot:task:merge:";
-const TASK_RECOMMEND_ACTION_PREFIX = "ompbot:task:recommend:";
+const TASK_MERGE_ACTION_PREFIX = "jabbu:task:merge:";
+const TASK_RECOMMEND_ACTION_PREFIX = "jabbu:task:recommend:";
 const TASK_ID = /^T-\d{8}-\d{2,}$/;
 
 export const taskMergeActionId = (taskId: string): string => `${TASK_MERGE_ACTION_PREFIX}${taskId}`;
@@ -608,7 +608,7 @@ export const formatWorkingSilentNotice = (
 /** The task's herdr agent vanished (dori `[LOST]`): the owner hears it once per progress base, with the resume call. */
 export function buildLostCard(row: TaskRow, ownerUserId: string, link?: string): TaskCard {
 	const missing = `herdr에 \`${row.agent}\` 에이전트가 없습니다.`;
-	const resume = `*재개*: \`ompbot_dispatch {mode:"herdr", taskSpec:{id:"${row.taskId}"}}\` — 같은 워크트리에서 에이전트를 다시 띄웁니다.`;
+	const resume = `*재개*: \`jabbu_dispatch {mode:"herdr", taskSpec:{id:"${row.taskId}"}}\` — 같은 워크트리에서 에이전트를 다시 띄웁니다.`;
 	const note = cardNote(link);
 	return {
 		text: [
@@ -698,7 +698,7 @@ export function buildAgyLimitCard(row: TaskRow, line: string, ownerUserId: strin
 		"```",
 		line,
 		"```",
-		`*이어가는 법*: 한도가 풀린 뒤 \`ompbot_dispatch {taskSpec:{id:"${row.taskId}"}}\`로 재개합니다.`,
+		`*이어가는 법*: 한도가 풀린 뒤 \`jabbu_dispatch {taskSpec:{id:"${row.taskId}"}}\`로 재개합니다.`,
 	];
 	const note = cardNote(link);
 	return {

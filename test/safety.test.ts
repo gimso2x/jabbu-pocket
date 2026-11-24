@@ -41,10 +41,10 @@ import {
 	buildFloorsPrompt,
 	buildWorkerFloorsPrompt,
 	floorsSystemPrompt,
-	OMPBOT_BUN,
-	OMPBOT_MAIN,
-	OMPBOT_NO_ENV_FILE,
-	ompbotCli,
+	JABBU_BUN,
+	JABBU_MAIN,
+	JABBU_NO_ENV_FILE,
+	jabbuCli,
 	WAIT_INTERIM_LINE,
 } from "../src/safety/prompt";
 import {
@@ -196,7 +196,7 @@ describe("prompt and child environment", () => {
 		const prompt = floorsSystemPrompt("/bot/home/secrets");
 		expect(prompt).toBe(buildFloorsPrompt("/bot/home/secrets"));
 		expect(prompt).toContain("/bot/home/secrets");
-		expect(prompt).toContain("ompbot_request_approval");
+		expect(prompt).toContain("jabbu_request_approval");
 		expect(prompt).toContain("discord_send_file");
 	});
 
@@ -216,10 +216,10 @@ describe("prompt and child environment", () => {
 		expect(chat).not.toContain(claimRule);
 	});
 
-	test("the child env loses SLACK_*/OMPBOT_* keys and refuses them as extras", () => {
+	test("the child env loses SLACK_*/JABBU_* keys and refuses them as extras", () => {
 		const env = buildChildEnv(
 			{ OMP_WIKI_NOTE_DISABLE: "1" },
-			{ PATH: "/bin", SLACK_BOT_TOKEN: "xoxb-TEST-0", OMPBOT_HOME: "/h", KEEP: "yes" },
+			{ PATH: "/bin", SLACK_BOT_TOKEN: "xoxb-TEST-0", JABBU_HOME: "/h", KEEP: "yes" },
 		);
 		expect(env).toEqual({ PATH: "/bin", KEEP: "yes", OMP_WIKI_NOTE_DISABLE: "1" });
 		expect(() => buildChildEnv({ SLACK_APP_TOKEN: "x" }, {})).toThrow();
@@ -241,19 +241,19 @@ describe("floors prompt answer format", () => {
 		for (const originKey of [ORIGIN, CHANNEL_ORIGIN, THREAD_ORIGIN] as const) {
 			const prompt = buildFloorsPrompt("/bot/home/secrets", originKey);
 			expect(prompt).toContain("## 답변 형식 / Answer format");
-			expect(prompt.includes("ompbot_monitor_add")).toBe(originKey === ORIGIN);
+			expect(prompt.includes("jabbu_monitor_add")).toBe(originKey === ORIGIN);
 		}
-		for (const originKey of ["monitor/3", "ompbot/work/lane1", "review/skills", undefined] as const) {
+		for (const originKey of ["monitor/3", "jabbu/work/lane1", "review/skills", undefined] as const) {
 			const prompt = buildFloorsPrompt("/bot/home/secrets", originKey);
 			expect(prompt).not.toContain("답변 형식");
-			expect(prompt).not.toContain("ompbot_monitor_add");
+			expect(prompt).not.toContain("jabbu_monitor_add");
 		}
 	});
 
-	test("the thread lookup line names this home's ledger, not ~/.ompbot/ompbot.db", () => {
-		const prompt = buildFloorsPrompt("/home/u/.ompbot-songbak/secrets", ORIGIN);
-		expect(prompt).toContain("`/home/u/.ompbot-songbak/ompbot.db`");
-		expect(prompt).not.toContain("~/.ompbot/ompbot.db");
+	test("the thread lookup line names this home's ledger, not ~/.jabbu/jabbu.db", () => {
+		const prompt = buildFloorsPrompt("/home/u/.jabbu-songbak/secrets", ORIGIN);
+		expect(prompt).toContain("`/home/u/.jabbu-songbak/jabbu.db`");
+		expect(prompt).not.toContain("~/.jabbu/jabbu.db");
 	});
 
 	test("chat sessions are told a note next to `wait` reaches the owner right away; monitor sessions are not", () => {
@@ -274,26 +274,24 @@ describe("floors prompt answer format", () => {
 		] as const;
 		for (const [originKey, target] of cases) {
 			const line = backgroundResumeLine(originKey, {});
-			expect(line).toContain(
-				`\`${OMPBOT_BUN} ${OMPBOT_NO_ENV_FILE} ${OMPBOT_MAIN} inject ${target} --text '[자동 후속]`,
-			);
+			expect(line).toContain(`\`${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN} inject ${target} --text '[자동 후속]`);
 			expect(buildFloorsPrompt("/s", originKey)).toContain(backgroundResumeLine(originKey) as string);
-			// A second install (OMPBOT_HOME set) names its own home, else the inject reaches the default ~/.ompbot socket.
-			expect(backgroundResumeLine(originKey, { OMPBOT_HOME: "/h/.ompbot-x" })).toContain(
-				`\`env OMPBOT_HOME=/h/.ompbot-x ${OMPBOT_BUN} ${OMPBOT_NO_ENV_FILE} ${OMPBOT_MAIN} inject ${target} --text '[자동 후속]`,
+			// A second install (JABBU_HOME set) names its own home, else the inject reaches the default ~/.jabbu socket.
+			expect(backgroundResumeLine(originKey, { JABBU_HOME: "/h/.jabbu-x" })).toContain(
+				`\`env JABBU_HOME=/h/.jabbu-x ${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN} inject ${target} --text '[자동 후속]`,
 			);
 		}
-		expect(ompbotCli({ OMPBOT_HOME: "" })).toBe(`${OMPBOT_BUN} ${OMPBOT_NO_ENV_FILE} ${OMPBOT_MAIN}`);
-		expect(ompbotCli({ OMPBOT_HOME: "/h/a b" })).toBe(
-			`env 'OMPBOT_HOME=/h/a b' ${OMPBOT_BUN} ${OMPBOT_NO_ENV_FILE} ${OMPBOT_MAIN}`,
+		expect(jabbuCli({ JABBU_HOME: "" })).toBe(`${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN}`);
+		expect(jabbuCli({ JABBU_HOME: "/h/a b" })).toBe(
+			`env 'JABBU_HOME=/h/a b' ${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN}`,
 		);
-		expect(OMPBOT_NO_ENV_FILE).toBe("--no-env-file");
-		expect(OMPBOT_MAIN).toBe(join(import.meta.dir, "..", "src", "main.ts"));
+		expect(JABBU_NO_ENV_FILE).toBe("--no-env-file");
+		expect(JABBU_MAIN).toBe(join(import.meta.dir, "..", "src", "main.ts"));
 		// A detached systemd unit has no ~/.bun/bin on PATH: the line names this bun by absolute path (11-11 exit 127).
-		expect(OMPBOT_BUN).toBe(process.execPath);
-		expect(isAbsolute(OMPBOT_BUN)).toBe(true);
+		expect(JABBU_BUN).toBe(process.execPath);
+		expect(isAbsolute(JABBU_BUN)).toBe(true);
 		// `inject` addresses Discord conversations only: no line where it could not reach (monitors, lanes, the removed Slack).
-		for (const originKey of ["telegram/dm/1", "monitor/3", "ompbot/work/lane1", "slack/dm/D1"]) {
+		for (const originKey of ["telegram/dm/1", "monitor/3", "jabbu/work/lane1", "slack/dm/D1"]) {
 			expect(backgroundResumeLine(originKey)).toBeUndefined();
 			expect(buildFloorsPrompt("/s", originKey)).not.toContain("[자동 후속]");
 		}
@@ -309,7 +307,7 @@ describe("floors prompt answer format", () => {
 		};
 		// The fixture keeps the checkout-dependent CLI path and the home-dependent ledger path as placeholders.
 		const fixed = (prompt: string): string =>
-			prompt.replaceAll(ompbotCli(), "<bun> <ompbot>/src/main.ts").replaceAll("`/h/ompbot.db`", "`<home>/ompbot.db`");
+			prompt.replaceAll(jabbuCli(), "<bun> <jabbu>/src/main.ts").replaceAll("`/h/jabbu.db`", "`<home>/jabbu.db`");
 		const seoul = { timezone: { name: "Asia/Seoul", offset: "+09:00" } };
 		const origins = Object.keys(base.prompts);
 		expect(origins.length).toBe(3);
@@ -326,7 +324,7 @@ describe("floors prompt answer format", () => {
 	test("`ask` is allowed only for chat and lane sessions whose dialogs the owner answers; forbidden elsewhere", () => {
 		const ALLOWED = "may use the `ask` tool";
 		const FORBIDDEN = "never use the `ask` tool";
-		for (const originKey of [ORIGIN, CHANNEL_ORIGIN, THREAD_ORIGIN, "ompbot/work/lane1"]) {
+		for (const originKey of [ORIGIN, CHANNEL_ORIGIN, THREAD_ORIGIN, "jabbu/work/lane1"]) {
 			const prompt = buildFloorsPrompt("/s", originKey, false, true);
 			expect(prompt).toContain(ALLOWED);
 			expect(prompt).toContain("추천 선택지(없으면 첫 선택지)가 자동 선택");
@@ -359,7 +357,7 @@ describe("floors prompt answer format", () => {
 describe("approval action ids", () => {
 	test("round trip, and malformed ids are rejected", () => {
 		const id = approvalActionId("approve", "200000000000000001", "700000000000000007");
-		expect(id).toBe("ompbot:approval:approve:200000000000000001:700000000000000007");
+		expect(id).toBe("jabbu:approval:approve:200000000000000001:700000000000000007");
 		expect(parseApprovalActionId(id)).toEqual({
 			decision: "approve",
 			channel: "200000000000000001",
@@ -367,11 +365,11 @@ describe("approval action ids", () => {
 		});
 		expect(parseApprovalActionId(approvalActionId("deny", SERVER_CHANNEL, "12"))?.decision).toBe("deny");
 		for (const bad of [
-			"ompbot:approval:maybe:D1:12",
-			"ompbot:approval:approve:D1",
-			"ompbot:approval:approve:D1:12:extra",
+			"jabbu:approval:maybe:D1:12",
+			"jabbu:approval:approve:D1",
+			"jabbu:approval:approve:D1:12:extra",
 			"other:approval:approve:D1:12",
-			"ompbot:approval:approve::12",
+			"jabbu:approval:approve::12",
 			"",
 		]) {
 			expect(parseApprovalActionId(bad)).toBeUndefined();
@@ -407,7 +405,7 @@ describe("ApprovalBroker", () => {
 		broker = make();
 	});
 
-	test("buttons carry the ompbot action ids of the request message; the owner's approve resolves it", async () => {
+	test("buttons carry the jabbu action ids of the request message; the owner's approve resolves it", async () => {
 		const result = broker.request(CHANNEL, "git push --force");
 		const { ts, components } = await transport.shown.promise;
 		const ids = JSON.stringify(components);
@@ -662,9 +660,9 @@ describe("host tools", () => {
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-safety-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-safety-"));
 		userHome = join(dir, "user");
-		homeDir = join(userHome, ".ompbot");
+		homeDir = join(userHome, ".jabbu");
 		workspaceDir = join(homeDir, "workspace");
 		mkdirSync(join(homeDir, "secrets"), { recursive: true });
 		mkdirSync(workspaceDir, { recursive: true });
@@ -678,16 +676,14 @@ describe("host tools", () => {
 	test("qa-j #47: a monitor session has no conversation, so neither its tools nor its prompt offer upload or approval", () => {
 		const names = build("monitor/m1").map((t) => t.name);
 		expect(names).not.toContain("discord_send_file");
-		expect(names).not.toContain("ompbot_request_approval");
+		expect(names).not.toContain("jabbu_request_approval");
 		const prompt = buildFloorsPrompt(join(homeDir, "secrets"), "monitor/m1");
 		expect(prompt).not.toContain("discord_send_file");
-		expect(prompt).not.toContain("`ompbot_request_approval(");
-		expect(prompt).not.toContain("승인 카드(`ompbot_request_approval`)");
+		expect(prompt).not.toContain("`jabbu_request_approval(");
+		expect(prompt).not.toContain("승인 카드(`jabbu_request_approval`)");
 		// A chat origin keeps both.
-		expect(build().map((t) => t.name)).toEqual(
-			expect.arrayContaining(["discord_send_file", "ompbot_request_approval"]),
-		);
-		expect(buildFloorsPrompt(join(homeDir, "secrets"), ORIGIN)).toContain("`ompbot_request_approval(");
+		expect(build().map((t) => t.name)).toEqual(expect.arrayContaining(["discord_send_file", "jabbu_request_approval"]));
+		expect(buildFloorsPrompt(join(homeDir, "secrets"), ORIGIN)).toContain("`jabbu_request_approval(");
 	});
 
 	test("a Discord origin's upload and approval tools are the base commit's definitions byte for byte", () => {
@@ -698,7 +694,7 @@ describe("host tools", () => {
 			const found = tool(name);
 			return { name: found.name, label: found.label, description: found.description, parameters: found.parameters };
 		};
-		expect(base.tools.map((t) => t.name)).toEqual(["discord_send_file", "ompbot_request_approval"]);
+		expect(base.tools.map((t) => t.name)).toEqual(["discord_send_file", "jabbu_request_approval"]);
 		for (const expected of base.tools) expect(JSON.stringify(shown(expected.name))).toBe(JSON.stringify(expected));
 	});
 
@@ -709,7 +705,7 @@ describe("host tools", () => {
 	});
 
 	test("host tools are registered with object schemas (dispatch, upload, approval)", () => {
-		expect(tools.map((t) => t.name)).toEqual(["ompbot_dispatch", "discord_send_file", "ompbot_request_approval"]);
+		expect(tools.map((t) => t.name)).toEqual(["jabbu_dispatch", "discord_send_file", "jabbu_request_approval"]);
 		for (const t of tools) expect(t.parameters.type).toBe("object");
 	});
 
@@ -748,19 +744,19 @@ describe("host tools", () => {
 		expect(last?.method === "uploadFile" ? last.messageReference : "missing").toBeUndefined();
 	});
 
-	test("ompbot_dispatch is registered for chat origins only (lanes and monitors never get it)", () => {
-		const chat = build().find((tool) => tool.name === "ompbot_dispatch");
+	test("jabbu_dispatch is registered for chat origins only (lanes and monitors never get it)", () => {
+		const chat = build().find((tool) => tool.name === "jabbu_dispatch");
 		expect(chat).toBeDefined();
 		expect(chat?.parameters).toMatchObject({ additionalProperties: false });
-		const lane = build("ompbot/work/readme-line").find((tool) => tool.name === "ompbot_dispatch");
-		const monitor = build("monitor/m1").find((tool) => tool.name === "ompbot_dispatch");
+		const lane = build("jabbu/work/readme-line").find((tool) => tool.name === "jabbu_dispatch");
+		const monitor = build("monitor/m1").find((tool) => tool.name === "jabbu_dispatch");
 		expect(lane).toBeUndefined();
 		expect(monitor).toBeUndefined();
 		// No ompExecutable → not registered (defensive: daemon always passes one for chat origins).
 		const withoutOmp = build(ORIGIN, { ompExecutable: undefined });
-		expect(withoutOmp.find((tool) => tool.name === "ompbot_dispatch")).toBeUndefined();
+		expect(withoutOmp.find((tool) => tool.name === "jabbu_dispatch")).toBeUndefined();
 		// A thread session is a chat surface too: dispatch registers and the parent channel resolves.
-		const thread = build(THREAD_ORIGIN).find((tool) => tool.name === "ompbot_dispatch");
+		const thread = build(THREAD_ORIGIN).find((tool) => tool.name === "jabbu_dispatch");
 		expect(thread).toBeDefined();
 	});
 
@@ -934,10 +930,10 @@ describe("host tools", () => {
 		// No conversation to post into: the tools are not offered at all (qa-j #47).
 		const names = build(`discord/channel/${SERVER_CHANNEL}`).map((t) => t.name);
 		expect(names).not.toContain("discord_send_file");
-		expect(names).not.toContain("ompbot_request_approval");
+		expect(names).not.toContain("jabbu_request_approval");
 	});
 
-	test("ompbot_request_approval returns approved / denied / denied (timeout) from the buttons", async () => {
+	test("jabbu_request_approval returns approved / denied / denied (timeout) from the buttons", async () => {
 		const broker = new ApprovalBroker({
 			timezone: "Asia/Seoul",
 			channels: registryOf(port(transport)),
@@ -955,19 +951,19 @@ describe("host tools", () => {
 			workspaceDir,
 			userHome,
 		});
-		const approval = tool("ompbot_request_approval").execute({ summary: "drop table" }, ctx);
+		const approval = tool("jabbu_request_approval").execute({ summary: "drop table" }, ctx);
 		const { ts } = await transport.shown.promise;
 		broker.handleAction({ actionId: approvalActionId("approve", CHANNEL, ts), userId: OWNER });
 		expect(await approval).toBe("approved");
 
 		transport.shown = Promise.withResolvers();
-		const timedOut = tool("ompbot_request_approval").execute({ summary: "again" }, ctx);
+		const timedOut = tool("jabbu_request_approval").execute({ summary: "again" }, ctx);
 		await transport.shown.promise;
 		timers.fireAll();
 		expect(await timedOut).toBe("denied (timeout)");
 	});
 
-	test("ompbot_request_approval forwards the optional sections; unfilled ones never appear", async () => {
+	test("jabbu_request_approval forwards the optional sections; unfilled ones never appear", async () => {
 		const broker = new ApprovalBroker({
 			timezone: "Asia/Seoul",
 			channels: registryOf(port(transport)),
@@ -985,7 +981,7 @@ describe("host tools", () => {
 			workspaceDir,
 			userHome,
 		});
-		const approval = tool("ompbot_request_approval").execute(
+		const approval = tool("jabbu_request_approval").execute(
 			{
 				summary: "배포 스크립트 실행",
 				action: "bash deploy.sh --prod",
@@ -1012,7 +1008,7 @@ describe("approval through the daemon (adapter owner gate, logs)", () => {
 	let logs: string[];
 
 	beforeEach(() => {
-		home = makeHome("ompbot-safety-daemon-");
+		home = makeHome("jabbu-safety-daemon-");
 		logs = [];
 		daemon = undefined;
 	});
@@ -1035,7 +1031,7 @@ describe("approval through the daemon (adapter owner gate, logs)", () => {
 		await daemon.start();
 		const approval = daemon
 			.hostToolsFor(ORIGIN)
-			.find((t) => t.name === "ompbot_request_approval")
+			.find((t) => t.name === "jabbu_request_approval")
 			?.execute({ summary: "force push" }, { signal: new AbortController().signal });
 		if (!approval) throw new Error("tool missing");
 		const { ts } = await transport.shown.promise;
@@ -1061,7 +1057,7 @@ describe("file upload thread routing (daemon)", () => {
 	let daemon: Daemon | undefined;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-upload-thread-");
+		home = makeHome("jabbu-upload-thread-");
 		daemon = undefined;
 	});
 	afterEach(async () => {
@@ -1098,12 +1094,12 @@ describe("file upload thread routing (daemon)", () => {
 			name: "l1",
 			title: "레인",
 			threadRef: `${CHANNEL}:700000000000000009`,
-			originKey: "ompbot/work/l1",
+			originKey: "jabbu/work/l1",
 			cwd: home.config.workspaceDir,
 			sessionDir: join(home.config.homeDir, "sessions", "l1"),
 			meta: { startedAt: 0, lastProgressAt: 0, steerSeq: 0 },
 		});
-		const laneSend = daemon.hostToolsFor("ompbot/work/l1").find((t) => t.name === "discord_send_file");
+		const laneSend = daemon.hostToolsFor("jabbu/work/l1").find((t) => t.name === "discord_send_file");
 		if (!laneSend) throw new Error("lane tool missing");
 		await laneSend.execute({ path: file }, ctx);
 		expect(transport.calls.filter((c) => c.method === "uploadFile").at(-1)).toMatchObject({

@@ -28,7 +28,7 @@ jobs:
       - name: Install gitleaks 8.28.0
         run: |
           bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
-          echo "OMPBOT_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+          echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
       - run: bun run check
       - run: bun run knip
       - run: bun test --parallel=3
@@ -44,14 +44,14 @@ jobs:
       - name: Install gitleaks 8.28.0
         run: |
           bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
-          echo "OMPBOT_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+          echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
       - name: Install pinned omp test host
         run: |
           cd test/fixtures/omp-host && bun install --frozen-lockfile
-          echo "OMPBOT_OMP_EXECUTABLE=$GITHUB_WORKSPACE/test/fixtures/omp-host/node_modules/.bin/omp" >> "$GITHUB_ENV"
+          echo "JABBU_OMP_EXECUTABLE=$GITHUB_WORKSPACE/test/fixtures/omp-host/node_modules/.bin/omp" >> "$GITHUB_ENV"
       - name: Check test fixtures
         run: bun src/dev/check-test-fixtures.ts
       - name: omp mock e2e
         env:
-          OMPBOT_E2E_OMP_MOCK: "1"
+          JABBU_E2E_OMP_MOCK: "1"
         run: bun test test/omp-mock.e2e.test.ts test/omp-rpc.contract.test.ts

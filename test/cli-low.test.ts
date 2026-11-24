@@ -16,7 +16,7 @@ import { runCliCapture, runMain } from "./helpers/daemon-process";
 
 let home: TestHome;
 beforeEach(() => {
-	home = makeHome("ompbot-cli-low-");
+	home = makeHome("jabbu-cli-low-");
 });
 afterEach(() => home.remove());
 
@@ -46,7 +46,7 @@ describe("CLI argument errors are usage errors (exit 2, one line)", () => {
 	test("the retired feedback command is unknown: usage text, exit 2", async () => {
 		const run = await runMain(home.dir, ["feedback"]);
 		expect(run.code).toBe(2);
-		expect(run.stderr.startsWith("usage: ompbot <command>")).toBe(true);
+		expect(run.stderr.startsWith("usage: jabbu-pocket <command>")).toBe(true);
 		expect(run.stderr).not.toMatch(/^\s+feedback\b/m);
 	});
 
@@ -58,11 +58,11 @@ describe("CLI argument errors are usage errors (exit 2, one line)", () => {
 		]);
 		for (const run of [briefing, offsite]) {
 			expect(run.code).toBe(2);
-			expect(run.stderr.startsWith("usage: ompbot <command>")).toBe(true);
+			expect(run.stderr.startsWith("usage: jabbu-pocket <command>")).toBe(true);
 			expect(run.stderr).not.toMatch(/briefing|offsite \[|tasks flow/);
 		}
 		expect(flow.code).toBe(2);
-		expect(flow.stderr.startsWith("usage: ompbot tasks <list|show|check|close|pause|resume>")).toBe(true);
+		expect(flow.stderr.startsWith("usage: jabbu-pocket tasks <list|show|check|close|pause|resume>")).toBe(true);
 	});
 
 	test("drain --timeout '' is refused instead of meaning 0 minutes", async () => {
@@ -89,7 +89,7 @@ describe("CLI argument errors are usage errors (exit 2, one line)", () => {
 });
 
 describe("CLI commands without a daemon", () => {
-	test("inject into a home without config.json fails at once and names OMPBOT_HOME", async () => {
+	test("inject into a home without config.json fails at once and names JABBU_HOME", async () => {
 		const run = await runMain(join(home.dir, "missing"), [
 			"inject",
 			"--origin",
@@ -99,7 +99,7 @@ describe("CLI commands without a daemon", () => {
 			"hi",
 		]);
 		expect(run.code).toBe(1);
-		expect(run.stderr).toContain("set OMPBOT_HOME");
+		expect(run.stderr).toContain("set JABBU_HOME");
 		expect(run.stderr).not.toContain("daemon not reachable");
 	});
 
@@ -118,7 +118,7 @@ describe("CLI commands without a daemon", () => {
 			null,
 		];
 		for (const answer of answers) {
-			const server = startIpcServer(join(home.dir, "ompbot.sock"), async () => answer);
+			const server = startIpcServer(join(home.dir, "jabbu.sock"), async () => answer);
 			try {
 				const run = await runCliCapture(home.dir, ["reload"]);
 				expect(run.code).toBe(1);
@@ -128,7 +128,7 @@ describe("CLI commands without a daemon", () => {
 				server.stop();
 			}
 		}
-		const good = startIpcServer(join(home.dir, "ompbot.sock"), async () => ({
+		const good = startIpcServer(join(home.dir, "jabbu.sock"), async () => ({
 			ok: true,
 			changed: ["mentionFreeChannels"],
 			restartRequired: [],
@@ -144,7 +144,7 @@ describe("CLI commands without a daemon", () => {
 	});
 
 	test("status falls back to the database without reading the bot token, and works on a db-only home", async () => {
-		openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul").close();
+		openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul").close();
 		chmodSync(join(home.dir, "secrets", "discord-bot-token"), 0o644);
 		const loose = await runMain(home.dir, ["status", "--json"]);
 		expect(loose.code, loose.stderr).toBe(0);
@@ -157,14 +157,14 @@ describe("CLI commands without a daemon", () => {
 	});
 });
 
-describe("ompbot skills rollback", () => {
-	test("an empty OMPBOT_SKILLS_DIR is unset: the agent skills root, never the current directory", () => {
+describe("jabbu-pocket skills rollback", () => {
+	test("an empty JABBU_SKILLS_DIR is unset: the agent skills root, never the current directory", () => {
 		const cwd = join(home.dir, "cwd");
 		mkdirSync(join(cwd, "foo", "revisions"), { recursive: true });
 		writeFileSync(join(cwd, "foo", "SKILL.md"), "current\n");
 		writeFileSync(join(cwd, "foo", "revisions", "20260101-000000.md"), "old\n");
 		const run = Bun.spawnSync([process.execPath, MAIN, "skills", "rollback", "foo"], {
-			env: { HOME: home.dir, PATH: "/usr/bin:/bin", OMPBOT_TEST_HOOKS: "1", OMPBOT_SKILLS_DIR: "" },
+			env: { HOME: home.dir, PATH: "/usr/bin:/bin", JABBU_TEST_HOOKS: "1", JABBU_SKILLS_DIR: "" },
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
@@ -175,7 +175,7 @@ describe("ompbot skills rollback", () => {
 	});
 });
 
-describe("ompbot doctor dispatch host names", () => {
+describe("jabbu-pocket doctor dispatch host names", () => {
 	test("a control character in a dispatchHosts name cannot forge a doctor line", async () => {
 		const path = join(home.dir, "config.json");
 		const config = JSON.parse(readFileSync(path, "utf8"));
@@ -198,7 +198,7 @@ describe("ompbot doctor dispatch host names", () => {
 });
 
 describe("tasks CLI reads (qa-l low B)", () => {
-	const dbPath = () => join(home.dir, "ompbot.db");
+	const dbPath = () => join(home.dir, "jabbu.db");
 	function registerTask(title: string): string {
 		const ledger = openTaskLedger(dbPath(), "Asia/Seoul");
 		const row = ledger.register({

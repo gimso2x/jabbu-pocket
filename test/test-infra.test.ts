@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 /** A directory this test owns, left for `afterEach` to remove. */
-function scratch(prefix = "ompbot-infra-"): string {
+function scratch(prefix = "jabbu-infra-"): string {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
 	scratchDirs.push(dir);
 	return dir;
@@ -41,7 +41,7 @@ describe("fixture git ignores this host's global configuration", () => {
 	test("a hostile global .gitconfig never reaches a fixture repo", () => {
 		// A developer's own config at the top of every git lookup: a commit there would need gpg and the branch would not
 		// be `main`. The fixture points HOME and GIT_CONFIG_GLOBAL at its own world, so none of it is read.
-		const hostileHome = scratch("ompbot-hostile-home-");
+		const hostileHome = scratch("jabbu-hostile-home-");
 		writeFileSync(
 			join(hostileHome, ".gitconfig"),
 			["[init]", "\tdefaultBranch = hostile", "[commit]", "\tgpgsign = true", "[alias]", "\tinit = nope", ""].join(
@@ -130,7 +130,7 @@ describe("hostile pathnames survive every shell they cross", () => {
 	test("the remote check line exports the shim PATH, then cd's into the worktree", async () => {
 		const dir = scratch();
 		const repo = makeRepo(repos);
-		const home = scratch("ompbot-shim-home-");
+		const home = scratch("jabbu-shim-home-");
 		const bin = recordingChild(dir);
 		const ops = createTaskHostOps({
 			sshTarget: "some-host",
@@ -174,7 +174,7 @@ describe("a rendered systemd unit carries a hostile path as one quoted word", ()
 		const bun = join(dir, "bun");
 		const repoDir = join(dir, HOSTILE_PATH);
 		const home = join(dir, HOSTILE_QUOTED);
-		const text = renderUnit("ompbot-x.service", template, { bun, repoDir, home });
+		const text = renderUnit("jabbu-x.service", template, { bun, repoDir, home });
 		const execLine = text.split("\n").find((line) => line.startsWith("ExecStart=")) as string;
 		// A word of plain characters goes out bare; a hostile one is wrapped so systemd never splits it at a space, and
 		// the two characters systemd itself reads inside double quotes (`\` and `"`) are escaped.
@@ -226,10 +226,10 @@ describe("a rendered systemd unit carries a hostile path as one quoted word", ()
 });
 
 describe("a spawned child gets no secret and no inherited git redirect", () => {
-	test("dispatchEnv drops Slack, ompbot and GIT_* variables and keeps the rest", () => {
+	test("dispatchEnv drops Slack, jabbu and GIT_* variables and keeps the rest", () => {
 		const env = dispatchEnv({
 			SLACK_BOT_TOKEN: "xoxb-TEST-0",
-			OMPBOT_HOME: "/home/someone/.ompbot",
+			JABBU_HOME: "/home/someone/.jabbu",
 			GIT_CONFIG_GLOBAL: "/home/someone/.gitconfig",
 			GIT_DIR: "/elsewhere/.git",
 			LD_PRELOAD: "/tmp/inject.so",
@@ -237,7 +237,7 @@ describe("a spawned child gets no secret and no inherited git redirect", () => {
 			PATH: "/usr/bin:/bin",
 		});
 		expect(env.SLACK_BOT_TOKEN).toBeUndefined();
-		expect(env.OMPBOT_HOME).toBeUndefined();
+		expect(env.JABBU_HOME).toBeUndefined();
 		expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
 		expect(env.GIT_DIR).toBeUndefined();
 		expect(env.LD_PRELOAD).toBeUndefined();
@@ -252,7 +252,7 @@ describe("a spawned child gets no secret and no inherited git redirect", () => {
 			inheritedEnv: {
 				...process.env,
 				SLACK_BOT_TOKEN: "xoxb-TEST-0",
-				OMPBOT_HOME: "/home/someone/.ompbot",
+				JABBU_HOME: "/home/someone/.jabbu",
 				GIT_CONFIG_GLOBAL: "/home/someone/.gitconfig",
 				KEEP_ME: "kept",
 			},
@@ -261,7 +261,7 @@ describe("a spawned child gets no secret and no inherited git redirect", () => {
 		expect(result.code).toBe(0);
 		const [run] = readRecording(dir);
 		expect(run?.env.KEEP_ME).toBe("kept");
-		for (const key of ["SLACK_BOT_TOKEN", "OMPBOT_HOME", "GIT_CONFIG_GLOBAL"]) expect(run?.env[key]).toBeUndefined();
+		for (const key of ["SLACK_BOT_TOKEN", "JABBU_HOME", "GIT_CONFIG_GLOBAL"]) expect(run?.env[key]).toBeUndefined();
 		expect(Object.keys(run?.env ?? {}).some((key) => key.startsWith("GIT_"))).toBe(false);
 	});
 

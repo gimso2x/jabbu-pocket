@@ -10,7 +10,7 @@
 - 설치할 때 `sed -e "s|@REVIEWER_MODEL@|<모델 id>|g"`로 바꾼다.
 - 쓸 만한 다른 공급자 모델이 없으면 그 줄을 지운다(`sed -e "/@REVIEWER_MODEL@/d"`). 그러면 검토 하위가 기본 모델로 검토한다.
 
-회의록 경로: `~/.ompbot/workspace/meetings/<YYYY>-W<ww>.md`(ISO 주차, 봇 시간대). 형식:
+회의록 경로: `~/.jabbu/workspace/meetings/<YYYY>-W<ww>.md`(ISO 주차, 봇 시간대). 형식:
 
 ```
 # 주간 개선 회의 2026-W45

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** Root of the fixture's own git world; it lives under the test scratch dir, so the preload removes it with the run. */
-const FIXTURE_ROOT = mkdtempSync(join(tmpdir(), "ompbot-git-fixture-"));
+const FIXTURE_ROOT = mkdtempSync(join(tmpdir(), "jabbu-git-fixture-"));
 const FIXTURE_HOME = join(FIXTURE_ROOT, "home");
 /** An empty hooks directory: `core.hooksPath` points here, so neither the host's nor the repository's hooks run. */
 const FIXTURE_HOOKS = join(FIXTURE_ROOT, "no-hooks");
@@ -21,8 +21,8 @@ writeFileSync(
 	FIXTURE_CONFIG,
 	[
 		"[user]",
-		"\tname = ompbot fixture",
-		"\temail = fixture@ompbot.invalid",
+		"\tname = jabbu fixture",
+		"\temail = fixture@jabbu.invalid",
 		"[init]",
 		"\tdefaultBranch = main",
 		"[commit]",
@@ -72,7 +72,7 @@ export function git(dir: string, ...args: string[]): string {
  * so the test's cleanup can remove it. `prefix` names the directory; a path a shell or `TASK_PATH_PATTERN` would refuse
  * is made by passing such a prefix.
  */
-export function makeRepo(repos: string[], prefix = "ompbot-repo-"): string {
+export function makeRepo(repos: string[], prefix = "jabbu-repo-"): string {
 	const dir = mkdtempSync(join(tmpdir(), prefix));
 	git(dir, "init", "-q", "-b", "main");
 	writeFileSync(join(dir, "README.md"), "hello\n");

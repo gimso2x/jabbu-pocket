@@ -58,7 +58,7 @@ describe("formatPendingDispatchNotice", () => {
 				`🚨 [자가보고] ${DM_ORIGIN}의 메시지를 2분째 보내지 못하고 있습니다`,
 				"마지막 사인: OmpDriverError: abort wedged line2",
 				"스위프가 계속 재시도합니다 — 원인이 해소되면 자동으로 전송됩니다.",
-				"대기 중인 일반 메시지는 `/queue-ompbot`에서 취소할 수 있습니다.",
+				"대기 중인 일반 메시지는 `/queue-jabbu`에서 취소할 수 있습니다.",
 			].join("\n"),
 		);
 		expect(formatPendingDispatchNotice(DM_ORIGIN, 90_500, "boom", 2)).toContain("같은 사안 반복 2회차");

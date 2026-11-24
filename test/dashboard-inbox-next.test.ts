@@ -143,14 +143,14 @@ describe("inbox tab signal", () => {
 		const down = renderDashboardPage(snapshotOf([], { ...RUNNING, running: false }), {
 			board: boardOf([card("w2:a", "blocked", "attention")]),
 		});
-		expect(titleOf(two)).toBe("(2) 확인 필요 · ompbot 현황판");
-		expect(titleOf(none)).toBe("ompbot 현황판");
-		expect(titleOf(down)).toBe("(!) ompbot 현황판");
+		expect(titleOf(two)).toBe("(2) 확인 필요 · jabbu 현황판");
+		expect(titleOf(none)).toBe("jabbu 현황판");
+		expect(titleOf(down)).toBe("(!) jabbu 현황판");
 		const icons = [two, none, down].map(faviconOf);
 		expect(icons.every((href) => href.startsWith("data:image/svg+xml,"))).toBe(true);
 		expect(new Set(icons).size).toBe(3);
 		// A cut-off board and a failed refresh are 이상 too.
-		expect(tabSignal(snapshotOf([]), { ok: false, error: "herdr_unreachable" }, false).title).toBe("(!) ompbot 현황판");
+		expect(tabSignal(snapshotOf([]), { ok: false, error: "herdr_unreachable" }, false).title).toBe("(!) jabbu 현황판");
 		expect(tabSignal(snapshotOf([]), boardOf([]), true).bad).toBe(true);
 	});
 });

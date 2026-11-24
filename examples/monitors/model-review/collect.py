@@ -3,10 +3,10 @@
 
 지난 N일(기본 7일, 창 = [now - N일, now), 세션 레코드의 timestamp 기준) 모델 실측·폴백·현행 설정·
 omp 카탈로그 변화를 읽기 전용으로 모아 마크다운으로 출력한다. 섹션 순서는 고정이다.
-  1. 소스 상태: sessions·log(홈마다), omp-sessions, config, ompbot-config, db, catalog, catalog-prev, mcp-config
+  1. 소스 상태: sessions·log(홈마다), omp-sessions, config, jabbu-config, db, catalog, catalog-prev, mcp-config
   2. 모델별 실측: assistant 메시지의 provider/model별 호출·비용(usage.cost.total)·출력 토큰·오류%
   3. 용도별: 세션 경로로 가른 용도(대화·omp직접·모니터·레인·리뷰·하위·기타)×모델
-  4. 한도·폴백: <home>/logs/ompbot.log의 event=retry_fallback_applied, from → to 쌍(effort 뗌)
+  4. 한도·폴백: <home>/logs/jabbu.log의 event=retry_fallback_applied, from → to 쌍(effort 뗌)
   5. MCP 호출: assistant toolCall 중 'mcp__<서버>_<도구>' 또는 write 'xd://mcp__<서버>_<도구>'의 서버·도구·용도별
      호출과 오류(같은 toolCallId의 toolResult isError). 정보 섹션 — 규칙 없음
   6. 현행 설정: omp config list --json의 modelRoles·retry.fallbackChains, <home>/config.json, DB monitors
@@ -15,7 +15,7 @@ omp 카탈로그 변화를 읽기 전용으로 모아 마크다운으로 출력�
 못 읽은 소스는 '소스 상태'에 missing/error로 남기고 그 섹션은 '(소스 없음)' 한 줄로 낸다.
 DB는 mode=ro로만 연다. 쓰는 파일은 <state-dir>/catalog-<YYYY-MM-DD>.json 하나뿐이다(--no-snapshot이면 없음).
 
-입력: --home <dir>(기본 $OMPBOT_HOME), --extra-home <dir>(반복, 세션·로그만 합산),
+입력: --home <dir>(기본 $JABBU_HOME), --extra-home <dir>(반복, 세션·로그만 합산),
       --allow-same-provider <provider>(반복, R4(b) 예외), --omp-sessions <dir>(기본 ~/.omp/agent/sessions),
       --state-dir <dir>(기본 <home>/workspace/model-review), --omp <path>(기본 omp),
       --now <ISO8601>(기본 현재 시각; 시간대 없으면 봇 시간대), --days N(기본 7), --no-snapshot,
@@ -66,8 +66,8 @@ def first_line(text: object) -> str:
 
 
 def bot_timezone(home: Path) -> dt.tzinfo:
-    """봇 시간대: OMPBOT_TZ 환경 변수 → <home>/config.json의 timezone → 시스템 시간대."""
-    name = os.environ.get("OMPBOT_TZ", "").strip()
+    """봇 시간대: JABBU_TZ 환경 변수 → <home>/config.json의 timezone → 시스템 시간대."""
+    name = os.environ.get("JABBU_TZ", "").strip()
     if not name:
         try:
             name = str(json.loads((home / "config.json").read_text(encoding="utf-8")).get("timezone") or "").strip()
@@ -126,7 +126,7 @@ class Usage:
 def origin_use(root: Path, dirpath: str) -> str:
     rel = os.path.relpath(dirpath, root)
     segment = rel.split(os.sep, 1)[0]
-    if segment.startswith("ompbot%2Fwork%2F"):
+    if segment.startswith("jabbu%2Fwork%2F"):
         return "레인"
     head = urllib.parse.unquote(segment).split("/", 1)[0]
     if head == "monitor":
@@ -347,7 +347,7 @@ def reason_summary(reason: str) -> str:
 
 
 def scan_log(home: Path, start: dt.datetime, end: dt.datetime) -> tuple[str, dict[tuple[str, str], Counter] | None]:
-    path = home / "logs" / "ompbot.log"
+    path = home / "logs" / "jabbu.log"
     if not path.is_file():
         return "missing", None
     pairs: dict[tuple[str, str], Counter] = {}
@@ -447,7 +447,7 @@ def omp_catalog(omp: str) -> tuple[str, dict[str, dict] | None]:
     return f"ok ({len(catalog)}개)", catalog
 
 
-def ompbot_config(home: Path) -> tuple[str, dict]:
+def jabbu_config(home: Path) -> tuple[str, dict]:
     path = home / "config.json"
     if not path.is_file():
         return "missing", {}
@@ -459,7 +459,7 @@ def ompbot_config(home: Path) -> tuple[str, dict]:
 
 
 def db_monitors(home: Path) -> tuple[str, list[tuple[str, str | None, str | None]]]:
-    path = home / "ompbot.db"
+    path = home / "jabbu.db"
     if not path.is_file():
         return "missing", []
     try:
@@ -474,15 +474,15 @@ def db_monitors(home: Path) -> tuple[str, list[tuple[str, str | None, str | None
 
 
 def settings_section(
-    roles: dict[str, str], chains: dict[str, list[str]], config_ok: bool, ompbot: dict, ompbot_ok: bool,
+    roles: dict[str, str], chains: dict[str, list[str]], config_ok: bool, jabbu: dict, jabbu_ok: bool,
     monitors: list[tuple[str, str | None, str | None]], db_ok: bool,
 ) -> str:
     rows: list[tuple[str, str]] = []
     if config_ok:
         rows += [(f"modelRoles.{key}", value) for key, value in sorted(roles.items())]
         rows += [(f"fallbackChains.{key}", json.dumps(value, ensure_ascii=False)) for key, value in sorted(chains.items())]
-    if ompbot_ok:
-        rows += [("ompbot.model", str(ompbot.get("model") or "(없음)")), ("ompbot.thinking", str(ompbot.get("thinking") or "(없음)"))]
+    if jabbu_ok:
+        rows += [("jabbu.model", str(jabbu.get("model") or "(없음)")), ("jabbu.thinking", str(jabbu.get("thinking") or "(없음)"))]
     if db_ok:
         rows += [(f"monitor.{name}", f"{model or '(봇 기본)'} · {thinking or '(봇 기본)'}") for name, model, thinking in monitors]
     lines = ["## 현행 설정"]
@@ -535,14 +535,14 @@ def price_change(old: dict, new: dict) -> str | None:
     return ", ".join(changed) or None
 
 
-def used_models(roles: dict[str, str], chains: dict[str, list[str]], ompbot: dict, monitors: list) -> set[str]:
+def used_models(roles: dict[str, str], chains: dict[str, list[str]], jabbu: dict, monitors: list) -> set[str]:
     used = {bare(v) for v in roles.values() if v}
     for key, chain in chains.items():
         if "/" in key:
             used.add(bare(key))
         used.update(bare(v) for v in chain if v)
-    if ompbot.get("model"):
-        used.add(bare(str(ompbot["model"])))
+    if jabbu.get("model"):
+        used.add(bare(str(jabbu["model"])))
     used.update(bare(model) for _, model, _ in monitors if model)
     return used
 
@@ -573,7 +573,7 @@ def rule_r4(roles: dict[str, str], chains: dict[str, list[str]], allowed: set[st
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="주간 모델 점검 수집기 (읽기 전용, 카탈로그 스냅샷만 씀)")
-    parser.add_argument("--home", type=Path, default=os.environ.get("OMPBOT_HOME") or None)
+    parser.add_argument("--home", type=Path, default=os.environ.get("JABBU_HOME") or None)
     parser.add_argument("--extra-home", type=Path, action="append", default=[])
     parser.add_argument("--allow-same-provider", action="append", default=[])
     parser.add_argument("--omp-sessions", type=Path, default=Path.home() / ".omp" / "agent" / "sessions")
@@ -585,7 +585,7 @@ def main() -> int:
     parser.add_argument("--mcp-config", type=Path, default=Path.home() / ".omp" / "agent" / "mcp.json")
     args = parser.parse_args()
     if args.home is None:
-        parser.error("--home이 없고 OMPBOT_HOME도 없음")
+        parser.error("--home이 없고 JABBU_HOME도 없음")
     home: Path = Path(args.home).expanduser()
     tz = bot_timezone(home)
     now = args.now or dt.datetime.now(tz)
@@ -613,7 +613,7 @@ def main() -> int:
         per_home_logs.append((each, pairs))
 
     status["config"], roles, chains = omp_config(args.omp)
-    status["ompbot-config"], ompbot = ompbot_config(home)
+    status["jabbu-config"], jabbu = jabbu_config(home)
     status["db"], monitors = db_monitors(home)
     status["catalog"], catalog = omp_catalog(args.omp)
     status["catalog-prev"], prev_path = latest_snapshot(state_dir, today)
@@ -635,7 +635,7 @@ def main() -> int:
 
     total_cost = sum(usage.cost for usage in by_model.values())
     fallback_text, by_from = fallbacks_section(per_home_logs)
-    used = used_models(roles, chains, ompbot, monitors)
+    used = used_models(roles, chains, jabbu, monitors)
     used_providers = {model.split("/", 1)[0] for model in used}
     rules: list[str] = []
 
@@ -688,7 +688,7 @@ def main() -> int:
         fallback_text,
         mcp.section(sessions_read),
         settings_section(
-            roles, chains, status["config"] == "ok", ompbot, status["ompbot-config"] == "ok", monitors, status["db"] == "ok"
+            roles, chains, status["config"] == "ok", jabbu, status["jabbu-config"] == "ok", monitors, status["db"] == "ok"
         ),
         "\n".join(catalog_lines),
     ]

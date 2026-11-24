@@ -1,7 +1,7 @@
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-/** `logs/ompbot.log` is capped at 10 MB per file and 5 files in total (the live file plus `.1` .. `.4`). */
+/** `logs/jabbu.log` is capped at 10 MB per file and 5 files in total (the live file plus `.1` .. `.4`). */
 export const LOG_MAX_BYTES = 10 * 1024 * 1024;
 export const LOG_FILES = 5;
 
@@ -63,7 +63,7 @@ export function openLogSink(
 	options: RotationOptions = {},
 ): { path: string; sink: (line: string) => void } {
 	const dir = join(homeDir, "logs");
-	const path = join(dir, "ompbot.log");
+	const path = join(dir, "jabbu.log");
 	try {
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
 		accessSync(dir, constants.W_OK | constants.X_OK);

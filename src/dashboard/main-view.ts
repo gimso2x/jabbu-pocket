@@ -54,7 +54,7 @@ export interface DashboardUi {
  * which the page ships next to it: the page ships this very function's source as its inline script, so the server's
  * first render and every client redraw are the same code. Every free string goes through `esc`.
  *
- * Inline 16x16 SVG line icons are hand-crafted for ompbot (MIT, no external requests).
+ * Inline 16x16 SVG line icons are hand-crafted for jabbu (MIT, no external requests).
  *
  * Badge colours carry one meaning each: is-success done/healthy · is-info in progress · is-warning someone has to
  * look (blocked, stalled, open gate, frozen, waiting on the owner) · is-danger failed/down/gone · grey idle/waiting.
@@ -341,11 +341,11 @@ export function renderDashboardMain(
 	const d = s.daemon;
 	if (!d.ok) {
 		banners.push(
-			`<div class="notice is-danger">${badge("데몬 상태 모름", "is-danger")}<span>${esc(d.error)}</span><span class="notice-next">다음 행동: 터미널에서 <code>ompbot status</code> 또는 <code>ompbot doctor</code>로 데몬 소켓·DB 상태를 확인하세요.</span></div>`,
+			`<div class="notice is-danger">${badge("데몬 상태 모름", "is-danger")}<span>${esc(d.error)}</span><span class="notice-next">다음 행동: 터미널에서 <code>jabbu-pocket status</code> 또는 <code>jabbu-pocket doctor</code>로 데몬 소켓·DB 상태를 확인하세요.</span></div>`,
 		);
 	} else if (!d.running) {
 		banners.push(
-			`<div class="notice is-danger">${badge("데몬 꺼짐", "is-danger")}<span>데몬이 응답하지 않아요. 아래 내용은 DB에 남은 마지막 상태예요.</span><span class="notice-next">다음 행동: <code>systemctl --user status ompbot</code>으로 데몬 상태를 확인하고 필요하면 다시 켜세요.</span></div>`,
+			`<div class="notice is-danger">${badge("데몬 꺼짐", "is-danger")}<span>데몬이 응답하지 않아요. 아래 내용은 DB에 남은 마지막 상태예요.</span><span class="notice-next">다음 행동: <code>systemctl --user status jabbu</code>으로 데몬 상태를 확인하고 필요하면 다시 켜세요.</span></div>`,
 		);
 	}
 	if (board !== undefined && !board.ok) {
@@ -446,7 +446,7 @@ export function renderDashboardMain(
 										(host) =>
 											`<p class="group">${esc(host.host)}</p>${
 												!host.ok
-													? `<div class="notice is-danger">${badge("호스트 연결 실패", "is-danger")}<span>${esc(host.error)}</span><span class="notice-next">다음 행동: <code>ompbot doctor</code>로 해당 호스트의 SSH 및 herdr 경로를 점검하세요.</span></div>`
+													? `<div class="notice is-danger">${badge("호스트 연결 실패", "is-danger")}<span>${esc(host.error)}</span><span class="notice-next">다음 행동: <code>jabbu-pocket doctor</code>로 해당 호스트의 SSH 및 herdr 경로를 점검하세요.</span></div>`
 													: host.agents.length === 0
 														? '<div class="empty-box"><p class="note">실행 중인 에이전트가 없어요</p><p class="note-sub">새 작업을 위임하면 이 호스트의 에이전트 목록에 나타납니다.</p></div>'
 														: `<div class="rows">${host.agents
@@ -466,7 +466,7 @@ export function renderDashboardMain(
 											}`,
 									)
 									.join("")
-							: `<div class="notice is-danger">${badge("herdr 조회 실패", "is-danger")}<span>${esc(herdr.error)}</span><span class="notice-next">다음 행동: 로컬 herdr 실행 파일과 데몬 설정을 확인하세요(<code>ompbot doctor</code>).</span></div>`
+							: `<div class="notice is-danger">${badge("herdr 조회 실패", "is-danger")}<span>${esc(herdr.error)}</span><span class="notice-next">다음 행동: 로컬 herdr 실행 파일과 데몬 설정을 확인하세요(<code>jabbu-pocket doctor</code>).</span></div>`
 					}</section>`;
 		// The head names what it counts: the 진행 중 column, the same number as the side nav.
 		const working = shown.filter((entry) => entry.col === "working").length;
@@ -1045,7 +1045,7 @@ export function renderDashboardMain(
 				rows,
 				monitors.items.length,
 				"켜진 모니터가 없어요",
-				"ompbot monitors add로 등록한 정기·조건 모니터가 여기에 표시됩니다.",
+				"jabbu-pocket monitors add로 등록한 정기·조건 모니터가 여기에 표시됩니다.",
 				lead,
 			);
 		}
@@ -1549,7 +1549,7 @@ export function renderDashboardMain(
 						: heavy.waiting.map((item) => `<li>${esc(item.label)} <b>${dur(item.waitedMs)}</b></li>`).join("")
 				}<li class="heavy-note">표시는 대기 시작 순서이고 실제 실행 순서는 보장되지 않습니다.</li></ul></details>`
 			: "";
-	const topbar = `<header class="topbar"><nav class="crumbs" aria-label="위치"><span>ompbot</span><span aria-hidden="true">/</span><span aria-current="page">${esc(
+	const topbar = `<header class="topbar"><nav class="crumbs" aria-label="위치"><span>jabbu</span><span aria-hidden="true">/</span><span aria-current="page">${esc(
 		viewLabel,
 	)}</span></nav><div class="status-chips" aria-label="봇 상태">${chips.join("")}</div>${heavyChip}${limitsPop()}<div class="top-tools">${layoutSeg}<div class="seg" role="group" aria-label="테마">${themeBtn("system", "시스템")}${themeBtn("light", "라이트")}${themeBtn("dark", "다크")}</div><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
 	const content = view === "inbox" ? inboxView() : view === "list" ? listView() : sectionView();

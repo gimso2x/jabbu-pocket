@@ -2,7 +2,7 @@
 // thread_ref, and a fatal or late Discord gateway never takes the daemon down.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ChannelBinding } from "../src/channel/adapter";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordBinding } from "../src/discord/binding";
 import { DiscordChannel } from "../src/discord/channel";
@@ -50,7 +50,7 @@ function waitForLog(needle: string, timeoutMs = 10_000): Promise<void> {
 const logged = (needle: string): boolean => logs.some((line) => line.includes(needle));
 
 async function boot(
-	config: OmpbotConfig,
+	config: JabbuConfig,
 	discord: WaitingDiscordTransport | undefined,
 	discordOptions: { startWaitMs?: number } = {},
 ): Promise<void> {
@@ -78,7 +78,7 @@ async function boot(
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-daemon-");
+	home = makeHome("jabbu-discord-daemon-");
 	logs = [];
 });
 

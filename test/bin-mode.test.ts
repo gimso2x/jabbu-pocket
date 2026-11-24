@@ -36,7 +36,7 @@ describe("every command this repository installs can be run", () => {
 		});
 	}
 
-	test("package.json names src/main.ts as the ompbot and jabbu-pocket bins", () => {
-		expect(pkg.bin).toEqual({ ompbot: "src/main.ts", "jabbu-pocket": "src/main.ts" });
+	test("package.json names src/main.ts as the jabbu and jabbu-pocket bins", () => {
+		expect(pkg.bin).toEqual({ jabbu: "src/main.ts", "jabbu-pocket": "src/main.ts" });
 	});
 });

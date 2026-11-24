@@ -23,7 +23,7 @@ async function groupGone(pgid: number): Promise<void> {
  * First stdout line of `<command...>` (e.g. `omp --version`); `unknown` when it cannot be run, exits non-zero or is
  * still running after `timeoutMs`. The command runs in its own process group, and on timeout the whole group is
  * killed (a launcher's grandchild holding stdout open would otherwise keep the read waiting) and the child reaped.
- * The command gets `env`, by default the turn child's env (`buildChildEnv`: no `SLACK_`/`OMPBOT_` keys), never the
+ * The command gets `env`, by default the turn child's env (`buildChildEnv`: no `SLACK_`/`JABBU_` keys), never the
  * daemon's own.
  */
 export async function readVersion(

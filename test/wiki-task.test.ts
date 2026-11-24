@@ -38,7 +38,7 @@ const outboxIds = (): string[] =>
 				.map((name) => name.slice(0, -5))
 		: [];
 const noteOf = (taskId: string) =>
-	JSON.parse(readFileSync(join(outbox, `ompbot-task-${taskId}.json`), "utf8")) as { summary: string; project: string };
+	JSON.parse(readFileSync(join(outbox, `jabbu-task-${taskId}.json`), "utf8")) as { summary: string; project: string };
 
 function newDaemon(): Daemon {
 	const sessions = new FakeSessionStore();
@@ -61,7 +61,7 @@ function newDaemon(): Daemon {
 }
 
 beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), "ompbot-wiki-task-"));
+	root = mkdtempSync(join(tmpdir(), "jabbu-wiki-task-"));
 	repo = join(root, "repo");
 	const origin = join(root, "origin.git");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: dispatchEnv(process.env) });
@@ -77,7 +77,7 @@ beforeEach(async () => {
 	const client = join(root, "client");
 	mkdirSync(join(client, "integrations", "omp"), { recursive: true });
 	writeFileSync(join(client, "integrations", "omp", "omp-wiki-session-note.py"), "# fake client\n");
-	home = makeHome("ompbot-wiki-task-home-");
+	home = makeHome("jabbu-wiki-task-home-");
 	home.config.wikiNotes = { client, agentDir: join(root, "agent") };
 	outbox = join(root, "agent", "wiki-outbox");
 	daemon = newDaemon();
@@ -128,11 +128,11 @@ function seed(): TaskRow {
 }
 
 describe("task result note", () => {
-	test("AC-2: a core landing writes ompbot-task-<id>.json with the criteria and commits although the worktree and branch are gone", async () => {
+	test("AC-2: a core landing writes jabbu-task-<id>.json with the criteria and commits although the worktree and branch are gone", async () => {
 		const row = seed();
 		expect(await daemon.autoLand(row)).toMatchObject({ state: "landed" });
 		expect(existsSync(row.worktree)).toBe(false);
-		expect(outboxIds()).toEqual([`ompbot-task-${row.taskId}`]);
+		expect(outboxIds()).toEqual([`jabbu-task-${row.taskId}`]);
 		const note = noteOf(row.taskId);
 		expect(note.project).toBe("repo");
 		expect(note.summary).toContain("로그 파일을 날짜별로 회전한다.");
@@ -156,12 +156,12 @@ describe("task result note", () => {
 		expect(await tasksCommand(["close", cancelled.taskId, "--as", "cancelled"], home.dir)).toBe(0);
 		expect(outboxIds()).toEqual([]);
 		expect(await tasksCommand(["close", done.taskId, "--as", "done"], home.dir)).toBe(0);
-		expect(outboxIds()).toEqual([`ompbot-task-${done.taskId}`]);
+		expect(outboxIds()).toEqual([`jabbu-task-${done.taskId}`]);
 		const note = noteOf(done.taskId);
 		expect(note.summary).toContain("AC-1 (통과)");
 		expect(note.summary).toContain("feat: 로그 회전");
 		// Closing is idempotent: a second sync after the file was drained writes nothing again.
-		rmSync(join(outbox, `ompbot-task-${done.taskId}.json`));
+		rmSync(join(outbox, `jabbu-task-${done.taskId}.json`));
 		expect(await tasksCommand(["close", done.taskId, "--as", "done"], home.dir)).toBe(0);
 		expect(outboxIds()).toEqual([]);
 	});
@@ -174,7 +174,7 @@ describe("task result note", () => {
 		expect(outboxIds()).toEqual([]);
 		daemon = newDaemon();
 		await daemon.start();
-		expect(outboxIds()).toEqual([`ompbot-task-${row.taskId}`]);
+		expect(outboxIds()).toEqual([`jabbu-task-${row.taskId}`]);
 		expect(noteOf(row.taskId).summary).toContain("AC-1 (통과)");
 	});
 });

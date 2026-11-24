@@ -4,6 +4,24 @@
 
 ## Unreleased
 
+- 이름: 남아 있던 내부 이름 `ompbot`·`kencrew`를 모두 jabbu 이름으로 바꿉니다. 옛 이름을 같이 읽는 호환 코드는 없으니 기존 설치는 아래 순서로 한 번 옮겨야 합니다. 장부 스키마 버전이 9로 올라갑니다(옛 이름 값 일회성 이전, 9가 된 장부는 이전 버전으로 열 수 없습니다).
+
+  | 예전 | 지금 |
+  |---|---|
+  | 명령 `ompbot <명령>` | `jabbu-pocket <명령>` (`bin`의 `ompbot` 항목 삭제) |
+  | 환경변수 `OMPBOT_HOME`·`OMPBOT_*` | `JABBU_HOME`·`JABBU_*` |
+  | 기본 홈 `~/.ompbot` | `~/.jabbu` |
+  | 홈 안 `ompbot.db`·`ompbot.sock`·`ompbot.lock`·`logs/ompbot.log` | `jabbu.db`·`jabbu.sock`·`jabbu.lock`·`logs/jabbu.log` |
+  | 백업 `ompbot-<stamp>.db`·`ompbot-bundle-<stamp>.tar.gz` | `jabbu-<stamp>.db`·`jabbu-bundle-<stamp>.tar.gz` |
+  | systemd 유닛 `ompbot.service`·`ompbot-<인스턴스>`·`ompbot-backup`·`ompbot-gc`·`ompbot-dashboard` | `jabbu.service`·`jabbu-<인스턴스>`·`jabbu-backup`·`jabbu-gc`·`jabbu-dashboard` |
+  | 도구 `ompbot_dispatch` 등 10종 | `jabbu_dispatch` 등 (접미사 그대로) |
+  | `OMP_HOST_DRIVER=kencrew` | `OMP_HOST_DRIVER=jabbu-pocket` |
+  | 영수증 `runtime.kencrew` | `runtime.source` |
+  | 레인 대화 키 `ompbot/work/…`, 카드 버튼 `ompbot:…`, 위키 원천 id `ompbot-task-…` 등 | `jabbu/work/…`, `jabbu:…`, `jabbu-task-…` |
+  | 일감 유닛 접두사 `ompbot-`·`kencrew-` | `jabbu-` (`kencrew-` 없음) |
+
+  이전 방법: ① 봇을 멈추고(`systemctl --user stop ompbot…`) 홈을 통째로 백업합니다. ② 홈 디렉터리 이름을 `~/.jabbu`(여러 봇이면 `~/.jabbu-<이름>`)로 바꾸고 안의 `ompbot.db`(`-wal`·`-shm` 포함)를 `jabbu.db…`로, `backups/`의 백업 파일을 새 이름으로 바꾸며 남은 `ompbot.sock`·`ompbot.lock`은 지웁니다. ③ `config.json`·스크립트에 든 옛 홈 경로와 `OMPBOT_HOME`을 `JABBU_HOME`으로 고칩니다. ④ `JABBU_HOME=<홈> jabbu-pocket units render`로 새 유닛을 만들어 켜고 옛 `ompbot*` 유닛은 끕니다(새 코드의 `apply`·`!restart`는 옛 유닛을 보지 못합니다). ⑤ 장부는 첫 시작에 스키마 9로 자동 이전됩니다(레인 대화 키·위키 원천 id·영수증 `runtime` 키). 세션 기록 속 옛 도구 이름은 옮기지 않으니 대화마다 새 세션으로 시작하세요. 페르소나·모니터 지시문이 옛 도구 이름(`ompbot_*`)을 부르면 새 이름으로 고칩니다.
+
 ## 0.1.0 — 2026-11-24
 
 - jabbu-pocket 첫 공개판입니다. 이전 이름 kencrew의 0.5.0을 이어받았고, 아래는 그 뒤에 바뀐 것입니다.

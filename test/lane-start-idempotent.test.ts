@@ -18,7 +18,7 @@ let h: LaneHarness;
 let repo: string;
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-idempotent-home-");
+	home = makeHome("jabbu-lane-idempotent-home-");
 	repos = [];
 	repo = makeRepo(repos);
 });

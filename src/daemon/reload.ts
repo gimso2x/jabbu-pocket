@@ -1,10 +1,10 @@
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS } from "./reload-fields";
 
 export { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS };
 
 /**
- * Config reload without a restart (gajae-way SIGHUP reload): `ompbot reload` or SIGHUP re-reads config.json. Policy
+ * Config reload without a restart (gajae-way SIGHUP reload): `jabbu-pocket reload` or SIGHUP re-reads config.json. Policy
  * fields apply live, fields bound to startup resources are reported as needing a restart and left untouched, and
  * fields only the CLI reads (gc, backup) take effect on its next run anyway. A config that fails validation changes
  * nothing.
@@ -16,7 +16,7 @@ export { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS };
  * names it uses, not from a setting in it.
  */
 type UnclassifiedField = Exclude<
-	keyof OmpbotConfig,
+	keyof JabbuConfig,
 	| (typeof LIVE_FIELDS)[number]
 	| (typeof RESTART_FIELDS)[number]
 	| (typeof CLI_FIELDS)[number]
@@ -29,21 +29,21 @@ true satisfies [UnclassifiedField] extends [never] ? true : never;
 
 export interface ReloadPlan {
 	/** The config the daemon runs with after the reload: live fields from the new file, everything else unchanged. */
-	next: OmpbotConfig;
+	next: JabbuConfig;
 	changed: string[];
 	restartRequired: string[];
 	cli: string[];
 }
 
-/** What `ompbot reload` (IPC op `reload`) answers. */
+/** What `jabbu-pocket reload` (IPC op `reload`) answers. */
 export type ReloadResult =
 	| { ok: true; changed: string[]; restartRequired: string[]; cli: string[] }
 	| { ok: false; error: string };
 
 const differs = (a: unknown, b: unknown): boolean => JSON.stringify(a) !== JSON.stringify(b);
 
-export function planReload(current: OmpbotConfig, fresh: OmpbotConfig): ReloadPlan {
-	const next: OmpbotConfig = { ...current };
+export function planReload(current: JabbuConfig, fresh: JabbuConfig): ReloadPlan {
+	const next: JabbuConfig = { ...current };
 	const changed: string[] = [];
 	for (const field of LIVE_FIELDS) {
 		if (!differs(current[field], fresh[field])) continue;

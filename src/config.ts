@@ -63,7 +63,7 @@ export interface DiscordChannelConfig {
 	 */
 	displayName?: string;
 	/**
-	 * Peer bots (other ompbot instances) whose server channel messages that mention this bot are taken as review
+	 * Peer bots (other jabbu instances) whose server channel messages that mention this bot are taken as review
 	 * requests. Changing it needs a restart (`channels` is a restart key).
 	 */
 	peerBots?: Array<{ userId: string; name: string }>;
@@ -89,7 +89,7 @@ export const PEER_SILENCE_DEFAULT_MINUTES = 10;
 const PEER_SILENCE_MAX_MINUTES = 1440;
 
 /** Minutes a peer may stay silent after a call before the owner hears of it; 0: the alert is off. */
-export function peerSilenceMinutes(config: Pick<OmpbotConfig, "peerSilenceAlert">): number {
+export function peerSilenceMinutes(config: Pick<JabbuConfig, "peerSilenceAlert">): number {
 	return config.peerSilenceAlert?.minutes ?? PEER_SILENCE_DEFAULT_MINUTES;
 }
 
@@ -158,7 +158,7 @@ const DEFAULT_CODE_ROLLBACK: CodeRollbackMode = "detach";
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+$/;
 
 /** The code rollback mode of a home's config (`DEFAULT_CODE_ROLLBACK` without config or setting). */
-export function codeRollbackMode(config: Pick<OmpbotConfig, "apply"> | undefined): CodeRollbackMode {
+export function codeRollbackMode(config: Pick<JabbuConfig, "apply"> | undefined): CodeRollbackMode {
 	return config?.apply?.codeRollback ?? DEFAULT_CODE_ROLLBACK;
 }
 
@@ -175,7 +175,7 @@ export interface WorkerAgyConfig {
 	model: string;
 }
 
-export interface OmpbotConfig {
+export interface JabbuConfig {
 	schemaVersion: 1;
 	homeDir: string;
 	configPath: string;
@@ -189,12 +189,12 @@ export interface OmpbotConfig {
 	ompExecutable: string;
 	/**
 	 * omp profile of the bot's own omp children (`OMP_PROFILE`): their agent dir becomes
-	 * `~/.omp/profiles/<name>/agent`, filled by `ompbot omp sync`. Unset → the inherited agent dir, as before.
+	 * `~/.omp/profiles/<name>/agent`, filled by `jabbu-pocket omp sync`. Unset → the inherited agent dir, as before.
 	 */
 	ompProfile?: string;
 	/**
 	 * Absolute path of an omp `--config` overlay every omp child of this install gets (RPC children of every origin and
-	 * the simple `ompbot_dispatch` run): the file's value resolved against the home, an existing file. Its contents are
+	 * the simple `jabbu_dispatch` run): the file's value resolved against the home, an existing file. Its contents are
 	 * read by each new child; unset → no `--config`, as before.
 	 */
 	ompConfigOverlay?: string;
@@ -214,13 +214,13 @@ export interface OmpbotConfig {
 	thinking?: string;
 	sessionRetentionDays?: number;
 	/**
-	 * Combined size ceiling of the backup bundle sources (sessions + config.json) in bytes; `ompbot backup
+	 * Combined size ceiling of the backup bundle sources (sessions + config.json) in bytes; `jabbu-pocket backup
 	 * --max-bundle-bytes` overrides it per run. A positive integer; unset means the 512MB default.
 	 */
 	maxBundleBytes?: number;
 	/**
-	 * Off-site copy of the newest backup + bundle (`ompbot backup` runs it after a good local backup; running
-	 * `ompbot backup` again retries it). `ssh` is an ssh alias or `user@host` (BatchMode, key auth); `remoteDir` an
+	 * Off-site copy of the newest backup + bundle (`jabbu-pocket backup` runs it after a good local backup; running
+	 * `jabbu-pocket backup` again retries it). `ssh` is an ssh alias or `user@host` (BatchMode, key auth); `remoteDir` an
 	 * absolute path or `~/…` on that host; `keep` the days of daily files per kind kept there - every file of the
 	 * uploaded day, the latest of each other day (default 14). Unset → no off-site copy.
 	 */
@@ -253,7 +253,7 @@ export interface OmpbotConfig {
 	 */
 	costCap?: { turnUsd?: number; dailyUsd?: number };
 	/**
-	 * herdr switch: present (`{}`) → `ompbot_dispatch` offers herdr/taskSpec and the [TASK] sweep runs; absent → simple
+	 * herdr switch: present (`{}`) → `jabbu_dispatch` offers herdr/taskSpec and the [TASK] sweep runs; absent → simple
 	 * dispatch only. `bin` is the absolute path of the local herdr (default: `herdr` on PATH).
 	 */
 	herdr?: { bin?: string };
@@ -268,7 +268,7 @@ export interface OmpbotConfig {
 	 */
 	workerAgy?: WorkerAgyConfig;
 	/**
-	 * Remote dispatch targets for `ompbot_dispatch host=…`: herdr runs on that host over ssh. Needs `herdr`.
+	 * Remote dispatch targets for `jabbu_dispatch host=…`: herdr runs on that host over ssh. Needs `herdr`.
 	 * `ompArgs`: extra arguments for that host's herdr worker omp, resolved by that host's omp settings.
 	 */
 	dispatchHosts?: Record<string, DispatchHostConfig>;
@@ -310,7 +310,7 @@ export interface OmpbotConfig {
 	};
 	/**
 	 * Work lanes. `models`: the model (`provider/id`) of each tier the session may pick when it starts a lane
-	 * (`ompbot_work_start` `model`); a tier left out cannot be picked. `land`: how each repository's lanes land.
+	 * (`jabbu_work_start` `model`); a tier left out cannot be picked. `land`: how each repository's lanes land.
 	 */
 	lanes?: { models?: LaneModelTiers; land?: Record<string, LaneLandRepoConfig> };
 	/**
@@ -339,7 +339,7 @@ export interface OmpbotConfig {
 	 */
 	webhook?: { port: number; bind?: "127.0.0.1" | "::1" };
 	/**
-	 * Read-only status page of `ompbot dashboard` (a separate process; `--port`/`--bind` override). `bind` must be a
+	 * Read-only status page of `jabbu-pocket dashboard` (a separate process; `--port`/`--bind` override). `bind` must be a
 	 * loopback address; the default is 127.0.0.1. Absent = the command needs `--port`. `herdrWebUrl` is herdr-web-ui's
 	 * address for the agent board's "herdr에서 답하기" links (absent = no link). `opsStatus` is a command printing the
 	 * ops-status JSON for the system view's "호스트 점검" card and a `!brief` line (absent = no card, no command run);
@@ -355,7 +355,7 @@ export interface OmpbotConfig {
 		peerHomes?: Array<{ name: string; home: string }>;
 	};
 	/**
-	 * `ompbot apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
+	 * `jabbu-pocket apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
 	 * also failed does with the code — see `CodeRollbackMode`; absent = `DEFAULT_CODE_ROLLBACK`.
 	 */
 	apply?: { codeRollback?: CodeRollbackMode };
@@ -402,7 +402,7 @@ export const LANE_REVIEW_TIMEOUT_MS = 600_000;
 
 export function defaultHomeDir(env: Record<string, string | undefined> = process.env): string {
 	// An empty value is "unset", never "" (which `resolve` would turn into the current directory).
-	return env.OMPBOT_HOME || join(homedir(), ".ompbot");
+	return env.JABBU_HOME || join(homedir(), ".jabbu");
 }
 
 function modeString(mode: number): string {
@@ -645,7 +645,7 @@ function readSecretFile(path: string): string {
  * Reads the Discord bot token file again (permission check included). Discord tokens carry no fixed prefix, so the
  * only shape check is one non-empty line; a wrong token shows up as gateway close 4004.
  */
-export function readDiscordToken(config: OmpbotConfig): string {
+export function readDiscordToken(config: JabbuConfig): string {
 	const discord = config.channels.discord;
 	if (discord === undefined) throw new Error("channels.discord is not configured");
 	const value = readSecretFile(discord.botTokenFile);
@@ -672,7 +672,7 @@ function requireGitRepo(configPath: string, repo: string, field: string): void {
 
 /**
  * Loads and validates `<homeDir>/config.json`. Credential-file and workspace paths resolve against the config dir.
- * `checkTokens: false` skips reading the token files — for processes that never talk to a chat platform (`ompbot dashboard`).
+ * `checkTokens: false` skips reading the token files — for processes that never talk to a chat platform (`jabbu-pocket dashboard`).
  */
 /** A CLI's zone: the home's `config.timezone`, or the zone a config without the key gets when there is no usable one. */
 export function timezoneOfHome(homeDir: string): string {
@@ -683,7 +683,7 @@ export function timezoneOfHome(homeDir: string): string {
 	}
 }
 
-export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkTokens?: boolean } = {}): OmpbotConfig {
+export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkTokens?: boolean } = {}): JabbuConfig {
 	const home = resolve(homeDir);
 	checkHome(home);
 
@@ -827,7 +827,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	const agyMcpServers = agyMcpServersOf(configPath, root.agyMcpServers);
 
 	const offsiteRaw = root.offsite;
-	let offsite: OmpbotConfig["offsite"];
+	let offsite: JabbuConfig["offsite"];
 	if (offsiteRaw !== undefined) {
 		const record = asRecord(offsiteRaw);
 		if (record === undefined || typeof record.ssh !== "string" || !OFFSITE_SSH.test(record.ssh)) {
@@ -871,7 +871,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		}
 	}
 
-	let taskAutoLand: OmpbotConfig["taskAutoLand"];
+	let taskAutoLand: JabbuConfig["taskAutoLand"];
 	if (root.taskAutoLand !== undefined) {
 		const record = asRecord(root.taskAutoLand);
 		if (record === undefined) invalid(configPath, "taskAutoLand");
@@ -909,7 +909,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 				commitEmails[repo.replace(/(?<=.)\/+$/, "")] = (list as string[]).map((email) => email.trim());
 			}
 		}
-		let qa: NonNullable<OmpbotConfig["taskAutoLand"]>["qa"];
+		let qa: NonNullable<JabbuConfig["taskAutoLand"]>["qa"];
 		if (record.qa !== undefined) {
 			const qaRecord = asRecord(record.qa);
 			if (qaRecord === undefined) invalid(configPath, "taskAutoLand.qa");
@@ -941,7 +941,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 				...(timeoutMs === undefined ? {} : { timeoutMs }),
 			};
 		}
-		let review: NonNullable<OmpbotConfig["taskAutoLand"]>["review"];
+		let review: NonNullable<JabbuConfig["taskAutoLand"]>["review"];
 		if (record.review !== undefined) {
 			const reviewRecord = asRecord(record.review);
 			if (reviewRecord === undefined) invalid(configPath, "taskAutoLand.review");
@@ -998,7 +998,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 
 	const herdrRaw = root.herdr;
-	let herdr: OmpbotConfig["herdr"];
+	let herdr: JabbuConfig["herdr"];
 	if (herdrRaw !== undefined) {
 		const record = asRecord(herdrRaw);
 		if (record === undefined) invalid(configPath, "herdr");
@@ -1092,7 +1092,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 
 	const applyRaw = root.apply;
-	let apply: NonNullable<OmpbotConfig["apply"]> | undefined;
+	let apply: NonNullable<JabbuConfig["apply"]> | undefined;
 	if (applyRaw !== undefined) {
 		const record = asRecord(applyRaw);
 		if (record === undefined) invalid(configPath, "apply");
@@ -1213,7 +1213,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 
 	const candidatesRaw = root.candidates;
-	let candidates: NonNullable<OmpbotConfig["candidates"]> | undefined;
+	let candidates: NonNullable<JabbuConfig["candidates"]> | undefined;
 	if (candidatesRaw !== undefined) {
 		const record = asRecord(candidatesRaw);
 		if (record === undefined) invalid(configPath, "candidates");
@@ -1236,7 +1236,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		}
 	}
 
-	const config: OmpbotConfig = {
+	const config: JabbuConfig = {
 		schemaVersion: 1,
 		homeDir: home,
 		configPath,
@@ -1278,7 +1278,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (candidates !== undefined) config.candidates = candidates;
 	if (apply !== undefined) config.apply = apply;
 	if (webhook !== undefined) config.webhook = webhook as { port: number; bind?: "127.0.0.1" | "::1" };
-	if (dashboard !== undefined) config.dashboard = dashboard as NonNullable<OmpbotConfig["dashboard"]>;
+	if (dashboard !== undefined) config.dashboard = dashboard as NonNullable<JabbuConfig["dashboard"]>;
 	if (herdr !== undefined) config.herdr = herdr;
 	if (dispatchHosts !== undefined) config.dispatchHosts = dispatchHosts;
 	if (workerOmpArgs !== undefined) config.workerOmpArgs = workerOmpArgs;
@@ -1286,7 +1286,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (root.recordsRepo !== undefined) config.recordsRepo = root.recordsRepo as string;
 	if (herdrBoard !== undefined) config.herdrBoard = herdrBoard as { url: string; api?: string };
 	if (taskAutoLand !== undefined) config.taskAutoLand = taskAutoLand;
-	if (lanes !== undefined) config.lanes = keptLanes as NonNullable<OmpbotConfig["lanes"]>;
+	if (lanes !== undefined) config.lanes = keptLanes as NonNullable<JabbuConfig["lanes"]>;
 
 	if (options.checkTokens !== false) {
 		// Fail at startup on permissions/prefix/shape; values are discarded here.

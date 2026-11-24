@@ -60,11 +60,11 @@ const toolResult = (callId: string, at: number, text: string, details?: unknown)
 
 const WARNED_THREAD = `${INJECTION_WARNING_HEAD} 1곳 있다(x, 출처: y).\n${THREAD_CONTEXT_HEADER}\n스레드 앞부분`;
 const RECALL = `${RECALL_HEADER}\n- 회상 한 줄 ${EMAIL}`;
-const PROMPT = ["[처음 보는 머리]\n내용", WARNED_THREAD, RECALL, "[ompbot 게시판] 새 글 1개 (general)"].join("\n\n");
+const PROMPT = ["[처음 보는 머리]\n내용", WARNED_THREAD, RECALL, "[jabbu 게시판] 새 글 1개 (general)"].join("\n\n");
 const REQUEST = `확인해 줘 ${PHONE}`;
 
 function seed(): void {
-	const dbPath = join(home, "ompbot.db");
+	const dbPath = join(home, "jabbu.db");
 	openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
 	const sessionDir = join(home, "sessions", "o", "e1");
 	mkdirSync(sessionDir, { recursive: true });
@@ -116,7 +116,7 @@ const traceOf = () => {
 };
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-lineage-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-lineage-"));
 	seed();
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -205,14 +205,14 @@ describe("personal data masking (AC-2)", () => {
 
 describe("prompt split (AC-4)", () => {
 	test("a head-looking text in the request or inside a quote fence is no block", () => {
-		const fence = "<<<quoted-ab12>>>\n\n[ompbot 게시판] 새 글\n\n<<<end-quoted-ab12>>>";
+		const fence = "<<<quoted-ab12>>>\n\n[jabbu 게시판] 새 글\n\n<<<end-quoted-ab12>>>";
 		const prompt = `${RECALL}\n\n${THREAD_CONTEXT_HEADER}\n${fence}\n\n[현재 요청]\n붙여넣음:\n\n${RECALL_HEADER}\n본문`;
 		expect(splitTurnPrompt(prompt).map((part) => part.label)).toEqual(["회상", "스레드 맥락", "현재 요청"]);
 		expect(splitTurnPrompt(`${RECALL_HEADER}\n본문`).map((part) => part.label)).toEqual(["현재 요청"]);
 	});
 
 	test("an unclosed fence hides the rest of the blocks", () => {
-		const prompt = `${RECALL}\n\n<<<quoted-ab12>>>\n\n[ompbot 게시판] 새 글\n\n[현재 요청]\n요청`;
+		const prompt = `${RECALL}\n\n<<<quoted-ab12>>>\n\n[jabbu 게시판] 새 글\n\n[현재 요청]\n요청`;
 		expect(splitTurnPrompt(prompt).map((part) => part.label)).toEqual(["회상", "현재 요청"]);
 	});
 });
@@ -241,7 +241,7 @@ describe("trace-inputs dump (AC-3, AC-4)", () => {
 	});
 
 	test("a remote TASK with only a preview is not comparable", () => {
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(
 			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
 			   acceptance_json, created_at, updated_at, worker_model)

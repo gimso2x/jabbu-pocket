@@ -33,7 +33,7 @@ export interface MonitorSchedulerDeps {
 	scriptsRoot: string;
 	/** cwd of script checks. */
 	workspaceDir: string;
-	/** The bot home, handed to scripts as `OMPBOT_HOME`. */
+	/** The bot home, handed to scripts as `JABBU_HOME`. */
 	homeDir: string;
 	/** `config.watcherRoots`: watcher monitors whose root is not inside one of them never start a watch. */
 	watcherRoots?: readonly string[] | undefined;

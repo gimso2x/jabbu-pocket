@@ -66,8 +66,8 @@ describe("callDaemonWhenUp", () => {
 	});
 
 	test("callDaemon rejects with IpcNotListening on a socket nobody serves, and answers once a server is up", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "ompbot-ipc-up-"));
-		const path = join(dir, "ompbot.sock");
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-ipc-up-"));
+		const path = join(dir, "jabbu.sock");
 		try {
 			await expect(callDaemon(path, { op: "x" })).rejects.toBeInstanceOf(IpcNotListening);
 			const server = startIpcServer(path, async () => ({ ok: true }));

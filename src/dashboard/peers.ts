@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, type OmpbotConfig } from "../config";
+import { type JabbuConfig, loadConfig } from "../config";
 
 /** Another install on this host whose monitors and open turns the dashboard reads (config `dashboard.peerHomes`), read-only. */
 export interface PeerInstall {
@@ -18,7 +18,7 @@ export interface PeerInstall {
  * Each peer's workspace and zone from `<home>/config.json` (no token files read). A peer without a readable config
  * still gets its monitors listed, with `<home>/workspace` and the dashboard's zone, and the reason in `configError`.
  */
-export function resolvePeers(dashboard: OmpbotConfig["dashboard"], timezone: string): PeerInstall[] {
+export function resolvePeers(dashboard: JabbuConfig["dashboard"], timezone: string): PeerInstall[] {
 	return (dashboard?.peerHomes ?? []).map(({ name, home }) => {
 		const fallback = { name, home, workspaceDir: join(home, "workspace"), timezone };
 		if (!existsSync(join(home, "config.json"))) return { ...fallback, configError: "config.json이 없음" };

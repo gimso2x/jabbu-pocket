@@ -45,9 +45,9 @@ export interface LaneQaDeps {
 	ompProfile?: string;
 	/** The safety floors the daemon's `omp -p` children get (`--append-system-prompt`). */
 	systemPromptAppendix: string;
-	/** `<ompbot home>/qa-worktrees`: the copies of claim commits (0700); every entry there is a QA's copy. */
+	/** `<jabbu home>/qa-worktrees`: the copies of claim commits (0700); every entry there is a QA's copy. */
 	worktreesDir: string;
-	/** `<ompbot home>/reviews`: where the QA's isolation overlay is written for the run (0600). */
+	/** `<jabbu home>/reviews`: where the QA's isolation overlay is written for the run (0600). */
 	overlaysDir: string;
 	now(): number;
 	run?: ProcessRunner;

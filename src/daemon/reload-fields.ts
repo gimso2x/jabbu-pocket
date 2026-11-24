@@ -1,7 +1,7 @@
 // The reload field classification (which `config.json` keys the running daemon re-reads, which are boot-bound, which
 // only the CLI reads) — `./reload` re-exports and judges with these; moved out to keep it within the size ratchet.
 
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 
 /** Read by the running daemon on every use (after reload: the next inbound, card, answer, omp child or sweep). */
 export const LIVE_FIELDS = [
@@ -31,10 +31,10 @@ export const LIVE_FIELDS = [
 	"briefing",
 	// The candidate pass reads it on every sweep.
 	"candidates",
-	// `!brief` reads `dashboard.opsStatus` for its host-check card on every call; the `ompbot dashboard` service still
-	// reads port/bind/herdrWebUrl only when it starts (`systemctl --user restart ompbot-dashboard`).
+	// `!brief` reads `dashboard.opsStatus` for its host-check card on every call; the `jabbu-pocket dashboard` service still
+	// reads port/bind/herdrWebUrl only when it starts (`systemctl --user restart jabbu-dashboard`).
 	"dashboard",
-] as const satisfies ReadonlyArray<keyof OmpbotConfig>;
+] as const satisfies ReadonlyArray<keyof JabbuConfig>;
 
 /** Bound when the daemon starts (tokens, socket, omp children, scheduler). */
 export const RESTART_FIELDS = [
@@ -62,13 +62,13 @@ export const RESTART_FIELDS = [
 	"webhook",
 	// The dispatch tool schema and the [TASK] sweeper are decided when the daemon starts.
 	"herdr",
-] as const satisfies ReadonlyArray<keyof OmpbotConfig>;
+] as const satisfies ReadonlyArray<keyof JabbuConfig>;
 
 /**
- * Read by the CLI levers on every run (`ompbot gc` / `ompbot backup` load config.json themselves, `ompbot apply`
+ * Read by the CLI levers on every run (`jabbu-pocket gc` / `jabbu-pocket backup` load config.json themselves, `jabbu-pocket apply`
  * reads `apply`), so a change needs no daemon action. The daemon reads only `maxBundleBytes`, once, for its first-boot
  * backup (`#bootBackup`); a changed value reaches that backup after a restart.
  */
 export const CLI_FIELDS = ["sessionRetentionDays", "maxBundleBytes", "apply"] as const satisfies ReadonlyArray<
-	keyof OmpbotConfig
+	keyof JabbuConfig
 >;

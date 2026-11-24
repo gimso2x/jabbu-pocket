@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DiscordChannelConfig, OmpbotConfig } from "../src/config";
+import type { DiscordChannelConfig, JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { buildLaneOutcomeCard, laneHoldActionId, lanePublishActionId, parseLaneActionId } from "../src/lanes/card";
 import { EXTERNAL_PR_LANE, laneLandBlockers } from "../src/lanes/land";
@@ -48,7 +48,7 @@ let repos: string[];
 let scratch: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-xpr-home-");
+	home = makeHome("jabbu-lane-xpr-home-");
 	repos = [];
 	scratch = [];
 });
@@ -81,7 +81,7 @@ function commitIn(dir: string, ...files: string[]): string {
 /** A repository with a local bare repository as its `fork` remote (the push target of every test). */
 function repoWithFork(): { repo: string; fork: string; base: string } {
 	const repo = makeRepo(repos);
-	const fork = tempDir("ompbot-lane-xpr-fork-");
+	const fork = tempDir("jabbu-lane-xpr-fork-");
 	git(fork, "init", "-q", "--bare");
 	git(repo, "remote", "add", "fork", fork);
 	return { repo, fork, base: git(repo, "symbolic-ref", "--short", "HEAD") };
@@ -240,7 +240,7 @@ function laneRow(meta: Partial<LaneMeta>): LaneRow {
 		name: "ext",
 		title: "외부",
 		threadRef: `${CHANNEL}:1`,
-		originKey: "ompbot/work/ext",
+		originKey: "jabbu/work/ext",
 		cwd: "/tmp/ext",
 		sessionDir: "/tmp/ext-s",
 		status: "closed",
@@ -313,8 +313,8 @@ describe("Outcome card buttons", () => {
 			name: "cataly-pr-오너-프로필",
 		});
 		expect(parseLaneActionId(laneHoldActionId("ext-2"))).toEqual({ kind: "hold", name: "ext-2" });
-		expect(parseLaneActionId("ompbot:lane:publish:Bad Name")).toBeUndefined();
-		expect(parseLaneActionId("ompbot:lane:hold:")).toBeUndefined();
+		expect(parseLaneActionId("jabbu:lane:publish:Bad Name")).toBeUndefined();
+		expect(parseLaneActionId("jabbu:lane:hold:")).toBeUndefined();
 	});
 
 	test("`!pr` forms", () => {
@@ -333,7 +333,7 @@ describe("Outcome card buttons", () => {
 describe("default PR tools environment", () => {
 	test("an inherited GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE do not point the child git at another repository", async () => {
 		const repo = makeRepo(repos);
-		const elsewhere = tempDir("ompbot-xpr-elsewhere-");
+		const elsewhere = tempDir("jabbu-xpr-elsewhere-");
 		const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE, index: process.env.GIT_INDEX_FILE };
 		process.env.GIT_DIR = join(elsewhere, "nope.git");
 		process.env.GIT_WORK_TREE = elsewhere;
@@ -383,7 +383,7 @@ describe("LaneManager external PR publish", () => {
 				"--title",
 				"ext",
 				"--body-file",
-				expect.stringMatching(/ompbot-pr-[^/]+\/body\.md$/),
+				expect.stringMatching(/jabbu-pr-[^/]+\/body\.md$/),
 			],
 		]);
 		expect(s.gh.bodies).toEqual([{ path: expect.any(String), text: "pr-body.md\n", mode: 0o600 }]);
@@ -427,7 +427,7 @@ describe("LaneManager external PR publish", () => {
 	});
 
 	test("④ a pr-body.md link out of the worktree is refused before any approval card", async () => {
-		const outside = join(tempDir("ompbot-xpr-out-"), "secret.txt");
+		const outside = join(tempDir("jabbu-xpr-out-"), "secret.txt");
 		writeFileSync(outside, "TOP SECRET\n");
 		const ap = approvals("approved");
 		const s = await closedExternal(ap.fn, { body: (worktree) => symlinkSync(outside, join(worktree, "pr-body.md")) });
@@ -454,7 +454,7 @@ describe("LaneManager external PR publish", () => {
 		const s = await closedExternal(approvals("approved").fn);
 		const branch = s.lane.meta.externalPr?.branch ?? "";
 		// Somebody else's commit already sits on that branch of the fork.
-		const other = tempDir("ompbot-lane-xpr-other-");
+		const other = tempDir("jabbu-lane-xpr-other-");
 		git(other, "init", "-q");
 		writeFileSync(join(other, "z.txt"), "z\n");
 		git(other, "add", "z.txt");
@@ -641,7 +641,7 @@ describe("LaneManager external PR publish", () => {
 // ---------------------------------------------------------------- daemon (수락기준 데몬)
 
 describe("through the daemon: `!pr` in a closed lane's thread", () => {
-	function laneConfig(): OmpbotConfig {
+	function laneConfig(): JabbuConfig {
 		return {
 			...home.config,
 			channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
@@ -650,7 +650,7 @@ describe("through the daemon: `!pr` in a closed lane's thread", () => {
 
 	test("`!pr owner/name` records externalPr and redraws the card without reaching the lane session; bare `!pr` on a non-GitHub origin is refused", async () => {
 		const repo = makeRepo(repos);
-		const bare = tempDir("ompbot-lane-xpr-origin-");
+		const bare = tempDir("jabbu-lane-xpr-origin-");
 		git(bare, "init", "-q", "--bare");
 		git(repo, "remote", "add", "origin", bare);
 		const transport = new WaitingDiscordTransport();
@@ -675,7 +675,7 @@ describe("through the daemon: `!pr` in a closed lane's thread", () => {
 			await daemon.inject({ origin: `discord/dm/${OWNER_DM}`, asOwner: true, text: `작업: ask @${repo}` });
 			await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 			const rootId = transport.posts((text) => text === "🔄 ask")[0]?.id ?? "";
-			const claim = daemon.hostToolsFor("ompbot/work/ask").find((tool) => tool.name === "ompbot_claim_done");
+			const claim = daemon.hostToolsFor("jabbu/work/ask").find((tool) => tool.name === "jabbu_claim_done");
 			const worktree = daemon.store.getLane("ask")?.cwd ?? "";
 			commitIn(worktree, "a.txt");
 			const signal = new AbortController().signal;
@@ -686,8 +686,7 @@ describe("through the daemon: `!pr` in a closed lane's thread", () => {
 			const cardId = transport.posts((text) => text.startsWith("🔍 머지 대기"))[0]?.id ?? "";
 			const send = (content: string, id: string) =>
 				transport.emitMessage({ id, channel_id: rootId, guild_id: GUILD, author: { id: OWNER }, content, type: 0 });
-			const lanePrompts = () =>
-				drivers.get("ompbot/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
+			const lanePrompts = () => drivers.get("jabbu/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
 
 			await send("!pr", "7100000000000000100");
 			await transport.waitForPosts((text) => text.includes("GitHub 저장소가 아니라"));
@@ -715,7 +714,7 @@ describe("readPrBody", () => {
 	};
 
 	test("a FIFO, directly or through a link, is refused at once instead of blocking", () => {
-		const dir = tempDir("ompbot-xpr-fifo-");
+		const dir = tempDir("jabbu-xpr-fifo-");
 		mkfifo(join(dir, "pr-body.md"));
 		const started = performance.now();
 		expect(readPrBody(dir, "pr-body.md")).toMatchObject({ ok: false });
@@ -726,7 +725,7 @@ describe("readPrBody", () => {
 	});
 
 	test("a link inside the worktree, an oversized file and a plain file", () => {
-		const dir = tempDir("ompbot-xpr-body-");
+		const dir = tempDir("jabbu-xpr-body-");
 		writeFileSync(join(dir, "real.md"), "title\nmore\n");
 		symlinkSync("real.md", join(dir, "inside.md"));
 		expect(readPrBody(dir, "inside.md")).toEqual({ ok: true, text: "title\nmore\n" });

@@ -38,7 +38,7 @@ const DM_ORIGIN = `discord/dm/${OWNER_DM}`;
 const CH_ORIGIN = `discord/ch/${CHANNEL}`;
 
 beforeEach(() => {
-	home = makeHome("ompbot-qa50b-i-");
+	home = makeHome("jabbu-qa50b-i-");
 	repos = [];
 	transport = new WaitingDiscordTransport();
 	logLines = [];
@@ -72,14 +72,14 @@ describe("qa-r #16: the restart notice waits for the IPC server", () => {
 
 	test("a start that fails before the IPC server is up sends no 'back' notice and keeps the marker", async () => {
 		writeRestartMarker(home.dir, { at: Date.now(), threads: [`${OWNER_DM}:700000000000000005`] });
-		mkdirSync(join(home.dir, "ompbot.sock")); // the socket path is a directory: the IPC server cannot start
+		mkdirSync(join(home.dir, "jabbu.sock")); // the socket path is a directory: the IPC server cannot start
 		await expect(startDaemon()).rejects.toThrow();
 		expect(backPosts()).toHaveLength(0);
 		expect(existsSync(join(home.dir, RESTART_NOTICE_FILE))).toBe(true);
 	});
 
 	test("a normal start sends one notice, consumes the marker, and says it before a recovered turn's answer", async () => {
-		const seed = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		seed.ensureOrigin(DM_ORIGIN, "sess/e1");
 		seed.recordInbound({
 			originKey: DM_ORIGIN,
@@ -152,9 +152,9 @@ describe("I-19: a lane whose worktree was deleted by hand", () => {
 		await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 		const lane = d.store.getLane("ask");
 		expect(lane?.status).toBe("working");
-		expect(d.cwdFor("ompbot/work/ask")).toBe(lane?.cwd ?? "");
+		expect(d.cwdFor("jabbu/work/ask")).toBe(lane?.cwd ?? "");
 		rmSync(lane?.cwd ?? "", { recursive: true, force: true });
-		expect(() => d.cwdFor("ompbot/work/ask")).toThrow("lane_worktree_missing");
+		expect(() => d.cwdFor("jabbu/work/ask")).toThrow("lane_worktree_missing");
 	});
 });
 

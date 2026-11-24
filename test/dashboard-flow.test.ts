@@ -204,7 +204,7 @@ const hostOps = (): TaskHostOps => ({
 
 const deps = (): SnapshotDeps => ({
 	homeDir: home.dir,
-	repoDir: "/srv/ompbot",
+	repoDir: "/srv/jabbu",
 	timezone: "Asia/Seoul",
 	config: undefined,
 	now: () => NOW,
@@ -226,8 +226,8 @@ const chain = (flows: FlowChainInfo[], thread: string): FlowChainInfo => {
 };
 
 beforeEach(() => {
-	home = makeHome("ompbot-flow-");
-	dbPath = join(home.dir, "ompbot.db");
+	home = makeHome("jabbu-flow-");
+	dbPath = join(home.dir, "jabbu.db");
 	seedDatabase();
 });
 afterEach(() => home.remove());
@@ -374,7 +374,7 @@ describe("flow view", () => {
 		const web = "https://discord.com/channels";
 		expect(discordThreadHref(null, `discord/dm/${ch}`, `${ch}:${msg}`)).toBe(`${web}/@me/${ch}/${msg}`);
 		expect(discordThreadHref(guild, `discord/ch/${ch}/t/${msg}`, `${ch}:${msg}`)).toBe(`${web}/${guild}/${msg}`);
-		expect(discordThreadHref(guild, "ompbot/work/L-20261111-01", `${ch}:${msg}`)).toBe(`${web}/${guild}/${msg}`);
+		expect(discordThreadHref(guild, "jabbu/work/L-20261111-01", `${ch}:${msg}`)).toBe(`${web}/${guild}/${msg}`);
 		expect(discordThreadHref(guild, `discord/ch/${ch}`, `${ch}:${msg}`)).toBe(`${web}/${guild}/${ch}/${msg}`);
 		expect(discordThreadHref(null, `discord/ch/${ch}/t/${msg}`, `${ch}:${msg}`)).toBe("");
 		expect(discordThreadHref(guild, "monitor/m1", `${ch}:${msg}`)).toBe("");
@@ -425,7 +425,7 @@ describe("flow view", () => {
 	});
 });
 
-describe("request preview without ompbot's quote wrapping", () => {
+describe("request preview without jabbu's quote wrapping", () => {
 	const fence = (id: string, body: string): string => `<<<quoted-${id}>>>\n${body}\n<<<end-quoted-${id}>>>`;
 	const QUOTE = `${QUOTED_HEADER}\n${fence("0123456789abcdef", "인용된 글 <https://x.test|링크>")}`;
 	const clean = (line: string): void => {
@@ -453,7 +453,7 @@ describe("request preview without ompbot's quote wrapping", () => {
 		clean(c);
 		expect(previewLine(QUOTE, "title T-D1")).toBe("[첨부] title T-D1");
 		expect(previewLine("[첨부: a.png]")).toBe("[첨부] a.png");
-		expect(previewLine("[첨부: /home/u/.ompbot/media/img_1.png (image/png)]")).toBe("[첨부] img_1.png");
+		expect(previewLine("[첨부: /home/u/.jabbu/media/img_1.png (image/png)]")).toBe("[첨부] img_1.png");
 		expect(previewLine("[첨부: a.png]", "title T-D1")).toBe("[첨부] title T-D1");
 		expect(previewLine(`봐 줘 [첨부: a.png] ${TOKEN}`)).toBe("봐 줘 [첨부] [REDACTED]");
 	});

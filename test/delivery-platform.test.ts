@@ -13,9 +13,9 @@ let now: number;
 let store: Store;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-delivery-platform-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-delivery-platform-"));
 	now = 1_800_000_000_000;
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => now }, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => now }, redact });
 });
 
 afterEach(() => {

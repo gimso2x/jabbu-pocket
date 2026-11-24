@@ -33,7 +33,7 @@ import { createPrLandRetry } from "./daemon-task-retry";
 /** Feeds `text` as an owner message through the adapter's message path: the bot posts `marker` (in `threadTs`'s thread, or as a root) and the message takes its id; `posted.ts` is set once the marker is up. */
 export async function ingestOwnerText(
 	ctx: DaemonContext,
-	/** `injected`: put in by `ompbot inject`, not by an owner click (`OwnerIngest.injected`). */
+	/** `injected`: put in by `jabbu-pocket inject`, not by an owner click (`OwnerIngest.injected`). */
 	target: { channel: string; threadTs?: string | undefined; kind: "dm" | "ch"; injected?: boolean },
 	text: string,
 	marker: string,
@@ -449,7 +449,7 @@ export class DaemonTaskLanding {
 			const { outcome } = await ingestOwnerText(
 				this.#ctx,
 				{ channel: thread.channel, threadTs: thread.threadTs, kind: "ch" },
-				`다시 요청: ${firstLine.slice(0, 200)}\n(방금 시간 초과로 거부된 승인 요청입니다. 같은 요청을 ompbot_request_approval로 다시 올려 주세요.)`,
+				`다시 요청: ${firstLine.slice(0, 200)}\n(방금 시간 초과로 거부된 승인 요청입니다. 같은 요청을 jabbu_request_approval로 다시 올려 주세요.)`,
 				"🔘 다시 요청 (버튼)",
 				undefined,
 				posted,

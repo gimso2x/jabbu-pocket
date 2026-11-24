@@ -249,7 +249,7 @@ export async function queueText(host: MailboxHost): Promise<string> {
 }
 
 /**
- * `/queue-ompbot`: no argument lists the queue; `drop <번호>` cancels exactly one waiting row (pending ->
+ * `/queue-jabbu`: no argument lists the queue; `drop <번호>` cancels exactly one waiting row (pending ->
  * discarded), so it is never prompted or steered. Allowed while a turn runs — that is when the queue builds up.
  */
 export async function queueCommand(host: MailboxHost, arg: string, opRef: string): Promise<string> {

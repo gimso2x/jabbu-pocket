@@ -19,7 +19,7 @@ let daemon: Daemon;
 let discord: WaitingDiscordTransport;
 
 beforeEach(async () => {
-	home = makeHome("ompbot-discord-monitors-");
+	home = makeHome("jabbu-discord-monitors-");
 	discord = new WaitingDiscordTransport();
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
@@ -39,8 +39,8 @@ afterEach(async () => {
 });
 
 function addTool(originKey = DM_ORIGIN) {
-	const tool = daemon.hostToolsFor(originKey).find((candidate) => candidate.name === "ompbot_monitor_add");
-	if (!tool) throw new Error(`ompbot_monitor_add missing for ${originKey}`);
+	const tool = daemon.hostToolsFor(originKey).find((candidate) => candidate.name === "jabbu_monitor_add");
+	if (!tool) throw new Error(`jabbu_monitor_add missing for ${originKey}`);
 	return (params: Record<string, unknown>) => tool.execute(params, { signal: new AbortController().signal });
 }
 

@@ -99,7 +99,7 @@ const gitOnly: ProcessRunner = async () => ({ code: 0, stdout: "abc1234\n", time
 function deps(overrides: Partial<SnapshotDeps> = {}): SnapshotDeps {
 	return {
 		homeDir: home.dir,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: { ompExecutable: home.config.ompExecutable },
 		now: clock.now,
@@ -133,8 +133,8 @@ const sysCard = (html: string, id: string): string => {
 };
 
 beforeEach(() => {
-	home = makeHome("ompbot-dash-alerts-");
-	dbPath = join(home.dir, "ompbot.db");
+	home = makeHome("jabbu-dash-alerts-");
+	dbPath = join(home.dir, "jabbu.db");
 	clock = { t: NOW, now: () => clock.t };
 	seedAlerts();
 });

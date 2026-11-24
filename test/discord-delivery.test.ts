@@ -88,9 +88,9 @@ const longBody = (n: number): string =>
 		.slice(0, n);
 
 beforeEach(async () => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-discord-delivery-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-discord-delivery-"));
 	now = 1_800_000_000_000;
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => now }, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => now }, redact });
 	transport = new ScriptedTransport({ botUserId: BOT });
 	transport.setChannel({ id: CH, type: 0, guildId: GUILD });
 	failed = [];

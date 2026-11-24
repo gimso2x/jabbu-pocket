@@ -25,7 +25,7 @@ export function toolActivityText(toolName: string, args: unknown, intent?: unkno
 	return preview === "" ? toolName : `${toolName} ${preview}`;
 }
 
-/** `/model-ompbot <arg>`: an exact `provider/id`, a 1-based index into `options`, or a substring matching exactly one. */
+/** `/model-jabbu-pocket <arg>`: an exact `provider/id`, a 1-based index into `options`, or a substring matching exactly one. */
 export function pickOption(options: readonly string[], arg: string): string | undefined {
 	if (options.includes(arg)) return arg;
 	if (/^\d+$/.test(arg)) return options[Number(arg) - 1];

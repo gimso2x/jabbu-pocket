@@ -219,8 +219,8 @@ describe("OriginMailbox live view", () => {
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-live-"));
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		dir = mkdtempSync(join(tmpdir(), "jabbu-live-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		drivers = [];
 		progress = [];
 		logLines = [];
@@ -263,7 +263,7 @@ describe("OriginMailbox live view", () => {
 		const mailbox = liveMailbox();
 		try {
 			await streaming(mailbox);
-			await mailbox.enqueue(msg("/new-ompbot"));
+			await mailbox.enqueue(msg("/new-jabbu"));
 			expect(mailbox.liveView()).toBeNull();
 		} finally {
 			await mailbox.close();
@@ -304,7 +304,7 @@ describe("daemon live op", () => {
 	let daemon: Daemon | undefined;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-live-daemon-");
+		home = makeHome("jabbu-live-daemon-");
 	});
 
 	afterEach(async () => {

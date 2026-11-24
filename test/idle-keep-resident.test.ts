@@ -88,9 +88,9 @@ const running = (origin: string) => router.mailbox(origin).state.driverRunning;
 const reasons = () => logs.filter((l) => l.includes("event=idle_stop")).map((l) => /reason=(\w+)/.exec(l)?.[1]);
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-idlekeep-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-idlekeep-"));
 	now = 1_000_000;
-	store = openBotStore(join(dir, "ompbot.db"), { now: () => now }, "Asia/Seoul");
+	store = openBotStore(join(dir, "jabbu.db"), { now: () => now }, "Asia/Seoul");
 	logs = [];
 	percents = new Map();
 	keepResident = true;
@@ -244,7 +244,7 @@ describe("a lane start under pressure asks for a sweep", () => {
 	let home: TestHome;
 	let repos: string[];
 	beforeEach(() => {
-		home = makeHome("ompbot-idlekeep-home-");
+		home = makeHome("jabbu-idlekeep-home-");
 		repos = [];
 	});
 	afterEach(() => {

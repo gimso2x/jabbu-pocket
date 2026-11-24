@@ -16,14 +16,14 @@ import {
 /**
  * Restart E2E: a REAL omp behind the real daemon process (`bun src/main.ts daemon`) with the file-backed fake Discord
  * transport. For each crash hook the daemon is killed (exit 137) mid-flight and started again on the same home.
- * Costs tokens, so it only runs with OMPBOT_E2E_OMP=1 (model: OMPBOT_E2E_OMP_PROVIDER/OMPBOT_E2E_OMP_MODEL).
+ * Costs tokens, so it only runs with JABBU_E2E_OMP=1 (model: JABBU_E2E_OMP_PROVIDER/JABBU_E2E_OMP_MODEL).
  */
-const enabled = process.env.OMPBOT_E2E_OMP === "1";
-if (!enabled) console.log("[skip] restart.e2e.test.ts: set OMPBOT_E2E_OMP=1 to run against a real omp (costs tokens)");
+const enabled = process.env.JABBU_E2E_OMP === "1";
+if (!enabled) console.log("[skip] restart.e2e.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");
 
-const PROVIDER = process.env.OMPBOT_E2E_OMP_PROVIDER ?? "zai";
-const MODEL = process.env.OMPBOT_E2E_OMP_MODEL ?? "glm-5.3-flash";
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
+const PROVIDER = process.env.JABBU_E2E_OMP_PROVIDER ?? "zai";
+const MODEL = process.env.JABBU_E2E_OMP_MODEL ?? "glm-5.3-flash";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 const SCENARIO_TIMEOUT_MS = 420_000;
 // Failure deadlines on awaited events (file changes, process exit, log lines), never a wait for time to pass.
@@ -56,11 +56,11 @@ const inThread = (posts: LoggedPost[], threadTs: string) => posts.filter((post) 
 
 async function scenario(hook: Hook): Promise<void> {
 	const nonceA = `nonce${randomBytes(5).toString("hex")}`;
-	home = makeHome(`ompbot-e2e-${hook}-`, { ompExecutable: OMP_EXECUTABLE, model: `${PROVIDER}/${MODEL}` });
+	home = makeHome(`jabbu-e2e-${hook}-`, { ompExecutable: OMP_EXECUTABLE, model: `${PROVIDER}/${MODEL}` });
 	const log = new TransportLog(join(home.dir, "transport.jsonl"));
 
 	// Incarnation 1 dies at the hook.
-	const first = spawnDaemon(home.dir, log.path, { OMPBOT_TEST_CRASH_AT: hook });
+	const first = spawnDaemon(home.dir, log.path, { JABBU_TEST_CRASH_AT: hook });
 	await first.waitLog(/event=daemon_ready/);
 	const a = await inject(home.dir, `Reply with exactly one line and nothing else: ECHO ${nonceA}`);
 	expect(await first.exited).toBe(137);

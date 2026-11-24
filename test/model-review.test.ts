@@ -48,7 +48,7 @@ function py(args: string[], env: Record<string, string | undefined> = process.en
 	const run = Bun.spawnSync(["python3", ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...env, OMPBOT_TZ: "Asia/Seoul" },
+		env: { ...env, JABBU_TZ: "Asia/Seoul" },
 	});
 	return { code: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() };
 }
@@ -158,7 +158,7 @@ const BASE_SESSIONS: Record<string, Call[]> = {
 		},
 		{ model: "pa/small", cost: 0.25 },
 	],
-	"ompbot%2Fwork%2Flane-x/e1/s-lane.jsonl": [{ model: "pb/mid", cost: 0.4 }],
+	"jabbu%2Fwork%2Flane-x/e1/s-lane.jsonl": [{ model: "pb/mid", cost: 0.4 }],
 	"review%2Fskills/e1/s-rev.jsonl": [{ model: "pb/mid", cost: 0.1, error: true }],
 	"other%2Fx/e1/s-other.jsonl": [{ model: "pb/mid", cost: 0.2 }],
 	"discord%2Fch%2F9/e1/sess-dir/deep.jsonl": [{ model: "pa/big", cost: 1 }],
@@ -194,10 +194,10 @@ function fixture(options: Fixture = {}) {
 	for (const [path, calls] of Object.entries(options.ompSessions ?? BASE_OMP))
 		write(join(ompSessions, path), session(calls));
 	const log = options.log === undefined ? BASE_LOG : options.log;
-	if (log) write(join(home, "logs", "ompbot.log"), `${log.join("\n")}\n`);
+	if (log) write(join(home, "logs", "jabbu.log"), `${log.join("\n")}\n`);
 	write(join(home, "config.json"), JSON.stringify({ model: "pa/big", thinking: "medium", timezone: "Asia/Seoul" }));
 
-	const db = new Database(join(home, "ompbot.db"));
+	const db = new Database(join(home, "jabbu.db"));
 	db.run("CREATE TABLE monitors (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, model TEXT, thinking TEXT)");
 	db.run("INSERT INTO monitors VALUES ('m1','모니터A',NULL,NULL),('m2','모니터B','pb/mid','low')");
 	db.close();
@@ -305,8 +305,8 @@ describe("model-review collect.py", () => {
 		for (const row of [
 			"| modelRoles.default | pa/big:medium |",
 			'| fallbackChains.default | ["pb/mid:high"] |',
-			"| ompbot.model | pa/big |",
-			"| ompbot.thinking | medium |",
+			"| jabbu.model | pa/big |",
+			"| jabbu.thinking | medium |",
 			"| monitor.모니터A | (봇 기본) · (봇 기본) |",
 			"| monitor.모니터B | pb/mid · low |",
 		]) {
@@ -508,7 +508,7 @@ describe("model-review missing sources", () => {
 				{ ompFails: true },
 				["config: error: exit 3 omp: broken install", "catalog: error: exit 3 omp: broken install"],
 				(out) => {
-					expect(section(out, "## 현행 설정")).toContain("| ompbot.model | pa/big |");
+					expect(section(out, "## 현행 설정")).toContain("| jabbu.model | pa/big |");
 					expect(section(out, "## 카탈로그 변화")).toContain("(소스 없음)");
 					expect(section(out, "## 모델별 실측")).toContain("| pa/big | 6 |");
 				},
@@ -531,9 +531,9 @@ describe("model-review missing sources", () => {
 		expect(section(py([COLLECT, ...first.args]).out, "## 카탈로그 변화")).toContain("- 기준 스냅샷 저장(비교 없음)");
 	});
 
-	test("AC-3: no --home and no OMPBOT_HOME exits 2", () => {
+	test("AC-3: no --home and no JABBU_HOME exits 2", () => {
 		const env = { ...process.env };
-		delete env.OMPBOT_HOME;
+		delete env.JABBU_HOME;
 		const run = py([COLLECT, "--now", NOW], env);
 		expect(run.code).toBe(2);
 		expect(run.err).toContain("usage:");
@@ -550,7 +550,7 @@ describe("model-review writes", () => {
 
 	test("AC-4: --no-snapshot writes nothing; otherwise only catalog-<date>.json; DB bytes unchanged", () => {
 		const fx = fixture();
-		const db = join(fx.home, "ompbot.db");
+		const db = join(fx.home, "jabbu.db");
 		const before = listing(fx.root);
 		const hash = sha256(db);
 
@@ -661,14 +661,14 @@ describe("model-review review.py check", () => {
 });
 
 describe("model-review package", () => {
-	test("AC-6: monitor.json parses after @OMPBOT_HOME@ substitution; Monday 08:40 cron, no model", () => {
+	test("AC-6: monitor.json parses after @JABBU_HOME@ substitution; Monday 08:40 cron, no model", () => {
 		const home = tempDir("model-review-install-");
 		const scriptsRoot = join(home, "scripts");
 		mkdirSync(scriptsRoot);
 		const installed = join(scriptsRoot, "model-review-procedure.md");
 		copyFileSync(join(PKG, "procedure.md"), installed);
 		const template = readFileSync(join(PKG, "monitor.json"), "utf8");
-		const raw = JSON.parse(template.replaceAll("@OMPBOT_HOME@", home));
+		const raw = JSON.parse(template.replaceAll("@JABBU_HOME@", home));
 		expect(raw.procedureFiles).toEqual([installed]);
 		const spec = parseMonitorSpec(raw, { scriptsRoot, defaultTimezone: "Asia/Seoul" });
 		expect(spec.trigger).toEqual({ kind: "cron", schedule: "40 8 * * 1", timezone: "Asia/Seoul" });
@@ -689,12 +689,12 @@ describe("model-review package", () => {
 		}
 	});
 
-	test("procedure.md runs the installed scripts through @OMPBOT_HOME@ and @COLLECT_ARGS@", () => {
+	test("procedure.md runs the installed scripts through @JABBU_HOME@ and @COLLECT_ARGS@", () => {
 		const procedure = readFileSync(join(PKG, "procedure.md"), "utf8");
 		expect(procedure).toContain(
-			"python3 @OMPBOT_HOME@/scripts/model-review-collect.py --home @OMPBOT_HOME@ @COLLECT_ARGS@ > @OMPBOT_HOME@/workspace/model-review/collect-<날짜>.md",
+			"python3 @JABBU_HOME@/scripts/model-review-collect.py --home @JABBU_HOME@ @COLLECT_ARGS@ > @JABBU_HOME@/workspace/model-review/collect-<날짜>.md",
 		);
-		expect(procedure).toContain("python3 @OMPBOT_HOME@/scripts/model-review.py check");
+		expect(procedure).toContain("python3 @JABBU_HOME@/scripts/model-review.py check");
 		expect(readFileSync(join(PKG, "README.md"), "utf8")).toContain("@COLLECT_ARGS@");
 	});
 });

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
-import { type OmpbotConfig, readDiscordToken } from "../config";
+import { type JabbuConfig, readDiscordToken } from "../config";
 import { DiscordBinding } from "../discord/binding";
 import { DiscordChannel } from "../discord/channel";
 import { DiscordSocketTransport } from "../discord/socket-transport";
@@ -38,27 +38,27 @@ export function splitModel(model: string | undefined): { provider?: string; mode
  * `ompProfile` the parent env loses `PI_CODING_AGENT_DIR` and gains `OMP_PROFILE`; without it `baseEnv` stays
  * unset, so the driver reads `process.env` exactly as before. `PI_INTENT_TRACING=1`: omp 19 leaves tool-call intents
  * off in RPC sessions unless configured, and the live progress line shows each tool call by its intent.
- * `OMP_HOST_DRIVER=kencrew`: the owner's rule-guards extension judges only what reaches the chat (turn answers and
+ * `OMP_HOST_DRIVER=jabbu-pocket`: the owner's rule-guards extension judges only what reaches the chat (turn answers and
  * notes next to `wait`/`ask`), not text before ordinary tool calls.
  */
 export function botRpcEnv(
 	ompProfile: string | undefined,
 	base: Record<string, string | undefined> = process.env,
 ): { env: Record<string, string>; baseEnv?: Record<string, string | undefined> } {
-	const env = { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "kencrew" };
+	const env = { OMP_WIKI_NOTE_DISABLE: "1", PI_INTENT_TRACING: "1", OMP_HOST_DRIVER: "jabbu-pocket" };
 	return ompProfile === undefined ? { env } : { env, baseEnv: withOmpProfile(base, ompProfile) };
 }
 
 /**
  * The Discord binding when `channels.discord` is set: the real gateway + REST, or the file-logging fake for test
- * runs (`OMPBOT_TEST_DISCORD_TRANSPORT`). A non-retryable gateway close stops Discord alone and is logged.
+ * runs (`JABBU_TEST_DISCORD_TRANSPORT`). A non-retryable gateway close stops Discord alone and is logged.
  */
-function discordBindings(config: OmpbotConfig, env: Record<string, string | undefined>, log: Logger): ChannelBinding[] {
+function discordBindings(config: JabbuConfig, env: Record<string, string | undefined>, log: Logger): ChannelBinding[] {
 	const discord = config.channels.discord;
 	if (discord === undefined) return [];
 	const transport: DiscordTransport =
-		env.OMPBOT_TEST_HOOKS === "1" && env.OMPBOT_TEST_DISCORD_TRANSPORT
-			? new FileFakeDiscordTransport(env.OMPBOT_TEST_DISCORD_TRANSPORT)
+		env.JABBU_TEST_HOOKS === "1" && env.JABBU_TEST_DISCORD_TRANSPORT
+			? new FileFakeDiscordTransport(env.JABBU_TEST_DISCORD_TRANSPORT)
 			: new DiscordSocketTransport(
 					{ botToken: readDiscordToken(config) },
 					{
@@ -79,7 +79,7 @@ function discordBindings(config: OmpbotConfig, env: Record<string, string | unde
 
 /** The chat bindings: Discord, the only platform, when `channels.discord` is set. */
 export function channelBindings(
-	config: OmpbotConfig,
+	config: JabbuConfig,
 	env: Record<string, string | undefined>,
 	log: Logger,
 ): ChannelBinding[] {
@@ -87,7 +87,7 @@ export function channelBindings(
 }
 
 /** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */
-async function checkOmpVersion(config: OmpbotConfig, log: Logger): Promise<string> {
+async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
 	const version = await readVersion([config.ompExecutable, "--version"]);
 	const recorded = join(config.homeDir, "omp-version");
 	let previous: string | undefined;
@@ -128,11 +128,11 @@ export function fatalHandler(
 }
 
 /**
- * `ompbot daemon`: holds the single-instance lock, runs until SIGTERM/SIGINT, then stops gracefully.
+ * `jabbu-pocket daemon`: holds the single-instance lock, runs until SIGTERM/SIGINT, then stops gracefully.
  * Resolves with the process exit code.
  */
 export async function runDaemon(
-	config: OmpbotConfig,
+	config: JabbuConfig,
 	env: Record<string, string | undefined> = process.env,
 	/** The config.json text read right before `loadConfig` produced `config` (the only text last-good may record). */
 	bootConfigText?: string,
@@ -143,12 +143,12 @@ export async function runDaemon(
 		({ sink: logFile, path: logPath } = openLogSink(config.homeDir));
 	} catch (error) {
 		if (error instanceof LogDirError) {
-			process.stderr.write(`ompbot daemon: refusing to start: ${error.message}\n`);
+			process.stderr.write(`jabbu-pocket daemon: refusing to start: ${error.message}\n`);
 			return 1;
 		}
 		throw error;
 	}
-	const lockPath = join(config.homeDir, "ompbot.lock");
+	const lockPath = join(config.homeDir, "jabbu.lock");
 	let lock: Lock;
 	try {
 		lock = acquireLock(lockPath);
@@ -180,7 +180,7 @@ export async function runDaemon(
 		}),
 		{ clock },
 	);
-	// Why the process ended, in ompbot.log too (not only Bun's journal output). Both lines are written synchronously:
+	// Why the process ended, in jabbu.log too (not only Bun's journal output). Both lines are written synchronously:
 	// the process is gone right after them.
 	const lastWords = createLogger({
 		clock,
@@ -227,11 +227,11 @@ export async function runDaemon(
 			},
 		);
 	};
-	const hostLoad = testHostLoad(env); // test-only idle host, behind OMPBOT_TEST_HOOKS=1
+	const hostLoad = testHostLoad(env); // test-only idle host, behind JABBU_TEST_HOOKS=1
 	const ompVersion = await checkOmpVersion(config, log);
-	// What every review, QA and check receipt of this run is recorded on: omp, the kencrew source commit, OS and arch.
+	// What every review, QA and check receipt of this run is recorded on: omp, the source checkout commit, OS and arch.
 	const runtime = await bootRuntime({ omp: ompVersion, sourceDir: join(import.meta.dir, "..", ".."), log });
-	log.info("runtime_booted", { omp: runtime.omp, kencrew: runtime.kencrew });
+	log.info("runtime_booted", { omp: runtime.omp, source: runtime.source });
 	const daemonOptions: ConstructorParameters<typeof Daemon>[0] = {
 		config,
 		bootConfigText,
@@ -242,7 +242,7 @@ export async function runDaemon(
 		channels: channelBindings(config, env, log),
 		crash: crashHook(env),
 		...(hostLoad === undefined ? {} : { hostLoad }),
-		sweepMs: env.OMPBOT_TEST_HOOKS === "1" && env.OMPBOT_SWEEP_MS ? Number(env.OMPBOT_SWEEP_MS) : undefined,
+		sweepMs: env.JABBU_TEST_HOOKS === "1" && env.JABBU_SWEEP_MS ? Number(env.JABBU_SWEEP_MS) : undefined,
 		driverFactory: (origin, sessionDir) => {
 			// Only the omp driver answers dialogs and narrows host tools for a peer-touched conversation.
 			const omp = config.agent !== "agy";
@@ -259,7 +259,7 @@ export async function runDaemon(
 				ownerDialogs: answerDialog !== undefined,
 				peerTouched: omp && daemon.peerTouched(origin),
 				surface: daemon.floorsSurfaceFor(origin),
-				// agy children get no ompbot host tools, so their floors name none.
+				// agy children get no jabbu host tools, so their floors name none.
 				hostTools: omp,
 				now: clock.now(),
 				log,
@@ -292,7 +292,7 @@ export async function runDaemon(
 		},
 	};
 	const daemon = new Daemon(daemonOptions);
-	// The daemon stops its children and settles the ledger before it exits. SIGHUP re-reads config.json (`ompbot reload`
+	// The daemon stops its children and settles the ledger before it exits. SIGHUP re-reads config.json (`jabbu-pocket reload`
 	// too) and swaps `daemonOptions.config`, which the agy MCP getter above reads at each session start.
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 		process.removeAllListeners(signal);

@@ -5,15 +5,15 @@
 ## 1. 수집 (한 번)
 
 ```
-python3 @OMPBOT_HOME@/scripts/weekly-improvement-collect.py
+python3 @JABBU_HOME@/scripts/weekly-improvement-collect.py
 ```
 
 - 정확히 한 번 실행하고, 출력 전문을 이후 단계의 유일한 사실 근거로 쓴다. **출력에 없는 사실은 쓰지 않는다**(다른 파일·DB·로그를 따로 열어 보충하지 않는다).
 - `## 소스 상태`에 `missing`/`error`가 있으면 그 소스는 근거로 쓰지 않고, 답의 회의록 경로 줄 뒤에 한 줄로 알린다.
-- 회의 주차와 기간은 다음으로 정한다(봇 시간대: `OMPBOT_TZ` → `@OMPBOT_HOME@/config.json`의 `timezone` → 시스템 시간대, ISO 주차; 출력 `<YYYY>-W<ww> <월요일> <일요일>`):
+- 회의 주차와 기간은 다음으로 정한다(봇 시간대: `JABBU_TZ` → `@JABBU_HOME@/config.json`의 `timezone` → 시스템 시간대, ISO 주차; 출력 `<YYYY>-W<ww> <월요일> <일요일>`):
 
 ```
-python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("OMPBOT_TZ") or json.load(open("@OMPBOT_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();m=t-d.timedelta(t.weekday());y,w,_=t.isocalendar();print(f"{y}-W{w:02d} {m} {m+d.timedelta(6)}")'
+python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("JABBU_TZ") or json.load(open("@JABBU_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();m=t-d.timedelta(t.weekday());y,w,_=t.isocalendar();print(f"{y}-W{w:02d} {m} {m+d.timedelta(6)}")'
 ```
 
 ## 2. 안건 초안
@@ -38,7 +38,7 @@ python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("OMPBOT_
 
 ## 4. 회의록 작성과 형식 게이트
 
-`@OMPBOT_HOME@/workspace/meetings/<YYYY>-W<ww>.md`에 쓴다(디렉터리가 없으면 만들고, 파일이 있으면 덮어쓴다). 형식:
+`@JABBU_HOME@/workspace/meetings/<YYYY>-W<ww>.md`에 쓴다(디렉터리가 없으면 만들고, 파일이 있으면 덮어쓴다). 형식:
 
 ```
 # 주간 개선 회의 <YYYY>-W<ww>
@@ -56,7 +56,7 @@ python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("OMPBOT_
 - 쓴 뒤 반드시 형식 게이트를 돌린다:
 
 ```
-python3 @OMPBOT_HOME@/scripts/weekly-improvement-meeting.py check <회의록 파일>
+python3 @JABBU_HOME@/scripts/weekly-improvement-meeting.py check <회의록 파일>
 ```
 
 - exit 0이 될 때까지 stderr의 `줄 <n>: <사유>`를 보고 고친다(고쳐서 다시 돌리기 최대 2회). 끝내 실패하면 답 첫 줄을 `⚠️ 회의록 형식 검증 실패: <stderr 첫 줄>`로 쓰고 아래 5단계 내용을 그 뒤에 붙인다.
@@ -67,15 +67,15 @@ python3 @OMPBOT_HOME@/scripts/weekly-improvement-meeting.py check <회의록 파
 주간 개선 회의 <YYYY>-W<ww>: 안건 N건 (검토 동의 a · 수정 b · 반대 c)
 1. <제목> — <제안 요약> [검토: <동의|수정|반대|검토 실패>: <이유>]
 …
-회의록: @OMPBOT_HOME@/workspace/meetings/<YYYY>-W<ww>.md
-이 스레드에 "채택 1,3 기각 2"처럼 답하면 python3 @OMPBOT_HOME@/scripts/weekly-improvement-meeting.py decide <파일> P-…=채택 …로 기록합니다.
+회의록: @JABBU_HOME@/workspace/meetings/<YYYY>-W<ww>.md
+이 스레드에 "채택 1,3 기각 2"처럼 답하면 python3 @JABBU_HOME@/scripts/weekly-improvement-meeting.py decide <파일> P-…=채택 …로 기록합니다.
 ```
 
 - 안건 0건이어도 `[SILENT]`를 쓰지 않는다. 대신 `주간 개선 회의 <YYYY>-W<ww>: 안건 없음 (검토한 근거: 자체회고 n일 · 모니터 m개 · TASK k건)`과 회의록 경로를 올린다(n = 수집기 `reflections: ok (n/7일…)`, m = `## 모니터 실행`의 모니터 수, k = `## TASK`의 열린 TASK 수).
 
 ## 6. 금지
 
-- 승인 요청(`ompbot_request_approval`)·dispatch·TASK 생성을 하지 않는다. 이 세션에는 그 도구가 없거나 실패한다.
+- 승인 요청(`jabbu_request_approval`)·dispatch·TASK 생성을 하지 않는다. 이 세션에는 그 도구가 없거나 실패한다.
 - 회의록 파일 말고는 어떤 파일도 만들거나 고치지 않는다(코드·설정·규칙·다른 회의록·자체회고 포함).
 - 서비스·데몬·컨테이너를 조작하지 않는다(systemctl·재시작·drain 등).
 - 검토 하위는 3단계의 한 번만 부르고, 다른 하위 에이전트는 띄우지 않는다.

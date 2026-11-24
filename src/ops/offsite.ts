@@ -103,7 +103,7 @@ export async function runOffsite(options: OffsiteOptions): Promise<OffsiteResult
 		throw new OffsiteError("no_local_backup", backupsDir);
 	}
 	const dbName = newest(localNames, BACKUP_FILE_PATTERN);
-	if (dbName === undefined) throw new OffsiteError("no_local_backup", `no ompbot-*.db in ${backupsDir}`);
+	if (dbName === undefined) throw new OffsiteError("no_local_backup", `no jabbu-*.db in ${backupsDir}`);
 	const bundleName = newest(localNames, BUNDLE_FILE_PATTERN);
 
 	const stamp = readStamp(backupsDir);

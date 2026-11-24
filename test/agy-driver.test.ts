@@ -62,7 +62,7 @@ interface Harness {
 }
 
 function makeHarness(): Harness {
-	const root = tempDir("ompbot-agy-");
+	const root = tempDir("jabbu-agy-");
 	const workspace = join(root, "workspace");
 	const sessionDir = join(root, "sessions", "e1");
 	const executable = join(root, "bin", "agy");
@@ -158,7 +158,7 @@ function captureLog(): { log: Logger; lines: string[] } {
 }
 
 test("start fails fast with agy_executable_missing", async () => {
-	const root = tempDir("ompbot-agy-missing-");
+	const root = tempDir("jabbu-agy-missing-");
 	const driver = new AgyOmpDriver({
 		agyExecutable: join(root, "no-such-agy"),
 		cwd: root,
@@ -607,7 +607,7 @@ test("agyMcpServers config: defaults filled, reserved env prefixes and malformed
 	expect(agyMcpServersOf("/c.json", [{ name: "w", command: "wiki" }])).toEqual([
 		{ name: "w", command: "wiki", args: [], env: [] },
 	]);
-	for (const prefix of ["SLACK_", "OMPBOT_", "LD_", "DYLD_"]) {
+	for (const prefix of ["SLACK_", "JABBU_", "LD_", "DYLD_"]) {
 		const bad = [{ name: "w", command: "wiki", env: [{ name: `${prefix}X`, value: "1" }] }];
 		expect(() => agyMcpServersOf("/c.json", bad)).toThrow(ConfigError);
 	}
@@ -804,7 +804,7 @@ test("AgyOmpDriver @holdtool prevents false stall_alert up to 8 min, then alerts
 	const harness = makeHarness();
 	const clock = { t: 1_000_000, now: () => clock.t };
 	const intervals = createFakeIntervals();
-	const store = openBotStore(join(harness.root, "ompbot.db"), clock, "Asia/Seoul");
+	const store = openBotStore(join(harness.root, "jabbu.db"), clock, "Asia/Seoul");
 	const lines: string[] = [];
 	const log = createLogger({ sink: (line) => lines.push(line), clock, redact });
 	const stalls: Array<{ originKey: string; threadRef: string; stalled: boolean; silentMs: number }> = [];
@@ -857,7 +857,7 @@ test("AgyOmpDriver @holdtool prevents false stall_alert up to 8 min, then alerts
 		expect(keepalives).toHaveLength(7);
 		expect(stalls).toEqual([]);
 		expect(lines.some((line) => line.includes("stall_alert"))).toBe(false);
-		const db = new Database(join(harness.root, "ompbot.db"), { readonly: true });
+		const db = new Database(join(harness.root, "jabbu.db"), { readonly: true });
 		try {
 			const row = db.query("SELECT last_event_at FROM inbound WHERE origin_key = ?").get(origin) as {
 				last_event_at: number | null;

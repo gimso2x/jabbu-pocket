@@ -116,7 +116,7 @@ let daemon: Daemon | undefined;
 let drivers: SteerSignalDriver[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-statusfinish-");
+	home = makeHome("jabbu-statusfinish-");
 	sessions = new FakeSessionStore();
 	drivers = [];
 	daemon = undefined;
@@ -181,11 +181,11 @@ describe("status messages are finished for every row of a turn and for commands"
 		expect(transport.posts((t) => t.startsWith("ANSWER"))).toHaveLength(1);
 	});
 
-	test("/status-ompbot and /new-ompbot leave no ⏳ message and no 👀 behind", async () => {
+	test("/status-jabbu and /new-jabbu leave no ⏳ message and no 👀 behind", async () => {
 		const transport = new SettlingTransport();
 		const d = await boot(transport, false);
-		await d.inject({ origin: ORIGIN, asOwner: true, text: "/status-ompbot" });
-		await d.inject({ origin: ORIGIN, asOwner: true, text: "/new-ompbot" });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "/status-jabbu" });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "/new-jabbu" });
 		await transport.waitForPosts((t) => t.startsWith("🆕"));
 		await transport.settled(() => transport.eyesLeft().length === 0);
 		expect(transport.posts((t) => t.startsWith("⏳"))).toHaveLength(0);
@@ -203,7 +203,7 @@ describe("status messages are finished for every row of a turn and for commands"
 		const driver = drivers[0];
 		if (!driver) throw new Error("driver not created");
 		await driver.steered.promise;
-		await d.inject({ origin: ORIGIN, asOwner: true, text: "/new-ompbot" });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "/new-jabbu" });
 		await transport.waitForPosts((t) => t.startsWith("🆕"));
 		await transport.settled(() => transport.calls.filter((c) => c.method === "editMessage").length >= 2);
 		expect(transport.stuckStatuses()).toEqual([]);
@@ -215,7 +215,7 @@ describe("status messages are finished for every row of a turn and for commands"
 		const d = await boot(transport, true);
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "long job" });
 		await transport.waitForPosts((t) => t.startsWith("⏳"), 1);
-		await d.inject({ origin: ORIGIN, asOwner: true, text: "/followup-ompbot next job" });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "/followup-jabbu next job" });
 		await transport.waitForPosts((t) => t.startsWith("⏳"), 2);
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "!queue drop 1" });
 		await transport.waitForPosts((t) => t.startsWith("🚫"));
@@ -239,7 +239,7 @@ describe("status messages are finished for every row of a turn and for commands"
 		const d = await boot(transport, true);
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "long job" });
 		await transport.waitForPosts((t) => t.startsWith("⏳"), 1);
-		await d.inject({ origin: ORIGIN, asOwner: true, text: "/followup-ompbot next job" });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "/followup-jabbu next job" });
 		await transport.waitForPosts((t) => t.startsWith("⏳"), 2);
 		const statuses = transport.posts((t) => t.startsWith("⏳")).map((c) => c.id);
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "!stop" });
@@ -324,12 +324,12 @@ describe("an answer that could not be sent", () => {
 	});
 });
 
-describe("ompbot status: uncertain inbound", () => {
+describe("jabbu-pocket status: uncertain inbound", () => {
 	test("the intake line counts uncertain rows as held, and an empty ledger reads uncertain=0", () => {
 		let home: TestHome | undefined;
 		try {
-			home = makeHome("ompbot-status-uncertain-");
-			const dbPath = join(home.dir, "ompbot.db");
+			home = makeHome("jabbu-status-uncertain-");
+			const dbPath = join(home.dir, "jabbu.db");
 			const store = openBotStore(dbPath, clock, "Asia/Seoul");
 			try {
 				expect(renderStatusText(readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul"))).toContain("uncertain=0");

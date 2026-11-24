@@ -53,7 +53,7 @@ let home: string;
 let lowered: string[];
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-adv-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-adv-"));
 	lowered = [];
 });
 
@@ -77,7 +77,7 @@ function tmpLeftovers(homeDir: string): string[] {
 async function cli(args: string[], homeDir: string): Promise<{ out: string; err: string; code: number }> {
 	const proc = Bun.spawn(["bun", MAIN, ...args], {
 		// Test hooks give the gates an idle host, so host_pressure never depends on this machine's load.
-		env: { ...process.env, OMPBOT_HOME: homeDir, OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_HOST_LOAD: "idle" },
+		env: { ...process.env, JABBU_HOME: homeDir, JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "idle" },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -150,20 +150,20 @@ CREATE TABLE monitor_events (
 `;
 
 function seedLedger(dir: string, mutate: (db: Database) => void = () => {}): void {
-	const db = new Database(join(dir, "ompbot.db"), { create: true, strict: true });
+	const db = new Database(join(dir, "jabbu.db"), { create: true, strict: true });
 	db.run(DDL);
 	mutate(db);
 	db.close();
 }
 
 function resetLedger(): void {
-	for (const suffix of ["", "-wal", "-shm"]) rmSync(join(home, `ompbot.db${suffix}`), { force: true });
+	for (const suffix of ["", "-wal", "-shm"]) rmSync(join(home, `jabbu.db${suffix}`), { force: true });
 }
 
 function writeStampAt(dir: string, ts: Date, mtime?: Date): void {
 	mkdirSync(join(dir, "backups"), { recursive: true });
 	const path = join(dir, "backups", STAMP_FILE);
-	writeFileSync(path, `ts=${ts.toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`);
+	writeFileSync(path, `ts=${ts.toISOString()} file=jabbu-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`);
 	if (mtime) utimesSync(path, mtime, mtime);
 }
 
@@ -179,7 +179,7 @@ function gateOf(dir: string, now: number, name: string): { state: string; detail
 
 describe("runBackup adversarial", () => {
 	test("backup taken while another process commits to two tables never tears a transaction", async () => {
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const setup = new Database(dbPath, { create: true, strict: true });
 		setup.run("PRAGMA journal_mode=WAL");
 		setup.run("CREATE TABLE a (n INTEGER PRIMARY KEY)");
@@ -232,22 +232,22 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 	});
 
 	test("a crashed daemon's WAL without -shm is replayed into the backup", () => {
-		const src = mkdtempSync(join(tmpdir(), "ompbot-adv-src-"));
+		const src = mkdtempSync(join(tmpdir(), "jabbu-adv-src-"));
 		try {
-			const live = new Database(join(src, "ompbot.db"), { create: true, strict: true });
+			const live = new Database(join(src, "jabbu.db"), { create: true, strict: true });
 			live.run("PRAGMA journal_mode=WAL");
 			live.run("PRAGMA wal_autocheckpoint=0");
 			live.run("CREATE TABLE t (n INTEGER PRIMARY KEY)");
 			for (let i = 1; i <= 50; i++) live.run("INSERT INTO t VALUES (?)", [i]);
 			// Snapshot main file + WAL exactly as a SIGKILLed daemon would leave them (no -shm survives a reboot).
-			copyFileSync(join(src, "ompbot.db"), join(home, "ompbot.db"));
-			copyFileSync(join(src, "ompbot.db-wal"), join(home, "ompbot.db-wal"));
+			copyFileSync(join(src, "jabbu.db"), join(home, "jabbu.db"));
+			copyFileSync(join(src, "jabbu.db-wal"), join(home, "jabbu.db-wal"));
 			live.close();
 		} finally {
 			rmSync(src, { recursive: true, force: true });
 		}
-		expect(existsSync(join(home, "ompbot.db-wal"))).toBe(true);
-		expect(existsSync(join(home, "ompbot.db-shm"))).toBe(false);
+		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(true);
+		expect(existsSync(join(home, "jabbu.db-shm"))).toBe(false);
 
 		const result = runBackup({ homeDir: home, now: new Date(2026, 9, 23, 4, 30, 0) });
 		const copy = new Database(result.file, { readonly: true, strict: true });
@@ -261,10 +261,10 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 		const backupsDir = join(home, "backups");
 		mkdirSync(backupsDir, { recursive: true });
 		for (const name of [
-			"ompbot-20201010-000000.db",
-			"ompbot-20261020-043000.db",
-			"ompbot-20290101-000000.db",
-			"ompbot-20301010-000000.db",
+			"jabbu-20201010-000000.db",
+			"jabbu-20261020-043000.db",
+			"jabbu-20290101-000000.db",
+			"jabbu-20301010-000000.db",
 		]) {
 			writeFileSync(join(backupsDir, name), "x");
 		}
@@ -272,14 +272,14 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 		expect(existsSync(first.file)).toBe(true);
 		expect(first.kept).toContain(first.file);
 		expect(first.kept).toHaveLength(2);
-		expect(dailyBackupNames(home)).toEqual(["ompbot-20261025-043000.db", "ompbot-20301010-000000.db"]);
+		expect(dailyBackupNames(home)).toEqual(["jabbu-20261025-043000.db", "jabbu-20301010-000000.db"]);
 
 		const second = runBackup({ homeDir: home, keep: 1, now: new Date(2026, 9, 26, 4, 30, 0) });
-		expect(dailyBackupNames(home)).toEqual(["ompbot-20261026-043000.db"]);
+		expect(dailyBackupNames(home)).toEqual(["jabbu-20261026-043000.db"]);
 		expect(second.kept).toEqual([second.file]);
 		expect(second.removed).toHaveLength(2);
 		// The stamp points at the file that actually exists.
-		expect(readStamp(backupsDir)?.file).toBe("ompbot-20261026-043000.db");
+		expect(readStamp(backupsDir)?.file).toBe("jabbu-20261026-043000.db");
 	});
 
 	test("prune pattern ignores look-alike names, other dirs and non-ASCII digits", () => {
@@ -287,38 +287,38 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 		const backupsDir = join(home, "backups");
 		mkdirSync(backupsDir, { recursive: true });
 		const lookalikes = [
-			"ompbot-20261020-043000.db.tmp-abc",
-			"ompbot-20261020-043000.db-wal",
-			"ompbot-2026102-043000.db",
-			"ompbot-20261020-04300.db",
-			"OMPBOT-20261020-043000.db",
-			"ompbot-\u0662\u0660\u0662\u0666\u0661\u0660\u0662\u0660-043000.db",
-			"ompbot-20261020-043000.db\n",
-			"xompbot-20261020-043000.db",
-			"ompbot-20261020-043000.DB",
-			"ompbot-20261020-043000.db.gz",
-			"ompbot-pre-upgrade-20261019T000000Z.db",
+			"jabbu-20261020-043000.db.tmp-abc",
+			"jabbu-20261020-043000.db-wal",
+			"jabbu-2026102-043000.db",
+			"jabbu-20261020-04300.db",
+			"JABBU-20261020-043000.db",
+			"jabbu-\u0662\u0660\u0662\u0666\u0661\u0660\u0662\u0660-043000.db",
+			"jabbu-20261020-043000.db\n",
+			"xjabbu-20261020-043000.db",
+			"jabbu-20261020-043000.DB",
+			"jabbu-20261020-043000.db.gz",
+			"jabbu-pre-upgrade-20261019T000000Z.db",
 			"백업-20261020.db",
 		];
 		for (const name of lookalikes) {
 			expect(BACKUP_FILE_PATTERN.test(name)).toBe(false);
 			writeFileSync(join(backupsDir, name), "x");
 		}
-		mkdirSync(join(backupsDir, "ompbot-20261020-043000.db.d"));
-		writeFileSync(join(backupsDir, "ompbot-20200101-000000.db"), "x");
+		mkdirSync(join(backupsDir, "jabbu-20261020-043000.db.d"));
+		writeFileSync(join(backupsDir, "jabbu-20200101-000000.db"), "x");
 
 		const result = runBackup({ homeDir: home, keep: 1, now: new Date(2026, 9, 25, 4, 30, 0) });
-		expect(result.removed).toEqual([join(backupsDir, "ompbot-20200101-000000.db")]);
+		expect(result.removed).toEqual([join(backupsDir, "jabbu-20200101-000000.db")]);
 		const left = new Set(readdirSync(backupsDir));
 		for (const name of lookalikes) expect(left.has(name)).toBe(true);
-		expect(left.has("ompbot-20261020-043000.db.d")).toBe(true);
+		expect(left.has("jabbu-20261020-043000.db.d")).toBe(true);
 	});
 
 	test("a directory squatting on a daily name must not turn a finished backup into a failure", () => {
 		seedDb(home);
 		const backupsDir = join(home, "backups");
-		mkdirSync(join(backupsDir, "ompbot-20200101-000000.db"), { recursive: true });
-		writeFileSync(join(backupsDir, "ompbot-20200101-000000.db", "inner"), "x");
+		mkdirSync(join(backupsDir, "jabbu-20200101-000000.db"), { recursive: true });
+		writeFileSync(join(backupsDir, "jabbu-20200101-000000.db", "inner"), "x");
 
 		let thrown: unknown;
 		let result: BackupResult | undefined;
@@ -379,7 +379,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 
 	test("a symlink inside sessions is archived as a link, never the target outside the home", () => {
 		seedDb(home);
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-adv-out-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-adv-out-"));
 		try {
 			writeFileSync(join(outside, "bundle-canary.txt"), "xoxb-TEST-0 secret material\n");
 			mkdirSync(join(home, "sessions", "e1"), { recursive: true });
@@ -437,7 +437,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 
 	test("unusable inputs (garbage db, db that is a directory, backups that is a file) leave no stamp and no residue", async () => {
 		// (a) garbage in place of the database
-		writeFileSync(join(home, "ompbot.db"), "this is definitely not a sqlite file\n".repeat(200));
+		writeFileSync(join(home, "jabbu.db"), "this is definitely not a sqlite file\n".repeat(200));
 		expect(() => runBackup({ homeDir: home, now: new Date(2026, 9, 23, 4, 30, 0) })).toThrow();
 		expect(dailyBackupNames(home)).toEqual([]);
 		expect(tmpLeftovers(home)).toEqual([]);
@@ -445,7 +445,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 
 		// (b) the "database" is a directory
 		const homeB = join(home, "b");
-		mkdirSync(join(homeB, "ompbot.db"), { recursive: true });
+		mkdirSync(join(homeB, "jabbu.db"), { recursive: true });
 		expect(() => runBackup({ homeDir: homeB })).toThrow();
 		expect(existsSync(join(homeB, "backups", STAMP_FILE))).toBe(false);
 
@@ -461,7 +461,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 	});
 
 	test("a damaged source page never yields a stamped backup that silently lost rows", () => {
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const db = new Database(dbPath, { create: true, strict: true });
 		db.run("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
 		db.run("BEGIN");
@@ -493,7 +493,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 	});
 
 	test("a database cut mid-file is rejected or complete, never stamped as a partial success", () => {
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const db = new Database(dbPath, { create: true, strict: true });
 		db.run("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)");
 		db.run("BEGIN");
@@ -520,7 +520,7 @@ for (;;) { n += 1; tx(n); if (n === 1) console.log("ready"); }
 	});
 
 	test("a snapshot spanning several hash chunks hashes identically to an independent sha256", () => {
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const db = new Database(dbPath, { create: true, strict: true });
 		db.run("CREATE TABLE t (n INTEGER PRIMARY KEY, v TEXT NOT NULL)");
 		db.run("BEGIN");
@@ -566,12 +566,12 @@ describe("pruneBackups direct", () => {
 	test("keep=1 removes every other daily and never the protected path", () => {
 		const dir = join(home, "backups");
 		mkdirSync(dir);
-		for (const name of ["ompbot-20261020-000000.db", "ompbot-20261021-000000.db", "ompbot-20261022-000000.db"]) {
+		for (const name of ["jabbu-20261020-000000.db", "jabbu-20261021-000000.db", "jabbu-20261022-000000.db"]) {
 			writeFileSync(join(dir, name), "x");
 		}
-		const protect = join(dir, "ompbot-20261020-000000.db"); // deliberately the OLDEST name
+		const protect = join(dir, "jabbu-20261020-000000.db"); // deliberately the OLDEST name
 		const removed = pruneBackups(dir, 1, protect);
-		expect(removed.map((p) => p.split("/").pop())).toEqual(["ompbot-20261022-000000.db", "ompbot-20261021-000000.db"]);
+		expect(removed.map((p) => p.split("/").pop())).toEqual(["jabbu-20261022-000000.db", "jabbu-20261021-000000.db"]);
 		expect(existsSync(protect)).toBe(true);
 	});
 });
@@ -751,7 +751,7 @@ describe("collectGates adversarial", () => {
 
 		// A pre-migration ledger: no last_event_at column, no lanes/monitors tables.
 		resetLedger();
-		const db = new Database(join(home, "ompbot.db"), { create: true, strict: true });
+		const db = new Database(join(home, "jabbu.db"), { create: true, strict: true });
 		db.run("CREATE TABLE inbound (platform_message_id TEXT, state TEXT, dispatched_at INTEGER)");
 		db.run("CREATE TABLE deliveries (state TEXT, next_at INTEGER)");
 		db.run("INSERT INTO inbound VALUES ('x', 'dispatched', ?)", [old]);
@@ -782,16 +782,16 @@ describe("collectGates adversarial", () => {
 		const now = Math.floor(Date.now() / 1000) * 1000;
 		const thrown: string[] = [];
 		const variants: Array<[string, (dir: string) => void]> = [
-			["zero-byte", (dir) => writeFileSync(join(dir, "ompbot.db"), "")],
+			["zero-byte", (dir) => writeFileSync(join(dir, "jabbu.db"), "")],
 			[
 				"no-inbound-table",
 				(dir) => {
-					const db = new Database(join(dir, "ompbot.db"), { create: true, strict: true });
+					const db = new Database(join(dir, "jabbu.db"), { create: true, strict: true });
 					db.run("CREATE TABLE unrelated (x INTEGER)");
 					db.close();
 				},
 			],
-			["garbage", (dir) => writeFileSync(join(dir, "ompbot.db"), "not a database at all\n".repeat(500))],
+			["garbage", (dir) => writeFileSync(join(dir, "jabbu.db"), "not a database at all\n".repeat(500))],
 		];
 		for (const [label, make] of variants) {
 			const dir = join(home, label);
@@ -810,7 +810,7 @@ describe("collectGates adversarial", () => {
 	test("an uncommitted writer does not block or leak into gates; WAL-only rows of a crashed daemon are visible", () => {
 		const now = Math.floor(Date.now() / 1000) * 1000;
 		writeStampAt(home, new Date(now));
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const writer = new Database(dbPath, { create: true, strict: true });
 		writer.run("PRAGMA journal_mode=WAL");
 		writer.run("PRAGMA wal_autocheckpoint=0");
@@ -829,11 +829,11 @@ describe("collectGates adversarial", () => {
 		// Crash snapshot: main file + WAL copied while the daemon connection is still open, no -shm.
 		const crash = join(home, "crash");
 		mkdirSync(crash);
-		copyFileSync(dbPath, join(crash, "ompbot.db"));
-		copyFileSync(`${dbPath}-wal`, join(crash, "ompbot.db-wal"));
+		copyFileSync(dbPath, join(crash, "jabbu.db"));
+		copyFileSync(`${dbPath}-wal`, join(crash, "jabbu.db-wal"));
 		writer.close();
 		writeStampAt(crash, new Date(now));
-		expect(existsSync(join(crash, "ompbot.db-shm"))).toBe(false);
+		expect(existsSync(join(crash, "jabbu.db-shm"))).toBe(false);
 		expect(gateOf(crash, now, "inbound_starved")).toEqual({ state: "open", detail: "silent_old=1" });
 	});
 

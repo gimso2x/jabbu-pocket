@@ -8,7 +8,7 @@ jabbu-pocket를 Discord에서도 쓰려면 Discord 봇이 하나 필요합니다
 
 | 항목 | 값 |
 |---|---|
-| Application | 새로 하나 (이름 자유, 예: `ompbot`) |
+| Application | 새로 하나 (이름 자유, 예: `jabbu`) |
 | Installation → Install Link | **None** (Public Bot을 끄기 전에 먼저) |
 | Installation → Installation Contexts | Guild Install만 (User Install 끔) |
 | Bot → Public Bot | 끔 |
@@ -16,7 +16,7 @@ jabbu-pocket를 Discord에서도 쓰려면 Discord 봇이 하나 필요합니다
 | Privileged Gateway Intents | **Message Content Intent만 켬** (Presence·Server Members는 끔) |
 | OAuth2 scope | `bot` |
 | 봇 권한(정수) | `309237763136` |
-| 토큰 파일 | `~/.ompbot/secrets/discord-bot-token` (0600) |
+| 토큰 파일 | `~/.jabbu/secrets/discord-bot-token` (0600) |
 
 권한 정수 `309237763136`은 아래 8개의 합입니다: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Embed Links, Attach Files. 관리자 권한이나 메시지 삭제·멤버 관리 권한은 넣지 않습니다.
 
@@ -44,14 +44,14 @@ jabbu-pocket를 Discord에서도 쓰려면 Discord 봇이 하나 필요합니다
 
 ```sh
 umask 077
-cat > ~/.ompbot/secrets/discord-bot-token
+cat > ~/.jabbu/secrets/discord-bot-token
 ```
 
 3. 토큰을 붙여넣고 Enter, 이어서 Ctrl-D를 누릅니다.
 4. 권한을 확인합니다. `-rw-------`이어야 합니다.
 
 ```sh
-ls -l ~/.ompbot/secrets/discord-bot-token
+ls -l ~/.jabbu/secrets/discord-bot-token
 ```
 
 토큰이 노출됐다고 생각되면 Portal에서 **Reset Token**으로 새로 받아 같은 파일을 덮어쓰고 데몬을 재시작합니다. 이전 토큰은 즉시 무효가 됩니다.
@@ -82,10 +82,10 @@ https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot&permissions=30
 
 ```sh
 bun src/main.ts init --platform discord --owner <4절의 사용자 ID> --app-id <1절의 Application ID>
-umask 077; cat > ~/.ompbot/secrets/discord-bot-token   # 2절의 봇 토큰 붙여넣고 Ctrl-D
+umask 077; cat > ~/.jabbu/secrets/discord-bot-token   # 2절의 봇 토큰 붙여넣고 Ctrl-D
 ```
 
-서버·채널 키를 더할 때는 `~/.ompbot/config.json`의 `channels`에 직접 넣습니다.
+서버·채널 키를 더할 때는 `~/.jabbu/config.json`의 `channels`에 직접 넣습니다.
 
 ```json
 {
@@ -107,9 +107,9 @@ umask 077; cat > ~/.ompbot/secrets/discord-bot-token   # 2절의 봇 토큰 붙�
 }
 ```
 
-- `botTokenFile`은 ompbot 홈(`~/.ompbot`) 기준 상대경로입니다. 파일이 없으면 `secret_missing`, 권한이 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
+- `botTokenFile`은 jabbu 홈(`~/.jabbu`) 기준 상대경로입니다. 파일이 없으면 `secret_missing`, 권한이 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
 - `displayName`은 선택입니다. 넣으면 기동 때 봇의 글로벌 표시 이름을 이 값으로 바꿉니다(`PATCH /users/@me`, 1~32자). DM·별명 없는 서버의 메시지 위에 이 이름이 보입니다. 바꾸기가 실패하면 경고 로그만 남고 기동은 계속됩니다.
-- `laneChannelId`는 선택입니다. 없으면 DM 세션에는 `ompbot_work_start`가 없고, DM의 `작업: …`에는 이 설정이 필요하다는 답이 옵니다. 서버 채널·스레드에서 요청한 레인은 설정 없이 그 채널에 열립니다.
+- `laneChannelId`는 선택입니다. 없으면 DM 세션에는 `jabbu_work_start`가 없고, DM의 `작업: …`에는 이 설정이 필요하다는 답이 옵니다. 서버 채널·스레드에서 요청한 레인은 설정 없이 그 채널에 열립니다.
 - `logChannelId`는 선택입니다. 넣으면 Discord 대화와 Discord 스레드의 작업 레인 답 첫 줄이 `✅ 완료`로 시작할 때 그 답의 사본이 `📒 완료 보고 사본 · <요청 위치 + 원 스레드 링크>` 머리말과 함께 이 채널에 한 번 올라갑니다. 이 채널과 그 스레드의 글은 멘션이 있어도 턴이 되지 않습니다(`inbound_dropped reason=log_channel`). `escalationChannelId`·`laneChannelId`·`mentionFreeChannels`와 같은 채널이면 `config_invalid field=channels.discord.logChannelId`로 기동하지 않습니다.
 - `alertChannelId`는 선택입니다. 넣으면 오너 경보(게이트 열림·회복, 턴 연속 실패·멈춤, 처리 정체, 공급자 한도, 모니터 실패)가 오너 DM 대신 이 채널 최상위에 올라갑니다. 답장으로 이어 물으려면 `mentionFreeChannels`에도 넣습니다. `logChannelId`와 같으면 기동하지 않습니다.
 - `escalationChannelId`는 선택입니다. 넣으면 Discord 대화에서 올린 승인 카드가 이 채널에 뜹니다(Discord 오너 멘션, `요청 위치` 링크). 요청한 대화에 스레드가 있으면 그곳에 버튼 달린 사본 카드가 뜨고, 카드 스레드에 단 답글도 카드를 결정합니다. 없으면 지금처럼 요청한 대화에 카드가 뜹니다.
@@ -120,7 +120,7 @@ umask 077; cat > ~/.ompbot/secrets/discord-bot-token   # 2절의 봇 토큰 붙�
 반영과 확인:
 
 ```sh
-cd ~/work/ompbot
+cd ~/work/jabbu
 bun src/main.ts doctor          # ok discord … 줄이 나와야 함
 bun src/main.ts apply --detach  # 재시작
 ```
@@ -177,4 +177,4 @@ bun src/main.ts apply --detach  # 재시작
 | 작업 레인 루트가 `❌ 제목`으로 바뀜 | 레인 채널에서 스레드를 못 만듦(위와 같은 권한). 권한을 켜고 다시 요청 |
 | DM `작업: …`에 `laneChannelId`가 필요하다는 답 | 5절에 `laneChannelId`를 넣고 재시작 |
 | Public Bot을 끌 때 "기본 승인 링크" 오류 | Installation 탭 Install Link가 Discord Provided Link임. None으로 바꾸고 저장한 뒤 다시 끔(1절 3단계) |
-| 예전 버전이 등록한 `/…-ompbot` 슬래시 명령이 아직 보이고 누르면 "애플리케이션이 응답하지 않았어요"가 뜸 | 봇은 슬래시 명령을 더 이상 받지 않고 등록·삭제도 하지 않습니다. 서버에 남은 명령은 봇 토큰으로 빈 목록을 덮어써야 지워집니다: 전역은 `PUT /applications/<APP_ID>/commands`, `guildIds`를 쓰던 서버는 `PUT /applications/<APP_ID>/guilds/<서버 ID>/commands`에 본문 `[]`(헤더 `Authorization: Bot <토큰>`). 쓰지 않는 명령이 보이는 것 외에 해는 없습니다 |
+| 예전 버전이 등록한 `/…-jabbu` 슬래시 명령이 아직 보이고 누르면 "애플리케이션이 응답하지 않았어요"가 뜸 | 봇은 슬래시 명령을 더 이상 받지 않고 등록·삭제도 하지 않습니다. 서버에 남은 명령은 봇 토큰으로 빈 목록을 덮어써야 지워집니다: 전역은 `PUT /applications/<APP_ID>/commands`, `guildIds`를 쓰던 서버는 `PUT /applications/<APP_ID>/guilds/<서버 ID>/commands`에 본문 `[]`(헤더 `Authorization: Bot <토큰>`). 쓰지 않는 명령이 보이는 것 외에 해는 없습니다 |

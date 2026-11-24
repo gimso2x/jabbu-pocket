@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { DiscordChannelConfig, OmpbotConfig } from "../src/config";
+import type { DiscordChannelConfig, JabbuConfig } from "../src/config";
 import { parseThreadRef } from "../src/core/normalize";
 import { Daemon } from "../src/daemon/daemon";
 import type { ProcessRunner, RunProcessOptions, RunProcessResult } from "../src/dispatch/omp";
@@ -61,7 +61,7 @@ let repos: string[];
 let daemons: Daemon[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-review-home-");
+	home = makeHome("jabbu-lane-review-home-");
 	repos = [];
 	daemons = [];
 });
@@ -137,7 +137,7 @@ function commitIn(dir: string, file: string): string {
 }
 
 /** The test home's config with lanes opening in the server channel `CHANNEL` (the DM has no lane channel of its own). */
-function laneConfig(): OmpbotConfig {
+function laneConfig(): JabbuConfig {
 	return {
 		...home.config,
 		channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
@@ -291,7 +291,7 @@ describe("review before auto-merge", () => {
 		expect(cards[0]?.content).toContain("자동 머지 안 함: 독립 리뷰 BLOCK");
 		expect(cards[0]?.content).toContain("*리뷰 지적*");
 		expect(cards[0]?.content).toContain("테스트를 지웠다");
-		expect(JSON.stringify(cards[0]?.components ?? [])).toContain(`ompbot:lane:merge:${lane.name}`);
+		expect(JSON.stringify(cards[0]?.components ?? [])).toContain(`jabbu:lane:merge:${lane.name}`);
 		expect(diffFiles(lane)).toEqual([]);
 
 		const outcome = await h.manager.requestLand(lane.name, "owner");
@@ -866,7 +866,7 @@ describe("reviewLane: the prompt and the diff file (AC-8)", () => {
 		name: "review",
 		title: "리뷰 제목",
 		threadRef: `${CHANNEL}:900000000000000001`,
-		originKey: "ompbot/work/review",
+		originKey: "jabbu/work/review",
 		cwd: "/wt",
 		sessionDir: "/s",
 		status: "closed",
@@ -920,11 +920,11 @@ describe("reviewLane: the prompt and the diff file (AC-8)", () => {
 			{ lane: lane(), model: MODEL, timeoutMs: 1000 },
 			{
 				...deps(fakeGit("+x\n").git, fake.run),
-				ompProfile: "ompbot",
+				ompProfile: "jabbu",
 				inheritedEnv: { PATH: "/usr/bin", PI_CODING_AGENT_DIR: "/custom/agent" },
 			},
 		);
-		expect(fake.calls[0]?.opts.env?.OMP_PROFILE).toBe("ompbot");
+		expect(fake.calls[0]?.opts.env?.OMP_PROFILE).toBe("jabbu");
 		expect(fake.calls[0]?.opts.env).not.toHaveProperty("PI_CODING_AGENT_DIR");
 	});
 
@@ -1135,7 +1135,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 		daemons.push(daemon);
 		await daemon.start();
 		const signal = new AbortController().signal;
-		const start = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "ompbot_work_start");
+		const start = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "jabbu_work_start");
 		await start?.execute(
 			{ title: "daemon-review", cwd: repo, brief: "데몬 브리프", acceptance: [CHECK_A], risk: "L2" },
 			{ signal },
@@ -1144,7 +1144,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 		if (lane === undefined) throw new Error("no lane");
 		expect(lane.meta.brief).toBe("데몬 브리프");
 		commitIn(lane.cwd, "a.txt");
-		const claim = daemon.hostToolsFor(lane.originKey).find((tool) => tool.name === "ompbot_claim_done");
+		const claim = daemon.hostToolsFor(lane.originKey).find((tool) => tool.name === "jabbu_claim_done");
 		expect(await claim?.execute({ repo: lane.cwd, commit: "HEAD", summary: "a.txt 추가" }, { signal })).toContain(
 			"검증 통과",
 		);
@@ -1191,7 +1191,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 		daemons.push(daemon);
 		await daemon.start();
 		const signal = new AbortController().signal;
-		const start = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "ompbot_work_start");
+		const start = daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((tool) => tool.name === "jabbu_work_start");
 		const closeWith = async (title: string, risk: string | undefined): Promise<LaneRow> => {
 			await start?.execute(
 				{ title, cwd: repo, brief: `${title} 브리프`, acceptance: [CHECK_A], ...(risk === undefined ? {} : { risk }) },
@@ -1200,7 +1200,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 			const lane = daemon.store.getLane(title);
 			if (lane === undefined) throw new Error(`no lane ${title}`);
 			commitIn(lane.cwd, "a.txt");
-			const claim = daemon.hostToolsFor(lane.originKey).find((tool) => tool.name === "ompbot_claim_done");
+			const claim = daemon.hostToolsFor(lane.originKey).find((tool) => tool.name === "jabbu_claim_done");
 			expect(await claim?.execute({ repo: lane.cwd, commit: "HEAD", summary: "a.txt 추가" }, { signal })).toContain(
 				"검증 통과",
 			);

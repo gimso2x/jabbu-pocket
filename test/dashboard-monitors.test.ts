@@ -21,17 +21,17 @@ const TOKEN = ["xox", "b-", "1234567890-abcdefABCDEF"].join("");
 
 /** The production instructions' opening and script sentences as the owner wrote them (2026-11-06). */
 const MORNING_BRIEF =
-	"아침 브리핑을 쓴다.\n1) `python3 /home/owner/.ompbot/scripts/morning-brief-collect.py`를 한 번만 실행한다.";
+	"아침 브리핑을 쓴다.\n1) `python3 /home/owner/.jabbu/scripts/morning-brief-collect.py`를 한 번만 실행한다.";
 const LEDGER_SUMMARY =
-	"전달 장부 요약을 올린다. `python3 /home/owner/.ompbot/scripts/ledger-summary.py`를 한 번 실행하고, 그 출력을 그대로 답한다.";
+	"전달 장부 요약을 올린다. `python3 /home/owner/.jabbu/scripts/ledger-summary.py`를 한 번 실행하고, 그 출력을 그대로 답한다.";
 const cron = (schedule: string, timezone = "Asia/Seoul") => ({ kind: "cron", schedule, timezone });
 
 let home: string;
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-dash-monitors-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-dash-monitors-"));
 	openStore({
 		timezone: "Asia/Seoul",
-		path: join(home, "ompbot.db"),
+		path: join(home, "jabbu.db"),
 		clock: { now: () => NOW },
 		redact: (text) => text,
 	}).close();
@@ -63,7 +63,7 @@ interface Ev {
 }
 
 function insert(table: string, rows: Array<Record<string, string | number | null>>, dir = home): void {
-	const db = new Database(join(dir, "ompbot.db"), { strict: true });
+	const db = new Database(join(dir, "jabbu.db"), { strict: true });
 	for (const row of rows) {
 		const keys = Object.keys(row);
 		db.run(`INSERT INTO ${table} (${keys}) VALUES (${keys.map(() => "?")})`, Object.values(row));
@@ -115,7 +115,7 @@ function addEvents(monitorId: string, events: Ev[]): void {
 function deps(): SnapshotDeps {
 	return {
 		homeDir: home,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: {
 			channels: { discord: { logChannelId: "678901234567890123", escalationChannelId: "789012345678901234" } },
@@ -267,7 +267,7 @@ describe("dashboard monitors snapshot", () => {
 				channel: "890123456789012345",
 				copyChannel: "678901234567890123",
 				procedureFiles: ["procedures/owner-distill.md", "/srv/elsewhere/scripts/a.md"],
-				instruction: "절차를 따른다. `bash ~/.ompbot/scripts/check-disk.sh`와 run.ts 를 본다.",
+				instruction: "절차를 따른다. `bash ~/.jabbu/scripts/check-disk.sh`와 run.ts 를 본다.",
 			},
 			{ id: "hook", name: "훅", trigger: { kind: "webhook", id: "h", token: "t" }, channel: "789012345678901234" },
 			{ id: "early", name: "아침 브리핑", trigger: cron("0 2 * * *"), instruction: MORNING_BRIEF },
@@ -302,7 +302,7 @@ describe("dashboard monitors snapshot", () => {
 			{ kind: "script", name: "run.ts" },
 		]);
 		for (const item of items) for (const file of item.files) expect(file.name).not.toContain("/");
-		for (const leak of ["/home/owner/.ompbot/scripts", "/srv/elsewhere", "procedures/owner-distill.md"]) {
+		for (const leak of ["/home/owner/.jabbu/scripts", "/srv/elsewhere", "procedures/owner-distill.md"]) {
 			expect(json).not.toContain(leak);
 		}
 		const html = monitorsHtml(snapshot);
@@ -690,10 +690,10 @@ describe("dashboard monitors view", () => {
 describe("dashboard peer monitors", () => {
 	let peer: string;
 	beforeEach(() => {
-		peer = mkdtempSync(join(tmpdir(), "ompbot-dash-peer-"));
+		peer = mkdtempSync(join(tmpdir(), "jabbu-dash-peer-"));
 		openStore({
 			timezone: "Asia/Seoul",
-			path: join(peer, "ompbot.db"),
+			path: join(peer, "jabbu.db"),
 			clock: { now: () => NOW },
 			redact: (text) => text,
 		}).close();
@@ -744,23 +744,23 @@ describe("dashboard peer monitors", () => {
 	test("AC-3: a missing or broken peer db leaves the own monitors and one peerErrors line; none without errors", async () => {
 		addMonitors([{ id: "own", name: "송박 일", trigger: cron("0 9 * * *") }]);
 		writeFileSync(join(peer, "config.json"), "{}");
-		rmSync(join(peer, "ompbot.db"));
+		rmSync(join(peer, "jabbu.db"));
 		const missing = await peerSnapshot([
 			{ name: "서팍", home: peer, workspaceDir: join(peer, "workspace"), timezone: "Asia/Seoul" },
 		]);
 		expect(missing.monitors.items.map((item) => item.id)).toEqual(["own"]);
-		expect(missing.monitors.peerErrors).toEqual([{ install: "서팍", error: "ompbot.db가 없음" }]);
-		writeFileSync(join(peer, "ompbot.db"), "not a database".repeat(50));
+		expect(missing.monitors.peerErrors).toEqual([{ install: "서팍", error: "jabbu.db가 없음" }]);
+		writeFileSync(join(peer, "jabbu.db"), "not a database".repeat(50));
 		const broken = await peerSnapshot([
 			{ name: "서팍", home: peer, workspaceDir: join(peer, "workspace"), timezone: "Asia/Seoul" },
 		]);
 		expect(broken.monitors.items.map((item) => item.id)).toEqual(["own"]);
 		expect(broken.monitors.peerErrors).toHaveLength(1);
 		expect(broken.monitors.peerErrors?.[0]?.error.includes("\n")).toBe(false);
-		rmSync(join(peer, "ompbot.db"));
+		rmSync(join(peer, "jabbu.db"));
 		openStore({
 			timezone: "Asia/Seoul",
-			path: join(peer, "ompbot.db"),
+			path: join(peer, "jabbu.db"),
 			clock: { now: () => NOW },
 			redact: (t) => t,
 		}).close();

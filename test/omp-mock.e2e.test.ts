@@ -13,13 +13,13 @@ import { createOmpMockEnv, MOCK_MODEL, type OmpMockEnv } from "./helpers/omp-moc
 /**
  * Real `omp --mode rpc` behind the real mailbox, answered by the scripted mock model (test/helpers/mock-llm.ts): zero
  * tokens, deterministic, so an omp upgrade that changes event shapes, steer or abort fails here. Runs only with
- * OMPBOT_E2E_OMP_MOCK=1 (`bun run test:omp-mock`); pick the binary with OMPBOT_OMP_EXECUTABLE. A missing omp skips;
+ * JABBU_E2E_OMP_MOCK=1 (`bun run test:omp-mock`); pick the binary with JABBU_OMP_EXECUTABLE. A missing omp skips;
  * an omp that rejects the mock provider config fails (that is the regression signal).
  */
-const enabled = process.env.OMPBOT_E2E_OMP_MOCK === "1";
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? undefined;
+const enabled = process.env.JABBU_E2E_OMP_MOCK === "1";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? undefined;
 if (!enabled)
-	console.log("[skip] omp-mock.e2e.test.ts: set OMPBOT_E2E_OMP_MOCK=1 to run against a real omp (no tokens)");
+	console.log("[skip] omp-mock.e2e.test.ts: set JABBU_E2E_OMP_MOCK=1 to run against a real omp (no tokens)");
 else if (OMP_EXECUTABLE === undefined) console.log("[skip] omp-mock.e2e.test.ts: omp executable not found");
 const runnable = enabled && OMP_EXECUTABLE !== undefined;
 const OMP_VERSION = runnable
@@ -89,7 +89,7 @@ beforeAll(() => {
 	if (!runnable) return;
 	llm = startMockLlm();
 	env = createOmpMockEnv(llm.baseUrl);
-	store = openBotStore(join(env.root, "ompbot.db"), { now: () => now }, "Asia/Seoul");
+	store = openBotStore(join(env.root, "jabbu.db"), { now: () => now }, "Asia/Seoul");
 	const slash = MOCK_MODEL.indexOf("/");
 	router = new OriginRouter({
 		timezone: "Asia/Seoul",

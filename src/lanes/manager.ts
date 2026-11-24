@@ -882,7 +882,7 @@ export class LaneManager {
 		const frozen = this.#deps.frozen?.() !== undefined;
 		if (frozen) log.warn("lane_send_held_frozen", { lane: name });
 		else if (by !== "attach" && back !== "done-claimed") {
-			this.#send(name, "resume", "[ompbot] 오너가 재개했습니다. 멈추기 전 작업을 이어 하세요.");
+			this.#send(name, "resume", "[jabbu] 오너가 재개했습니다. 멈추기 전 작업을 이어 하세요.");
 		}
 		if (store.getLane(name)?.status === "paused") {
 			return { handled: true, text: "⚠️ 재개하지 못했습니다: 레인이 여전히 paused입니다." };
@@ -894,7 +894,7 @@ export class LaneManager {
 	}
 
 	/**
-	 * `ompbot lanes attach`: hands the lane's session to a terminal omp. The file is read first — the one the running
+	 * `jabbu-pocket lanes attach`: hands the lane's session to a terminal omp. The file is read first — the one the running
 	 * child has open, else the one the next child would resume — then the lane is held (`paused`, registry `attach`, so no
 	 * child starts and thread messages wait), its turn is aborted (`wait`: awaited instead) and the child stopped. The
 	 * caller resumes exactly that file; `detach` (or the orphan check of `tick`) gives the lane back.
@@ -964,7 +964,7 @@ export class LaneManager {
 	}
 
 	/**
-	 * The terminal omp ended (`by: "cli"`) or its `ompbot lanes attach` process is gone (`"orphan"`): the attached file is
+	 * The terminal omp ended (`by: "cli"`) or its `jabbu-pocket lanes attach` process is gone (`"orphan"`): the attached file is
 	 * pinned as the file the next child resumes — no new epoch, no child started here (the next message starts it
 	 * through the mailbox) — and the lane is resumed unless it was paused before, `--keep-paused` was given, or the
 	 * terminal left new session files (`newFiles`, listed by the CLI): then it stays paused and the owner picks the file.
@@ -1206,7 +1206,7 @@ export class LaneManager {
 	}
 
 	/**
-	 * Milestone report from the lane (`ompbot_lane_progress`): recorded and shown in the status message at once. It
+	 * Milestone report from the lane (`jabbu_lane_progress`): recorded and shown in the status message at once. It
 	 * needs evidence: a regular file inside the lane's worktree or a tool call the lane session finished, whose sha256
 	 * the core records with the milestone. A
 	 * report that asks the owner to decide (`needsOwner`) is a question, not a claim, and is taken without evidence
@@ -2802,7 +2802,7 @@ export class LaneManager {
 	}
 
 	/**
-	 * `ompbot_work_start` with `after`: stores the start arguments instead of starting a lane. Refused (`LaneInputError`, nothing stored) for an argument `start` would refuse, for a
+	 * `jabbu_work_start` with `after`: stores the start arguments instead of starting a lane. Refused (`LaneInputError`, nothing stored) for an argument `start` would refuse, for a
 	 * prerequisite that is missing, in another repository, without a worktree (made before lanes had one) or already
 	 * discarded, for a repeated one, one named like the lane itself, or more than
 	 * `RESERVATION_AFTER_MAX`. `args` is `start`'s input without `parentOrigin` (that is `originKey`) or `force`
@@ -3214,7 +3214,7 @@ export class LaneManager {
 		}
 	}
 
-	/** An attached lane whose `ompbot lanes attach` process is gone (killed terminal, restart of this host) is taken back. */
+	/** An attached lane whose `jabbu-pocket lanes attach` process is gone (killed terminal, restart of this host) is taken back. */
 	async #takeBackOrphans(): Promise<void> {
 		const alive = this.#deps.pidAlive ?? pidAlive;
 		for (const lane of this.#deps.store.listLanes()) {

@@ -49,8 +49,8 @@ function reopen(store: Store): Store {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-peer-silence-"));
-	dbPath = join(dir, "ompbot.db");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-peer-silence-"));
+	dbPath = join(dir, "jabbu.db");
 	now = 1_800_000_000_000;
 });
 

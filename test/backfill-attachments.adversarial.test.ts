@@ -43,7 +43,7 @@ let dir: string;
 let cleanups: Array<() => void | Promise<void>>;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-a2-adv-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-a2-adv-"));
 	cleanups = [];
 });
 

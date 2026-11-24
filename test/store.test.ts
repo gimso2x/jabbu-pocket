@@ -42,8 +42,8 @@ function open(hooks?: Parameters<typeof openStore>[0]["hooks"]): Store {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-store-"));
-	dbPath = join(dir, "ompbot.db");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-store-"));
+	dbPath = join(dir, "jabbu.db");
 	clock = new FakeClock();
 });
 

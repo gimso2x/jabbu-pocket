@@ -1,8 +1,8 @@
 [Unit]
-Description=ompbot gc: prune old conversation and expired thread sessions
+Description=jabbu-pocket gc: prune old conversation and expired thread sessions
 # Both timers are Persistent=true and can fire together after downtime; the backup bundles
 # the sessions/ tree that gc prunes, so run gc only after the backup finished.
-After=ompbot-backup.service
+After=jabbu-backup.service
 
 [Service]
 Type=oneshot

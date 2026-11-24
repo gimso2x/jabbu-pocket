@@ -17,15 +17,15 @@ const BROKEN = "C0123456789:1793769100.000001";
 const BARE = "C0123456789:1793769200.000002";
 const LANE = "C0123456789:1793769300.000003";
 const FULL_SUMMARY =
-	"T-20261102-04 워크트리와 브랜치를 정리합니다. 리뷰가 끝난 TASK라 /home/user/work/ompbot-t-20261102-04 워크트리와 task/T-20261102-04 브랜치를 지웁니다.";
+	"T-20261102-04 워크트리와 브랜치를 정리합니다. 리뷰가 끝난 TASK라 /home/user/work/jabbu-t-20261102-04 워크트리와 task/T-20261102-04 브랜치를 지웁니다.";
 const LONG_SUMMARY = `원격 저장소 ${"가나다라마".repeat(40)} 강제 push`;
 
 let home: TestHome;
 let dbPath: string;
 
 beforeEach(() => {
-	home = makeHome("ompbot-dash-approvals-");
-	dbPath = join(home.dir, "ompbot.db");
+	home = makeHome("jabbu-dash-approvals-");
+	dbPath = join(home.dir, "jabbu.db");
 });
 afterEach(() => home.remove());
 
@@ -61,7 +61,7 @@ function seed(): void {
 		NOW + 29 * MINUTE,
 		"discord/ch/300000000000000002/t/1793768647644509",
 		JSON.stringify({
-			action: "git worktree remove /home/user/work/ompbot-t-20261102-04",
+			action: "git worktree remove /home/user/work/jabbu-t-20261102-04",
 			why: "리뷰 끝 · 토큰 xoxb-TEST-0 은 가려져야 함",
 			impact: "브랜치 task/T-20261102-04 삭제",
 			rollback: "지운 브랜치는 reflog로만 살릴 수 있음",
@@ -140,7 +140,7 @@ describe("dashboard approvals", () => {
 			originLabel: "Discord 채널 300000000000000002 스레드",
 		});
 		expect(full.detail).toEqual({
-			action: "git worktree remove /home/user/work/ompbot-t-20261102-04",
+			action: "git worktree remove /home/user/work/jabbu-t-20261102-04",
 			why: "리뷰 끝 · 토큰 [REDACTED] 은 가려져야 함",
 			impact: "브랜치 task/T-20261102-04 삭제",
 			rollback: "지운 브랜치는 reflog로만 살릴 수 있음",
@@ -211,7 +211,7 @@ describe("dashboard approvals", () => {
 		};
 		const full = rowOf(FULL);
 		expect(full).toContain('<p class="row-title">T-20261102-04 워크트리와 브랜치를 정리합니다.</p>');
-		expect(full).not.toContain("/home/user/work/ompbot-t-20261102-04");
+		expect(full).not.toContain("/home/user/work/jabbu-t-20261102-04");
 		expect(full).toContain("29분 남음");
 		expect(full).toContain("되돌릴 수 없음");
 		expect(full).toContain("Discord 채널 300000000000000002 스레드");
@@ -232,7 +232,7 @@ describe("dashboard approvals", () => {
 		const snapshot = await buildSnapshot(deps());
 		const full = renderItemDetail(snapshot, "approvals", FULL);
 		for (const [label, value] of [
-			["할 일", "git worktree remove /home/user/work/ompbot-t-20261102-04"],
+			["할 일", "git worktree remove /home/user/work/jabbu-t-20261102-04"],
 			["이유", "리뷰 끝 · 토큰 [REDACTED] 은 가려져야 함"],
 			["영향", "브랜치 task/T-20261102-04 삭제"],
 			["되돌릴 수 없는 이유", "지운 브랜치는 reflog로만 살릴 수 있음"],

@@ -306,7 +306,7 @@ describe("DiscordGateway", () => {
 		expect(DISCORD_INTENTS).toBe(37377);
 		expect(identify.token).toBe(TOKEN);
 		expect(identify.intents).toBe(37377);
-		expect(identify.properties).toMatchObject({ browser: "ompbot", device: "ompbot" });
+		expect(identify.properties).toMatchObject({ browser: "jabbu", device: "jabbu" });
 		expect(identify.presence).toEqual({ status: "online", since: null, activities: [], afk: false });
 		expect(gw.session()).toEqual({
 			sessionId: "sess-1",

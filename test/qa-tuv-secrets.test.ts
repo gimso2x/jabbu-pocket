@@ -150,7 +150,7 @@ describe("결함 3: 감사 기록의 작은따옴표 토큰", () => {
 
 describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 	const signal = new AbortController().signal;
-	const home = tempDir("ompbot-qa-tuv-home-");
+	const home = tempDir("jabbu-qa-tuv-home-");
 	mkdirSync(join(home, "secrets", "sub"), { recursive: true });
 	mkdirSync(join(home, "work"), { recursive: true });
 	symlinkSync(join(home, "secrets"), join(home, "work", "link"));
@@ -178,7 +178,7 @@ describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 			join(home, "secrets"),
 			join(home, "secrets", "sub"),
 			join(home, "work", "link"),
-			"/home/someone/.ompbot-songbak/secrets",
+			"/home/someone/.jabbu-songbak/secrets",
 		]) {
 			const { built, calls } = tool();
 			await expect(built.execute({ mode: "herdr", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
@@ -189,7 +189,7 @@ describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 	});
 
 	test("a remote cwd with a `secrets` path component is refused before any process", async () => {
-		for (const cwd of ["~/.ompbot/secrets", "/home/u/.ompbot-x/secrets/a"]) {
+		for (const cwd of ["~/.jabbu/secrets", "/home/u/.jabbu-x/secrets/a"]) {
 			const { built, calls } = tool();
 			await expect(built.execute({ host: "wsl", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
 				"비밀 디렉터리",
@@ -325,7 +325,7 @@ describe("결함 5: 자른 뒤 가리던 오류·증거 문구", () => {
 	}
 
 	test("land: a git failure line and the handoff reason are masked before their cuts", async () => {
-		const worktree = tempDir("ompbot-qa-tuv-wt-");
+		const worktree = tempDir("jabbu-qa-tuv-wt-");
 		const git: GitRunner = async (args) => {
 			if (args.includes("symbolic-ref")) return { code: 0, stdout: "refs/heads/task/T-20261120-01\n", stderr: "" };
 			if (args.includes("status")) return { code: 128, stdout: "", stderr: straddle(200, JWT, "fatal: ") };
@@ -337,7 +337,7 @@ describe("결함 5: 자른 뒤 가리던 오류·증거 문구", () => {
 	});
 
 	test("land: git patch-id's stderr is masked before its 160-char cut", async () => {
-		const repo = tempDir("ompbot-qa-tuv-repo-");
+		const repo = tempDir("jabbu-qa-tuv-repo-");
 		execFileSync("git", ["init", "-q", repo]);
 		// `fatal: ambiguous argument '` (27 chars) comes before the revision in git's message.
 		const rev = straddle(160 - 27, SK);
@@ -426,7 +426,7 @@ describe("서팍 검토: 남은 절단·복사 경로", () => {
 	});
 
 	test("export --with-files never copies a file from the home's secrets directory", () => {
-		const home = tempDir("ompbot-qatuv-export-");
+		const home = tempDir("jabbu-qatuv-export-");
 		const scriptsRoot = join(home, "scripts");
 		const secrets = join(home, "secrets");
 		mkdirSync(scriptsRoot, { recursive: true });
@@ -438,7 +438,7 @@ describe("서팍 검토: 남은 절단·복사 경로", () => {
 		writeFileSync(token, `${SK}\n`, { mode: 0o600 });
 		// No usable config: the workspace falls back to the home itself (src/cli/monitors.ts).
 		const ctx = { scriptsRoot, workspaceDir: home, defaultTimezone: "Asia/Seoul" };
-		const ledger = openMonitorLedger(join(home, "ompbot.db"));
+		const ledger = openMonitorLedger(join(home, "jabbu.db"));
 		try {
 			ledger.addMonitor(
 				parseMonitorSpec(

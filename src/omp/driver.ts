@@ -1,5 +1,5 @@
 /**
- * Boundary between ompbot and one `omp --mode rpc` child process.
+ * Boundary between jabbu and one `omp --mode rpc` child process.
  *
  * One driver instance owns at most one child process and one conversation
  * (`sessionDir`). Implementations: `RpcOmpDriver` (real omp), `AgyOmpDriver`
@@ -43,7 +43,7 @@ export class OmpDriverError extends Error {
 	}
 }
 
-/** One session entry as returned by `get_entries` (only the fields ompbot relies on are typed). */
+/** One session entry as returned by `get_entries` (only the fields jabbu relies on are typed). */
 export interface OmpEntry {
 	id: string;
 	parentId?: string | null;
@@ -61,7 +61,7 @@ export interface OmpEntry {
 	[key: string]: unknown;
 }
 
-/** Token counts (and cost in dollars) of one assistant call (omp `Usage`; only the fields ompbot reads are typed). */
+/** Token counts (and cost in dollars) of one assistant call (omp `Usage`; only the fields jabbu reads are typed). */
 export interface OmpUsage {
 	input?: number;
 	output?: number;
@@ -246,7 +246,7 @@ export interface OmpSessionDriver {
 	newSession(): Promise<{ cancelled: boolean }>;
 	/** Continue the newest session in this driver's `sessionDir` (or start a fresh one). */
 	openSession(): Promise<OmpOpenResult>;
-	/** Open a specific session file (`/resume-ompbot`). */
+	/** Open a specific session file (`/resume-jabbu`). */
 	switchSession(sessionFile: string): Promise<{ cancelled: boolean }>;
 	/** Models omp can use (`provider/id`). */
 	availableModels(): Promise<string[]>;

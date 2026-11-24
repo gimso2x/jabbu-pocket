@@ -31,7 +31,7 @@ const write = (extra: Record<string, unknown>): void => {
 };
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-wiki-cfg-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-wiki-cfg-"));
 	chmodSync(home, 0o700);
 	mkdirSync(join(home, "secrets"), { mode: 0o700 });
 	writeFileSync(join(home, "secrets", "bot.token"), "TEST-discord-0\n");
