@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { IntegrityRefusal } from "../src/lanes/integrity";
-import { refusalFingerprint } from "../src/lanes/integrity-approval";
+import { type IntegrityRefusal, LaneDiffUnavailable } from "../src/lanes/integrity";
+import { type IntegrityReaders, integrityRefusalsOf, refusalFingerprint } from "../src/lanes/integrity-approval";
 import { CLAIM_GRACE_MS, OVERLAP_REPLY } from "../src/lanes/manager-constants";
 import type { LaneRow } from "../src/lanes/status";
 import { createTaskHostOps, type TaskHostOps } from "../src/tasks/host";
@@ -264,5 +264,90 @@ describe("a recorded approval survives (T-20261124-03 AC-2)", () => {
 		expect(answers.asked).toHaveLength(1);
 		expect(second.store.getLane(lane.name)?.status).toBe("closed");
 		second.close();
+	});
+});
+
+describe("the card over the refusal cap (T-20261125-05 AC-4)", () => {
+	const todos = (n: number): IntegrityRefusal[] => Array.from({ length: n }, (_, i) => refusalOf(`a.txt: TODO ${i}`));
+	const guardDeletion: IntegrityRefusal = {
+		category: "guard_deletion_without_adversarial_regression",
+		excerpt: "a.txt: guard",
+		remedy: "복원하세요",
+	};
+
+	test("12 TODOs and a guard deletion: the card shows the guard line, 8 lines and the notice", async () => {
+		const answers = cards("denied");
+		const h = harness({ integrity: () => [...todos(12), guardDeletion], approvals: answers.approvals });
+		const lane = await startLane(h);
+		commitIn(lane.cwd, "a.txt");
+		await claim(h, lane);
+		await h.settle();
+		const card = answers.asked[0] ?? "";
+		expect(card).toContain("guard_deletion_without_adversarial_regression: a.txt: guard");
+		expect(card.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(8);
+		expect(card).toContain("8건 상한으로 나머지가 생략됐을 수 있음");
+		h.close();
+	});
+
+	test("9 TODOs merged with a commit identity refusal: the identity line survives", async () => {
+		const repo = makeRepo(repos);
+		const answers = cards("denied");
+		const h = harness({
+			integrity: () => todos(9),
+			approvals: answers.approvals,
+			autoLandPolicy: () => ({ repos: [repo], maxRisk: "L2", commitEmails: { [repo]: ["owner@example.com"] } }),
+		});
+		const lane = await h.manager.start({ title: "identity", cwd: repo, channel: CHANNEL, acceptance: [], risk: "L2" });
+		await h.settle();
+		writeFileSync(join(lane.cwd, "a.txt"), "a\n");
+		git(lane.cwd, "add", "--", "a.txt");
+		git(
+			lane.cwd,
+			"-c",
+			"user.email=owner@example.com",
+			"-c",
+			"user.name=t",
+			"commit",
+			"-q",
+			"--author",
+			"t <x@other.example>",
+			"-m",
+			"a",
+		);
+		await claim(h, lane);
+		await h.settle();
+		const card = answers.asked[0] ?? "";
+		expect(card).toContain("commit_identity_mismatch");
+		expect(card.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(8);
+		h.close();
+	});
+
+	test("3 TODOs: no notice line", async () => {
+		const answers = cards("denied");
+		const h = harness({ integrity: () => todos(3), approvals: answers.approvals });
+		const lane = await startLane(h);
+		commitIn(lane.cwd, "a.txt");
+		await claim(h, lane);
+		await h.settle();
+		const card = answers.asked[0] ?? "";
+		expect(card.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(3);
+		expect(card).not.toContain("상한");
+		h.close();
+	});
+});
+
+describe("integrityRefusalsOf over the cap (T-20261125-05 AC-5)", () => {
+	test("an unreadable base plus 9 TODOs: 8 refusals led by lane_diff_unavailable", async () => {
+		const readers: IntegrityReaders = {
+			collectDiff: () => Promise.reject(new LaneDiffUnavailable("no base")),
+			integrity: () => Array.from({ length: 9 }, (_, i) => refusalOf(`a.txt: TODO ${i}`)),
+			allowedEmails: () => Promise.resolve(undefined),
+			plansRoot: () => undefined,
+			warn: () => {},
+		};
+		const lane = { name: "l", cwd: "/nowhere", meta: { baseBranch: "main" }, history: [] } as unknown as LaneRow;
+		const out = await integrityRefusalsOf(readers, lane, { summary: "완료" } as never, "abc");
+		expect(out).toHaveLength(8);
+		expect(out[0]?.category).toBe("lane_diff_unavailable");
 	});
 });
