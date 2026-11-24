@@ -235,7 +235,7 @@ describe("TASK merge button: 막힌 PR 착지는 다시 시도 버튼을 남긴�
 	const buttons = (edit: Update | undefined): string => JSON.stringify(edit?.components ?? []);
 
 	test.each(["blocked", "held"] as const)(
-		"PR %s 기록으로 끝난 클릭: 카드에 머지(다시 시도) 버튼이 남고 두 번째 클릭이 착지를 다시 부른다",
+		"PR %s 기록으로 끝난 클릭: 카드에 머지(PR 다시 올리기) 버튼이 남고 두 번째 클릭이 착지를 다시 부른다",
 		async (state) => {
 			landAnswer = { state: "blocked", reason: "누출 검사 실패" };
 			const { taskId, cardTs } = await seedTask("review");
@@ -243,12 +243,12 @@ describe("TASK merge button: 막힌 PR 착지는 다시 시도 버튼을 남긴�
 			await click(taskId, cardTs);
 			const last = cardEdits(cardTs).at(-1);
 			expect(buttons(last)).toContain(`jabbu:task:merge:${taskId}`);
-			expect(buttons(last)).toContain("다시 시도");
+			expect(buttons(last)).toContain("PR 다시 올리기");
 			expect(cardText(last)).toContain(taskLandNote(landAnswer));
 			expect(landCalls).toBe(1);
 			await click(taskId, cardTs);
 			expect(landCalls).toBe(2);
-			expect(buttons(cardEdits(cardTs).at(-1))).toContain("다시 시도");
+			expect(buttons(cardEdits(cardTs).at(-1))).toContain("PR 다시 올리기");
 			expect(logs.some((l) => l.includes("event=task_merge_ignored") && l.includes("reason=duplicate"))).toBe(false);
 			expect(markers()).toHaveLength(0);
 		},
