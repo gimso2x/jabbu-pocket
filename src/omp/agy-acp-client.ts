@@ -1,21 +1,53 @@
-import { OmpDriverError } from "./driver";
+import { OmpDriverError, type OmpUsage } from "./driver";
 import { isRecord } from "./type-guards";
 
 /*
- * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line).
- * - out requests `initialize`, `session/new|resume`, `session/set_config_option`, `session/prompt`; out notification
+ * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line). Modelled on omp's
+ * antigravity-cli provider (oh-my-pi eca7acfa45, MIT: `packages/ai/src/providers/antigravity-cli/host.ts`,
+ * `packages/utils/src/acp/`); written here, nothing imported.
+ * - out requests `initialize`, `session/new|load`, `session/set_config_option`, `session/prompt`; out notification
  *   `session/cancel`.
  * - in  responses (paired by `id`), `session/update` notifications, and agent→client requests: `session/request_permission`
- *   is answered `allow_once` (the child runs with `--dangerously-skip-permissions`, so it should never ask), any other
- *   request gets JSON-RPC "method not found".
+ *   is answered `cancelled` like omp (the child runs with `--dangerously-skip-permissions`, so it should never ask),
+ *   any other request gets JSON-RPC "method not found".
  * The child leads its own process group: `kill` signals the whole group, so the shells and MCP servers agy started
  * go with it.
  */
 
 /** The child's arguments after the executable: ACP over stdio, no telemetry, tools without prompts. */
 export const AGY_ACP_ARGS = ["acp", "--disable-telemetry", "--dangerously-skip-permissions"] as const;
+/**
+ * Env omp gives agy (`host.ts` startTransport, `credentials.ts` agyCredentialEnv): no self-update mid-session, and a
+ * non-empty SSH_TTY so agy keeps its login in files instead of probing a desktop keychain.
+ */
+const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "ompbot-agy-file-auth" };
 
 const STDERR_TAIL_BYTES = 4_000;
+
+// agy retries quota failures itself and reports each attempt only as a line of agent text. Regexes copied from omp
+// (oh-my-pi eca7acfa45, MIT, `packages/ai/src/providers/antigravity-cli/host.ts` RETRY_NOTICE…NOTICE_ATTEMPT).
+const RETRY_NOTICE = /(?:^|\n)[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?API error \(attempt \d+\):[^\S\n]*([^\n]+)/;
+const QUOTA_EXHAUSTED = /\bRESOURCE_EXHAUSTED\b|\bcode 429\b/;
+const NOTICE_MARK = /^[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?/;
+const NOTICE_HEAD = "API error (attempt ";
+const NOTICE_ATTEMPT = /^\d*$|^\d+\)(?::.*)?$/;
+
+/** The quota detail of an agy retry notice in `text` ("RESOURCE_EXHAUSTED (code 429): …"), else undefined. */
+export function quotaRetryNotice(text: string): string | undefined {
+	const detail = RETRY_NOTICE.exec(text)?.[1]?.trim();
+	return detail && QUOTA_EXHAUSTED.test(detail) ? detail : undefined;
+}
+
+/** `text` minus an unfinished last line that may still turn into a retry notice (omp withholds it the same way). */
+export function shownText(text: string): string {
+	const lineStart = text.lastIndexOf("\n") + 1;
+	const rest = text.slice(lineStart).replace(NOTICE_MARK, "");
+	const pending =
+		rest.length < NOTICE_HEAD.length
+			? NOTICE_HEAD.startsWith(rest)
+			: rest.startsWith(NOTICE_HEAD) && NOTICE_ATTEMPT.test(rest.slice(NOTICE_HEAD.length));
+	return pending ? text.slice(0, lineStart) : text;
+}
 
 export interface AgyAcpHandlers {
 	/** A `session/update` (or other) notification from the child. */
@@ -53,7 +85,7 @@ export class AgyAcpClient {
 		this.#handlers = handlers;
 		this.#proc = Bun.spawn([options.executable, ...AGY_ACP_ARGS], {
 			cwd: options.cwd,
-			env: options.env,
+			env: { ...options.env, ...AGY_ENV },
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -170,10 +202,7 @@ export class AgyAcpClient {
 		this.#handlers.onRequest?.(method, params);
 		try {
 			if (method === "session/request_permission") {
-				const options = Array.isArray(params.options) ? params.options.filter(isRecord) : [];
-				const allow = options.find((option) => option.kind === "allow_once") ?? options[0];
-				const optionId = typeof allow?.optionId === "string" ? allow.optionId : "allow_once";
-				this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "selected", optionId } } });
+				this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
 				return;
 			}
 			this.#write({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });
@@ -212,4 +241,51 @@ export class AgyAcpClient {
 			// stream closed with the child
 		}
 	}
+}
+
+// ---- ACP payloads ----
+
+/** One `configOptions` entry (`model`, `thought_level`, `mode`) with its offered values. */
+export interface AcpConfigOption {
+	id: string;
+	currentValue?: string;
+	values: string[];
+}
+
+const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
+const recordOf = (value: unknown): Record<string, unknown> | undefined => (isRecord(value) ? value : undefined);
+
+/** ACP prompt `usage` → omp `Usage`; agy reports no cost, so `cost` stays unset. */
+export function acpUsageOf(value: unknown): OmpUsage | undefined {
+	const usage = recordOf(value);
+	if (usage === undefined) return undefined;
+	const fields = {
+		input: num(usage.inputTokens),
+		output: num(usage.outputTokens),
+		cacheRead: num(usage.cachedReadTokens),
+		cacheWrite: num(usage.cachedWriteTokens),
+	};
+	return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as OmpUsage;
+}
+
+export function configOptionsOf(value: unknown): AcpConfigOption[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	return value.filter(isRecord).map((option) => ({
+		id: str(option.id) ?? "",
+		...(str(option.currentValue) === undefined ? {} : { currentValue: str(option.currentValue) }),
+		values: (Array.isArray(option.options) ? option.options.filter(isRecord) : []).flatMap((o) => str(o.value) ?? []),
+	}));
+}
+
+/** Tool output: agy's `rawOutput.output`, else the text of its `content` blocks; undefined when it sent none. */
+export function toolOutputOf(update: Record<string, unknown>): string | undefined {
+	const raw = recordOf(update.rawOutput);
+	if (raw !== undefined && typeof raw.output === "string") return raw.output;
+	if (!Array.isArray(update.content)) return undefined;
+	const texts = update.content.flatMap((block) => {
+		const inner = recordOf(recordOf(block)?.content);
+		return inner?.type === "text" && typeof inner.text === "string" ? [inner.text] : [];
+	});
+	return texts.length === 0 ? undefined : texts.join("\n");
 }

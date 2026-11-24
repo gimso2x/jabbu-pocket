@@ -6,7 +6,10 @@ import { createInterface } from "node:readline";
 /**
  * Fake `agy acp` for wire tests: JSON-RPC 2.0 over stdio as agy 1.5.16 speaks it. Driven by env plus prompt markers:
  * - FAKE_AGY_LOG: argv, every in/out message and marker events are appended there as JSON lines.
- * - FAKE_AGY_UNKNOWN_SESSION=1: `session/resume` fails like agy for a session it cannot read.
+ * - FAKE_AGY_UNKNOWN_SESSION=1: `session/load` fails like agy for a session it cannot find; a load that works replays
+ *   the conversation as updates (a user chunk, an agent chunk, a tool call, usage 900/1000) before it answers.
+ * - "@quota": streams agy's quota retry notice (RESOURCE_EXHAUSTED, code 429) split over two chunks and holds the
+ *   prompt until `session/cancel`.
  * - FAKE_AGY_DEAF_CONFIG=1: `session/set_config_option` replies without changing the value.
  * - Session ids are `fake-<uuid>`; only those resume. The orchestrator model offers no `thought_level`.
  * - "@tool": a run_command tool call (in_progress, then completed with output) before the answer; with "@nooutput"
@@ -83,6 +86,16 @@ function prompt(id: unknown, text: string): void {
 		};
 		return;
 	}
+	if (text.includes("@quota")) {
+		// agy's own quota retry, split across chunks; it only stops on `session/cancel`.
+		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
+		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Working\n⚠ API error (att" } });
+		update({
+			sessionUpdate: "agent_message_chunk",
+			content: { type: "text", text: "empt 1): RESOURCE_EXHAUSTED (code 429): out" },
+		});
+		return;
+	}
 	if (text.includes("@ask")) {
 		held = { id, onSignal: () => finish("ASKED") };
 		send({
@@ -157,13 +170,18 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 		case "session/new":
 			sessionId = `fake-${randomUUID()}`;
 			return send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
-		case "session/resume": {
+		case "session/load": {
 			const wanted = String(params.sessionId);
 			if (!wanted.startsWith("fake-") || process.env.FAKE_AGY_UNKNOWN_SESSION === "1") {
-				return send({ id: message.id, error: { code: -32603, message: `Failed to read session ${wanted}` } });
+				return send({ id: message.id, error: { code: -32602, message: `Session not found: ${wanted}` } });
 			}
 			sessionId = wanted;
-			return send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+			// Like agy, load replays the conversation as updates before it answers.
+			update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "old question" } });
+			update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAYED" } });
+			update({ sessionUpdate: "tool_call", toolCallId: "call_old", name: "run_command", status: "completed" });
+			update({ sessionUpdate: "usage_update", used: 900, size: 1000 });
+			return send({ id: message.id, result: { configOptions: configOptions() } });
 		}
 		case "session/set_config_option": {
 			const value = String(params.value);

@@ -309,7 +309,7 @@ test("tool calls become toolCall/toolResult entries and tool start/end events", 
 	await driver.stop();
 });
 
-test("a permission request is answered allow_once and logged", async () => {
+test("a permission request is answered cancelled (as omp does) and logged", async () => {
 	const harness = makeHarness();
 	const { log, lines } = captureLog();
 	const driver = harness.make({ log });
@@ -318,7 +318,7 @@ test("a permission request is answered allow_once and logged", async () => {
 	await driver.prompt("@ask");
 	expect(await done).toMatchObject({ status: "completed", text: "ASKED" });
 	const answer = harness.readLog().find((entry) => entry.dir === "in" && entry.message?.id === "perm-1");
-	expect(answer?.message?.result).toEqual({ outcome: { outcome: "selected", optionId: "yes-once" } });
+	expect(answer?.message?.result).toEqual({ outcome: { outcome: "cancelled" } });
 	expect(lines.some((line) => line.includes("event=agy.acp.agent_request"))).toBe(true);
 	await driver.stop();
 });
@@ -393,7 +393,7 @@ test("a cancel agy never answers kills the process group: no onExit, no turn lef
 	await driver.prompt("back");
 	expect(await next).toMatchObject({ status: "completed", text: "REPLY1:back" });
 	expect(spawns(harness)).toHaveLength(2);
-	expect(sent(harness, "session/resume").map((params) => params.sessionId)).toEqual([session]);
+	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
 	expect(finals).toHaveLength(2);
 	await driver.stop();
 });
@@ -410,10 +410,18 @@ test("a resumed session is reused without session/new; one agy cannot read falls
 
 	const { log, lines } = captureLog();
 	const second = harness.make({ log });
+	const replayed: OmpEvent[] = [];
+	second.onEvent((event) => replayed.push(event));
 	await second.start();
 	expect(await second.openSession()).toEqual({ resumed: true, sessionId });
 	expect(sent(harness, "session/new")).toHaveLength(1);
 	expect(lines.some((line) => line.includes("event=agy.acp.started") && line.includes("resumed=true"))).toBe(true);
+	// session/load replays the conversation; none of it is this driver's turn, entries or context size.
+	expect(replayed).toEqual([]);
+	expect((await second.entriesSince()).entries).toEqual([]);
+	const done = nextFinal(second);
+	await second.prompt("after load");
+	expect((await done).usage).toMatchObject({ contextTokens: 100, rotated: false });
 	await second.stop();
 
 	const third = harness.make({ log, env: { FAKE_AGY_UNKNOWN_SESSION: "1" } });
@@ -422,8 +430,32 @@ test("a resumed session is reused without session/new; one agy cannot read falls
 	expect(opened.resumed).toBe(false);
 	expect(opened.sessionId).not.toBe(sessionId);
 	expect(sent(harness, "session/new")).toHaveLength(2);
-	expect(lines.some((line) => line.includes("event=agy.acp.resume_failed"))).toBe(true);
+	expect(lines.some((line) => line.includes("event=agy.acp.load_failed"))).toBe(true);
 	await third.stop();
+});
+
+test("agy's quota retry notice cancels the turn and ends it as a 429 error; a half-written notice is never shown", async () => {
+	const harness = makeHarness();
+	const driver = harness.make();
+	await driver.start();
+	const pid = driver.pid;
+	const shown: OmpEvent[] = [];
+	driver.onEvent((event) => {
+		if (event.type === "message_update") shown.push(event);
+	});
+	const done = nextFinal(driver);
+	const opRef = await driver.prompt("@quota");
+	expect(await done).toMatchObject({
+		opRef,
+		status: "error",
+		error: "agy rate limited (429): RESOURCE_EXHAUSTED (code 429): out",
+	});
+	expect(shown).toEqual([
+		{ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "Working\n" }] } },
+	]);
+	expect(sent(harness, "session/cancel")).toHaveLength(1);
+	expect(driver.pid).toBe(pid);
+	await driver.stop();
 });
 
 test("a pointer the -p driver left (not an ACP session) is tried, then replaced by a new session", async () => {
@@ -437,7 +469,7 @@ test("a pointer the -p driver left (not an ACP session) is tried, then replaced 
 	await driver.start();
 	const opened = await driver.openSession();
 	expect(opened.resumed).toBe(false);
-	expect(sent(harness, "session/resume").map((params) => params.sessionId)).toEqual(["conv-old-1234"]);
+	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual(["conv-old-1234"]);
 	expect(JSON.parse(readFileSync(join(harness.sessionDir, "agy-conversation.json"), "utf8")).conversationId).toBe(
 		opened.sessionId,
 	);
@@ -546,11 +578,11 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	const second = (await driver.state()).sessionId;
 	expect(second).not.toBe(first);
 	expect(spawns(harness)).toHaveLength(2);
-	expect(sent(harness, "session/resume")).toEqual([]);
+	expect(sent(harness, "session/load")).toEqual([]);
 	await driver.stop();
 });
 
-test("agyMcpServers reach session/new and session/resume; a reload's new list applies from the next start", async () => {
+test("agyMcpServers reach session/new and session/load; a reload's new list applies from the next start", async () => {
 	const harness = makeHarness();
 	let servers = [
 		{ name: "wiki", command: "/usr/bin/wiki-mcp", args: ["--stdio"], env: [{ name: "WIKI_HOME", value: "/w" }] },
@@ -566,7 +598,7 @@ test("agyMcpServers reach session/new and session/resume; a reload's new list ap
 	expect(sent(harness, "session/new").map((params) => params.mcpServers)).toEqual([
 		[{ name: "wiki", command: "/usr/bin/wiki-mcp", args: ["--stdio"], env: [{ name: "WIKI_HOME", value: "/w" }] }],
 	]);
-	expect(sent(harness, "session/resume").map((params) => params.mcpServers)).toEqual([[]]);
+	expect(sent(harness, "session/load").map((params) => params.mcpServers)).toEqual([[]]);
 	expect(LIVE_FIELDS as readonly string[]).toContain("agyMcpServers");
 });
 
