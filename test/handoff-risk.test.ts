@@ -9,6 +9,24 @@ const GH_ACCOUNT = ["gimso", "2x"].join("");
 const rulesOf = (brief: string, options?: { protectedBranches?: readonly string[] }) =>
 	scanHandoffBrief(brief, options).findings.map((finding) => finding.rule);
 
+/**
+ * How many times slower `brief` scans than `baseline` (a copy with the matched word changed, floored at 10ms), each
+ * the best of 3 runs. Both sides run under the same machine load, so a loaded run moves the ratio far less than an
+ * absolute time: a scan that rescans to the line's end per hit is hundreds of times slower, a linear one a few.
+ */
+function scanSlowdown(brief: string, baseline: string): number {
+	const fastest = (text: string): number => {
+		let best = Number.POSITIVE_INFINITY;
+		for (let run = 0; run < 3; run++) {
+			const started = performance.now();
+			scanHandoffBrief(text);
+			best = Math.min(best, performance.now() - started);
+		}
+		return best;
+	};
+	return fastest(brief) / Math.max(fastest(baseline), 10);
+}
+
 describe("scanHandoffBrief: high_risk rules", () => {
 	const POSITIVES: Record<string, string[]> = {
 		git_reset_hard: ["git reset --hard origin/task/x", "먼저 `git reset --hard HEAD~2` 로 되돌려"],
@@ -464,10 +482,8 @@ describe("scanHandoffBrief: qa-i low A", () => {
 	test("#45 many forbidden hits on one long line do not stall the scan", () => {
 		const unit = "mkfs 하지않 ";
 		const brief = unit.repeat(Math.floor(HANDOFF_SCAN_BYTES / new TextEncoder().encode(unit).length));
-		const started = performance.now();
-		scanHandoffBrief(brief);
-		// About 4.7s before; the bound only catches a return of the per-hit rescan.
-		expect(performance.now() - started).toBeLessThan(1500);
+		// About 4.7s before against tens of ms with the hits renamed away; linear is a few times the baseline.
+		expect(scanSlowdown(brief, brief.replaceAll("mkfs", "mkfx"))).toBeLessThan(25);
 	});
 });
 
@@ -551,15 +567,6 @@ describe("scanHandoffBrief: qa-j low A", () => {
 	});
 
 	test("#45 #98 a 64KB line of git verbs that never match scans in linear time", () => {
-		const fastest = (brief: string): number => {
-			let best = Number.POSITIVE_INFINITY;
-			for (let run = 0; run < 3; run++) {
-				const started = performance.now();
-				scanHandoffBrief(brief);
-				best = Math.min(best, performance.now() - started);
-			}
-			return best;
-		};
 		for (const unit of [
 			"git push x ",
 			"git branch - ",
@@ -569,9 +576,8 @@ describe("scanHandoffBrief: qa-j low A", () => {
 			"git push \\\n",
 		]) {
 			const brief = unit.repeat(Math.floor(HANDOFF_SCAN_BYTES / unit.length));
-			// Timed against the same text with the verb word changed (at least 10ms), so machine load counts on both
-			// sides: each failed verb rescanned to the line's end took 0.5~2.2s, linear takes tens of ms.
-			const ratio = fastest(brief) / Math.max(fastest(brief.replaceAll("git", "gat")), 10);
+			// Each failed verb rescanned to the line's end took 0.5~2.2s, linear takes tens of ms.
+			const ratio = scanSlowdown(brief, brief.replaceAll("git", "gat"));
 			expect({ unit, slow: ratio > 25 }).toEqual({ unit, slow: false });
 		}
 	});
