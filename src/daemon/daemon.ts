@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
 import { escapeMrkdwn } from "../channel/text";
@@ -26,10 +26,9 @@ import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { MonitorScheduler } from "../monitors/scheduler";
 import { WebhookServer } from "../monitors/webhook";
+import { latestRotationContext } from "../omp/agy-quota";
 import type { OmpDialogAnswerer, OmpSessionDriver } from "../omp/driver";
-import { buildChildEnv, withOmpProfile } from "../omp/env";
 import type { RpcOmpDriver } from "../omp/rpc-driver";
-import { usageLimitsBlock } from "../omp/usage-json";
 import {
 	applyPathEnv,
 	isExecutableFile,
@@ -50,7 +49,6 @@ import { resolvedCeiling } from "../ops/host-resources";
 import { hostSessionsInfo } from "../ops/host-sessions";
 import { pruneMediaFiles } from "../ops/media";
 import { BRIEFING_TIMEOUT_MS, BRIEFING_WIDTH, renderPng } from "../ops/screenshot";
-import { allSessionFiles, conversationSessionFiles, renderUsage, summarizeSessionFiles } from "../ops/usage";
 import { redact } from "../redact";
 import { ApprovalBroker, type ApprovalOutcome } from "../safety/approval";
 import type { HostToolDef } from "../safety/host-tools";
@@ -66,6 +64,7 @@ import type { TaskRow } from "../tasks/ledger";
 import { TASK_SWEEP_MS, type TaskSweeper } from "../tasks/sweeper";
 import { localIso } from "../time";
 import { turnNoteRepos, WikiNotes } from "../wiki/notes";
+import { readBotUsageSummary } from "./bot-driver";
 import { DIALOG_AMBIGUOUS_NOTICE, MEDIA_SWEEP_INTERVAL_MS, STOP_DRAIN_MS, WIKI_FLUSH_MS } from "./daemon-constants";
 import {
 	adapterOfThread,
@@ -258,6 +257,10 @@ export class Daemon {
 		return taskDriver(this.#ctx, originKey, sessionDir, rpcEnv);
 	}
 
+	rotationContextFor(originKey: string): string | null {
+		return latestRotationContext(this.#store, originKey, this.#log);
+	}
+
 	controlTask(taskId: string, control: "pause" | "resume"): Promise<{ ok: boolean; text: string }> {
 		return this.#inbound.controlTask(taskId, control);
 	}
@@ -434,25 +437,8 @@ export class Daemon {
 			sessionBackupsRoot: join(config.homeDir, "session-backups"),
 			statusProvider: (originKey) => this.#statusText(originKey),
 			usageProvider: async (originKey) => {
-				const config = this.#options.config;
-				const agent = config.agent;
-				if (agent === "agy") return `${agent} 세션은 집계하지 않습니다`;
 				const sessionDir = store.getOrigin(originKey)?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1);
-				// The account limits come from one `omp usage` call and never take the totals down: a failed read is one
-				// "확인 실패" line under them (usageLimitsBlock decides that, not this handler).
-				const [conversation, overall, limits] = await Promise.all([
-					summarizeSessionFiles(conversationSessionFiles(dirname(sessionDir))),
-					summarizeSessionFiles(allSessionFiles(sessionsRoot)),
-					usageLimitsBlock({
-						executable: config.ompExecutable,
-						...(config.ompProfile === undefined ? {} : { profile: config.ompProfile }),
-						...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
-						// No messenger credentials in the child's env, as for every other omp jabbu spawns.
-						env: buildChildEnv({}, withOmpProfile(process.env, config.ompProfile)),
-						run: realProcessRunner,
-					}),
-				]);
-				return `${renderUsage(conversation, overall)}\n\n${limits}`;
+				return readBotUsageSummary(this.#options.config, sessionDir, sessionsRoot);
 			},
 			// Read on every turn: a reload replaces this.#options.config, a captured local config would not follow it.
 			recallEnabled: () => this.#options.config.recallEnabled !== false,
@@ -1255,6 +1241,8 @@ export class Daemon {
 		);
 		const withFreeze = { ...report, ...frozenField(this.#options.config.homeDir) };
 		withFreeze.hostSessions = hostSessionsInfo(gateOptionsFromConfig(this.#options.config).hostSessionCeiling);
+		const agyAccounts = this.#options.agyStatus?.();
+		if (agyAccounts !== undefined) withFreeze.agyAccounts = agyAccounts;
 		return router?.draining ? { ...withFreeze, drain: this.drainCounts() } : withFreeze;
 	}
 
