@@ -644,7 +644,7 @@ bun src/main.ts monitors apply --dir <디렉터리> [--prune] [--dry-run]  # 내
 ```sh
 bun src/main.ts status [--json]   # 데몬이 꺼져 있으면 DB를 직접 읽습니다
 bun src/main.ts doctor            # home·secrets·omp·bun·Discord 점검·백업 번들 점검, herdr 켜짐이면 herdr --version과 herdr omp 통합, 이어서 dispatchHosts마다 ssh 도달과 herdr omp 통합(`ok`/`fail <사유>`, 통합·호스트 줄은 실패해도 종료 코드는 그대로)
-bun src/main.ts gates [--json] [--strict]   # 읽기 전용 건강 판정 — 게이트 하나라도 열리면 exit 1, --strict는 판정불가(unknown)도 exit 1
+bun src/main.ts gates [--json] [--strict] [--ko]   # 읽기 전용 건강 판정 — 게이트 하나라도 열리면 exit 1, --strict는 판정불가(unknown)도 exit 1, --ko는 마지막 줄을 한국어로
 bun src/main.ts gc [--dry-run]    # 보존 기간이 지난 이전 대화 세션, 오래 쉰 채널 스레드 세션, 삭제된 모니터의 세션, 7일 지난 `!undo` 턴 스냅샷 정리
 bun src/main.ts backup [--keep N] [--max-bundle-bytes N]
 bun src/main.ts drain [--wait] [--timeout <분>] # 재시작 전 대기(--wait 없으면 걸기만 하고 바로 끝남)
@@ -868,7 +868,7 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 - **닫힘**(`closed`): 판정했고 문제없음.
 - **판정불가**(`unknown`): 판정할 근거가 없음 — 하트비트 스탬프(`~/.jabbu/sweep-heartbeat`)가 없으면 `sweep_stalled`·`monitors_stalled`(detail `stamp=missing`), `jabbu.db`가 없으면 원장 게이트 8개(`inbound_starved`·`origin_silent`·`deliveries_overdue`·`deliveries_ambiguous_stuck`·`lanes_stuck`·`monitors_failed`·`monitors_stalled`·`turns_failing`, detail `db=missing`). 데몬이 한 번도 돌지 않은 새 설치가 이 상태입니다. 기본은 exit 코드에 영향이 없고, `--strict`를 주면 판정불가가 하나라도 있을 때도 exit 1입니다.
 
-자동화가 아픈 봇을 "건강"으로 오판하지 못하게 하는 계약은 판정할 수 있는 게이트에만 걸립니다. 데몬이 실제로 떠 있는지까지 확인하려면 `--strict`를 씁니다. 마지막 줄은 `gates_done open=N unknown=M total=T`이고 열린 게이트가 있으면 ` opened=이름(detail),…`, 판정불가가 있으면 ` unknown_gates=이름,…`이 붙습니다. `--json`은 `{ open, unknown, gates }`입니다. `herdr_unreachable`의 오래된 스탬프(`stamp=stale`)도 닫힘, 백업 도장이 없으면 `backup_age`는 열림, DB가 손상되면 `ledger_unreadable`이 열림입니다.
+자동화가 아픈 봇을 "건강"으로 오판하지 못하게 하는 계약은 판정할 수 있는 게이트에만 걸립니다. 데몬이 실제로 떠 있는지까지 확인하려면 `--strict`를 씁니다. 마지막 줄은 `gates_done open=N unknown=M total=T`이고 열린 게이트가 있으면 ` opened=이름(detail),…`, 판정불가가 있으면 ` unknown_gates=이름,…`이 붙습니다. 사람이 읽는 경보에는 `--ko`를 붙이면 마지막 줄이 현황판과 같은 한국어 이름으로 바뀝니다(`게이트 1/19개 열림 — 레인이 24시간 넘게 멈춤·머지 대기(…) · 할 일: …`, 모두 닫히면 `게이트 N개 모두 정상`). 종료 코드는 같습니다. `--json`은 `{ open, unknown, gates }`입니다. `herdr_unreachable`의 오래된 스탬프(`stamp=stale`)도 닫힘, 백업 도장이 없으면 `backup_age`는 열림, DB가 손상되면 `ledger_unreadable`이 열림입니다.
 
 | 게이트 | 열리는 조건 |
 | --- | --- |
