@@ -3395,5 +3395,4 @@ export class LaneManager {
 	/** Brings the root and status messages to what the registry says (`syncLane`). */
 	#sync(lane: LaneRow, reason: "transition" | "milestone" | "tick"): Promise<LaneRow> {
 		return syncLane(this.#deps, this.#unroutableWarned, lane, reason);
-	}
-				}
+						 }
