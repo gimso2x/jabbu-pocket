@@ -470,7 +470,7 @@ export class LaneManager {
 			// Set once the root is up: a later failure turns it into ❌ so no 🔄 root is left behind.
 			let rootRef: MessageRef | undefined;
 			let threadOpened = false;
-			let lane: LaneRow;
+			let lane: LaneRow | undefined;
 			let externalPr: LaneExternalPr | undefined;
 			try {
 				if (externalPrInput !== undefined) {
@@ -545,7 +545,41 @@ export class LaneManager {
 						...(workflow === undefined ? {} : { workflow }),
 					},
 				});
+				if (model !== undefined) {
+					store.ensureOrigin(lane.originKey, lane.sessionDir);
+					store.setOriginSettings(lane.originKey, model);
+				}
+				log.info("lane_started", {
+					lane: lane.name,
+					origin: lane.originKey,
+					cwd: lane.cwd,
+					branch,
+					model: model?.model,
+					tier: worker.tier,
+				});
+				if (floored.note !== undefined)
+					log.info("lane_risk_floor_raised", { lane: lane.name, from: risk, to: floored.risk });
+				this.#send(
+					lane.name,
+					"start",
+					buildLanePrompt({
+						name: lane.name,
+						title,
+						cwd: lane.cwd,
+						brief: input.brief,
+						branch,
+						baseBranch,
+						acceptance,
+						externalPr,
+						workflow,
+						sameRepoLanes: await openLanesOfRepo(store.listLanes(), lane.name, repo, this.#matcher),
+					}) + planLocations(input.brief, this.#deps.recordsRepo?.()),
+				);
 			} catch (error) {
+				if (lane !== undefined) {
+					await this.failLaunch(lane.originKey, oneLine(String(error)).slice(0, 200)).catch(() => undefined);
+					throw error;
+				}
 				// The root stays in the channel and says the lane never started.
 				if (rootRef !== undefined) {
 					await channels
@@ -564,39 +598,6 @@ export class LaneManager {
 				this.#reservedLaneIds.delete(laneId);
 				if (reservedName !== undefined) this.#reservedNames.delete(reservedName);
 			}
-			if (model !== undefined) {
-				// The lane's first child applies origin settings when it opens (`#applySettings`), like a thread `!model`.
-				store.ensureOrigin(lane.originKey, lane.sessionDir);
-				store.setOriginSettings(lane.originKey, model);
-			}
-			log.info("lane_started", {
-				lane: lane.name,
-				origin: lane.originKey,
-				cwd: lane.cwd,
-				branch,
-				model: model?.model,
-				tier: worker.tier,
-			});
-			if (floored.note !== undefined) {
-				log.info("lane_risk_floor_raised", { lane: lane.name, from: risk, to: floored.risk });
-			}
-			// The first turn runs in the background: the owner's reply must not wait for omp to start.
-			this.#send(
-				lane.name,
-				"start",
-				buildLanePrompt({
-					name: lane.name,
-					title,
-					cwd: lane.cwd,
-					brief: input.brief,
-					branch,
-					baseBranch,
-					acceptance,
-					externalPr,
-					workflow,
-					sameRepoLanes: await openLanesOfRepo(store.listLanes(), lane.name, repo, this.#matcher),
-				}) + planLocations(input.brief, this.#deps.recordsRepo?.()),
-			);
 			if (briefCut) log.warn("lane_brief_cut", { lane: lane.name, chars: fullBrief.length, kept: MAX_BRIEF_CHARS });
 			const notes = [
 				...(floored.note === undefined ? [] : [floored.note]),
@@ -615,10 +616,7 @@ export class LaneManager {
 	}
 
 	/** The tier the starter asked for, checked against the configured ones; undefined when none was asked for. */
-	/**
-	 * `start`'s arguments as the tool received them, validated; throws `LaneInputError` for the first bad one. A
-	 * reservation runs it too, so a bad argument is refused when it is stored, not when ▶ is clicked a day later.
-	 */
+	/** `start`'s arguments, validated (`LaneInputError` on the first bad one); a reservation runs it too, so it fails when stored. */
 	#startArgs(input: {
 		risk?: unknown;
 		acceptance?: unknown;
@@ -3398,4 +3396,4 @@ export class LaneManager {
 	#sync(lane: LaneRow, reason: "transition" | "milestone" | "tick"): Promise<LaneRow> {
 		return syncLane(this.#deps, this.#unroutableWarned, lane, reason);
 	}
-}
+				}
