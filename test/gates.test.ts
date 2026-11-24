@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GatesCommandDeps, gatesCommand } from "../src/cli/index";
+import { type GatesCommandDeps, gatesCommand } from "../src/cli/gates";
 import { readSweepHeartbeat, SweepHeartbeatWriter } from "../src/daemon/heartbeat";
 import { currentBootId } from "../src/daemon/lock";
 import { readStatusFromDb } from "../src/daemon/status";
@@ -958,6 +958,27 @@ describe("jabbu-pocket gates: open, closed and unknown (판정불가)", () => {
 		expect(corrupt.out).toContain("gate=ledger_unreadable state=open");
 		expect(lastLine(corrupt.out)).toStartWith("gates_done open=1 unknown=0 total=6 opened=ledger_unreadable(");
 		expect(runGates(["--strict"]).code).toBe(1);
+	});
+
+	test("--ko keeps the exit code and the gate lines, and names open and unjudged gates by their dashboard label", () => {
+		writeStamp(0);
+		const fresh = runGates(["--ko", "--strict"]);
+		expect(fresh.code).toBe(1);
+		expect(fresh.out).toContain("gate=lanes_stuck state=unknown");
+		expect(lastLine(fresh.out)).toStartWith("판정 못 한 게이트 9개 — ");
+		expect(lastLine(fresh.out)).toContain(gateText("lanes_stuck").label);
+
+		writeFileSync(join(home, "sweep-heartbeat"), `ts=${new Date(now).toISOString()} loop_ms=0 draining=0\n`);
+		seedDb(() => {});
+		const healthy = runGates(["--ko", "--strict"]);
+		expect(healthy.code).toBe(0);
+		expect(lastLine(healthy.out)).toBe("게이트 14개 모두 정상");
+
+		writeFileSync(join(home, "jabbu.db"), "not a database at all\n".repeat(500));
+		const corrupt = runGates(["--ko"]);
+		expect(corrupt.code).toBe(1);
+		expect(lastLine(corrupt.out)).toStartWith(`게이트 1/6개 열림 — ${gateText("ledger_unreadable").label}(`);
+		expect(lastLine(corrupt.out)).toEndWith(` · 할 일: ${gateText("ledger_unreadable").todo}`);
 	});
 });
 
