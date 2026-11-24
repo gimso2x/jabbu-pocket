@@ -163,7 +163,7 @@ describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 			homeDir: home,
 			workspaceDir: join(home, "workspace"),
 			herdr: {},
-			dispatchHosts: { wsl: { ssh: "wsl" } },
+			dispatchHosts: () => ({ wsl: { ssh: "wsl" } }),
 			log: { info() {}, warn() {} },
 			run: async (cmd) => {
 				calls.push(cmd);

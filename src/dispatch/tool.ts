@@ -43,8 +43,8 @@ export interface DispatchToolDeps {
 	ompConfigOverlay?: string;
 	homeDir: string;
 	workspaceDir: string;
-	/** Remote dispatch targets (hub fleet pattern): herdr runs on that host over ssh. */
-	dispatchHosts?: Record<string, DispatchHostConfig>;
+	/** Remote dispatch targets (hub fleet pattern, ssh herdr), config `dispatchHosts` read at every call (live on reload). */
+	dispatchHosts?: () => Record<string, DispatchHostConfig> | undefined;
 	/** Config `workerOmpArgs`: extra omp arguments of local herdr workers (remote ones take their host's `ompArgs`). */
 	workerOmpArgs?: string[];
 	/** Config `lanes.models`, read at every new [TASK] (a reload applies to the next one); absent → no `--model`. */
@@ -331,10 +331,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				);
 		}
 		// Own keys only: `constructor` or `__proto__` must not find an Object.prototype member.
-		const hostEntry =
-			host === undefined || deps.dispatchHosts === undefined || !Object.hasOwn(deps.dispatchHosts, host)
-				? undefined
-				: deps.dispatchHosts[host];
+		const hosts = deps.dispatchHosts?.();
+		const hostEntry = host !== undefined && Object.hasOwn(hosts ?? {}, host) ? hosts?.[host] : undefined;
 		const taskDeps: TaskDispatchDeps | undefined =
 			deps.tasks === undefined
 				? undefined
@@ -342,7 +340,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						...deps.tasks,
 						originKey: deps.originKey,
 						workspaceDir: deps.workspaceDir,
-						...(deps.dispatchHosts === undefined ? {} : { dispatchHosts: deps.dispatchHosts }),
+						...(hosts === undefined ? {} : { dispatchHosts: hosts }),
 						...(deps.workerOmpArgs === undefined ? {} : { workerOmpArgs: deps.workerOmpArgs }),
 						secretsDir: join(deps.homeDir, "secrets"),
 						...(deps.run === undefined ? {} : { run: deps.run }),
@@ -420,7 +418,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		if (host !== undefined) {
 			// Remote dispatch (hub fleet pattern): the named host runs its own herdr+omp. The host implies herdr.
 			if (hostEntry === undefined) {
-				const known = Object.keys(deps.dispatchHosts ?? {}).join(", ") || "없음";
+				const known = Object.keys(hosts ?? {}).join(", ") || "없음";
 				throw new Error(`알 수 없는 호스트: ${host} (등록된 호스트: ${known})`);
 			}
 			const sshOptions = { ...herdrOptions, sshTarget: hostEntry.ssh };
