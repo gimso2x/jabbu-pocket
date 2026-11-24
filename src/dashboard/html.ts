@@ -1,4 +1,5 @@
 import { formatTypicalRange, typicalNote } from "../store/turn-duration";
+import { appAssets, PAGE_CSS } from "./assets";
 import type { BoardPanel } from "./board";
 import { BOOT_CLIENT } from "./boot-client";
 import {
@@ -54,7 +55,6 @@ import {
 	stackHtml,
 } from "./motion";
 import type { DashboardSnapshot, FlowChainInfo } from "./snapshot";
-import { STYLE } from "./style";
 import {
 	APPROVAL_OUTCOMES,
 	alertText,
@@ -72,13 +72,13 @@ import { flowDoing, renderFlow, renderTrace } from "./trace-view";
 import { resetIn, usageLevel } from "./usage-limits";
 
 /**
- * Inline script: the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
+ * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
  * board stream (`api/board/events`, only with a board), view switching (`?view=`), search and List sorting, theme
  * persistence, keyboard navigation (`j`/`k`, `Enter`, `Esc`, `g <key>`, `/`, `?`, `⌘K`/`Ctrl+K`), copy toast, and the
  * detail panel (`?card=`, `?task=`, `?item=` in the address; a card's conversation and plan read through
  * `api/pane/*`). Every request is relative to the page, so any tunnel prefix works.
  */
-const SCRIPT = `const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)};
+export const SCRIPT = `const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)};
 const TURN_LABELS = ${JSON.stringify(TURN_LABELS)};
 const JOB_LABELS = ${JSON.stringify(JOB_LABELS)};
 const MONITOR_STAGES = ${JSON.stringify(MONITOR_STAGES)};
@@ -247,7 +247,7 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#15181D" media="(prefers-color-scheme: dark)">
-<style>${STYLE}.card-thread{position:relative}.card-link{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}.card-link::after{content:"";position:absolute;inset:0;border-radius:var(--r-m)}.card-job{position:relative;z-index:1}.card-job:hover{text-decoration:underline}</style>
+<link rel="stylesheet" href="${appAssets(SCRIPT, PAGE_CSS).css.name}">
 </head>
 <body${open === undefined ? "" : tab === "trace" ? ' class="detail-open detail-trace"' : ' class="detail-open"'}>
 <div class="shell">
@@ -278,7 +278,7 @@ ${open === undefined ? `<aside id="detail" class="detail" aria-label="${label}" 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <div id="event-stack" class="event-stack" hidden><p id="es-say" class="es-say" aria-live="polite"></p><div id="es-body"></div></div>
 <p id="stale" class="stale" role="status" hidden></p>
-${board === undefined ? "" : `<script type="application/json" id="board-data">${JSON.stringify(board).replace(/</g, "\\u003c")}</script>\n`}<script>${SCRIPT}</script>
+${board === undefined ? "" : `<script type="application/json" id="board-data">${JSON.stringify(board).replace(/</g, "\\u003c")}</script>\n`}<script src="${appAssets(SCRIPT, PAGE_CSS).js.name}"></script>
 </body>
 </html>
 `;

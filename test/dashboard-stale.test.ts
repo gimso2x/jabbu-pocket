@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { BoardCard, BoardView } from "../src/dashboard/board";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { type InboxEntry, inboxEntries, isStale } from "../src/dashboard/inbox";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { startDashboardServer } from "../src/dashboard/server";
@@ -186,7 +186,7 @@ describe("방치 herdr 패널 필터", () => {
 	test("AC-6: the shipped renderer draws the same filtered inbox, and ?stale=1 starts the page with the filter on", () => {
 		const html = renderDashboardMain(SNAP, MIXED, NOW, { stale: true });
 		const page = renderDashboardPage(SNAP, { board: MIXED, stale: "1" });
-		const script = /<script>([\s\S]*)<\/script>/.exec(page)?.[1] ?? "";
+		const script = SCRIPT;
 		const clientRender = new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 			{ getElementById: () => ({}) },
 			() => 0,

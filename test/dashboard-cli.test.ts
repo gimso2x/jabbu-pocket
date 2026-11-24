@@ -131,7 +131,8 @@ describe("jabbu-pocket dashboard", () => {
 			"api/turn/7/trace",
 			"api/thread/conversation?origin=discord/dm/200000000000000099",
 			"api/monitor/detail?id=ISECRET2",
-			"api/snapshot",
+			"api/snapshot?view=flow",
+			"api/snapshot?view=turns&hidden=1",
 			"healthz",
 		]) {
 			await (await fetch(`${url}${path}`)).arrayBuffer();
@@ -146,6 +147,8 @@ describe("jabbu-pocket dashboard", () => {
 			"dashboard_request kind=trace",
 			"dashboard_request kind=conversation",
 			"dashboard_request kind=monitor_detail",
+			"dashboard_request kind=snapshot view=flow",
+			"dashboard_request kind=snapshot_hidden view=turns",
 		]);
 		expect(stderr).not.toMatch(/SECRET|200000000000000099/);
 	});

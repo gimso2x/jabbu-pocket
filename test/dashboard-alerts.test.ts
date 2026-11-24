@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StatusReport } from "../src/daemon/status";
 import { renderItemDetail } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { startDashboardServer } from "../src/dashboard/server";
 import {
@@ -287,7 +287,7 @@ describe("dashboard alerts & system screens", () => {
 		expect(detail).toContain(`>${id}<`);
 		expect(detail).toContain("recent=0 [REDACTED]");
 		// The page the server sends for a selected alert carries the hash only inside the detail panel.
-		const page = renderDashboardPage(snapshot, { view: "alerts", item: id }).replace(/<script>[\s\S]*<\/script>/, "");
+		const page = renderDashboardPage(snapshot, { view: "alerts", item: id });
 		const panel = page.indexOf('id="detail-head"');
 		expect(page.indexOf(SIG)).toBeGreaterThan(panel);
 	});
@@ -365,8 +365,7 @@ describe("dashboard alerts & system screens", () => {
 	test("the shipped client renderer draws the alerts and system views the same as the server", async () => {
 		stamp(STAMP_FILE, HOUR);
 		const snapshot = await buildSnapshot(deps());
-		const html = renderDashboardPage(snapshot);
-		const script = /<script>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "";
+		const script = SCRIPT;
 		const fakeDocument = { getElementById: () => ({}) };
 		const client = new Function(
 			"document",

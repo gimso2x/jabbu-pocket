@@ -4,10 +4,10 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderDetailTabs, renderItemDetail } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { startDashboardServer } from "../src/dashboard/server";
-import { buildSnapshot, type DashboardSnapshot, type JobInfo, type SnapshotDeps } from "../src/dashboard/snapshot";
+import { buildSnapshot, type JobInfo, type SnapshotDeps } from "../src/dashboard/snapshot";
 import { readCardTrace, readCwdTrace, readJobTrace, readJobTraceByName, type TurnTrace } from "../src/dashboard/trace";
 import { ompSessionDirFor } from "../src/omp/session-dir";
 import { openStore } from "../src/store/db";
@@ -60,8 +60,8 @@ function turnsNav(html: string): { count: number; warn: boolean } {
 }
 
 /** The page script's own renderer: what the browser redraws every 15 seconds. */
-function clientRender(snapshot: DashboardSnapshot): typeof renderDashboardMain {
-	const script = /<script>([\s\S]*)<\/script>/.exec(renderDashboardPage(snapshot))?.[1] ?? "";
+function clientRender(): typeof renderDashboardMain {
+	const script = SCRIPT;
 	return new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 		{ getElementById: () => ({}) },
 		() => 0,
@@ -239,7 +239,7 @@ describe("dashboard jobs section", () => {
 			expect(turnsNav(html)).toEqual({ count: 0, warn: false });
 			expect(html).toContain('진행 중 스레드 <b>0</b> · <a href="#jobs">백그라운드 작업 <b>1</b></a>');
 			// The page's own redraw draws the same, and the system view stays as it was.
-			expect(clientRender(snapshot)(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
+			expect(clientRender()(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
 			expect(renderDashboardMain(snapshot, undefined, NOW, { view: "system" })).not.toContain("백그라운드 작업");
 
 			const detail = renderItemDetail(snapshot, "turns", "job:a");
@@ -287,7 +287,7 @@ describe("dashboard jobs section", () => {
 			expect(html).not.toContain('id="jobs"');
 			expect(html).toContain("끝난 백그라운드 작업");
 			expect(turnsNav(html)).toEqual({ count: 0, warn: false });
-			expect(clientRender(snapshot)(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
+			expect(clientRender()(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
 			expect(renderItemDetail(snapshot, "turns", "job:halted")).toContain("중단 · stopped");
 		});
 
@@ -622,7 +622,7 @@ describe("dashboard jobs in thread board (AC-1, AC-2)", () => {
 		expect(listHtml).toContain(">백그라운드 작업 2<");
 
 		// Client renderer matches SSR
-		expect(clientRender(snapshot)(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
+		expect(clientRender()(snapshot, undefined, NOW, { view: "turns" })).toBe(html);
 	});
 });
 
@@ -899,8 +899,8 @@ describe("job trace API and detail tabs (AC-4)", () => {
 			expect(tabStrip?.[2]).toContain('id="tab-head"');
 			expect(tabStrip?.[2]).toContain('id="tab-trace"');
 			expect(tabStrip?.[2]).not.toContain('id="tab-conv"');
-			expect(page).toContain("api/job/trace?name=");
-			expect(page).toContain("trace.reload()");
+			expect(SCRIPT).toContain("api/job/trace?name=");
+			expect(SCRIPT).toContain("trace.reload()");
 
 			// Without jobTrace option -> 404 trace_disabled
 			stop();

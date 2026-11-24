@@ -420,11 +420,11 @@ export const BOOT_CLIENT = `function boot() {
 		if (quiet) quiet.textContent = signal.bad ? "다음 · 상태 모름 — 갱신 끊김" : "다음 · 기다리는 항목 없음";
 	}
 	/** One snapshot read, given up after 8 seconds so a server that never answers shows as cut off too. */
-	async function getSnapshot() {
+	async function getSnapshot(hidden) {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), 8000);
 		try {
-			const response = await fetch("api/snapshot", { cache: "no-store", signal: controller.signal });
+			const response = await fetch("api/snapshot?view=" + encodeURIComponent(ui.view) + (hidden ? "&hidden=1" : ""), { cache: "no-store", signal: controller.signal });
 			if (!response.ok) throw new Error("HTTP " + response.status);
 			return await response.json();
 		} finally {
@@ -1447,7 +1447,7 @@ export const BOOT_CLIENT = `function boot() {
 	// A hidden tab reads a snapshot once a minute for the tab title and icon only; the page itself is not redrawn.
 	setInterval(() => {
 		if (document.visibilityState === "visible") return;
-		getSnapshot()
+		getSnapshot(true)
 			.then((next) => {
 				snapshot = next;
 				updateTabSignal();

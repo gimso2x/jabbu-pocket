@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { BoardCard, BoardView } from "../src/dashboard/board";
 import { renderDetailHead } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { byAttention, type InboxEntry, orderKeyTarget, replyKeyTarget, tabSignal } from "../src/dashboard/inbox";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import type { DashboardSnapshot, TaskInfo } from "../src/dashboard/snapshot";
@@ -110,7 +110,6 @@ const column = (html: string, id: string): string => {
 const rowIds = (html: string): string[] => [...html.matchAll(/data-row="([^"]+)"/g)].map((match) => match[1] ?? "");
 const titleOf = (page: string): string => /<title>([^<]*)<\/title>/.exec(page)?.[1] ?? "";
 const faviconOf = (page: string): string => /<link rel="icon" id="favicon" href="([^"]+)">/.exec(page)?.[1] ?? "";
-const scriptOf = (page: string): string => /<script>([\s\S]*)<\/script>/.exec(page)?.[1] ?? "";
 
 describe("inbox next line", () => {
 	test("AC-2: the next line opens the first 확인 필요 item, with task.error as the reason even beside a blocker", () => {
@@ -185,7 +184,7 @@ describe("inbox number keys", () => {
 	});
 
 	test("AC-4: refresh, the hidden tab's 60-second read and the board stream all call updateTabSignal", () => {
-		const script = scriptOf(renderDashboardPage(AC1, { board: AC1_BOARD }));
+		const script = SCRIPT;
 		const refreshStart = script.indexOf("async function refresh()");
 		const refresh = script.slice(refreshStart, script.indexOf("\n\t}\n", refreshStart));
 		expect(refresh.match(/updateTabSignal\(/g)?.length).toBe(2);
@@ -217,8 +216,8 @@ describe("inbox next line, 7·8절 (AC-9)", () => {
 		const html = renderDashboardMain(AC1, AC1_BOARD, NOW);
 		const marked = [...html.matchAll(/<a class="card[^"]*\bis-next\b[^"]*"[^>]*data-row="([^"]+)"/g)].map((m) => m[1]);
 		expect(marked).toEqual(["T-20261104-60"]);
-		const script = scriptOf(renderDashboardPage(AC1, { board: AC1_BOARD }));
-		const read = script.slice(script.indexOf("async function getSnapshot()"));
+		const script = SCRIPT;
+		const read = script.slice(script.indexOf("async function getSnapshot(hidden)"));
 		expect(read.slice(0, read.indexOf("\n\t}\n"))).toMatch(/new AbortController\(\)[\s\S]*8000[\s\S]*signal/);
 	});
 

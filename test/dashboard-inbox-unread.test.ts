@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { BoardCard, BoardPanel, BoardView } from "../src/dashboard/board";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { SCRIPT } from "../src/dashboard/html";
 import {
 	entrySig,
 	type InboxEntry,
@@ -390,8 +390,8 @@ describe("AC-3: the unread dot and the column's unread line", () => {
 });
 
 describe("AC-4: the page ships the read-mark functions and constants", () => {
-	test("the inline script defines all of them", () => {
-		const html = renderDashboardPage(snapshotOf([task("T-20261104-76")]), { board: boardOf([]) });
+	test("the page script defines all of them", () => {
+		const html = SCRIPT;
 		for (const name of ["entrySig", "unreadIds", "seedStore", "markSeen", "pruneStore", "readUnread", "unreadReady"]) {
 			expect(html).toContain(`const ${name} = function ${name}(`);
 		}
@@ -401,8 +401,7 @@ describe("AC-4: the page ships the read-mark functions and constants", () => {
 	});
 
 	test("the shipped functions run on their own with the page's other helpers", () => {
-		const html = renderDashboardPage(snapshotOf([task("T-20261104-76")]), { board: boardOf([]) });
-		const script = html.slice(html.lastIndexOf("<script>") + 8, html.lastIndexOf("</script>"));
+		const script = SCRIPT;
 		// The script boots only with a window; here it just defines its helpers.
 		const run = new Function(`${script}\nreturn { seedStore, unreadIds, inboxEntries };`) as () => {
 			seedStore: typeof seedStore;

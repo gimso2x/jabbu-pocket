@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { BoardCard, BoardView } from "../src/dashboard/board";
 import { renderItemDetail, renderTaskDetail } from "../src/dashboard/detail";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { inboxAttention } from "../src/dashboard/inbox";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { renderMarkdown } from "../src/dashboard/markdown";
@@ -212,9 +212,6 @@ const SNAPSHOT: DashboardSnapshot = {
 	jobs: { ok: true, items: [] },
 };
 
-/** The rendered markup only: the inline script ships the renderers' source, templates included. */
-const markup = (html: string): string => html.replace(/<script>[\s\S]*<\/script>/, "");
-
 /** The markup of one inbox column (`col-attention`, `col-working`, `col-wait`). */
 const column = (html: string, id: string): string => {
 	const start = html.indexOf(`id="col-${id}"`);
@@ -247,7 +244,7 @@ describe("dashboard inbox", () => {
 			renderDashboardPage(SNAPSHOT, { board: BOARD, task: "T-20261104-50" }),
 			renderDashboardPage(SNAPSHOT),
 			renderDashboardPage(SNAPSHOT, { board: { ok: false, error: "herdr_unreachable" } }),
-		].map(markup);
+		];
 		expect(pages[1]).toContain('target="_blank"');
 		for (const html of pages) {
 			for (const [, attributes] of html.matchAll(/<a\b([^>]*)>/g)) {
@@ -394,7 +391,7 @@ describe("dashboard inbox", () => {
 	});
 
 	test("AC-6: ?view=list draws one table, 확인 필요 → 진행 중 → 완료·대기", async () => {
-		const html = markup(await (await fetch(`${serve()}/?view=list`)).text());
+		const html = await (await fetch(`${serve()}/?view=list`)).text();
 		const head = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
 		expect([...head.matchAll(/<th[^>]*>(?:<button[^>]*>)?([^<]+)/g)].map((match) => match[1])).toEqual([
 			"상태",
@@ -559,7 +556,7 @@ describe("dashboard polish", () => {
 	});
 
 	test("SVG icons, theme toggles, command palette, shortcut help, copy buttons and empty/error next actions", () => {
-		const page = markup(renderDashboardPage(SNAPSHOT, { board: BOARD, card: "w1:p1" }));
+		const page = renderDashboardPage(SNAPSHOT, { board: BOARD, card: "w1:p1" });
 		expect(page).toContain('<svg class="ico nav-ico"');
 		expect(page).toContain('<svg class="ico state-ico"');
 		expect(page).toContain('data-theme-set="system" aria-pressed="true"');
@@ -603,17 +600,17 @@ describe("dashboard polish", () => {
 
 	test("UX QA fixes: sticky detail tabs/title, contextual Board/List, non-gate alert records, system search, closed task AC and nested markdown ol", () => {
 		// UX-001: sticky #detail-tabs and #detail-bar-title shown on non-head tabs (e.g. turns conversation tab).
-		const turnPage = markup(renderDashboardPage(SNAPSHOT, { view: "turns", item: "discord/dm/200000000000000001" }));
+		const turnPage = renderDashboardPage(SNAPSHOT, { view: "turns", item: "discord/dm/200000000000000001" });
 		expect(turnPage).toContain('<span id="detail-bar-title" class="detail-bar-title">인박스 셸 손봐 줘</span>');
-		const cardPage = markup(renderDashboardPage(SNAPSHOT, { board: BOARD, card: "w1:p1" }));
+		const cardPage = renderDashboardPage(SNAPSHOT, { board: BOARD, card: "w1:p1" });
 		expect(cardPage).toContain('<span id="detail-bar-title" class="detail-bar-title" hidden>pane w1:p1</span>');
 		expect(STYLE).toMatch(/\.tabs\s*\{[^}]*position:\s*sticky/);
 
 		// UX-002: g f, the Command Palette and the side nav all reach the flow view.
 		const fullPage = renderDashboardPage(SNAPSHOT, { board: BOARD });
-		expect(fullPage).toContain('label: "보기: 흐름"');
-		expect(fullPage).toContain('f: "flow"');
-		expect(markup(fullPage)).toContain('data-view="flow"');
+		expect(SCRIPT).toContain('label: "보기: 흐름"');
+		expect(SCRIPT).toContain('f: "flow"');
+		expect(fullPage).toContain('data-view="flow"');
 
 		// UX-003: Board | List segmented control appears only on inbox, list, and turns views.
 		for (const v of ["inbox", "list", "turns"]) {

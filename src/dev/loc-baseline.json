@@ -89,7 +89,7 @@
 	"src/dashboard/preview-line.ts": 46,
 	"src/dashboard/proxy.ts": 69,
 	"src/dashboard/section-cache.ts": 37,
-	"src/dashboard/server.ts": 565,
+	"src/dashboard/server.ts": 556,
 	"src/dashboard/session-model.ts": 146,
 	"src/dashboard/snapshot-assembly.ts": 94,
 	"src/dashboard/snapshot.ts": 2130,

@@ -5,7 +5,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config";
-import { renderDashboardPage } from "../src/dashboard/html";
+import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { buildSnapshot, type DashboardConfig, type SnapshotDeps } from "../src/dashboard/snapshot";
 import { assembleSnapshotDeps } from "../src/dashboard/snapshot-assembly";
@@ -422,8 +422,7 @@ describe("AC-1: html strip", () => {
 			agy: { stdout: AGY.replace("28%", "3%") },
 		});
 		const server = renderDashboardMain(snapshot, undefined, NOW, { view: "system" });
-		const page = renderDashboardPage(snapshot, undefined);
-		const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? "";
+		const script = SCRIPT;
 		const client = new Function("document", "setInterval", `${script}\nreturn renderDashboardMain;`)(
 			{ getElementById: () => ({}) },
 			() => 0,
