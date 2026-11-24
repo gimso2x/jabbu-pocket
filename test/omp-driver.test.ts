@@ -17,13 +17,8 @@ import {
 } from "../src/omp/driver";
 import { buildChildEnv } from "../src/omp/env";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
-import {
-	ExtensionUiTap,
-	leafIdViaCursor,
-	RpcOmpDriver,
-	type RpcOmpDriverOptions,
-	TAIL_WAIT_MS,
-} from "../src/omp/rpc-driver";
+import { leafIdViaCursor, RpcOmpDriver, type RpcOmpDriverOptions, TAIL_WAIT_MS } from "../src/omp/rpc-driver";
+import { ExtensionUiTap } from "../src/omp/rpc-ui-tap";
 import { redact } from "../src/redact";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
 
@@ -783,6 +778,40 @@ describe("osa-session-settled: a prompt whose session is not settled keeps its t
 			await untilFinals(1);
 			expect(finals).toEqual([{ opRef, status: "completed", text: "late answer" }]);
 			expect(warns.filter((line) => line.includes("event=tail_wait_timeout"))).toHaveLength(1);
+		} finally {
+			await driver.stop();
+		}
+	});
+
+	test("an owner dialog open at the cap keeps the wait open; the late answer still ends the turn", async () => {
+		const peer = tailPeer({ settled: false });
+		const answer = Promise.withResolvers<{ confirmed: boolean }>();
+		const asked = Promise.withResolvers<void>();
+		const answerDialog = async () => {
+			asked.resolve();
+			return answer.promise;
+		};
+		const capHit = Promise.withResolvers<void>();
+		const warns: string[] = [];
+		const sink = (line: string) => {
+			warns.push(line);
+			if (line.includes("event=tail_wait_dialog_open")) capHit.resolve();
+		};
+		const log = createLogger({ sink, clock: { now: () => 0 }, redact });
+		const { driver, finals, untilFinals } = await startPeerDriver(peer, { tailWaitMs: 20, answerDialog, log });
+		try {
+			const opRef = await driver.prompt("go");
+			peer.push(promptResult(opRef, "completed", { sessionSettled: false }));
+			peer.push({ type: "extension_ui_request", method: "confirm", id: "d1", title: "t", message: "m" });
+			await asked.promise;
+			await capHit.promise;
+			expect(finals).toEqual([]);
+			expect(warns.filter((line) => line.includes("event=tail_wait_timeout"))).toEqual([]);
+			answer.resolve({ confirmed: true });
+			await peer.command((c) => c.type === "extension_ui_response" && c.id === "d1");
+			peer.push({ type: "session_settled" });
+			await untilFinals(1);
+			expect(finals).toEqual([{ opRef, status: "completed", text: "late answer" }]);
 		} finally {
 			await driver.stop();
 		}

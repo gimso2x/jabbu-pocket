@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type OmpDialogRequest, OmpDriverError, type OmpFinal } from "../src/omp/driver";
 import { MAX_RPC_FRAME_BYTES, OmpRpcClient, RpcProtocolError, readLines } from "../src/omp/rpc-client";
-import { ExtensionUiTap, RpcOmpDriver } from "../src/omp/rpc-driver";
+import { RpcOmpDriver } from "../src/omp/rpc-driver";
+import { ExtensionUiTap } from "../src/omp/rpc-ui-tap";
 import { gcSessions } from "../src/ops/gc";
 import {
 	applyUndo,
