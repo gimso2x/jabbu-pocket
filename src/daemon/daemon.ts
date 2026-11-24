@@ -28,6 +28,7 @@ import { MonitorScheduler } from "../monitors/scheduler";
 import { WebhookServer } from "../monitors/webhook";
 import type { OmpDialogAnswerer, OmpSessionDriver } from "../omp/driver";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
+import type { RpcOmpDriver } from "../omp/rpc-driver";
 import { usageLimitsBlock } from "../omp/usage-json";
 import {
 	applyPathEnv,
@@ -81,6 +82,7 @@ import { DaemonInbound, deliverySources } from "./daemon-sink";
 import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
 import { escalateTurnFailures, GateSweep, notifyProviderLimit, PendingDispatchSweep } from "./daemon-sweeps";
 import { DaemonTaskLanding, ingestOwnerText } from "./daemon-task-land";
+import { type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
@@ -118,27 +120,21 @@ export class Daemon {
 	#router: OriginRouter | undefined;
 	#monitors: MonitorScheduler | undefined;
 	#webhook: WebhookServer | undefined;
-	/** One adapter per bound platform, built at start. */
-	readonly #adapters = new Map<ChatPlatform, ChannelAdapter>();
+	readonly #adapters = new Map<ChatPlatform, ChannelAdapter>(); // one adapter per bound platform, built at start
 	#ipc: IpcServer | undefined;
 	#timer: NodeJS.Timeout | undefined;
 	#lastMediaSweep = 0;
 	#taskSweeper: TaskSweeper | undefined;
 	#wikiNotes: WikiNotes | undefined;
 	#lastWikiFlushAt = 0;
-	/** Threads told "재시작 뒤에 처리" for an owner message held by the current drain: once per thread per drain. */
-	readonly #drainDeferNoticed = new Set<string>();
+	readonly #drainDeferNoticed = new Set<string>(); // threads told "재시작 뒤에 처리" for a message held by the current drain: once each
 	#lastTaskSweepAt = 0;
 	#lastHerdrHealthAt = 0;
 	#taskSweeping = false;
-	/** A sweep was asked for while one ran (a check job ended): it runs once more right after. */
-	#taskSweepAgain = false;
-	/** Tasks whose check job just ended: the next sweep judges them whatever their cadence. */
-	readonly #taskSweepDue = new Set<string>();
-	/** The `[check: …]` queue of local tasks (herdr on only): the sweep asks it for checks instead of running them. */
-	#checkRunner: TaskCheckRunner | undefined;
-	/** Local `herdr status server` check on the task sweep cadence (herdr on only); feeds `herdr_unreachable`. */
-	#herdrHealth: HerdrHealthProbe | undefined;
+	#taskSweepAgain = false; // a sweep was asked for while one ran (a check job ended): it runs once more right after
+	readonly #taskSweepDue = new Set<string>(); // tasks whose check job just ended: the next sweep judges them whatever their cadence
+	#checkRunner: TaskCheckRunner | undefined; // the `[check: …]` queue of local tasks: the sweep asks it for checks instead of running them
+	#herdrHealth: HerdrHealthProbe | undefined; // local `herdr status server` check on the sweep cadence (herdr on only); feeds `herdr_unreachable`
 	/** Background lane tick / mailbox idle sweep in flight: the sweep never awaits them, and never overlaps them. */
 	#laneTicking = false;
 	#idleSweeping = false;
@@ -146,8 +142,7 @@ export class Daemon {
 	#peerSilenceArmed = false;
 	#pumping: Promise<void> = Promise.resolve();
 	#stopped = false;
-	/** The in-flight shutdown; a re-entering stop() awaits it instead of returning immediately. */
-	#stopPromise: Promise<void> | undefined;
+	#stopPromise: Promise<void> | undefined; // the in-flight shutdown; a re-entering stop() awaits it instead of returning
 	#heartbeat: SweepHeartbeatWriter | undefined;
 	/** `<home>/FROZEN` re-read within seconds; autonomous paths (dispatch, monitors, lanes, task reminders) consult it. */
 	readonly #frozen: () => FreezeState | undefined;
@@ -155,10 +150,8 @@ export class Daemon {
 	#lanes: LaneManager | undefined;
 	/** Outbound posts of the core (approval cards, lanes, tasks, uploads, inject markers), redacted on the way. */
 	readonly #channels: ChannelRegistry;
-	/** The one lander of lanes and [TASK]s: landings of one repository never overlap. */
-	#lander: LandLane | undefined;
-	/** The [TASK] review·QA gate (src/tasks/gate.ts); its running gates are the `#taskGating` of the spec. */
-	#taskGates: TaskGateRunner | undefined;
+	#lander: LandLane | undefined; // the one lander of lanes and [TASK]s: landings of one repository never overlap
+	#taskGates: TaskGateRunner | undefined; // the [TASK] review·QA gate (src/tasks/gate.ts); its running gates are the `#taskGating` of the spec
 	/** The live view of this daemon's state that its parts in the sibling `daemon-*.ts` files read. */
 	readonly #ctx: DaemonContext;
 	readonly #inbound: DaemonInbound;
@@ -258,6 +251,11 @@ export class Daemon {
 
 	cwdFor(originKey: string): string {
 		return cwdFor(this.#ctx, originKey);
+	}
+
+	/** The child of a [TASK] worker origin (`driverFactory`): always the headless omp RPC driver. */
+	taskDriver(originKey: string, sessionDir: string, rpcEnv: TaskRpcEnv): RpcOmpDriver {
+		return taskDriver(this.#ctx, originKey, sessionDir, rpcEnv);
 	}
 
 	controlTask(taskId: string, control: "pause" | "resume"): Promise<{ ok: boolean; text: string }> {
@@ -512,8 +510,11 @@ export class Daemon {
 			},
 			// The registry row is the lane's only hold: a paused lane or one the core is rebasing (not-ff landing) dispatches nothing.
 			isFrozen: () => this.#frozen() !== undefined,
+			// A [TASK] worker's only hold is the owner's pause (`taskHeld`); `resumeTask` and `계속` lift it.
 			isHeld: (originKey) =>
-				this.#store?.getLaneByOrigin(originKey)?.status === "paused" || this.#lanes?.isCoreRebasing(originKey) === true,
+				taskHeld(this.#store?.tasks, originKey) ||
+				this.#store?.getLaneByOrigin(originKey)?.status === "paused" ||
+				this.#lanes?.isCoreRebasing(originKey) === true,
 			isAttached: (originKey) => this.#store?.getLaneByOrigin(originKey)?.meta.attach !== undefined,
 			onHeldWork: (info) => this.#lanes?.onHeldWork(info.originKey),
 			// A new lane session starts with its acceptance criteria as omp todos.
@@ -701,27 +702,24 @@ export class Daemon {
 
 		const herdrRun = this.#options.herdrRun;
 		setLocalHerdrBin(config.herdr?.bin);
-		if (config.herdr === undefined) {
-			// herdr off: no sweeper, so [TASK] rows are never read or reminded. Say so once and leave the rows alone.
-			const orphaned = store.tasks.listActive().length;
-			if (orphaned > 0) log.warn("tasks_orphaned", { count: orphaned });
-		} else {
-			const sweep = createTaskSweep(this.#ctx, {
-				store,
-				config,
-				herdr: config.herdr,
-				herdrRun,
-				requestTaskSweep: (taskId) => this.#requestTaskSweep(taskId),
-				repoMatches: (row, repos) => this.repoMatches(row, repos),
-				autoLand: (row, gate) => this.autoLand(row, gate),
-				landReady: () => this.#landing.landReady(),
-				pollTaskPrLand: (row) => this.#landing.pollPrLand(row),
-				retryPrLand: (row) => this.#landing.retryPrLand(row),
-			});
-			this.#herdrHealth = sweep.herdrHealth;
-			this.#checkRunner = sweep.checkRunner;
-			this.#taskSweeper = sweep.taskSweeper;
-		}
+		// herdr off: the sweep leaves the herdr rows alone (never read or reminded); say so once. Headless rows need no herdr.
+		const orphaned = config.herdr === undefined ? store.tasks.listActive().filter((r) => r.runtime === "herdr") : [];
+		if (orphaned.length > 0) log.warn("tasks_orphaned", { count: orphaned.length });
+		const sweep = createTaskSweep(this.#ctx, {
+			store,
+			config,
+			herdr: config.herdr,
+			herdrRun,
+			requestTaskSweep: (taskId) => this.#requestTaskSweep(taskId),
+			repoMatches: (row, repos) => this.repoMatches(row, repos),
+			autoLand: (row, gate) => this.autoLand(row, gate),
+			landReady: () => this.#landing.landReady(),
+			pollTaskPrLand: (row) => this.#landing.pollPrLand(row),
+			retryPrLand: (row) => this.#landing.retryPrLand(row),
+		});
+		this.#herdrHealth = sweep.herdrHealth;
+		this.#checkRunner = sweep.checkRunner;
+		this.#taskSweeper = sweep.taskSweeper;
 		this.#ipc = startIpcServer(this.socketPath, (request) => handleIpc(this.#ctx, this, this.#landing, request));
 		// "Back" is told only once the process can be reached: a start that fails earlier leaves the marker for the next one,
 		// and the notice goes out before a recovered turn's first post.

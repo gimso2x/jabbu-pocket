@@ -9,6 +9,7 @@ import { closingAnswer, turnAnswerParts } from "../omp/answers";
 import { entryText, type OmpEntry, type OmpSessionDriver } from "../omp/driver";
 import type { Store } from "../store/db";
 import type { InboundRow } from "../store/db-rows";
+import { taskClosed } from "./daemon-task-resume";
 
 export const INTERRUPTED_NOTICE = "[turn failed] interrupted_by_restart — 다시 보내 주세요";
 
@@ -32,8 +33,7 @@ export interface RestartCutEntry {
 }
 
 export interface RestartCut {
-	/** When the daemon wrote it (ms). */
-	at: number;
+	at: number; // when the daemon wrote it (ms)
 	applyStamp: string;
 	opRefs: RestartCutEntry[];
 }
@@ -145,8 +145,7 @@ export interface RecoveryDeps {
 export interface RecoveryResult {
 	answered: number;
 	interrupted: number;
-	/** Cut turns resumed with a `cut-<id>` row instead of the interrupted notice. */
-	continued: number;
+	continued: number; // cut turns resumed with a `cut-<id>` row instead of the interrupted notice
 }
 
 /**
@@ -176,8 +175,8 @@ function finalAnswerParts(entries: readonly OmpEntry[], promptText: string, last
  * the row's `entry_cursor` (-> answered + delivery) or gets exactly one interrupted notice. Prompts are never resent.
  * Exception: a conversation turn the planned restart cut (its op_ref is in {@link RESTART_CUT_FILE}) gets one resume
  * row `cut-<id>` in the same thread and {@link CONTINUE_NOTICE} instead — once: a turn of a resume row, a monitor
- * origin, a command op (`COMMAND_OP_REF`), a closed lane's work turn (its worktree is gone; question turns still
- * resume) or an op_ref not in a fresh record is interrupted. A launch-refused row (`refused:`) is discarded silently.
+ * origin, a command op (`COMMAND_OP_REF`), a closed [TASK]'s turn, a closed lane's work turn (its worktree is gone;
+ * question turns still resume) or an op_ref not in a fresh record is interrupted. A launch-refused row (`refused:`) is discarded silently.
  * Rows that were steered into the same turn share an `op_ref` and are settled together by the first row's lookup.
  */
 export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryResult> {
@@ -240,6 +239,7 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 					!monitor &&
 					!COMMAND_OP_REF.test(opRef) &&
 					(store.getLaneByOrigin(originKey)?.status !== "closed" || isClosedLaneQuestion(lead.textRef)) &&
+					!taskClosed(store.tasks, originKey) &&
 					!group.some((row) => row.platformMessageId.startsWith(CONTINUE_ID_PREFIX))
 						? cutTurnsOf().get(opRef)
 						: undefined;

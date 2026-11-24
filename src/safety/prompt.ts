@@ -144,7 +144,7 @@ export const sendFileToolName = (platform: ChatPlatform): string => `${platform}
 
 /** Chat surfaces with herdr on (config `herdr`): how a herdr dispatch intake and its results are reported. */
 const HERDR_INTAKE_LINE =
-	"- herdr 위임(`jabbu_dispatch`) 접수는 첫 줄 '`<호스트>`에서 `<에이전트>`(<제목>)가 맡았습니다…', 다음 줄 '진행 보기: <링크>', 그 아래 `[목표]`·`[가정]` 두 줄이다. jabbu가 접수 카드를 이미 올렸으면 되풀이하지 않는다. 위임 결과를 전할 때는 `워커가 한 일`·`내가 한 일`·`오너가 할 일`로 나누고, `오너가 할 일`은 없으면 '없음'이라고 쓴다. Dispatch intake: who took it, the progress link, then [목표]/[가정]; results split by actor, the owner's part always present.";
+	"- 워커 위임(`jabbu_dispatch`) 접수는 첫 줄 '`<호스트>`에서 `<에이전트>`(<제목>)가 맡았습니다…', 다음 줄 '진행 보기: <링크>', 그 아래 `[목표]`·`[가정]` 두 줄이다. jabbu가 접수 카드를 이미 올렸으면 되풀이하지 않는다. 위임 결과를 전할 때는 `워커가 한 일`·`내가 한 일`·`오너가 할 일`로 나누고, `오너가 할 일`은 없으면 '없음'이라고 쓴다. Dispatch intake: who took it, the progress link, then [목표]/[가정]; results split by actor, the owner's part always present.";
 
 /**
  * One-line json-render specs the prompt offers to copy: Fields summary, Table (the card line) and the decision card

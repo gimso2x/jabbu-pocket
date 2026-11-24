@@ -128,14 +128,18 @@ export function agyWorkerArgs(model: string, workspaces: readonly string[], secr
 	return ["--model", model, "--dangerously-skip-permissions", "--settings", agySettings(workspaces, secretsDirs)];
 }
 
-/** Why a requested agy worker was not given; `undefined` when it was. */
-function agyRefusal(input: {
+interface AgyAsk {
 	risk: TaskRisk;
 	host: string | null;
 	agy: WorkerAgyConfig | undefined;
 	busy: string | undefined;
-}): string | undefined {
+	herdr: boolean; // herdr is configured: an agy worker is a herdr TUI, never headless
+}
+
+/** Why a requested agy worker was not given; `undefined` when it was. */
+function agyRefusal(input: AgyAsk): string | undefined {
 	if (input.agy === undefined) return "설정 workerAgy 없음";
+	if (!input.herdr) return "herdr 없음";
 	if (input.risk !== "L0" && input.risk !== "L1") return `위험 ${input.risk}`;
 	if (input.host !== null) return `host ${input.host}`;
 	if (input.busy !== undefined) return `${input.busy} 점유 중`;
@@ -143,14 +147,10 @@ function agyRefusal(input: {
 }
 
 /**
- * The worker of a new task that asked for agy (`taskSpec.worker: "agy"`): the trial runs only a local L0·L1 task, one
- * at a time (`busy`: an agy task still working or blocked), with `workerAgy` set. Within that it is the omp tier's row
- * on low with `agy:<model>`; outside it the omp worker as resolved, with a reply line saying why.
+ * The worker of a new task that asked for agy (`taskSpec.worker: "agy"`): only a local L0·L1 task, one at a time
+ * (`busy`), with `workerAgy` and herdr set, gets `agy:<model>` on low; outside that the omp worker, with a line why.
  */
-export function resolveAgyWorker(
-	omp: WorkerTier,
-	input: { risk: TaskRisk; host: string | null; agy: WorkerAgyConfig | undefined; busy: string | undefined },
-): WorkerTier {
+export function resolveAgyWorker(omp: WorkerTier, input: AgyAsk): WorkerTier {
 	const refusal = agyRefusal(input);
 	if (refusal === undefined && input.agy !== undefined) {
 		return { tier: "low", tierReason: omp.tierReason, model: `${AGY_WORKER_PREFIX}${input.agy.model}` };

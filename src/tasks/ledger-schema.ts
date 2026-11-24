@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 	check_json TEXT,
 	base_sha TEXT,
 	docs_dir TEXT,
-	land_json TEXT
+	land_json TEXT,
+	runtime TEXT NOT NULL DEFAULT 'herdr'
 );
 CREATE INDEX IF NOT EXISTS tasks_thread ON tasks(thread_ref);
 CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
@@ -83,6 +84,9 @@ export function migrateTaskSchema(db: Database): void {
 	for (const column of LATER_TASK_COLUMNS) {
 		if (!columns.some((existing) => existing.name === column)) db.run(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
 	}
+	// Every task from before `runtime` ran on herdr and keeps doing so to its end (`src/tasks/runtime.ts`).
+	if (!columns.some((existing) => existing.name === "runtime"))
+		db.run("ALTER TABLE tasks ADD COLUMN runtime TEXT NOT NULL DEFAULT 'herdr'");
 	db.run("UPDATE tasks SET docs_dir = worktree || '/docs/tasks/' || task_id WHERE docs_dir IS NULL");
 	migrateTransitionActors(db);
 }

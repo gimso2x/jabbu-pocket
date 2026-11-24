@@ -8,9 +8,38 @@ import { join } from "node:path";
 import { planPathsIn } from "../lanes/declared";
 import { defaultGit, type GitRunner } from "../lanes/verify";
 import { redactThenClip } from "../redact";
-import { docsDirUnder, taskDocsCommitTitle } from "./docs";
-import { readRegularFile, resolveTaskHost, type TaskHostOps } from "./host";
+import { docsDirOf, docsDirUnder, type ParsedProgress, parseProgress, taskDocsCommitTitle } from "./docs";
+import { type HostResult, readRegularFile, resolveTaskHost, type TaskHostOps, type TaskResumeOps } from "./host";
 import type { TaskRow } from "./ledger";
+import { checkResume, type ResumeCheck } from "./resume-check";
+
+/** A host read that throws (unsafe input, ssh spawn) is a failed read like any other. */
+export async function settled<T>(read: () => Promise<HostResult<T>>): Promise<HostResult<T>> {
+	try {
+		return await read();
+	} catch (error) {
+		return { ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
+/**
+ * The pre-resume check (`checkResume` over PROGRESS.md and `progressLag`) and the `restated` value PROGRESS.md had
+ * at this resume (`undefined` when it could not be read). Never throws: a failed read becomes a note.
+ */
+export async function readResumeCheck(
+	ops: TaskHostOps & TaskResumeOps,
+	row: TaskRow,
+): Promise<{ check: ResumeCheck; restated: string | undefined }> {
+	const file = await settled(() => ops.readFile(`${docsDirOf(row)}/PROGRESS.md`));
+	const progress: HostResult<ParsedProgress> = !file.ok
+		? file
+		: file.value === undefined
+			? { ok: false, error: "PROGRESS.md 없음" }
+			: { ok: true, value: parseProgress(file.value) };
+	const progressFile = `${docsDirOf(row)}/PROGRESS.md`;
+	const lag = await settled(() => ops.progressLag({ worktree: row.worktree, taskId: row.taskId, progressFile }));
+	return { check: checkResume(progress, lag), restated: progress.ok ? progress.value.restated : undefined };
+}
 
 /** The four documents of a task, in the order they are written. */
 export const TASK_DOC_NAMES = ["context.md", "spec.md", "PROGRESS.md", "outcome.md"] as const;

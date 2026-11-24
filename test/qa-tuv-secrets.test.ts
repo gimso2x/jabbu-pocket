@@ -61,6 +61,7 @@ const row = (over: Partial<TaskRow> = {}): TaskRow => ({
 	branch: "task/T-20261120-01",
 	agent: "t-20261120-01",
 	status: "review",
+	runtime: "herdr",
 	acceptance: [],
 	createdAt: 0,
 	updatedAt: 0,
@@ -181,7 +182,7 @@ describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 			"/home/someone/.jabbu-songbak/secrets",
 		]) {
 			const { built, calls } = tool();
-			await expect(built.execute({ mode: "herdr", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
+			await expect(built.execute({ mode: "worker", name: "x", task: "t", cwd }, { signal })).rejects.toThrow(
 				"비밀 디렉터리",
 			);
 			expect(calls).toEqual([]);
@@ -198,10 +199,15 @@ describe("결함 4: 워커 cwd가 비밀 디렉터리", () => {
 		}
 	});
 
-	test("an ordinary cwd still starts the worker", async () => {
+	test("an ordinary remote cwd still starts the worker; a local worker takes no cwd at all", async () => {
 		const { built, calls } = tool();
-		await built.execute({ mode: "herdr", name: "x", task: "t", cwd: join(home, "work") }, { signal });
+		await built.execute({ host: "wsl", name: "x", task: "t", cwd: "/home/u/work" }, { signal });
 		expect(calls.length).toBeGreaterThan(0);
+		const local = tool();
+		await expect(
+			local.built.execute({ mode: "worker", name: "x", task: "t", cwd: join(home, "work") }, { signal }),
+		).rejects.toThrow("cwd는 원격");
+		expect(local.calls).toEqual([]);
 	});
 });
 

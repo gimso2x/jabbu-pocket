@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import {
 	type ActionButton,
 	type ChannelPort,
@@ -208,10 +209,7 @@ const workerLines = (row: TaskRow): string[] => {
 const branchField = (row: TaskRow) => ({ label: "브랜치", value: `\`${row.branch}\`` });
 const workerField = (row: TaskRow) => ({ label: "워커", value: ownerTag(row) });
 
-/**
- * The accepted card posted to the task thread when the agent has started (gajae-way hub "맡았습니다" report): who
- * took it, the board card, then the goal and the session's assumptions so the owner can correct a misreading early.
- */
+/** The accepted card posted once the agent started: who took it (a local task: this `hostname()`), board link, goal, assumptions. */
 export function buildAcceptedCard(
 	row: TaskRow,
 	spec: { goal: string; assumptions?: string | undefined },
@@ -221,7 +219,7 @@ export function buildAcceptedCard(
 	const assumptions = `[가정] ${spec.assumptions ?? "없음"}`;
 	const worker = workerLines(row);
 	const text = [
-		`\`${hostLabelOf(row)}\`에서 \`${row.agent}\`(${row.title})가 맡았습니다. 결정이 필요하거나 끝나면 이 스레드로 알려 드립니다.`,
+		`\`${row.host ?? hostname()}\`에서 \`${row.agent}\`(${row.title})가 맡았습니다. 결정이 필요하거나 끝나면 이 스레드로 알려 드립니다.`,
 		...(link === undefined ? [] : [`진행 보기: ${link}`]),
 		"",
 		goal,
@@ -607,8 +605,8 @@ export const formatWorkingSilentNotice = (
 
 /** The task's herdr agent vanished (dori `[LOST]`): the owner hears it once per progress base, with the resume call. */
 export function buildLostCard(row: TaskRow, ownerUserId: string, link?: string): TaskCard {
-	const missing = `herdr에 \`${row.agent}\` 에이전트가 없습니다.`;
-	const resume = `*재개*: \`jabbu_dispatch {mode:"herdr", taskSpec:{id:"${row.taskId}"}}\` — 같은 워크트리에서 에이전트를 다시 띄웁니다.`;
+	const missing = `${row.runtime === "headless" ? "데몬 Mailbox" : "herdr"}에 \`${row.agent}\` 에이전트가 없습니다.`;
+	const resume = `*재개*: \`jabbu_dispatch {mode:"worker", taskSpec:{id:"${row.taskId}"}}\` — 같은 워크트리에서 에이전트를 다시 띄웁니다.`;
 	const note = cardNote(link);
 	return {
 		text: [

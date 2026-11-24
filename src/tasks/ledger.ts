@@ -83,6 +83,7 @@ export interface TaskRow {
 	/** Where the task's four documents live: `<worktree|recordsRepo|recordsDir>/docs/tasks/<id>`, fixed at registration. */
 	docsDir: string;
 	land: TaskLandRecord | null; // the task's own PR landing (`setLand`); null = none or unreadable
+	runtime: "herdr" | "headless"; // where the worker runs (`src/tasks/runtime.ts`), fixed at registration
 }
 
 /** A task's `[check:]` results, bound to the HEAD they ran at: reused only while the worktree is still there. */
@@ -109,6 +110,7 @@ export interface NewTask {
 	recordsRoot?: string;
 	/** The worker tier fixed for the task's life (resume and restart included); absent → all three stay null. */
 	worker?: { tier: LaneModelTier; tierReason: string; model: string | null; tierConfidence?: number };
+	runtime?: TaskRow["runtime"]; // absent = herdr
 }
 
 /** One append-only line of a task's status history; the registration line has `fromStatus: null`. */
@@ -151,6 +153,7 @@ export interface TaskSql {
 	base_sha?: string | null;
 	docs_dir?: string | null;
 	land_json?: string | null;
+	runtime?: string;
 }
 
 interface TransitionSql {
@@ -229,6 +232,7 @@ export function readTaskSql(r: TaskSql): ReadTask {
 		baseSha: r.base_sha ?? null,
 		docsDir: r.docs_dir ?? docsDirUnder(r.worktree, r.task_id),
 		land: parseObject<TaskLandRecord>(r.land_json),
+		runtime: r.runtime === "headless" ? "headless" : "herdr",
 	};
 	return { row, broken };
 }
@@ -315,8 +319,8 @@ export class TaskLedger {
 			this.#db
 				.query(
 					`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
-						acceptance_json, created_at, updated_at, worker_model, tier, tier_reason, tier_confidence, docs_dir)
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?, ?)`,
+						acceptance_json, created_at, updated_at, worker_model, tier, tier_reason, tier_confidence, docs_dir, runtime)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				)
 				.run(
 					taskId,
@@ -337,6 +341,7 @@ export class TaskLedger {
 					input.worker?.tierReason ?? null,
 					input.worker?.tierConfidence === undefined ? null : String(input.worker.tierConfidence),
 					docsDirUnder(input.recordsRoot ?? worktreePathOf(input.repo, taskId), taskId),
+					input.runtime ?? "herdr",
 				);
 			this.#recordTransition(taskId, null, "working", "bot", "registered", now);
 			return this.require(taskId);
@@ -360,33 +365,27 @@ export class TaskLedger {
 		return row === null ? undefined : toTask(row);
 	}
 
+	#all(sql: string, ...args: (string | number)[]): TaskRow[] {
+		return (this.#db.query(`SELECT * FROM tasks ${sql}`).all(...args) as TaskSql[]).map(toTask);
+	}
+
 	list(): TaskRow[] {
-		return (this.#db.query(`SELECT * FROM tasks ORDER BY ${TASK_ORDER}`).all() as TaskSql[]).map(toTask);
+		return this.#all(`ORDER BY ${TASK_ORDER}`);
 	}
 
 	/** Tasks the sweep watches. */
 	listActive(): TaskRow[] {
-		return (
-			this.#db
-				.query(`SELECT * FROM tasks WHERE status IN ('working','blocked') ORDER BY ${TASK_ORDER}`)
-				.all() as TaskSql[]
-		).map(toTask);
+		return this.#all(`WHERE status IN ('working','blocked') ORDER BY ${TASK_ORDER}`);
 	}
 
 	/** Tasks waiting on the owner's review: the sweep re-alerts the ones left there a day or more. */
 	listInReview(): TaskRow[] {
-		return (
-			this.#db.query(`SELECT * FROM tasks WHERE status = 'review' ORDER BY ${TASK_ORDER}`).all() as TaskSql[]
-		).map(toTask);
+		return this.#all(`WHERE status = 'review' ORDER BY ${TASK_ORDER}`);
 	}
 
 	/** Tasks closed `done` at or after `since` (epoch ms), oldest first: the startup pass of the wiki result notes. */
 	listDoneSince(since: number): TaskRow[] {
-		return (
-			this.#db
-				.query(`SELECT * FROM tasks WHERE status = 'done' AND closed_at >= ? ORDER BY closed_at, task_id`)
-				.all(since) as TaskSql[]
-		).map(toTask);
+		return this.#all("WHERE status = 'done' AND closed_at >= ? ORDER BY closed_at, task_id", since);
 	}
 
 	/** Whether any task was registered from the conversation `originKey`. */
@@ -401,9 +400,7 @@ export class TaskLedger {
 
 	/** Every task registered in a thread (`<channel>:<ts>`), in id order; a thread may carry more than one. */
 	getByThread(threadRef: string): TaskRow[] {
-		return (
-			this.#db.query(`SELECT * FROM tasks WHERE thread_ref = ? ORDER BY ${TASK_ORDER}`).all(threadRef) as TaskSql[]
-		).map(toTask);
+		return this.#all(`WHERE thread_ref = ? ORDER BY ${TASK_ORDER}`, threadRef);
 	}
 
 	/** Whether the owner paused the task: its latest `pause:` mark is later than its latest `unpause:` mark. */

@@ -72,13 +72,13 @@ describe("2. dispatch: a taskSpec task may start with `-` (qa-x #36)", () => {
 		await expect(call({ taskSpec: { id: "T-20261026-01" }, task: "-v 옵션도 고려해" })).rejects.toThrow(
 			"이 세션에서는 taskSpec을 쓸 수 없습니다",
 		);
-		await expect(call({ mode: "herdr", taskSpec: { id: "T-20261026-01" }, task: "-v 옵션도 고려해" })).rejects.toThrow(
+		await expect(call({ mode: "worker", taskSpec: { id: "T-20261026-01" }, task: "-v 옵션도 고려해" })).rejects.toThrow(
 			"이 세션에서는 taskSpec을 쓸 수 없습니다",
 		);
 	});
 
 	test("a herdr or host task starting with `-` is still refused", async () => {
-		await expect(call({ mode: "herdr", name: "a1", task: "-v" })).rejects.toThrow("`-`로 시작할 수 없습니다");
+		await expect(call({ mode: "worker", name: "a1", task: "-v" })).rejects.toThrow("`-`로 시작할 수 없습니다");
 		await expect(call({ host: "wsl", name: "a1", task: "-v" })).rejects.toThrow("`-`로 시작할 수 없습니다");
 	});
 });

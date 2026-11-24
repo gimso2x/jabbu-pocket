@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parseThreadRef, platformOfThreadRef } from "../core/normalize";
 import { parseChatOrigin } from "../core/origin-key";
 import { buildBoardTools } from "../lanes/board";
-import { isLaneOrigin } from "../lanes/status";
+import { isLaneOrigin, isTaskOrigin } from "../lanes/status";
 import { buildLaneTools, buildWorkStartTool } from "../lanes/tools";
 import { buildMonitorTools, isPersonaOrigin } from "../monitors/tools";
 import type { OmpDialogAnswerer } from "../omp/driver";
@@ -14,6 +14,7 @@ import type { FloorsSurface } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
 import { offsetLabel } from "../time";
 import { approvalOf, type DaemonContext } from "./daemon-context";
+import { taskMailboxPort, taskOfOrigin } from "./daemon-task-resume";
 import { laneChannelOf, uploadThreadTs } from "./thread-target";
 
 /** Longest wait for the recorded deliveries before a dialog card goes out anyway. */
@@ -52,8 +53,7 @@ export function floorsSurfaceFor(ctx: DaemonContext, originKey: string): FloorsS
 		isPersonaOrigin(originKey) &&
 		laneChannelOf(ctx, originKey, ref.conversationId) === undefined &&
 		!peerTouched(ctx, originKey);
-	// The peer bots of the conversation's platform, in that platform's mention syntax: Discord's
-	// `channels.discord.peerBots`; other platforms have none.
+	// The peer bots of the conversation's platform in its mention syntax (Discord's `channels.discord.peerBots`; none elsewhere).
 	const { config } = ctx.options;
 	const peerBots = ref?.platform === "discord" ? config.channels.discord?.peerBots : undefined;
 	const port = ctx.options.channels.find((binding) => binding.port.platform === ref?.platform)?.port;
@@ -72,6 +72,7 @@ export function floorsSurfaceFor(ctx: DaemonContext, originKey: string): FloorsS
  * (an approval click can take minutes), and `drain` counts it as unfinished work.
  */
 export function hostToolsFor(ctx: DaemonContext, originKey: string): HostToolDef[] {
+	if (isTaskOrigin(originKey)) return []; // a [TASK] worker has no jabbu tools: its board is PROGRESS.md
 	const reduced = hostToolSet(ctx, originKey, true);
 	const allowed = new Set(reduced.map((tool) => tool.name));
 	const tools = peerTouched(ctx, originKey)
@@ -111,8 +112,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 	const lane = isLaneOrigin(originKey) ? ctx.store?.getLaneByOrigin(originKey) : undefined;
 	const chatOrigin = parseChatOrigin(originKey);
 	const channel = lane ? parseThreadRef(lane.threadRef)?.channel : chatOrigin?.conversationId;
-	// With a peer bot in the conversation only file upload, approval and dispatch remain (no lane or monitor
-	// tools); dispatch there asks the owner only for a high_risk brief, like anywhere else.
+	// With a peer bot in the conversation only file upload, approval and dispatch remain (no lane or monitor tools).
 	const base = buildHostTools({
 		originKey,
 		channels: ctx.channels,
@@ -141,6 +141,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 							ctx.router?.mailbox(originKey).state.threadRef ?? ctx.store?.latestInboundThread(originKey),
 						rootText: (threadRef: string) => ctx.store?.getInbound(threadRef)?.textRef,
 						channels: ctx.channels,
+						headless: taskMailboxPort(ctx),
 						now: () => ctx.clock.now(),
 						timezone: config.timezone,
 						...(config.recordsRepo === undefined ? {} : { recordsRepo: config.recordsRepo }),
@@ -176,7 +177,6 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 	// Discord conversations get monitors (and lanes where a lane can open); another platform's the base set.
 	const otherPlatform = chatOrigin !== undefined && chatOrigin.platform !== "discord";
 	const laneChannel = laneChannelOf(ctx, originKey, channel);
-	// The lane board: lane sessions and Discord conversations.
 	const boardTools = store && (lane || chatOrigin) ? buildBoardTools(store, originKey) : [];
 	return peerTouched || otherPlatform
 		? base
@@ -232,15 +232,15 @@ export function answerDialogsFor(
 	};
 }
 
-/** Working directory of the omp child: the project of a work lane, the bot workspace otherwise. */
+/** Working directory of the omp child: a [TASK] worker's worktree, the project of a work lane, the bot workspace otherwise. */
 export function cwdFor(ctx: DaemonContext, originKey: string): string {
+	const task = taskOfOrigin(ctx.store?.tasks, originKey);
+	if (task !== undefined) return task.worktree;
 	const lane = isLaneOrigin(originKey) ? ctx.store?.getLaneByOrigin(originKey) : undefined;
 	if (lane === undefined) return ctx.options.config.workspaceDir;
 	if (existsSync(lane.cwd)) return lane.cwd;
-	// An open lane without its worktree was damaged by hand: running in the live checkout instead would let the
-	// lane change the owner's working copy, so the child is refused.
+	// An open lane without its worktree was damaged by hand: the live checkout must not be changed, so the child is refused.
 	if (lane.status !== "closed") throw new Error(`lane_worktree_missing: ${lane.name} ${lane.cwd}`);
-	// A landed or discarded lane has no worktree any more: its session answers later questions from the
-	// repository it was merged into.
+	// A landed or discarded lane has no worktree: its session answers later questions from the repository it was merged into.
 	return lane.meta.repo ?? ctx.options.config.workspaceDir;
 }

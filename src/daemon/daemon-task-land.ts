@@ -1,6 +1,5 @@
 import type { IngestOutcome } from "../channel/types";
 import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
-import { herdrCloseTaskAgent } from "../dispatch/omp";
 import { confidentBand } from "../lanes/land";
 import { readAutoLandHold } from "../ops/apply";
 import { evaluateTask, memoryTaskChecks } from "../tasks/evaluate";
@@ -28,6 +27,7 @@ import {
 } from "./daemon-constants";
 import { adapterOfConversation, approvalOf, autoLandPolicy, type DaemonContext } from "./daemon-context";
 import { DaemonTaskPrLand } from "./daemon-task-pr-land";
+import { taskRuntimeOf } from "./daemon-task-resume";
 import { createPrLandRetry } from "./daemon-task-retry";
 
 /** Feeds `text` as an owner message through the adapter's message path: the bot posts `marker` (in `threadTs`'s thread, or as a root) and the message takes its id; `posted.ts` is set once the marker is up. */
@@ -246,14 +246,9 @@ export class DaemonTaskLanding {
 		const config = this.#ctx.options.config; // live: dispatchHosts and recordsRepo are reloadable
 		await recordWithConfig(config, this.#ctx.store?.tasks.get(row.taskId) ?? row); // the closed task's last records commit
 		const entry = row.host === null ? undefined : config.dispatchHosts?.[row.host];
-		if (row.host === null ? config.herdr === undefined : entry === undefined) return undefined;
-		const herdrRun = this.#ctx.options.herdrRun;
-		const closed = await herdrCloseTaskAgent(row.agent, {
-			cwd: config.workspaceDir,
-			...(entry === undefined ? {} : { sshTarget: entry.ssh }),
-			...(entry?.herdrBin === undefined ? {} : { herdrBin: entry.herdrBin }),
-			...(herdrRun === undefined ? {} : { run: herdrRun }),
-		});
+		if (row.runtime === "herdr" && (row.host === null ? config.herdr === undefined : entry === undefined))
+			return undefined;
+		const closed = await taskRuntimeOf(this.#ctx, row).close(row);
 		if (closed.ok) return undefined;
 		this.#ctx.log.warn("task_agent_close_failed", {
 			task: row.taskId,
