@@ -14,16 +14,16 @@ import {
 } from "./helpers/daemon-process";
 
 /**
- * Operations E2E: a REAL omp behind the real daemon process, file-backed fake Discord, temp OMPBOT_HOME with FAKE tokens.
+ * Operations E2E: a REAL omp behind the real daemon process, file-backed fake Discord, temp JABBU_HOME with FAKE tokens.
  * The omp child is killed with SIGKILL right after the tool_start log line (omp's tool_execution_start event).
- * Costs tokens, so it only runs with OMPBOT_E2E_OMP=1 (model: OMPBOT_E2E_OMP_PROVIDER/OMPBOT_E2E_OMP_MODEL).
+ * Costs tokens, so it only runs with JABBU_E2E_OMP=1 (model: JABBU_E2E_OMP_PROVIDER/JABBU_E2E_OMP_MODEL).
  */
-const enabled = process.env.OMPBOT_E2E_OMP === "1";
-if (!enabled) console.log("[skip] ops.e2e.test.ts: set OMPBOT_E2E_OMP=1 to run against a real omp (costs tokens)");
+const enabled = process.env.JABBU_E2E_OMP === "1";
+if (!enabled) console.log("[skip] ops.e2e.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");
 
-const PROVIDER = process.env.OMPBOT_E2E_OMP_PROVIDER ?? "zai";
-const MODEL = process.env.OMPBOT_E2E_OMP_MODEL ?? "glm-5.3-flash";
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
+const PROVIDER = process.env.JABBU_E2E_OMP_PROVIDER ?? "zai";
+const MODEL = process.env.JABBU_E2E_OMP_MODEL ?? "glm-5.3-flash";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
 const ORIGIN = "discord/dm/200000000000000001";
 const SCENARIO_TIMEOUT_MS = 420_000;
 // Failure deadline on awaited events (log lines, file changes), never a wait for time to pass.
@@ -53,7 +53,7 @@ async function inject(homeDir: string, text: string): Promise<{ threadTs: string
 
 const inThread = (posts: LoggedPost[], threadTs: string) => posts.filter((post) => post.threadTs === threadTs);
 
-/** Pid of the first origin's omp child in `ompbot status --json` output; null when none is running. */
+/** Pid of the first origin's omp child in `jabbu-pocket status --json` output; null when none is running. */
 function ompPidOf(statusJson: string): number | null {
 	const report: StatusReport = JSON.parse(statusJson);
 	return report.origins[0]?.ompPid ?? null;
@@ -64,7 +64,7 @@ describe.skipIf(!enabled)("operations surface with a real omp", () => {
 		"kill -9 of the omp child after tool_start: omp_exit log, one [turn failed] omp_exited reply, next inject resumes the session",
 		async () => {
 			const nonce = `nonce${randomBytes(5).toString("hex")}`;
-			home = makeHome("ompbot-e2e-ops-", { ompExecutable: OMP_EXECUTABLE, model: `${PROVIDER}/${MODEL}` });
+			home = makeHome("jabbu-e2e-ops-", { ompExecutable: OMP_EXECUTABLE, model: `${PROVIDER}/${MODEL}` });
 			const log = new TransportLog(join(home.dir, "transport.jsonl"));
 			const daemon = spawnDaemon(home.dir, log.path);
 			await daemon.waitLog(/event=daemon_ready/);
@@ -106,7 +106,7 @@ describe.skipIf(!enabled)("operations surface with a real omp", () => {
 			expect(await daemon.exited).toBe(0);
 			expect(inThread(log.posts(), a.threadTs).filter((post) => post.text.includes(FAILED_NOTICE))).toHaveLength(1);
 
-			const fileLog = readFileSync(join(home.dir, "logs", "ompbot.log"), "utf8").split("\n");
+			const fileLog = readFileSync(join(home.dir, "logs", "jabbu.log"), "utf8").split("\n");
 			const excerpt = fileLog.filter((line) => /event=(turn_start|tool_start|omp_exit|delivery_state)/.test(line));
 			expect(excerpt.some((line) => line.includes("event=omp_exit"))).toBe(true);
 			console.log(`[ops-e2e] killed omp pid ${ompPid}; exit line: ${exitLine}`);

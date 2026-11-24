@@ -315,7 +315,7 @@ export class OriginMailbox {
 	/**
 	 * Reports a running turn that has emitted no omp event for `STALL_MS`. Synchronous and clock-driven, so the daemon
 	 * sweep and tests with a fake clock both call it. Returns whether a new stall just began.
-	 * Never while a host tool runs: the child waits on ompbot (an approval click, an upload), not on its model. Never
+	 * Never while a host tool runs: the child waits on jabbu (an approval click, an upload), not on its model. Never
 	 * while the turn waits for its unsettled session's late runs either (`tailWaiting`): that wait is expected.
 	 *
 	 * Stalls of one turn merge: the first logs `stall_alert` and shows the stalled status text; later ones log
@@ -556,7 +556,7 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * The session file the running child reports as open (`ompbot lanes watch`); undefined without a child or when it
+	 * The session file the running child reports as open (`jabbu-pocket lanes watch`); undefined without a child or when it
 	 * reports none. Only reads `state()`: never queued behind the running turn, never starts a child.
 	 */
 	async openSessionFile(): Promise<string | undefined> {
@@ -812,7 +812,7 @@ export class OriginMailbox {
 
 	/**
 	 * Resolves once no turn runs (at once when none does). Does not hold new turns back: the caller holds the origin
-	 * first (a paused lane), so the turn running now is the last one (`ompbot lanes attach --wait`).
+	 * first (a paused lane), so the turn running now is the last one (`jabbu-pocket lanes attach --wait`).
 	 */
 	whenTurnEnds(): Promise<void> {
 		if (this.#turn === undefined) return Promise.resolve();
@@ -868,7 +868,7 @@ export class OriginMailbox {
 	/**
 	 * A plain owner message while the running turn waits on exactly one owner dialog: it becomes that dialog's answer
 	 * (never a steer) and rides the turn's opRef, so the turn's final settles it as answered. With 2+ open dialogs the
-	 * owner is told to answer in a card's thread and the message takes the normal path. An `injected` row (`ompbot
+	 * owner is told to answer in a card's thread and the message takes the normal path. An `injected` row (`jabbu
 	 * inject`, which anyone with the socket can send) never answers a card: it takes the normal path, the card open.
 	 */
 	async #answerDialog(row: InboundRow): Promise<boolean> {
@@ -1426,7 +1426,7 @@ export class OriginMailbox {
 
 	/**
 	 * Session-file heal for a restore-model failure (no live driver — `#healStaleModel` cannot run): the file
-	 * omp resumes (`/resume-ompbot`'s pin, else the newest of the session dir — the rule `openOriginSession`
+	 * omp resumes (`/resume-jabbu`'s pin, else the newest of the session dir — the rule `openOriginSession`
 	 * binds) has the `model_change` omp restores from (the last one; after a `role: "fallback"` retry hop, the last
 	 * one whose role is default) rewritten to the fallback, the same chain `#healStaleModel` uses:
 	 * `#effectiveSettings` → `defaultModel`. The original is backed up under the origin's backup dir first;
@@ -1506,7 +1506,7 @@ export class OriginMailbox {
 
 	/**
 	 * Effective chat-chosen settings. A thread origin (`…/t/<ts>`) with no choice of its own inherits the parent
-	 * channel's choice, so a new thread follows the channel's `/model-ompbot`·`/thinking-ompbot` until the thread
+	 * channel's choice, so a new thread follows the channel's `/model-jabbu`·`/thinking-jabbu` until the thread
 	 * sets its own. Every other origin kind never inherits.
 	 */
 	#effectiveSettings(origin: OriginRow): { model: string | null; thinking: string | null } {
@@ -1528,7 +1528,7 @@ export class OriginMailbox {
 
 	/**
 	 * Re-applies the model and thinking level chosen in chat each time a child opens the session (after idle release, a
-	 * restart, `/new-ompbot` or `/resume-ompbot`). A setting omp no longer accepts is logged and left out, never fatal.
+	 * restart, `/new-jabbu` or `/resume-jabbu`). A setting omp no longer accepts is logged and left out, never fatal.
 	 */
 	async #applySettings(driver: OmpSessionDriver, origin: OriginRow): Promise<void> {
 		const { log, originKey } = this.#deps;

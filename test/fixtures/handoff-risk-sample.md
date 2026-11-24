@@ -5,7 +5,7 @@
 ## 배경
 
 - 2026-11-04 oh-my-hermes(main `61470e4f5`, MIT) 분석에서 가져온 후보 1번이다. OMH `docs/HANDOFF-RISK-SCAN.md`는 무인 코딩 위임 직전에 최종 지시문(브리프)과 저장소를 훑어 위험 신호를 `clear / advisory / high_risk`로 판정하고, strict 모드에서는 high_risk면 자동화를 멈춘다. 코드는 가져오지 않고 개념만 TS로 새로 쓴다.
-- ompbot은 herdr 워커에 사람 없이 돌 지시를 넘긴다. 지금 이 경로에는 지시문 내용 검사가 없다. taskSpec `risk`(L0~L4)는 위임하는 세션이 스스로 적는 값일 뿐이고, 지시문에 되돌릴 수 없는 명령(강제 push, 하드 리셋, 서비스 재시작 등)이 들어 있어도 그대로 워커에 전달된다.
+- jabbu는 herdr 워커에 사람 없이 돌 지시를 넘긴다. 지금 이 경로에는 지시문 내용 검사가 없다. taskSpec `risk`(L0~L4)는 위임하는 세션이 스스로 적는 값일 뿐이고, 지시문에 되돌릴 수 없는 명령(강제 push, 하드 리셋, 서비스 재시작 등)이 들어 있어도 그대로 워커에 전달된다.
 - 워커에게 "하지 마라"고 적는 금지 줄(예: "머지·push·데몬 재시작은 하지 않는다")은 정상 지시이므로 고위험으로 보면 안 된다. 기존 스펙·위임 지시문이 전부 이런 금지 줄을 갖고 있다.
 
 ## 원인 (코드 경로)
@@ -16,7 +16,7 @@
   3. `host` 지정 + `task` → `herdrRemoteStart`.
   4. `mode=herdr` + `name` + `task` → `herdrPromptExisting` (후속 지시).
 - `src/safety/host-tools.ts` `buildHostTools`: `dispatchDeps = { ...deps, ompExecutable }`로 만들어 `buildDispatchTool`에 넘긴다. `deps.broker`(`ApprovalBroker`)와 `deps.threadTs`가 이미 이 객체 안에 있지만 `DispatchToolDeps`에 선언돼 있지 않아 dispatch 쪽에서 쓰지 않는다.
-- 승인 카드: `ompbot_request_approval`의 `execute`가 `deps.broker.ask(target, summary, { signal, detail, origin: { originKey, channel, threadTs } })`를 부른다. 결과는 `"approved" | "denied" | "timeout" | { replied }`.
+- 승인 카드: `jabbu_request_approval`의 `execute`가 `deps.broker.ask(target, summary, { signal, detail, origin: { originKey, channel, threadTs } })`를 부른다. 결과는 `"approved" | "denied" | "timeout" | { replied }`.
 - `HostToolDef.execute(params, context: { signal })`. dispatch 도구의 `execute(params)`는 지금 `context`를 받지 않는다.
 
 ## 목표
@@ -48,7 +48,7 @@ export function scanHandoffBrief(brief: string, options?: { protectedBranches?: 
   - `sql_destructive`: `DROP TABLE`, `DROP DATABASE`, `TRUNCATE TABLE`
   - `service_control`: `systemctl`(`--user` 포함) 뒤에 `restart|stop|start|disable|kill`, `docker`·`podman` 뒤에 `rm|stop|kill|restart`, `pm2` 뒤에 `restart|stop|delete`
   - `disk_destructive`: `mkfs`, `dd ` … `of=/dev/`
-  - `secret_path`: `.ompbot/secrets`
+  - `secret_path`: `.jabbu/secrets`
 - **advisory 규칙**:
   - `package_install`: `npm install`/`npm i `, `bun add`, `bun install`, `pip install`, `apt install`/`apt-get install`
   - `owner_gate_skip`: `OMP_OWNER_APPROVED`
@@ -64,7 +64,7 @@ export function scanHandoffBrief(brief: string, options?: { protectedBranches?: 
 ### 3. 연결 (`src/dispatch/tool.ts`)
 
 - `DispatchToolDeps`에 선택 필드 `approve?: (summary: string, detail: ApprovalDetail, signal?: AbortSignal) => Promise<ApprovalResult>`를 추가한다.
-- `src/safety/host-tools.ts`가 `dispatchDeps`를 만들 때 `approve`를 채운다: `deps.broker.ask(channel, summary, { signal, detail, origin: { originKey, channel, threadTs: deps.threadTs?.() } })`. 채널은 `ompbot_request_approval`과 같은 규칙(`needChannel`)으로 정한다.
+- `src/safety/host-tools.ts`가 `dispatchDeps`를 만들 때 `approve`를 채운다: `deps.broker.ask(channel, summary, { signal, detail, origin: { originKey, channel, threadTs: deps.threadTs?.() } })`. 채널은 `jabbu_request_approval`과 같은 규칙(`needChannel`)으로 정한다.
 - dispatch 도구 `execute(params, context)`가 `context.signal`을 `executeDispatch`로 넘긴다.
 - herdr 4갈래 각각에서, 지시문을 내보내는 함수를 부르기 **전에** `gateHandoff(text, signal)`을 부른다.
   - `clear`: 그대로 진행.
@@ -99,7 +99,7 @@ export function scanHandoffBrief(brief: string, options?: { protectedBranches?: 
 ## 수락기준
 
 - AC-1: `scanHandoffBrief` 단위 테스트 — high_risk 규칙 10개(`git_reset_hard`, `git_clean_force`, `git_push_force`, `git_push_protected`, `git_branch_force_delete`, `rm_rf_absolute`, `sql_destructive`, `service_control`, `disk_destructive`, `secret_path`)마다 양성 1개 이상이 `high_risk`와 그 rule 이름을 낸다.
-- AC-2: 금지 문맥 하향 테스트 — "머지·push·데몬 재시작(systemctl --user restart ompbot)은 하지 않는다", "never run git reset --hard" 같은 줄은 verdict가 `advisory`이고 `high_risk`가 아니다. 이 문서 전문을 넣어도 `high_risk`가 아니다.
+- AC-2: 금지 문맥 하향 테스트 — "머지·push·데몬 재시작(systemctl --user restart jabbu)는 하지 않는다", "never run git reset --hard" 같은 줄은 verdict가 `advisory`이고 `high_risk`가 아니다. 이 문서 전문을 넣어도 `high_risk`가 아니다.
 - AC-3: 음성 테스트 — `git push origin task/T-20261104-01`, `git reset --soft HEAD~1`, `rm -rf node_modules`, `git branch -d task/x`, 일반 한국어 지시문은 해당 high_risk rule을 내지 않는다.
 - AC-4: `protectedBranches: ["production"]`이면 `git push origin production`은 `git_push_protected`, `git push origin main`은 `git_push_protected`를 내지 않는다.
 - AC-5: 65536바이트를 넘는 입력은 `truncated: true`이고 verdict가 `clear`가 아니다. 위험 명령이 65536바이트 뒤에만 있으면 그 rule을 내지 않는다.

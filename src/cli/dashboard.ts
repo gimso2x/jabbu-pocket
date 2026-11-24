@@ -43,7 +43,7 @@ function usage(message: string): number {
 }
 
 /**
- * `ompbot dashboard`: a process of its own beside the daemon (it still answers "daemon down"). Reads config.json
+ * `jabbu-pocket dashboard`: a process of its own beside the daemon (it still answers "daemon down"). Reads config.json
  * without touching the token files, seeds the redaction value index from the environment and guard files, opens the
  * database read-only per snapshot, and serves until SIGTERM/SIGINT.
  */
@@ -115,7 +115,7 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 			diff: (subject) => readDiff(homeDir, subject),
 			// 800 ms bound: a wedged daemon must not hold a read past the next tick (callDaemon defaults to 120 s).
 			live: async (origin) => {
-				const answer = await callDaemon(join(homeDir, "ompbot.sock"), { op: "live", origin }, 800);
+				const answer = await callDaemon(join(homeDir, "jabbu.sock"), { op: "live", origin }, 800);
 				if (typeof answer !== "object" || answer === null || !("ok" in answer) || answer.ok !== true) {
 					throw new Error("daemon live op failed");
 				}

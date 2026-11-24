@@ -76,7 +76,7 @@ export class TaskPrWorld {
 		readonly records: string,
 		readonly denylistFile: string,
 	) {
-		this.home = makeHome("ompbot-task-pr-home-");
+		this.home = makeHome("jabbu-task-pr-home-");
 		this.transport = new WaitingDiscordTransport();
 		this.fake = new FakeGh({ slug: SLUG, bare });
 		this.transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
@@ -85,7 +85,7 @@ export class TaskPrWorld {
 
 	/** `autoLand`: `taskAutoLand` is on for the pr-mode repository (a `blocked` landing is then retried on a new tip). */
 	static async start(options: { autoLand?: boolean } = {}): Promise<TaskPrWorld> {
-		const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-task-pr-")));
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-task-pr-")));
 		// The bare repository's name ends in `.git`: the core refuses an origin that may be a live checkout.
 		const bare = join(root, "origin.git");
 		mkdirSync(bare);
@@ -94,8 +94,8 @@ export class TaskPrWorld {
 		mkdirSync(repo);
 		git(repo, "init", "-q", "-b", "main");
 		for (const [key, value] of [
-			["user.name", "ompbot fixture"],
-			["user.email", "fixture@ompbot.invalid"],
+			["user.name", "jabbu fixture"],
+			["user.email", "fixture@jabbu.invalid"],
 			["commit.gpgsign", "false"],
 		] as const)
 			git(repo, "config", key, value);
@@ -110,8 +110,8 @@ export class TaskPrWorld {
 		mkdirSync(join(records, "release"), { recursive: true });
 		git(records, "init", "-q", "-b", "main");
 		for (const [key, value] of [
-			["user.name", "ompbot fixture"],
-			["user.email", "fixture@ompbot.invalid"],
+			["user.name", "jabbu fixture"],
+			["user.email", "fixture@jabbu.invalid"],
 			["commit.gpgsign", "false"],
 		] as const)
 			git(records, "config", key, value);
@@ -241,7 +241,7 @@ export class TaskPrWorld {
 		const work = join(scratch, "w");
 		for (const [key, value] of [
 			["user.name", "someone else"],
-			["user.email", "else@ompbot.invalid"],
+			["user.email", "else@jabbu.invalid"],
 		] as const)
 			git(work, "config", key, value);
 		const sha = this.commit(work, files, content);
@@ -292,7 +292,7 @@ export class TaskPrWorld {
 			channel_id: THREAD,
 			guild_id: GUILD,
 			member: { user: { id: OWNER } },
-			data: { custom_id: `ompbot:task:merge:${taskId}`, component_type: 2 },
+			data: { custom_id: `jabbu:task:merge:${taskId}`, component_type: 2 },
 			message: { id: card.id, channel_id: THREAD },
 		});
 		return card.id;

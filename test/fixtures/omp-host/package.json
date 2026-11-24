@@ -1,5 +1,5 @@
 {
-	"name": "ompbot-omp-host-fixture",
+	"name": "jabbu-omp-host-fixture",
 	"private": true,
 	"type": "module",
 	"dependencies": {

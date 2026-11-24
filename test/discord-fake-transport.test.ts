@@ -150,7 +150,7 @@ describe("FakeDiscordTransport contract", () => {
 			type: 3,
 			token: "tok",
 			channel_id: CHANNEL,
-			data: { custom_id: "ompbot:approval:approve:C:1", component_type: 2 },
+			data: { custom_id: "jabbu:approval:approve:C:1", component_type: 2 },
 		};
 		await fake.emitMessage(message);
 		await fake.emitInteraction(interaction);

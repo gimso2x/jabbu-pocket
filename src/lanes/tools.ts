@@ -10,7 +10,7 @@ import { WORKFLOW_NAMES } from "./workflow";
 /** Offered to chat sessions: starts a work lane in `channel` (like the `작업: <제목> @<경로>` message); on Discord a thread. */
 export function buildWorkStartTool(manager: LaneManager, channel: string, originKey: string): HostToolDef {
 	return {
-		name: "ompbot_work_start",
+		name: "jabbu_work_start",
 		label: "Start work lane",
 		description:
 			"Start a long task as its own work lane: a new chat thread and a separate omp session working in its own git worktree and branch (`lane/L-YYYYMMDD-NN`) of the repository that contains `cwd`. Use it for tasks that take long or touch another project. Returns the lane name.",
@@ -153,10 +153,10 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 export function buildLaneTools(manager: LaneManager, originKey: string): HostToolDef[] {
 	return [
 		{
-			name: "ompbot_lane_progress",
+			name: "jabbu_lane_progress",
 			label: "Report lane milestone",
 			description:
-				"Report a milestone of this work lane in one line; it is shown in the lane's status message in its chat thread. It needs `evidence`: either `{ file }`, a regular file inside this lane's worktree that shows the milestone (a test log, a changed source file), or `{ toolCallId }`, the id of a tool call of this session that finished without error (not an `ompbot_*` tool). The core records the sha256 of the file or of the call's result; a missing, linked or outside file, or a failed, unknown or `ompbot_*` call means the report is not recorded. With `needsOwner: true` the line is the question the owner must decide: it needs no evidence, and the turn ends after it.",
+				"Report a milestone of this work lane in one line; it is shown in the lane's status message in its chat thread. It needs `evidence`: either `{ file }`, a regular file inside this lane's worktree that shows the milestone (a test log, a changed source file), or `{ toolCallId }`, the id of a tool call of this session that finished without error (not a `jabbu_*` tool). The core records the sha256 of the file or of the call's result; a missing, linked or outside file, or a failed, unknown or `jabbu_*` call means the report is not recorded. With `needsOwner: true` the line is the question the owner must decide: it needs no evidence, and the turn ends after it.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -191,7 +191,7 @@ export function buildLaneTools(manager: LaneManager, originKey: string): HostToo
 				}),
 		},
 		{
-			name: "ompbot_claim_done",
+			name: "jabbu_claim_done",
 			label: "Claim lane done",
 			description:
 				"Claim that this lane's task is finished. The bot itself checks that `git -C <repo> status --porcelain` is empty and that the commit exists; only then the lane closes. Commit everything first.",

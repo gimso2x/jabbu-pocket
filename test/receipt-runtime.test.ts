@@ -29,14 +29,14 @@ import { git, makeRepo } from "./helpers/git-fixtures";
 const SHA = "a".repeat(40);
 const MODEL = "test/reviewer";
 const QA_MODEL = "test/qa";
-const KENCREW = "1".repeat(40);
-const NOW: RuntimeIdentity = { omp: "omp 18.18.7", kencrew: KENCREW, os: "linux", arch: "arm64" };
+const SOURCE = "1".repeat(40);
+const NOW: RuntimeIdentity = { omp: "omp 18.18.7", source: SOURCE, os: "linux", arch: "arm64" };
 const REVIEW_HASH = overlayHash(REVIEW_OVERLAY_YAML);
 
 const runtimeOf = (over: Partial<ReceiptRuntime> = {}): ReceiptRuntime => ({
 	head: SHA,
 	omp: "omp 18.18.7",
-	kencrew: KENCREW,
+	source: SOURCE,
 	overlay: REVIEW_HASH,
 	os: "linux",
 	arch: "arm64",
@@ -65,13 +65,13 @@ const qaOf = (runtime?: ReceiptRuntime, over: Partial<LaneQa> = {}): LaneQa => (
 const tmps: string[] = [];
 const repos: string[] = [];
 const tmp = (): string => {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-receipt-runtime-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-receipt-runtime-"));
 	tmps.push(dir);
 	return dir;
 };
 const failingGit: GitRunner = async () => ({ code: 1, stdout: "", stderr: "no git" });
 
-/** Back to an identity no test depends on: omp and kencrew `unknown`. */
+/** Back to an identity no test depends on: omp and source `unknown`. */
 async function resetRuntime(): Promise<void> {
 	await bootRuntime({ omp: "unknown", sourceDir: "/nonexistent", git: failingGit });
 }
@@ -105,8 +105,8 @@ describe("receiptStale (pure)", () => {
 			receiptStale("review", reviewOf(runtime), now, ctx);
 		expect(review(runtimeOf({ omp: "omp 18.18.2" }))).toBeUndefined();
 		expect(review(runtimeOf({ omp: "omp 18.18.7-rc1" }))).toBeUndefined();
-		expect(review(runtimeOf({ kencrew: "2".repeat(40) }), NOW, { ...ok, gateSourceChanged: false })).toBeUndefined();
-		expect(review(runtimeOf({ kencrew: "unknown" }), NOW, { ...ok, gateSourceChanged: undefined })).toBeUndefined();
+		expect(review(runtimeOf({ source: "2".repeat(40) }), NOW, { ...ok, gateSourceChanged: false })).toBeUndefined();
+		expect(review(runtimeOf({ source: "unknown" }), NOW, { ...ok, gateSourceChanged: undefined })).toBeUndefined();
 		expect(review(runtimeOf({ omp: "unknown" }))).toBeUndefined();
 		expect(review(runtimeOf(), { ...NOW, omp: "unknown" })).toBeUndefined();
 		expect(review(runtimeOf({ os: "darwin", arch: "x64" }))).toBeUndefined();
@@ -154,7 +154,7 @@ describe("gatePathsChanged", () => {
 			return { code: 0, stdout: args.includes("status") ? "" : `${"3".repeat(40)}\n`, stderr: "" };
 		};
 		await bootRuntime({ omp: "omp 18.18.7", sourceDir: "/src", git, log: { warn: (event) => warns.push(event) } });
-		const current = currentRuntime().kencrew;
+		const current = currentRuntime().source;
 		expect(await gatePathsChanged("unknown", current)).toBeUndefined();
 		expect(await gatePathsChanged(`${"4".repeat(40)}+dirty`, current)).toBeUndefined();
 		expect(await gatePathsChanged("unknown", current)).toBeUndefined();
@@ -208,7 +208,7 @@ describe("receipts are bound to the runtime they were made on", () => {
 		(stdout: string): ProcessRunner =>
 		async () => ({ code: 0, stdout, timedOut: false });
 
-	test("review: runtime holds head, base, omp, kencrew, os, arch, overlay hash and the omp -p argv", async () => {
+	test("review: runtime holds head, base, omp, source, os, arch, overlay hash and the omp -p argv", async () => {
 		await bootRuntime({ omp: "omp 18.18.7", sourceDir: makeRepo(repos) });
 		const { subject, sha, repo, reviewsDir } = reviewFixture();
 		const receipt = await reviewSubject(
@@ -228,12 +228,12 @@ describe("receipts are bound to the runtime they were made on", () => {
 			head: sha,
 			base: git(repo, "rev-parse", `refs/heads/${subject.baseBranch}`),
 			omp: "omp 18.18.7",
-			kencrew: currentRuntime().kencrew,
+			source: currentRuntime().source,
 			os: process.platform,
 			arch: process.arch,
 			overlay: REVIEW_HASH,
 		});
-		expect(runtime?.kencrew).toMatch(/^[0-9a-f]{40}$/);
+		expect(runtime?.source).toMatch(/^[0-9a-f]{40}$/);
 		expect(runtime?.argv?.slice(0, 3)).toEqual(["/bin/omp-fake", "-p", "--no-session"]);
 		expect(runtime?.argv).toContain("--model");
 		expect(runtime?.argv).toContain("--config");
@@ -313,7 +313,7 @@ describe("receipts are bound to the runtime they were made on", () => {
 		expect(receiptRuntime({ head: SHA }, NOW)).toEqual({
 			head: SHA,
 			omp: NOW.omp,
-			kencrew: NOW.kencrew,
+			source: NOW.source,
 			os: NOW.os,
 			arch: NOW.arch,
 		});
@@ -352,7 +352,7 @@ describe("a stale receipt holds the merge and is made again", () => {
 		git(repo, "add", "--all");
 		git(repo, "commit", "-q", "-m", "gate");
 		await bootRuntime({ omp: "omp 18.18.7", sourceDir: repo });
-		const old = reviewOf(runtimeOf({ kencrew: before }));
+		const old = reviewOf(runtimeOf({ source: before }));
 		expect(gateChangedOf(before)).toBeUndefined();
 		await primeGateChanges({ review: old });
 		expect(gateChangedOf(before)).toBe(true);
@@ -361,7 +361,7 @@ describe("a stale receipt holds the merge and is made again", () => {
 		expect(receiptBlockers({ review: old }, SHA, "L2", { ...policy, qa: undefined }, live)[0]).toStartWith(
 			REVIEW_STALE,
 		);
-		const fresh = reviewOf(runtimeOf({ kencrew: identity.kencrew }));
+		const fresh = reviewOf(runtimeOf({ source: identity.source }));
 		expect(receiptBlockers({ review: fresh }, SHA, "L2", { ...policy, qa: undefined }, live)).toEqual([]);
 	});
 

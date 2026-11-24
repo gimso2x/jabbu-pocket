@@ -4,13 +4,13 @@ import { callDaemon } from "../daemon/ipc";
 import { RestoreError, runRestore } from "../ops/restore";
 
 export const RESTORE_USAGE = `  restore <backup-db-path> [--yes]
-                                 replace ompbot.db with a backup while the daemon is stopped: copy → quick_check → current
-                                 db/-wal/-shm move to backups/pre-restore-<stamp>/ → rename. Source: backups/ompbot-
+                                 replace jabbu.db with a backup while the daemon is stopped: copy → quick_check → current
+                                 db/-wal/-shm move to backups/pre-restore-<stamp>/ → rename. Source: backups/jabbu-
                                  YYYYMMDD-HHMMSS.db or an absolute file. Without --yes only prints the plan (exit 3);
                                  refuses (exit 1) while a daemon runs
 `;
 
-/** `ompbot restore`; resolves with the exit code. */
+/** `jabbu-pocket restore`; resolves with the exit code. */
 export async function restoreCommand(args: string[], homeDir: string): Promise<number> {
 	let parsed: ReturnType<typeof parse>;
 	try {
@@ -24,7 +24,7 @@ export async function restoreCommand(args: string[], homeDir: string): Promise<n
 		process.stderr.write(`restore needs exactly one <backup-db-path>\n${RESTORE_USAGE}`);
 		return 2;
 	}
-	const socketPath = join(homeDir, "ompbot.sock");
+	const socketPath = join(homeDir, "jabbu.sock");
 	try {
 		const result = await runRestore({
 			homeDir,

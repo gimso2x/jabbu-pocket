@@ -66,7 +66,7 @@ writeFreeze(${JSON.stringify(h.dir)}, { reason: "x", by: "cli", now: 0 });`;
 });
 
 describe("qa-x #10: status without a database", () => {
-	test("a frozen home without ompbot.db still shows FROZEN (rc stays 1)", async () => {
+	test("a frozen home without jabbu.db still shows FROZEN (rc stays 1)", async () => {
 		const h = home("qa-x-status-");
 		writeFreeze(h.dir, { reason: "점검", by: "cli", now: Date.parse("2026-11-20T00:00:00Z") });
 		const result = await runMain(h.dir, ["status"]);
@@ -87,7 +87,7 @@ describe("qa-x #10: status without a database", () => {
 describe("qa-x #11: restore picks up a -wal that appears before the lock", () => {
 	test("the -wal born while the daemon probe runs moves aside with the db", async () => {
 		const h = home("qa-x-restore-");
-		const dbPath = join(h.dir, "ompbot.db");
+		const dbPath = join(h.dir, "jabbu.db");
 		const seed = () => {
 			const db = new Database(dbPath, { create: true, strict: true });
 			for (const table of ["origins", "inbound", "deliveries"]) db.run(`CREATE TABLE IF NOT EXISTS ${table} (id)`);
@@ -107,7 +107,7 @@ describe("qa-x #11: restore picks up a -wal that appears before the lock", () =>
 		});
 		expect(result.applied).toBe(true);
 		expect(existsSync(`${dbPath}-wal`)).toBe(false);
-		const pre = join(result.plan.preRestoreDir, "ompbot.db-wal");
+		const pre = join(result.plan.preRestoreDir, "jabbu.db-wal");
 		expect(readFileSync(pre, "utf8")).toBe("late wal");
 	});
 });
@@ -117,7 +117,7 @@ describe("qa-x #12: gc checks the schema before deleting", () => {
 		const h = home("qa-x-gc-");
 		const root = join(h.dir, "sessions");
 		const origin = "discord/dm/200000000000000001";
-		const store = openBotStore(join(h.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const store = openBotStore(join(h.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin(origin, sessionDirFor(root, origin, 1));
 		store.newEpoch(origin, sessionDirFor(root, origin, 2));
 		store.close();
@@ -127,7 +127,7 @@ describe("qa-x #12: gc checks the schema before deleting", () => {
 		const past = new Date(Date.now() - 90 * 86_400_000);
 		utimesSync(join(old, "session.jsonl"), past, past);
 		utimesSync(old, past, past);
-		const db = new Database(join(h.dir, "ompbot.db"));
+		const db = new Database(join(h.dir, "jabbu.db"));
 		db.run("PRAGMA user_version = 9999");
 		db.close();
 		expect(() => gcSessions({ homeDir: h.dir, retentionDays: 30, now: Date.now() })).toThrow("newer_schema");
@@ -169,7 +169,7 @@ describe("qa-x #75: monitors export --dir keeps non-spec json", () => {
 			workspaceDir: h.config.workspaceDir,
 			defaultTimezone: "Asia/Seoul",
 		};
-		const ledger = openMonitorLedger(join(h.dir, "ompbot.db"));
+		const ledger = openMonitorLedger(join(h.dir, "jabbu.db"));
 		cleanups.push(() => ledger.close());
 		ledger.addMonitor(
 			parseMonitorSpec({ name: "live", trigger: { kind: "cron", schedule: "30 9 * * *" }, instruction: "x" }, ctx),

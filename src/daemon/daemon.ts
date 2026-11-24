@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
 import { escapeMrkdwn } from "../channel/text";
-import { loadConfig, type OmpbotConfig, primaryOwnerUserId } from "../config";
+import { type JabbuConfig, loadConfig, primaryOwnerUserId } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import type { ThreadSource } from "../core/mailbox-thread-context";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
@@ -288,7 +288,7 @@ export class Daemon {
 	}
 
 	get socketPath(): string {
-		return join(this.#options.config.homeDir, "ompbot.sock");
+		return join(this.#options.config.homeDir, "jabbu.sock");
 	}
 
 	get store(): Store {
@@ -322,7 +322,7 @@ export class Daemon {
 		this.#heartbeat = new SweepHeartbeatWriter(config.homeDir);
 		installProcessAudit(createDispatchAudit({ homeDir: config.homeDir, log, now: () => this.#clock.now() }));
 		const store = new DaemonStore(
-			join(config.homeDir, "ompbot.db"),
+			join(config.homeDir, "jabbu.db"),
 			this.#clock,
 			crash,
 			() => this.#nudgePump(),
@@ -418,7 +418,7 @@ export class Daemon {
 			repoDir: resolve(import.meta.dir, "..", ".."),
 			pathEnv: applyPathEnv(process.env),
 			// As `apply --detach`: a daemon under a non-default home hands it to the unit.
-			...(process.env.OMPBOT_HOME === undefined ? {} : { homeEnv: config.homeDir }),
+			...(process.env.JABBU_HOME === undefined ? {} : { homeEnv: config.homeDir }),
 			run: spawnRunner,
 			isAlive: this.#options.pidAlive ?? pidAlive,
 			isExecutable: isExecutableFile,
@@ -449,7 +449,7 @@ export class Daemon {
 						executable: config.ompExecutable,
 						...(config.ompProfile === undefined ? {} : { profile: config.ompProfile }),
 						...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
-						// No messenger credentials in the child's env, as for every other omp ompbot spawns.
+						// No messenger credentials in the child's env, as for every other omp jabbu spawns.
 						env: buildChildEnv({}, withOmpProfile(process.env, config.ompProfile)),
 						run: realProcessRunner,
 					}),
@@ -590,7 +590,7 @@ export class Daemon {
 			// An external PR's approval goes through `ask` with the lane thread as origin (escalation channel, pointer).
 			requestApproval: ({ channel, summary, detail, origin, signal }) =>
 				this.#approval.ask(channel, summary, { signal, detail, origin }),
-			// taskAutoLand is a live setting (`ompbot reload`); an apply code rollback holds auto-merge (`<home>/autoland.hold`).
+			// taskAutoLand is a live setting (`jabbu-pocket reload`); an apply code rollback holds auto-merge (`<home>/autoland.hold`).
 			autoLandPolicy: () => autoLandPolicy(this.#ctx),
 			autoLandHold: () => readAutoLandHold(config.homeDir),
 			// Cards mention the owner on the platform of the lane's thread.
@@ -628,7 +628,7 @@ export class Daemon {
 		});
 		this.#monitors.start();
 		if (config.webhook !== undefined) {
-			// A port that cannot be bound is logged (`webhook_bind_failed`) and shown by `ompbot doctor`; it never stops the bot.
+			// A port that cannot be bound is logged (`webhook_bind_failed`) and shown by `jabbu-pocket doctor`; it never stops the bot.
 			this.#webhook = new WebhookServer({
 				ledger: store.monitors,
 				log,
@@ -793,7 +793,7 @@ export class Daemon {
 	/**
 	 * One sweep of the interval chain; never rejects (a rejection would reach the process-level fatal handler and take
 	 * every omp child down with the daemon). A step that throws ends the sweep with `sweep_failed` and skips the beat:
-	 * a sweep that keeps failing then ages the stamp until `sweep_stalled` opens for `ompbot gates` outside the daemon.
+	 * a sweep that keeps failing then ages the stamp until `sweep_stalled` opens for `jabbu-pocket gates` outside the daemon.
 	 */
 	async sweep(): Promise<void> {
 		try {
@@ -834,7 +834,7 @@ export class Daemon {
 
 	/**
 	 * A lane verdict can wait on an owner approval card (30 minutes) and a mailbox idle stop queues behind its serial
-	 * chain (`/compact-ompbot`, a child start): run each in the background, one at a time, so gates, approval expiry
+	 * chain (`/compact-jabbu`, a child start): run each in the background, one at a time, so gates, approval expiry
 	 * and the heartbeat keep their cadence. A tick still running when the next sweep comes is skipped, not stacked.
 	 */
 	#startLaneTick(): void {
@@ -877,7 +877,7 @@ export class Daemon {
 	}
 
 	/**
-	 * A first install has no backup stamp until somebody runs `ompbot backup`, so `backup_age` would open (and DM the
+	 * A first install has no backup stamp until somebody runs `jabbu-pocket backup`, so `backup_age` would open (and DM the
 	 * owner) on the very first gate sweep. `start()` runs the same local backup once instead; a failure is logged and
 	 * left to the gate, which then opens and alerts as before.
 	 */
@@ -965,7 +965,7 @@ export class Daemon {
 		});
 		await route.port.uploadFile(route.target, {
 			path: out,
-			title: `ompbot 브리핑 ${localIso(now, this.#options.config.timezone).slice(11, 16)}`,
+			title: `jabbu 브리핑 ${localIso(now, this.#options.config.timezone).slice(11, 16)}`,
 			comment: briefingSummaryLine(snapshot),
 		});
 		this.#log.info("briefing_rendered", { origin: originKey, ms: Date.now() - startedAt, height: size.height });
@@ -1079,7 +1079,7 @@ export class Daemon {
 		};
 	}
 
-	/** `ompbot drain`: hold new turns, steers, monitor fires and skill reviews back so a restart cuts nothing (inbound stays `pending`; memory only, the restart ends it, ending it early dispatches what waited). */
+	/** `jabbu-pocket drain`: hold new turns, steers, monitor fires and skill reviews back so a restart cuts nothing (inbound stays `pending`; memory only, the restart ends it, ending it early dispatches what waited). */
 	setDraining(on: boolean): void {
 		const router = this.#router;
 		if (router === undefined || router.draining === on) return;
@@ -1135,12 +1135,12 @@ export class Daemon {
 	}
 
 	/**
-	 * `ompbot reload` / SIGHUP: re-reads config.json and applies the live fields (see `LIVE_FIELDS`); restart-bound
+	 * `jabbu-pocket reload` / SIGHUP: re-reads config.json and applies the live fields (see `LIVE_FIELDS`); restart-bound
 	 * fields are reported, not applied. An unreadable or invalid file keeps the running config untouched.
 	 */
 	reloadConfig(trigger: "ipc" | "sighup"): ReloadResult {
 		const current = this.#options.config;
-		let fresh: OmpbotConfig;
+		let fresh: JabbuConfig;
 		const text = readConfigText(current.homeDir);
 		try {
 			fresh = loadConfig(current.homeDir);
@@ -1222,7 +1222,7 @@ export class Daemon {
 		postThreadNotices(this.#ctx, marker.threads, RESTART_NOTICE_TEXT[kind]);
 	}
 
-	/** `!status` / `/status-ompbot`: the asking conversation's context line, then the daemon-wide status text. */
+	/** `!status` / `/status-jabbu`: the asking conversation's context line, then the daemon-wide status text. */
 	async #statusText(originKey: string): Promise<string> {
 		let state: Parameters<typeof renderContextLine>[0];
 		try {
@@ -1248,7 +1248,7 @@ export class Daemon {
 				};
 			},
 			openGateSummary(
-				join(this.#options.config.homeDir, "ompbot.db"),
+				join(this.#options.config.homeDir, "jabbu.db"),
 				this.#clock.now(),
 				gateOptionsFromConfig(this.#options.config),
 				this.#options.hostLoad,
@@ -1261,7 +1261,7 @@ export class Daemon {
 	}
 
 	/**
-	 * `ompbot inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
 	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
 	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
 	 * the owner message a reply of it.

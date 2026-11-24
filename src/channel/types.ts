@@ -9,7 +9,7 @@ export interface InboundMessage {
 	text: string;
 	threadRef: string;
 	ownerVerified: true;
-	/** Put in by `ompbot inject` (`OwnerIngest.injected`): the ledger keeps it, and such a row never answers an ask card. */
+	/** Put in by `jabbu-pocket inject` (`OwnerIngest.injected`): the ledger keeps it, and such a row never answers an ask card. */
 	injected?: boolean | undefined;
 }
 

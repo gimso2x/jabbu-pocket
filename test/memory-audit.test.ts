@@ -19,7 +19,7 @@ const PKG = join(import.meta.dir, "..", "examples", "monitors", "memory-audit");
 const COLLECT = join(PKG, "collect.py");
 const AUDIT = join(PKG, "audit.py");
 const NOW = "2026-11-15T05:00:00+09:00";
-const WORKSPACE = "/home/owner/.ompbot/workspace";
+const WORKSPACE = "/home/owner/.jabbu/workspace";
 const SECTIONS = ["## 소스 상태", "## 지표", "## 잡음", "## 후보"];
 const BANK_NAME = "workspace-fixture00001";
 
@@ -34,11 +34,11 @@ afterAll(() => {
 });
 
 function py(args: string[]): { code: number; out: string; err: string } {
-	// 기대값이 KST라 봇 시간대를 고정한다(없으면 ~/.ompbot/config.json·시스템 시간대를 따라 CI(UTC)에서 깨진다).
+	// 기대값이 KST라 봇 시간대를 고정한다(없으면 ~/.jabbu/config.json·시스템 시간대를 따라 CI(UTC)에서 깨진다).
 	const run = Bun.spawnSync(["python3", ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...process.env, OMPBOT_TZ: "Asia/Seoul" },
+		env: { ...process.env, JABBU_TZ: "Asia/Seoul" },
 	});
 	return { code: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() };
 }
@@ -117,7 +117,7 @@ function fillBank(db: Database, working: WorkingRow[], episodic: EpisodicRow[]):
 	f.run("f1", "version", "is", "1.2.3");
 	f.run("f2", "version", "is", "1.2.4");
 	f.run("f3", "iso_date", "is", "2026-11-01");
-	f.run("f4", "ompbot", "uses", "bun");
+	f.run("f4", "jabbu", "uses", "bun");
 }
 
 const ID = {
@@ -760,15 +760,15 @@ describe("memory-audit audit.py find", () => {
 });
 
 describe("memory-audit monitor.json", () => {
-	test("AC-6: with @OMPBOT_HOME@ replaced by a temp home it parses; Sunday 05:00 KST cron, bot model, one procedure file", () => {
+	test("AC-6: with @JABBU_HOME@ replaced by a temp home it parses; Sunday 05:00 KST cron, bot model, one procedure file", () => {
 		const home = tempDir("memory-audit-install-");
 		const scriptsRoot = join(home, "scripts");
 		mkdirSync(scriptsRoot);
 		const installed = join(scriptsRoot, "memory-audit-procedure.md");
 		copyFileSync(join(PKG, "procedure.md"), installed);
 		const template = readFileSync(join(PKG, "monitor.json"), "utf8");
-		expect(JSON.parse(template).procedureFiles).toEqual(["@OMPBOT_HOME@/scripts/memory-audit-procedure.md"]);
-		const raw = JSON.parse(template.replaceAll("@OMPBOT_HOME@", home));
+		expect(JSON.parse(template).procedureFiles).toEqual(["@JABBU_HOME@/scripts/memory-audit-procedure.md"]);
+		const raw = JSON.parse(template.replaceAll("@JABBU_HOME@", home));
 		expect(raw.procedureFiles).toEqual([installed]);
 		const spec = parseMonitorSpec(raw, { scriptsRoot, defaultTimezone: "Asia/Seoul" });
 		expect(spec.trigger).toEqual({ kind: "cron", schedule: "0 5 * * 0", timezone: "Asia/Seoul" });
@@ -777,15 +777,15 @@ describe("memory-audit monitor.json", () => {
 		expect("channel" in spec).toBe(false);
 	});
 
-	test("procedure.md names installed paths only through @OMPBOT_HOME@", () => {
+	test("procedure.md names installed paths only through @JABBU_HOME@", () => {
 		const procedure = readFileSync(join(PKG, "procedure.md"), "utf8");
 		for (const command of [
-			"python3 @OMPBOT_HOME@/scripts/memory-audit.py snapshot --out-dir @OMPBOT_HOME@/backups/memory-audit",
-			"python3 @OMPBOT_HOME@/scripts/memory-audit-collect.py",
-			"python3 @OMPBOT_HOME@/scripts/memory-audit.py find --since",
-			"python3 @OMPBOT_HOME@/scripts/memory-audit.py check",
-			"python3 @OMPBOT_HOME@/scripts/memory-audit.py verify",
-			"--record @OMPBOT_HOME@/workspace/memory-audit/state.json",
+			"python3 @JABBU_HOME@/scripts/memory-audit.py snapshot --out-dir @JABBU_HOME@/backups/memory-audit",
+			"python3 @JABBU_HOME@/scripts/memory-audit-collect.py",
+			"python3 @JABBU_HOME@/scripts/memory-audit.py find --since",
+			"python3 @JABBU_HOME@/scripts/memory-audit.py check",
+			"python3 @JABBU_HOME@/scripts/memory-audit.py verify",
+			"--record @JABBU_HOME@/workspace/memory-audit/state.json",
 		]) {
 			expect(procedure).toContain(command);
 		}

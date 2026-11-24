@@ -51,7 +51,7 @@ export const TAIL_WAIT_START_EVENT = "tail_wait_start";
 export const TAIL_WAIT_END_EVENT = "tail_wait_end";
 
 /**
- * Session-only omp events ompbot reads. `auto_retry_end` is here because a retry whose delay exceeds
+ * Session-only omp events jabbu reads. `auto_retry_end` is here because a retry whose delay exceeds
  * `retry.maxDelayMs` with no fallback ends with `finalError` and no `auto_retry_start` before it.
  */
 const FORWARDED_SESSION_EVENTS: ReadonlySet<string> = new Set([
@@ -79,16 +79,16 @@ function contextOf(usage: unknown): Pick<OmpState, "context"> {
 }
 
 export interface RpcOmpDriverOptions {
-	/** The omp executable (`OMPBOT_OMP_EXECUTABLE`): the package's `dist/cli.js` or the standalone binary. */
+	/** The omp executable (`JABBU_OMP_EXECUTABLE`): the package's `dist/cli.js` or the standalone binary. */
 	ompExecutable: string;
 	cwd: string;
 	sessionDir: string;
 	provider?: string;
 	model?: string;
 	thinking?: string;
-	/** ompbot-owned `--config` overlay file, only when needed. */
+	/** jabbu-owned `--config` overlay file, only when needed. */
 	overlayConfig?: string;
-	/** Extra child env, e.g. `{ OMP_WIKI_NOTE_DISABLE: "1" }`. `SLACK_`/`OMPBOT_` keys are rejected. */
+	/** Extra child env, e.g. `{ OMP_WIKI_NOTE_DISABLE: "1" }`. `SLACK_`/`JABBU_` keys are rejected. */
 	env?: Record<string, string>;
 	extraArgs?: string[];
 	/** Host tools registered with `set_host_tools` on start (executed by this process). */
@@ -274,7 +274,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const askDialog = options.answerDialog !== undefined;
 		this.#writeRaw(client, {
 			type: "set_ask_dialog",
-			id: `ompbot-ask-dialog-${askDialog ? "on" : "off"}`,
+			id: `jabbu-ask-dialog-${askDialog ? "on" : "off"}`,
 			enabled: askDialog,
 		});
 	}

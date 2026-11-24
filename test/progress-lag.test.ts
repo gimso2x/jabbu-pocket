@@ -11,7 +11,7 @@ const PROGRESS = `docs/tasks/${TASK}/PROGRESS.md`;
 describe("progressLag, local, real temp git repo", () => {
 	let repo: string;
 	beforeEach(() => {
-		repo = join(realpathSync(mkdtempSync(join(tmpdir(), "ompbot-progress-lag-"))), "repo");
+		repo = join(realpathSync(mkdtempSync(join(tmpdir(), "jabbu-progress-lag-"))), "repo");
 		mkdirSync(repo);
 		git("init", "-q", "-b", "main");
 		git("config", "user.name", "t");

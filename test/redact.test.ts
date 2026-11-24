@@ -58,7 +58,7 @@ describe("redact", () => {
 	});
 
 	test("dotted words, versions, hosts and JWT-like headers are not Discord tokens", () => {
-		const plain = "v1.2.3 api.discord.com a.b.c ompbot.config.json eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.abc";
+		const plain = "v1.2.3 api.discord.com a.b.c jabbu.config.json eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.abc";
 		expect(redact(plain)).toBe(plain);
 	});
 });

@@ -181,7 +181,7 @@ export function prTextOf(input: PrLandInput): { title: string; body: string } {
 
 /** The `gh pr create` call: the body goes through a private temporary file that is removed afterwards. */
 export async function createPr(run: PrRun, slug: string, text: { title: string; body: string }): Promise<string> {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-prland-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-prland-"));
 	try {
 		const file = join(dir, "body.md");
 		writeFileSync(file, text.body, { mode: 0o600 });

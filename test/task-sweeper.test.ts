@@ -314,7 +314,7 @@ describe("TaskSweeper", () => {
 		expect(post?.components).toEqual([
 			{
 				type: 1,
-				components: [{ type: 2, style: 1, label: "머지", custom_id: "ompbot:task:merge:T-20261026-01" }],
+				components: [{ type: 2, style: 1, label: "머지", custom_id: "jabbu:task:merge:T-20261026-01" }],
 			},
 		]);
 		// The button's note is the card's last line, as a Discord subtext.
@@ -1424,7 +1424,7 @@ describe("TaskSweeper: auto-land (taskAutoLand)", () => {
 	const POLICY = { repos: ["/r/repo"], maxRisk: "L2" as const };
 	const PASSED = [{ id: "AC-2", signal: 'command ["bun","test"]', ok: true, detail: "exit 0" }];
 	const hasMergeButton = (post: Post | undefined): boolean =>
-		JSON.stringify(post?.components ?? []).includes('"custom_id":"ompbot:task:merge:');
+		JSON.stringify(post?.components ?? []).includes('"custom_id":"jabbu:task:merge:');
 	const header = (post: Post | undefined): string => embedOf(post)?.title ?? "";
 
 	/** A rig with the policy on, `repoMatches` answering `matched`, and `autoLand` answering `landed`. */
@@ -1860,9 +1860,9 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 
 	beforeEach(async () => {
 		skew = 0;
-		home = makeHome("ompbot-task-daemon-");
+		home = makeHome("jabbu-task-daemon-");
 		transport = new WaitingDiscordTransport();
-		worktreeRoot = mkdtempSync(join(tmpdir(), "ompbot-task-wt-"));
+		worktreeRoot = mkdtempSync(join(tmpdir(), "jabbu-task-wt-"));
 		herdrCalls = [];
 		herdrAgents = [];
 		const sessions = new FakeSessionStore();
@@ -2007,7 +2007,7 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		await daemon.sweepTasks();
 		const sent = herdrCalls.find((cmd) => cmd[1] === "agent" && cmd[2] === "prompt" && cmd[3] === row.agent)?.[4];
 		expect(sent).toBeString();
-		const db = new Database(join(home.dir, "ompbot.db"), { readonly: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { readonly: true });
 		try {
 			const rows = db.query("SELECT host, agent, kind, preview, origin_key AS originKey FROM herdr_prompts").all();
 			expect(rows).toEqual([
@@ -2024,7 +2024,7 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		}
 	});
 
-	test("ompbot tasks check goes through the daemon; close is human-only and flips the reaction to ✅", async () => {
+	test("jabbu-pocket tasks check goes through the daemon; close is human-only and flips the reaction to ✅", async () => {
 		const row = registerWithDocs(true);
 		const checked = await runMain(home.dir, ["tasks", "check", row.taskId]);
 		expect(checked.code).toBe(0);
@@ -2048,7 +2048,7 @@ describe("daemon: herdr off (config without herdr)", () => {
 	const clock = { now: () => Date.now() };
 
 	beforeEach(() => {
-		home = makeHome("ompbot-herdr-off-");
+		home = makeHome("jabbu-herdr-off-");
 		daemon = undefined;
 	});
 	afterEach(async () => {
@@ -2142,11 +2142,11 @@ describe("daemon: herdr off (config without herdr)", () => {
 
 	test("chat host tools follow the switch: off has no taskSpec, on matches the full schema", async () => {
 		const off = await boot(home.config);
-		const offTool = off.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "ompbot_dispatch");
+		const offTool = off.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
 		expect(JSON.stringify(offTool?.parameters)).not.toContain("taskSpec");
 		await off.daemon.stop();
 		const on = await boot({ ...home.config, herdr: {} });
-		const onTool = on.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "ompbot_dispatch");
+		const onTool = on.daemon.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
 		expect(JSON.stringify(onTool?.parameters)).toContain("taskSpec");
 	});
 
@@ -2155,7 +2155,7 @@ describe("daemon: herdr off (config without herdr)", () => {
 		const bin = join(home.dir, "fake-herdr");
 		writeFileSync(bin, `#!/bin/sh\necho "$@" >> '${argvFile}'\necho '{"result":{"agents":[]}}'\n`, { mode: 0o755 });
 		const { daemon: started } = await boot({ ...home.config, herdr: { bin } });
-		const tool = started.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "ompbot_dispatch");
+		const tool = started.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
 		await tool?.execute({ mode: "herdr", name: "x" }, { signal: new AbortController().signal });
 		expect(await Bun.file(argvFile).text()).toBe("agent read x\n");
 	});
@@ -2398,7 +2398,7 @@ describe("taskChangedPaths", () => {
 	});
 
 	function repoOn(branch: string): string {
-		const repo = mkdtempSync(join(tmpdir(), "ompbot-overlap-"));
+		const repo = mkdtempSync(join(tmpdir(), "jabbu-overlap-"));
 		roots.push(repo);
 		gitFixture(repo, "init", "-q", "-b", branch);
 		writeFileSync(join(repo, "README.md"), "hello\n");
@@ -2431,7 +2431,7 @@ describe("taskChangedPaths", () => {
 
 	test("AC-4b: a clone uses origin/HEAD before main or master", async () => {
 		const upstream = repoOn("trunk");
-		const clone = mkdtempSync(join(tmpdir(), "ompbot-overlap-clone-"));
+		const clone = mkdtempSync(join(tmpdir(), "jabbu-overlap-clone-"));
 		roots.push(clone);
 		rmSync(clone, { recursive: true, force: true });
 		gitFixture(tmpdir(), "clone", "-q", upstream, clone);
@@ -3341,7 +3341,7 @@ describe("TaskSweeper: 원격 pr TASK의 repoMatched(AC-11f)", () => {
 	});
 
 	function repoDir(): string {
-		const repo = mkdtempSync(join(tmpdir(), "ompbot-remote-pr-"));
+		const repo = mkdtempSync(join(tmpdir(), "jabbu-remote-pr-"));
 		roots.push(repo);
 		gitFixture(repo, "init", "-q", "-b", "main");
 		writeFileSync(join(repo, "README.md"), "hello\n");

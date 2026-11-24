@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { buildChildEnv } from "./env";
 
 /**
- * Why `ompExecutable` cannot host an RPC child, checked before every spawn, by the `omp_runtime` gate, `ompbot doctor`
- * and `ompbot omp trial`. The child is the executable itself (the package's `dist/cli.js` or the standalone binary), so
+ * Why `ompExecutable` cannot host an RPC child, checked before every spawn, by the `omp_runtime` gate, `jabbu-pocket doctor`
+ * and `jabbu-pocket omp trial`. The child is the executable itself (the package's `dist/cli.js` or the standalone binary), so
  * the only requirement is that it runs and names itself `omp/<x.y.z>`.
  */
 export interface OmpRuntimeProblem {
@@ -70,7 +70,7 @@ function spawnFailure(executable: string, error: unknown): OmpRuntimeProblem {
 
 /**
  * Runs `<executable> --version` with `env` (the child's PATH decides which bun runs `cli.js`); by default the
- * environment an omp child gets, without the bot's `SLACK_`/`OMPBOT_` secrets.
+ * environment an omp child gets, without the bot's `SLACK_`/`JABBU_` secrets.
  */
 export async function checkOmpRuntime(
 	executable: string,
@@ -129,7 +129,7 @@ export function checkOmpRuntimeSync(
 	if (typeof key !== "string") return key;
 	if (knownVersions.has(key)) return undefined;
 	// Output goes to a file, not a pipe: a grandchild holding a pipe open would keep the call waiting past the limit.
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-omp-version-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-omp-version-"));
 	const outPath = join(dir, "out");
 	const errPath = join(dir, "err");
 	const outFd = openSync(outPath, "w");

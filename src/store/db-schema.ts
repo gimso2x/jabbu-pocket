@@ -150,7 +150,7 @@ export const PEER_CALL_KEEP_MS = 30 * 24 * 60 * 60_000;
  */
 /**
  * Same message id re-received with other content (`Store.recordInbound`): the first row stays, this table only counts
- * the re-receipts for the ops view (`ompbot gates`, `inbound_identity_conflicts`).
+ * the re-receipts for the ops view (`jabbu-pocket gates`, `inbound_identity_conflicts`).
  */
 const INBOUND_CONFLICTS_DDL = `CREATE TABLE IF NOT EXISTS inbound_conflicts (
 	conflict_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +183,7 @@ export const LANE_BOARD_TEXT_MAX = 2_000;
 /**
  * The inbound ledger. `uncertain` parks an input that may already have reached the omp child (`uncertain_reason` says
  * why, `uncertain_at` when) until the owner closes or retries it. A ledger without it is rebuilt by `migrateInbound`.
- * `injected` is 1 for a row `ompbot inject` put in (`OwnerIngest.injected`): it may not answer an ask card.
+ * `injected` is 1 for a row `jabbu-pocket inject` put in (`OwnerIngest.injected`): it may not answer an ask card.
  */
 export const INBOUND_DDL = `CREATE TABLE IF NOT EXISTS inbound (
 	inbound_id INTEGER PRIMARY KEY AUTOINCREMENT,

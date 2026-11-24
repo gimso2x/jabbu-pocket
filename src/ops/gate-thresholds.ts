@@ -31,7 +31,7 @@ export const DELIVERY_OVERDUE_MS = 10 * 60_000;
 export const LANE_STUCK_MS = 24 * 60 * 60_000;
 /**
  * A held (`failed_ambiguous`) delivery older than the boot requeue window (`FRESHNESS_MS`) can no longer be rescued by
- * a restart, so only the owner's `ompbot deliveries ack|resend` clears it — past this it gates. It is that window on
+ * a restart, so only the owner's `jabbu-pocket deliveries ack|resend` clears it — past this it gates. It is that window on
  * purpose: the same constant decides what `requeueAmbiguous` brings back, so the gate cannot drift from it.
  */
 export const AMBIGUOUS_STUCK_MS = FRESHNESS_MS;
@@ -40,7 +40,7 @@ export const MONITOR_FAILURE_WINDOW_MS = 24 * 60 * 60_000;
 /**
  * Chat turns failing repeatedly: `[turn failed]` notice deliveries are the only ledger trace of a broken bot (the
  * 2026-10-24 stale-model outage showed up as four of them and nothing else). The window and threshold mirror the
- * mailbox escalation, so what the owner was DM'd about also fails `ompbot gates`.
+ * mailbox escalation, so what the owner was DM'd about also fails `jabbu-pocket gates`.
  */
 export const TURNS_FAILING_WINDOW_MS = 60 * 60_000;
 export const TURNS_FAILING_THRESHOLD = 3;

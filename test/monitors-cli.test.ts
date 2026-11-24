@@ -23,7 +23,7 @@ const clock = { now: () => Date.now() };
 let home: TestHome;
 
 beforeEach(() => {
-	home = makeHome("ompbot-monitors-cli-");
+	home = makeHome("jabbu-monitors-cli-");
 	mkdirSync(join(home.dir, "scripts"));
 });
 
@@ -54,7 +54,7 @@ interface CliJson {
 /** Shape of the CLI's JSON output; each test only reads the fields its command prints. */
 const parse = (text: string) => JSON.parse(text) as CliJson;
 
-describe("ompbot monitors (CLI)", () => {
+describe("jabbu-pocket monitors (CLI)", () => {
 	test("add / list / update / test / remove round trip", async () => {
 		const added = await monitors(
 			"add",
@@ -97,7 +97,7 @@ describe("ompbot monitors (CLI)", () => {
 		const fired = await monitors("test", monitor.id);
 		expect(fired.code).toBe(0);
 		expect(parse(fired.stdout)).toMatchObject({ fired: true, stage: "admitted" });
-		const ledger = openMonitorLedger(join(home.dir, "ompbot.db"));
+		const ledger = openMonitorLedger(join(home.dir, "jabbu.db"));
 		try {
 			expect(ledger.listEvents().map((event) => [event.stage, event.manual])).toEqual([["admitted", true]]);
 		} finally {
@@ -172,7 +172,7 @@ describe("ompbot monitors (CLI)", () => {
 			expect(added.code).toBe(0);
 			ids.push(parse(added.stdout).monitor.id);
 		}
-		const ledger = openMonitorLedger(join(home.dir, "ompbot.db"), { now: () => Date.UTC(2026, 10, 13, 6, 0, 0) });
+		const ledger = openMonitorLedger(join(home.dir, "jabbu.db"), { now: () => Date.UTC(2026, 10, 13, 6, 0, 0) });
 		try {
 			ledger.recordCheckError(ids[0] ?? "", "spawn failed: EACCES");
 			ledger.recordCheckError(ids[0] ?? "", "spawn failed: EACCES");
@@ -250,7 +250,7 @@ describe("ompbot monitors (CLI)", () => {
 		expect(added.code).toBe(0);
 		const { monitor } = parse(added.stdout);
 		// What a row written before the upper bound may hold.
-		const db = new Database(join(home.dir, "ompbot.db"));
+		const db = new Database(join(home.dir, "jabbu.db"));
 		try {
 			db.run("UPDATE monitors SET trigger_json = ? WHERE id = ?", [
 				JSON.stringify({ kind: "script", command: [script], intervalMs: 9e15 }),
@@ -407,7 +407,7 @@ describe("ompbot monitors (CLI)", () => {
 		const skipped = await monitors("test", "no");
 		expect(skipped.code).toBe(1);
 		expect(parse(skipped.stdout)).toMatchObject({ fired: false, exitCode: 1, stderr: "sensor gone" });
-		const ledger = openMonitorLedger(join(home.dir, "ompbot.db"));
+		const ledger = openMonitorLedger(join(home.dir, "jabbu.db"));
 		try {
 			const events = ledger.listEvents();
 			expect(events).toHaveLength(1);
@@ -431,7 +431,7 @@ describe("ompbot monitors (CLI)", () => {
 		);
 		expect(added.code).toBe(0);
 		expect((await monitors("test", "sec")).code).toBe(0);
-		const ledger = openMonitorLedger(join(home.dir, "ompbot.db"));
+		const ledger = openMonitorLedger(join(home.dir, "jabbu.db"));
 		try {
 			const payload = ledger.listEvents()[0]?.payload ?? "";
 			expect(payload).not.toContain(token);
@@ -529,12 +529,12 @@ describe("ompbot monitors (CLI)", () => {
 	});
 });
 
-describe("ompbot monitors export: odd targets", () => {
+describe("jabbu-pocket monitors export: odd targets", () => {
 	const MAIN = join(import.meta.dir, "..", "src", "main.ts");
 
 	/** The real CLI in a child of a bounded child: a hang kills the inner run after 10 s and the outer after 20 s. */
 	async function exportBounded(dir: string): Promise<{ code: number | null; stderr: string; timedOut: boolean }> {
-		const code = `const r = Bun.spawnSync(["bun", ${JSON.stringify(MAIN)}, "monitors", "export", "--dir", ${JSON.stringify(dir)}], { env: { ...process.env, OMPBOT_HOME: ${JSON.stringify(home.dir)} }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10000 });
+		const code = `const r = Bun.spawnSync(["bun", ${JSON.stringify(MAIN)}, "monitors", "export", "--dir", ${JSON.stringify(dir)}], { env: { ...process.env, JABBU_HOME: ${JSON.stringify(home.dir)} }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 10000 });
 console.log(JSON.stringify({ code: r.exitCode, stderr: r.stderr.toString() }));`;
 		const result = await runBounded(code);
 		if (result.timedOut) return { code: null, stderr: result.stderr, timedOut: true };

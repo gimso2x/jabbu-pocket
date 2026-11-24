@@ -380,9 +380,9 @@ function buildRouter(): OriginRouter {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-mailbox-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-mailbox-"));
 	clock = new FakeClock();
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	drivers = [];
 	driverOptions = {};
 	failSteers = 0;
@@ -627,7 +627,7 @@ describe("mailbox: /new, /status, failures", () => {
 		await router.route(pending);
 		const old = drivers[0] as SteerFailingDriver;
 		expect(store.getInbound(pending.platformMessageId)?.state).toBe("pending");
-		const command = msg("/new-ompbot");
+		const command = msg("/new-jabbu");
 		await router.route(command);
 		await mailbox.sweepIdle(); // lets any (ignored) aborted final settle
 		expect(old.calls).toContain("abort");
@@ -657,7 +657,7 @@ describe("mailbox: /new, /status, failures", () => {
 			message: { role: "assistant", content: [], usage: { input: 1, output: 1, cost: { total: 1.25 } } },
 		});
 		old.failAbort = true;
-		const command = msg("/new-ompbot");
+		const command = msg("/new-jabbu");
 		await router.route(command);
 		await mailbox.sweepIdle();
 		expect(old.calls).toContain("abort-rejected");
@@ -667,8 +667,8 @@ describe("mailbox: /new, /status, failures", () => {
 		expect(store.dailyCost(localDay(clock.now(), "Asia/Seoul"), ORIGIN)).toBeCloseTo(1.25, 6);
 	});
 
-	test("/status-ompbot is response-only: provider text becomes a delivery, omp is never touched", async () => {
-		const command = msg("/status-ompbot");
+	test("/status-jabbu is response-only: provider text becomes a delivery, omp is never touched", async () => {
+		const command = msg("/status-jabbu");
 		await router.route(command);
 		expect(statusCalls).toEqual([ORIGIN]);
 		expect(drivers).toHaveLength(0);
@@ -913,7 +913,7 @@ describe("mailbox: !stop stops the turn and keeps the session", () => {
 		expect(drivers).toHaveLength(0);
 		await router.route(msg("hello"));
 		await mailbox.sweepIdle();
-		await router.route(msg("/stop-ompbot"));
+		await router.route(msg("/stop-jabbu"));
 		const driver = drivers[0] as SteerFailingDriver;
 		expect(driver.calls.filter((c) => c.startsWith("abort"))).toEqual([]);
 		expect(store.listDeliveries({ originKey: ORIGIN }).map((d) => d.body)).toEqual([
@@ -2354,7 +2354,7 @@ describe("mailbox: an owner message answers the origin's one open omp dialog", (
 			const lead = msg("배포 준비해", { originKey: DIALOG_ORIGIN });
 			await mailbox.enqueue(lead);
 			open = 1;
-			await mailbox.enqueue(msg("/status-ompbot", { originKey: DIALOG_ORIGIN, threadRef: lead.threadRef }));
+			await mailbox.enqueue(msg("/status-jabbu", { originKey: DIALOG_ORIGIN, threadRef: lead.threadRef }));
 			expect(answers).toEqual([]);
 		} finally {
 			await mailbox.close();
@@ -2883,10 +2883,10 @@ describe("mailbox: prompt cache monitor", () => {
 		expect(cacheMisses).toHaveLength(0);
 	});
 
-	test("a /new-ompbot session is judged on its own prefix, not the old session's", async () => {
+	test("a /new-jabbu session is judged on its own prefix, not the old session's", async () => {
 		events.push(usageEvent(300_000, 30_000));
 		await turn("one");
-		await router.route(msg("/new-ompbot"));
+		await router.route(msg("/new-jabbu"));
 		events.splice(0, events.length, usageEvent(0, 25_000));
 		await turn("fresh");
 		expect(cacheMissLogs()).toHaveLength(0);
@@ -2954,7 +2954,7 @@ describe("session file heal picks the record omp restores (role fallback)", () =
 		for (const temp of temps.splice(0)) rmSync(temp, { recursive: true, force: true });
 	});
 	const sessionFile = (lines: string[]): string => {
-		const temp = mkdtempSync(join(tmpdir(), "ompbot-heal-"));
+		const temp = mkdtempSync(join(tmpdir(), "jabbu-heal-"));
 		temps.push(temp);
 		const file = join(temp, "s.jsonl");
 		writeFileSync(file, `${lines.join("\n")}\n`);
@@ -3449,7 +3449,7 @@ describe("mailbox: compaction and between-turn model_usage ledger (compaction-co
 				},
 			]);
 
-			const compactCmd = msg("/compact-ompbot");
+			const compactCmd = msg("/compact-jabbu");
 			await r.route(compactCmd);
 			await mailbox.sweepIdle();
 			expect(store.listDeliveries({ originKey: ORIGIN }).at(-1)?.body).toContain("압축했습니다");
@@ -3587,14 +3587,14 @@ describe("mailbox: compaction and between-turn model_usage ledger (compaction-co
 			expect(store.getCursor(`charged:${ORIGIN}`)).toBe(`${e1File}\te8`);
 
 			// addDailyUsage failure on /compact also keeps cursor at e8.
-			await r.route(msg("/compact-ompbot"));
+			await r.route(msg("/compact-jabbu"));
 			await mailbox.sweepIdle();
 			expect(store.getCursor(`charged:${ORIGIN}`)).toBe(`${e1File}\te8`);
 
 			// /compact window-read failure (driver.state() throws) deletes the cursor without breaking the reply.
 			store.addDailyUsage = realAddDailyUsage;
 			driver.failState = true;
-			await r.route(msg("/compact-ompbot"));
+			await r.route(msg("/compact-jabbu"));
 			await mailbox.sweepIdle();
 			expect(store.getCursor(`charged:${ORIGIN}`)).toBeUndefined();
 			expect(store.listDeliveries({ originKey: ORIGIN }).at(-1)?.body).toContain("압축했습니다");
@@ -3673,7 +3673,7 @@ describe("mailbox: compaction and between-turn model_usage ledger (compaction-co
 			expect(store.getCursor(`charged:${ORIGIN}`)).toBe(`${e1File}\te4`);
 
 			// Prepare epoch 2 session file (used after /new) with pre-compact assistant cost 5.0 and an earlier sub-agent cost 9.0.
-			await r.route(msg("/new-ompbot"));
+			await r.route(msg("/new-jabbu"));
 			await mailbox.sweepIdle();
 			mkdirSync(dirname(e2File), { recursive: true });
 			writeFileSync(
@@ -3701,7 +3701,7 @@ describe("mailbox: compaction and between-turn model_usage ledger (compaction-co
 			]);
 
 			clock.advance(5_000);
-			await r.route(msg("/compact-ompbot"));
+			await r.route(msg("/compact-jabbu"));
 			await mailbox.sweepIdle();
 			// Only compaction's 0.5 is added (not n1's 5.0, not sub-before's 9.0).
 			expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(1.5, 6);
@@ -3738,12 +3738,12 @@ describe("mailbox: compaction and between-turn model_usage ledger (compaction-co
 				},
 			]);
 
-			await r.route(msg("/resume-ompbot 3333"));
+			await r.route(msg("/resume-jabbu 3333"));
 			await mailbox.sweepIdle();
 			expect(store.getOrigin(ORIGIN)?.sessionFile).toBe(e3File);
 
 			clock.advance(5_000);
-			await r.route(msg("/compact-ompbot"));
+			await r.route(msg("/compact-jabbu"));
 			await mailbox.sweepIdle();
 			// Only this compaction's 0.5 is added (not r2's 7.0, not sub-old's 8.0).
 			expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(2.0, 6);
@@ -3760,17 +3760,17 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 			{
 				error: "429 Usage limit reached for 5 hour. Your limit will reset at 2026-11-20 12:15:02",
 				expectedKind: "provider_limit",
-				expectedTail: "공급자 한도입니다. 12:15 이후 다시 보내거나 다른 모델로 `/model-ompbot`",
+				expectedTail: "공급자 한도입니다. 12:15 이후 다시 보내거나 다른 모델로 `/model-jabbu`",
 			},
 			{
 				error: "Too Many Requests",
 				expectedKind: "provider_limit",
-				expectedTail: "공급자 한도입니다. 다시 보내거나 다른 모델로 `/model-ompbot`",
+				expectedTail: "공급자 한도입니다. 다시 보내거나 다른 모델로 `/model-jabbu`",
 			},
 			{
 				error: "prompt is too long: 215000 tokens > 200000 maximum",
 				expectedKind: "context_overflow",
-				expectedTail: "대화가 너무 길어 이어갈 수 없습니다. `/new-ompbot`(또는 `/compact-ompbot`) 뒤 다시 보내 주세요",
+				expectedTail: "대화가 너무 길어 이어갈 수 없습니다. `/new-jabbu`(또는 `/compact-jabbu`) 뒤 다시 보내 주세요",
 			},
 			{
 				error: "401 invalid api key",
@@ -3837,7 +3837,7 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		await mailbox.sweepIdle();
 
 		expect(store.listDeliveries({ originKey: ORIGIN }).map((d) => d.body)).toEqual([
-			"[turn failed] omp_exited code=1 — 공급자 한도입니다. 12:15 이후 다시 보내거나 다른 모델로 `/model-ompbot`",
+			"[turn failed] omp_exited code=1 — 공급자 한도입니다. 12:15 이후 다시 보내거나 다른 모델로 `/model-jabbu`",
 		]);
 		const logLine = logLines.find((line) => line.includes("event=turn_failed"));
 		expect(logLine).toBeDefined();

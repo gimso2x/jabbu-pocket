@@ -72,7 +72,7 @@ describe("taskFlowStatus", () => {
 			"blocked",
 			{
 				"unmet:1a15": min(1),
-				"blocked:105:ompbot diff 한도를 넘는다": min(2),
+				"blocked:105:jabbu diff 한도를 넘는다": min(2),
 				"resume:1": min(3),
 				'blocked:107:무결성 검사가 "diff too large"로 미뤄진다': min(4),
 				"resume:2": min(5),
@@ -219,7 +219,7 @@ describe("tasks check against a slow daemon (qa50b H-6)", () => {
 	/** One registered task in a fresh home whose acceptance carries `checks` `[check: …]` signals. */
 	function homeWithTask(checks: number): { home: string; taskId: string; row: TaskRow } {
 		const home = mkdtempSync(join(tmpdir(), "task-check-"));
-		const ledger = openTaskLedger(join(home, "ompbot.db"), "Asia/Seoul", { now: () => T0 });
+		const ledger = openTaskLedger(join(home, "jabbu.db"), "Asia/Seoul", { now: () => T0 });
 		const acceptance = Array.from({ length: checks }, (_, i) => ({
 			id: `AC-${i + 1}`,
 			text: `기준 ${i + 1} [check: command ["true"]]`,
@@ -265,7 +265,7 @@ describe("tasks check against a slow daemon (qa50b H-6)", () => {
 		const { home, taskId } = homeWithTask(1);
 		const received = Promise.withResolvers<void>();
 		const server = Bun.listen<undefined>({
-			unix: join(home, "ompbot.sock"),
+			unix: join(home, "jabbu.sock"),
 			socket: {
 				data() {
 					// Holds the request like a check that runs past the CLI's wait.

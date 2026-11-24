@@ -54,7 +54,7 @@ let home: string;
 let repo: string;
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "ompbot-apply-"));
+	root = mkdtempSync(join(tmpdir(), "jabbu-apply-"));
 	home = join(root, "home");
 	repo = join(root, "repo");
 	mkdirSync(home, { mode: 0o700 });
@@ -208,7 +208,7 @@ function makeDeps(world: World, over: Partial<ApplyDeps> = {}): ApplyDeps {
 	];
 	return {
 		homeDir: home,
-		unit: "ompbot",
+		unit: "jabbu",
 		repoDir: repo,
 		pathEnv: "/h/.local/bin:/h/.bun/bin:/usr/bin",
 		now: () => world.clock,
@@ -243,7 +243,7 @@ function makeDeps(world: World, over: Partial<ApplyDeps> = {}): ApplyDeps {
 		},
 		backup: () => {
 			world.backups += 1;
-			return { file: join(home, "backups", "ompbot-20261030-050000.db") } as BackupResult;
+			return { file: join(home, "backups", "jabbu-20261030-050000.db") } as BackupResult;
 		},
 		gates: () => gates,
 		doctor: async () => ({ code: 1, lines: ["ok home: x", "fail omp: missing"] }),
@@ -378,9 +378,9 @@ describe("runApply bot omp profile sync (omp-isolation AC-6)", () => {
 		mkdirSync(join(home, "secrets"), { mode: 0o700 });
 		writeFileSync(join(home, "secrets", "bot.token"), `${["TEST", "discord", "0"].join("-")}\n`, { mode: 0o600 });
 		writeFileSync(join(home, "config.json"), JSON.stringify(config));
-		expect(homeDeps(home, "ompbot", "/usr/bin").ompSync).toBeUndefined();
-		writeFileSync(join(home, "config.json"), JSON.stringify({ ...config, ompProfile: "ompbot" }));
-		expect(homeDeps(home, "ompbot", "/usr/bin").ompSync).toBeFunction();
+		expect(homeDeps(home, "jabbu", "/usr/bin").ompSync).toBeUndefined();
+		writeFileSync(join(home, "config.json"), JSON.stringify({ ...config, ompProfile: "jabbu" }));
+		expect(homeDeps(home, "jabbu", "/usr/bin").ompSync).toBeFunction();
 	});
 
 	test("a failed sync ends the apply: no drain, no restart, exit 1", async () => {
@@ -620,7 +620,7 @@ describe("runApply execution", () => {
 
 	test("a snapshot the schema check refuses still lands in the receipt", async () => {
 		const world = makeWorld();
-		const file = join(home, "backups", "ompbot-20261030-050000.db");
+		const file = join(home, "backups", "jabbu-20261030-050000.db");
 		const deps = makeDeps(world, {
 			backup: () => {
 				throw new BackupUnusableError(file, "this code cannot open the ledger snapshot: x");
@@ -712,7 +712,7 @@ describe("runApply rollback and drain safety", () => {
 		expect(world.drainCancels).toBe(0);
 	});
 
-	test("an inactive ompbot unit (or no user bus) SKIPs before any change", async () => {
+	test("an inactive jabbu unit (or no user bus) SKIPs before any change", async () => {
 		const world = makeWorld();
 		world.activeRc = 3;
 		const { exitCode, receipt } = await runApply(base, makeDeps(world));
@@ -724,7 +724,7 @@ describe("runApply rollback and drain safety", () => {
 
 describe("runApply peers (other installs on the checkout)", () => {
 	const peer = (exitCode: 0 | 1 | 3, status: PeerApply["status"]): PeerApply => ({
-		unit: "ompbot-tteok",
+		unit: "jabbu-tteok",
 		status,
 		exitCode,
 		receiptPath: "/t/logs/apply-x.json",
@@ -732,8 +732,8 @@ describe("runApply peers (other installs on the checkout)", () => {
 
 	test("this install's own unit is the one restarted", async () => {
 		const world = makeWorld();
-		await runApply(base, makeDeps(world, { unit: "ompbot-tteok" }));
-		expect(restartCommands(world)).toEqual([["systemctl", "--user", "restart", "ompbot-tteok"]]);
+		await runApply(base, makeDeps(world, { unit: "jabbu-tteok" }));
+		expect(restartCommands(world)).toEqual([["systemctl", "--user", "restart", "jabbu-tteok"]]);
 	});
 
 	test("peers run after a fresh restart and after already_applied, but never after a SKIP or failure", async () => {
@@ -767,7 +767,7 @@ describe("runApply peers (other installs on the checkout)", () => {
 			const { exitCode, receipt } = await runApply(base, makeDeps(makeWorld(), { peers: async () => [result] }));
 			expect(exitCode).toBe(1);
 			expect(receipt.status).toBe("failed");
-			expect(receipt.steps.at(-1)?.detail).toContain(`ompbot-tteok=${result.status}`);
+			expect(receipt.steps.at(-1)?.detail).toContain(`jabbu-tteok=${result.status}`);
 		}
 	});
 });
@@ -776,29 +776,29 @@ describe("apply backup wiring (C-02)", () => {
 	test("the CLI's real deps.backup() snapshots the db without a session bundle", () => {
 		// No config.json: homeDeps would refuse the fixture's placeholder config, and the bundle needs only one source.
 		rmSync(join(home, "config.json"));
-		new Database(join(home, "ompbot.db")).close();
+		new Database(join(home, "jabbu.db")).close();
 		mkdirSync(join(home, "sessions"));
 		writeFileSync(join(home, "sessions", "s.jsonl"), "{}\n");
 
-		const result = homeDeps(home, "ompbot", "/usr/bin").backup();
+		const result = homeDeps(home, "jabbu", "/usr/bin").backup();
 
 		expect(existsSync(result.file)).toBe(true);
 		expect(result.bundle).toBeUndefined();
-		expect(readdirSync(join(home, "backups")).filter((name) => name.startsWith("ompbot-bundle-"))).toEqual([]);
+		expect(readdirSync(join(home, "backups")).filter((name) => name.startsWith("jabbu-bundle-"))).toEqual([]);
 	});
 
 	test("deps.backup() fails on a ledger this code cannot open, before anything restarts, and leaves no copy", () => {
 		rmSync(join(home, "config.json"));
-		const db = new Database(join(home, "ompbot.db"));
+		const db = new Database(join(home, "jabbu.db"));
 		db.run(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
 		db.close();
 
-		expect(() => homeDeps(home, "ompbot", "/usr/bin").backup()).toThrow("this code cannot open the ledger snapshot");
-		expect(readdirSync(tmpdir()).filter((name) => name.startsWith("ompbot-apply-schema-"))).toEqual([]);
+		expect(() => homeDeps(home, "jabbu", "/usr/bin").backup()).toThrow("this code cannot open the ledger snapshot");
+		expect(readdirSync(tmpdir()).filter((name) => name.startsWith("jabbu-apply-schema-"))).toEqual([]);
 	});
 });
 
-describe("apply on a home `ompbot init` never set up", () => {
+describe("apply on a home `jabbu-pocket init` never set up", () => {
 	test("the CLI fails fast naming the cause and creates no home (no lock, no receipt)", async () => {
 		const missing = join(root, "never-initialized");
 		const written: string[] = [];
@@ -820,38 +820,38 @@ describe("apply on a home `ompbot init` never set up", () => {
 });
 
 describe("findDaemonUnits", () => {
-	test("keeps active units running this checkout's daemon, with OMPBOT_HOME or the default home", async () => {
-		const repoDir = "/w/ompbot";
+	test("keeps active units running this checkout's daemon, with JABBU_HOME or the default home", async () => {
+		const repoDir = "/w/jabbu";
 		const run = async (cmd: string[]): Promise<RunResult> => {
 			if (cmd[2] === "list-units")
 				return {
 					code: 0,
 					stdout:
-						"ompbot.service loaded active running x\nompbot-tteok.service loaded active running y\nompbot-dashboard.service loaded active running z\nompbot-backup.timer loaded active waiting t\n",
+						"jabbu.service loaded active running x\njabbu-tteok.service loaded active running y\njabbu-dashboard.service loaded active running z\njabbu-backup.timer loaded active waiting t\n",
 					stderr: "",
 				};
-			expect(cmd).not.toContain("ompbot-backup.timer");
+			expect(cmd).not.toContain("jabbu-backup.timer");
 			return {
 				code: 0,
 				stdout: [
-					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/ompbot/src/main.ts daemon ; ignore_errors=no }",
+					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/jabbu/src/main.ts daemon ; ignore_errors=no }",
 					"Environment=PATH=/b",
-					"Id=ompbot.service",
+					"Id=jabbu.service",
 					"",
-					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/ompbot/src/main.ts daemon ; ignore_errors=no }",
-					"Environment=OMPBOT_HOME=/h/.ompbot-tteok PATH=/b",
-					"Id=ompbot-tteok.service",
+					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/jabbu/src/main.ts daemon ; ignore_errors=no }",
+					"Environment=JABBU_HOME=/h/.jabbu-tteok PATH=/b",
+					"Id=jabbu-tteok.service",
 					"",
-					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/ompbot/src/main.ts dashboard ; ignore_errors=no }",
+					"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/jabbu/src/main.ts dashboard ; ignore_errors=no }",
 					"Environment=PATH=/b",
-					"Id=ompbot-dashboard.service",
+					"Id=jabbu-dashboard.service",
 				].join("\n"),
 				stderr: "",
 			};
 		};
-		expect(await findDaemonUnits(run, "/b", repoDir, "/h/.ompbot")).toEqual([
-			{ unit: "ompbot", homeDir: "/h/.ompbot" },
-			{ unit: "ompbot-tteok", homeDir: "/h/.ompbot-tteok" },
+		expect(await findDaemonUnits(run, "/b", repoDir, "/h/.jabbu")).toEqual([
+			{ unit: "jabbu", homeDir: "/h/.jabbu" },
+			{ unit: "jabbu-tteok", homeDir: "/h/.jabbu-tteok" },
 		]);
 	});
 });
@@ -861,27 +861,27 @@ describe("findDaemonUnits: home with spaces (qa-z #5)", () => {
 		(environment: string) =>
 		async (cmd: string[]): Promise<RunResult> =>
 			cmd[2] === "list-units"
-				? { code: 0, stdout: "ompbot-sp.service loaded active running x\n", stderr: "" }
+				? { code: 0, stdout: "jabbu-sp.service loaded active running x\n", stderr: "" }
 				: {
 						code: 0,
 						stdout: [
-							"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/ompbot/src/main.ts daemon ; ignore_errors=no }",
+							"ExecStart={ path=/b/bun ; argv[]=/b/bun /w/jabbu/src/main.ts daemon ; ignore_errors=no }",
 							`Environment=${environment}`,
-							"Id=ompbot-sp.service",
+							"Id=jabbu-sp.service",
 						].join("\n"),
 						stderr: "",
 					};
 
-	test("a quoted OMPBOT_HOME keeps its spaces", async () => {
-		const run = unitsRun('PATH=/b "OMPBOT_HOME=/h/my bot/.ompbot"');
-		expect(await findDaemonUnits(run, "/b", "/w/ompbot", "/h/.ompbot")).toEqual([
-			{ unit: "ompbot-sp", homeDir: "/h/my bot/.ompbot" },
+	test("a quoted JABBU_HOME keeps its spaces", async () => {
+		const run = unitsRun('PATH=/b "JABBU_HOME=/h/my bot/.jabbu"');
+		expect(await findDaemonUnits(run, "/b", "/w/jabbu", "/h/.jabbu")).toEqual([
+			{ unit: "jabbu-sp", homeDir: "/h/my bot/.jabbu" },
 		]);
 	});
 
-	test("an unreadable OMPBOT_HOME stops the apply instead of falling back to the default home", async () => {
-		const run = unitsRun('PATH=/b "OMPBOT_HOME=/h/my bot');
-		await expect(findDaemonUnits(run, "/b", "/w/ompbot", "/h/.ompbot")).rejects.toThrow(/OMPBOT_HOME/);
+	test("an unreadable JABBU_HOME stops the apply instead of falling back to the default home", async () => {
+		const run = unitsRun('PATH=/b "JABBU_HOME=/h/my bot');
+		await expect(findDaemonUnits(run, "/b", "/w/jabbu", "/h/.jabbu")).rejects.toThrow(/JABBU_HOME/);
 	});
 });
 
@@ -891,66 +891,66 @@ describe("runApply dashboard step (dashboard-host-checks AC-8)", () => {
 	const unitBlock = (id: string, command: string, homeDir: string | undefined, since: number): string =>
 		[
 			`ExecStart={ path=/b/bun ; argv[]=/b/bun ${repo}/src/main.ts ${command} ; ignore_errors=no }`,
-			`Environment=PATH=/b${homeDir === undefined ? "" : ` OMPBOT_HOME=${homeDir}`}`,
+			`Environment=PATH=/b${homeDir === undefined ? "" : ` JABBU_HOME=${homeDir}`}`,
 			`ActiveEnterTimestamp=@${since}`,
 			`Id=${id}.service`,
 		].join("\n");
 	/** The daemon of this home, plus the given pages, all active. */
 	function withUnits(world: World, pages: Array<{ id: string; home: string | undefined; since: number }>): void {
 		world.activeEnterUnix = `@${DAEMON_SINCE}`;
-		world.listUnits = ["ompbot", ...pages.map((page) => page.id)]
+		world.listUnits = ["jabbu", ...pages.map((page) => page.id)]
 			.map((id) => `${id}.service loaded active running x\n`)
 			.join("");
 		world.unitsShow = [
-			unitBlock("ompbot", "daemon", home, DAEMON_SINCE),
+			unitBlock("jabbu", "daemon", home, DAEMON_SINCE),
 			...pages.map((page) => unitBlock(page.id, "dashboard", page.home, page.since)),
 		].join("\n\n");
 	}
 	const pageRestarts = (world: World): string[] =>
 		restartCommands(world)
 			.map((cmd) => cmd[3] ?? "")
-			.filter((unit) => unit !== "ompbot");
+			.filter((unit) => unit !== "jabbu");
 	const dashboardStep = (receipt: ApplyReceipt) => receipt.steps.find((s) => s.name === "dashboard");
 	const older = DAEMON_SINCE - 3600;
 
 	test("ok and already_applied both restart this home's page that started before the daemon", async () => {
 		const world = makeWorld();
-		withUnits(world, [{ id: "ompbot-dashboard", home, since: older }]);
+		withUnits(world, [{ id: "jabbu-dashboard", home, since: older }]);
 		const ok = await runApply(base, makeDeps(world));
 		expect(ok.receipt.status).toBe("ok");
 		expect(ok.receipt.steps.at(-1)).toMatchObject({
 			name: "dashboard",
 			ok: true,
-			detail: "restarted ompbot-dashboard",
+			detail: "restarted jabbu-dashboard",
 		});
-		expect(pageRestarts(world)).toEqual(["ompbot-dashboard"]);
+		expect(pageRestarts(world)).toEqual(["jabbu-dashboard"]);
 
 		const again = makeWorld();
-		withUnits(again, [{ id: "ompbot-dashboard", home, since: older }]);
+		withUnits(again, [{ id: "jabbu-dashboard", home, since: older }]);
 		const { exitCode, receipt } = await runApply({ ...base, mergedAt: new Date(T0) }, makeDeps(again));
 		expect(exitCode).toBe(0);
 		expect(receipt.status).toBe("already_applied");
 		expect(receipt.steps.map((s) => s.name)).toEqual(["preflight", "dashboard"]);
-		expect(dashboardStep(receipt)?.detail).toBe("restarted ompbot-dashboard");
-		expect(pageRestarts(again)).toEqual(["ompbot-dashboard"]);
+		expect(dashboardStep(receipt)?.detail).toBe("restarted jabbu-dashboard");
+		expect(pageRestarts(again)).toEqual(["jabbu-dashboard"]);
 		expect(again.backups).toBe(0);
 	});
 
 	test("another home's page, an inactive page and a page newer than the daemon are left alone", async () => {
 		const world = makeWorld();
 		withUnits(world, [
-			{ id: "ompbot-dashboard", home: undefined, since: older },
-			{ id: "ompbot-dashboard-tteok", home: join(root, "other-home"), since: older },
-			{ id: "ompbot-dashboard-new", home, since: DAEMON_SINCE + 10 },
+			{ id: "jabbu-dashboard", home: undefined, since: older },
+			{ id: "jabbu-dashboard-tteok", home: join(root, "other-home"), since: older },
+			{ id: "jabbu-dashboard-new", home, since: DAEMON_SINCE + 10 },
 		]);
 		// An inactive page is not in `list-units --state=active`; its block alone does not make it a target.
-		world.unitsShow += `\n\n${unitBlock("ompbot-dashboard-idle", "dashboard", home, older)}`;
+		world.unitsShow += `\n\n${unitBlock("jabbu-dashboard-idle", "dashboard", home, older)}`;
 		const { exitCode, receipt } = await runApply({ ...base, mergedAt: new Date(T0) }, makeDeps(world));
 		expect(exitCode).toBe(0);
-		expect(dashboardStep(receipt)?.detail).toBe("skipped: dashboard newer (ompbot-dashboard-new)");
+		expect(dashboardStep(receipt)?.detail).toBe("skipped: dashboard newer (jabbu-dashboard-new)");
 		expect(pageRestarts(world)).toEqual([]);
 		const listed = world.commands.find((cmd) => cmd[2] === "show" && cmd.includes("Id"));
-		expect(listed).not.toContain("ompbot-dashboard-idle.service");
+		expect(listed).not.toContain("jabbu-dashboard-idle.service");
 
 		const none = makeWorld();
 		withUnits(none, []);
@@ -960,13 +960,13 @@ describe("runApply dashboard step (dashboard-host-checks AC-8)", () => {
 
 	test("a failed restart or listing is only the step's detail: status and exit code stay", async () => {
 		const world = makeWorld();
-		withUnits(world, [{ id: "ompbot-dashboard", home, since: older }]);
+		withUnits(world, [{ id: "jabbu-dashboard", home, since: older }]);
 		world.dashboardRestartRc = 1;
 		const ok = await runApply(base, makeDeps(world));
 		expect(ok.exitCode).toBe(0);
 		expect(ok.receipt.status).toBe("ok");
 		expect(dashboardStep(ok.receipt)).toMatchObject({ ok: true });
-		expect(dashboardStep(ok.receipt)?.detail).toStartWith("failed: systemctl restart ompbot-dashboard rc=1");
+		expect(dashboardStep(ok.receipt)?.detail).toStartWith("failed: systemctl restart jabbu-dashboard rc=1");
 		expect(readReceipt(ok.receipt).status).toBe("ok");
 
 		const broken = makeWorld();
@@ -1131,8 +1131,8 @@ describe("detachedApplyCommand (apply --detach and !restart)", () => {
 			childArgs: ["apply", "--stamp", "20261114-191500", "--report-plain"],
 		};
 		const a = detachedApplyCommand(input);
-		const b = detachedApplyCommand({ ...input, homeEnv: "/h/.ompbot-x" });
-		expect(a.unit).toMatch(/^ompbot-apply-20261114-191500-[0-9a-f]{4}$/);
+		const b = detachedApplyCommand({ ...input, homeEnv: "/h/.jabbu-x" });
+		expect(a.unit).toMatch(/^jabbu-apply-20261114-191500-[0-9a-f]{4}$/);
 		expect(b.unit).not.toBe(a.unit);
 		expect(a.argv).toEqual([
 			"systemd-run",
@@ -1150,7 +1150,7 @@ describe("detachedApplyCommand (apply --detach and !restart)", () => {
 			"20261114-191500",
 			"--report-plain",
 		]);
-		expect(b.argv).toContain("--setenv=OMPBOT_HOME=/h/.ompbot-x");
+		expect(b.argv).toContain("--setenv=JABBU_HOME=/h/.jabbu-x");
 	});
 
 	test("--report-plain without --report-origin is a usage error", async () => {
@@ -1162,7 +1162,7 @@ describe("runApply apply lock (one apply per home)", () => {
 	const SECOND = "20261030-140100";
 	const OTHER = "20261030-130000";
 	const lockPath = () => join(home, "apply.lock");
-	const okPeer: PeerApply = { unit: "ompbot-tteok", status: "ok", exitCode: 0, receiptPath: "/t/logs/apply-x.json" };
+	const okPeer: PeerApply = { unit: "jabbu-tteok", status: "ok", exitCode: 0, receiptPath: "/t/logs/apply-x.json" };
 
 	/**
 	 * Starts a first apply whose drain is held on a promise, then a second one on the same home whose every poll
@@ -1536,7 +1536,7 @@ describe("apply report origin on Discord", () => {
 			return true;
 		}) as typeof process.stderr.write;
 		try {
-			const home = mkdtempSync(join(tmpdir(), "ompbot-apply-cli-"));
+			const home = mkdtempSync(join(tmpdir(), "jabbu-apply-cli-"));
 			const codes = [
 				await applyCommand(["--report-origin", `discord/dm/${DM}`, "--report-thread", "1793318305.840629"], home),
 				await applyCommand(["--report-origin", "slack/ch/C0123456789", "--report-thread", MESSAGE], home),
@@ -1817,7 +1817,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		const { deps, installs, pushes } = repoDeps(world, {
 			peers: async () => {
 				peerCalls += 1;
-				return [{ unit: "ompbot-tteok", status: "ok", exitCode: 0, receiptPath: "/t/r.json" }];
+				return [{ unit: "jabbu-tteok", status: "ok", exitCode: 0, receiptPath: "/t/r.json" }];
 			},
 		});
 		const report: ApplyOptions = {
@@ -2005,7 +2005,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(sh("git rev-parse HEAD^")).toBe(r.bad);
 		const step = codeStep(receipt);
 		expect(step?.ok).toBe(false);
-		expect(step?.detail).toContain("bun install --frozen-lockfile && systemctl --user restart ompbot");
+		expect(step?.detail).toContain("bun install --frozen-lockfile && systemctl --user restart jabbu");
 		expect(step?.detail).toContain("err 29");
 		expect(step?.detail).not.toContain("err 9\n");
 		expect(world.drainCancels).toBe(1);
@@ -2084,11 +2084,11 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 			const peerHome = join(root, "peer-home");
 			mkdirSync(peerHome, { recursive: true, mode: 0o700 });
 			return async (afterCodeRollback = false): Promise<PeerApply[]> => {
-				const { deps } = repoDeps(makeWorld(), { homeDir: peerHome, unit: "ompbot-peer", ...verifiedDoctor });
+				const { deps } = repoDeps(makeWorld(), { homeDir: peerHome, unit: "jabbu-peer", ...verifiedDoctor });
 				const outcome = await runApply(options(afterCodeRollback), deps);
 				results.push(outcome);
 				const { status, receiptPath } = outcome.receipt;
-				return [{ unit: "ompbot-peer", status, exitCode: outcome.exitCode, receiptPath }];
+				return [{ unit: "jabbu-peer", status, exitCode: outcome.exitCode, receiptPath }];
 			};
 		}
 
@@ -2495,7 +2495,7 @@ describe("ensureDeps install marker (apply-deps-install)", () => {
 		const lines: string[] = [];
 		const second = await runApply(
 			{ ...base, stamp: "20261030-140500" },
-			makeDeps(world, { homeDir: home2, unit: "ompbot-tteok", log: (line) => lines.push(line) }),
+			makeDeps(world, { homeDir: home2, unit: "jabbu-tteok", log: (line) => lines.push(line) }),
 		);
 		expect([first.exitCode, second.exitCode]).toEqual([0, 0]);
 		expect(world.installs).toHaveLength(1);
@@ -2654,7 +2654,7 @@ describe("apply signal handling (cataly-apply-release-guards)", () => {
 				"const [home, mode] = process.argv.slice(2);",
 				'const guard = new DrainSignalGuard({ log: (line) => process.stderr.write("guard: " + line + "\\n") });',
 				"guard.install();",
-				'const deps = homeDeps(home, "ompbot", process.env.PATH ?? "", guard);',
+				'const deps = homeDeps(home, "jabbu", process.env.PATH ?? "", guard);',
 				"const pending = deps.drain(5);",
 				'if (mode === "restarting") deps.onRestart?.();',
 				"console.log(JSON.stringify(await pending));",
@@ -2682,7 +2682,7 @@ describe("apply signal handling (cataly-apply-release-guards)", () => {
 	test("SIGTERM to the apply while it holds a drain cancels that drain and exits 143", async () => {
 		const childHome = join(root, "child-home");
 		mkdirSync(childHome, { mode: 0o700 });
-		const daemon = fakeDaemon(join(childHome, "ompbot.sock"));
+		const daemon = fakeDaemon(join(childHome, "jabbu.sock"));
 		const { child, stderrShows, stderr } = startChild(childHome, "drain");
 		try {
 			await within(daemon.drainAsked, 20_000, "drain request");
@@ -2700,7 +2700,7 @@ describe("apply signal handling (cataly-apply-release-guards)", () => {
 	test("once the restart was requested a signal is ignored and the drain is left to the restart", async () => {
 		const childHome = join(root, "child-home");
 		mkdirSync(childHome, { mode: 0o700 });
-		const daemon = fakeDaemon(join(childHome, "ompbot.sock"));
+		const daemon = fakeDaemon(join(childHome, "jabbu.sock"));
 		const { child, stderrShows } = startChild(childHome, "restarting");
 		try {
 			await within(daemon.drainAsked, 20_000, "drain request");

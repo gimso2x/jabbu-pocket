@@ -597,7 +597,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/**
-	 * `injected`: an `ompbot inject` message (`OwnerIngest.injected`), which may not answer a card. `onThread`: told when
+	 * `injected`: a `jabbu-pocket inject` message (`OwnerIngest.injected`), which may not answer a card. `onThread`: told when
 	 * the message opened its own thread (recovery picks its notice's place by it).
 	 */
 	async #processMessage(
@@ -940,7 +940,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		let name: string | undefined;
 		if (!known) {
 			const line = progressLine(text.split("\n")[0] ?? "");
-			name = (line === "" ? "ompbot" : line).slice(0, THREAD_NAME_MAX);
+			name = (line === "" ? "jabbu" : line).slice(0, THREAD_NAME_MAX);
 			try {
 				await this.#transport.startThread({ channelId: conversationId, messageId: event.id, name });
 			} catch (err) {

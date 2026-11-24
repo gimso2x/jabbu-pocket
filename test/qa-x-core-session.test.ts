@@ -19,7 +19,7 @@ import { openStore, type Store } from "../src/store/db";
 
 let dir: string;
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-qa-x-core-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-qa-x-core-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -28,7 +28,7 @@ const userLine = (text: string) =>
 	JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 const sessionFile = (id: string, text: string) => `${sessionLine(id)}\n${userLine(text)}\n`;
 
-describe("listSavedSessions (/resume-ompbot)", () => {
+describe("listSavedSessions (/resume-jabbu)", () => {
 	function origin(): { originDir: string; epoch: string } {
 		const originDir = join(dir, "origin");
 		const epoch = join(originDir, "e1");
@@ -136,7 +136,7 @@ describe("mailbox turns", () => {
 	let place: { channelName?: string; topic?: string } | undefined;
 
 	beforeEach(() => {
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		drivers = [];
 		driverOptions = {};
 		place = undefined;
@@ -228,9 +228,9 @@ describe("#10 !brief chromium environment", () => {
 			if (out !== undefined) await Bun.write(out, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
 			return { code: 0, stdout: "<html><head><title>1234</title></head></html>", timedOut: false };
 		};
-		const before = { slack: process.env.SLACK_BOT_TOKEN, bot: process.env.OMPBOT_TEST_SECRET };
+		const before = { slack: process.env.SLACK_BOT_TOKEN, bot: process.env.JABBU_TEST_SECRET };
 		process.env.SLACK_BOT_TOKEN = "xoxb-TEST-0";
-		process.env.OMPBOT_TEST_SECRET = "secret-TEST";
+		process.env.JABBU_TEST_SECRET = "secret-TEST";
 		try {
 			await renderPng("<html></html>", join(dir, "out.png"), {
 				chromium: "chromium",
@@ -241,7 +241,7 @@ describe("#10 !brief chromium environment", () => {
 		} finally {
 			for (const [key, value] of [
 				["SLACK_BOT_TOKEN", before.slack],
-				["OMPBOT_TEST_SECRET", before.bot],
+				["JABBU_TEST_SECRET", before.bot],
 			] as const) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
@@ -250,7 +250,7 @@ describe("#10 !brief chromium environment", () => {
 		expect(envs).toHaveLength(2);
 		for (const env of envs) {
 			expect(env).toBeDefined();
-			expect(Object.keys(env ?? {}).filter((key) => key.startsWith("SLACK_") || key.startsWith("OMPBOT_"))).toEqual([]);
+			expect(Object.keys(env ?? {}).filter((key) => key.startsWith("SLACK_") || key.startsWith("JABBU_"))).toEqual([]);
 		}
 		expect(dispatchEnv({ SLACK_BOT_TOKEN: "x" }).SLACK_BOT_TOKEN).toBeUndefined();
 	});
@@ -259,7 +259,7 @@ describe("#10 !brief chromium environment", () => {
 describe("#11 turn trace worker tierReason", () => {
 	test("an email and a phone number in a task's tier reason come out masked", () => {
 		const T0 = Date.parse("2026-11-05T10:00:00Z");
-		const dbPath = join(dir, "ompbot.db");
+		const dbPath = join(dir, "jabbu.db");
 		openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => T0 }, redact: (text) => text }).close();
 		const sessionDir = join(dir, "sessions", "o", "e1");
 		mkdirSync(sessionDir, { recursive: true });

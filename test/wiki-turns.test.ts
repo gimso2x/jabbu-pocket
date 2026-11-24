@@ -25,9 +25,9 @@ let repos: string[];
 let now: number;
 
 beforeEach(() => {
-	home = makeHome("ompbot-wiki-turns-home-");
+	home = makeHome("jabbu-wiki-turns-home-");
 	now = NOON;
-	store = openBotStore(join(home.dir, "ompbot.db"), { now: () => now }, "Asia/Seoul");
+	store = openBotStore(join(home.dir, "jabbu.db"), { now: () => now }, "Asia/Seoul");
 	wiki = wikiFixture(store, { now: () => now });
 	repos = [];
 });
@@ -80,9 +80,9 @@ describe("conversation turn notes", () => {
 		await wiki.notes.flushTurns();
 		const ids = wiki.outbox();
 		expect(ids).toHaveLength(1);
-		expect(ids[0]).toMatch(/^ompbot-turns-[0-9a-f]{10}-20270115$/);
+		expect(ids[0]).toMatch(/^jabbu-turns-[0-9a-f]{10}-20270115$/);
 		const note = wiki.read(ids[0] as string);
-		expect(note.tags).toEqual(["ompbot", "work-outcome", "turns"]);
+		expect(note.tags).toEqual(["jabbu", "work-outcome", "turns"]);
 		expect(note.summary).toContain("feat: 첫 번째");
 		expect(note.summary).toContain("feat: 두 번째");
 		expect(note.project).toBe(repo.split("/").pop() ?? "");

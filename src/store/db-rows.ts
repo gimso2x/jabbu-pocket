@@ -7,15 +7,15 @@ export interface OriginRow {
 	epoch: number;
 	sessionDir: string;
 	updatedAt: number;
-	/** Session file pinned by `/resume-ompbot`; opened instead of the newest session of `sessionDir`. */
+	/** Session file pinned by `/resume-jabbu`; opened instead of the newest session of `sessionDir`. */
 	sessionFile: string | null;
-	/** `provider/model` chosen with `/model-ompbot`; applied every time the omp child opens the session. */
+	/** `provider/model` chosen with `/model-jabbu`; applied every time the omp child opens the session. */
 	model: string | null;
-	/** Thinking level chosen with `/thinking-ompbot`; applied like `model`. */
+	/** Thinking level chosen with `/thinking-jabbu`; applied like `model`. */
 	thinking: string | null;
 }
 
-/** Per-origin runtime settings kept across idle release, restarts and `/new-ompbot`. */
+/** Per-origin runtime settings kept across idle release, restarts and `/new-jabbu`. */
 export type OriginSettings = Pick<OriginRow, "model" | "thinking">;
 
 export interface InboundRow {
@@ -36,7 +36,7 @@ export interface InboundRow {
 	/** Set while `state` is `uncertain` (and kept after retry/close): why the input was parked, and when. */
 	uncertainReason: UncertainReason | null;
 	uncertainAt: number | null;
-	/** Put in by `ompbot inject` (`OwnerIngest.injected`), not typed by the owner: never answers an ask card. */
+	/** Put in by `jabbu-pocket inject` (`OwnerIngest.injected`), not typed by the owner: never answers an ask card. */
 	injected: boolean;
 }
 

@@ -100,9 +100,9 @@ const toolEnd = (id: string | undefined, command: string, isError = false): OmpE
 });
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-steer-cap-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-steer-cap-"));
 	clock = new FakeClock();
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	opened = [];
 	logLines = [];
 	progress = [];
@@ -166,7 +166,7 @@ describe("mailbox: steer cap", () => {
 			await mailbox.resumePending();
 			const owner = steersOf(driver).filter((c) => c.startsWith("steer:o"));
 			expect(owner).toEqual(["steer:o1", "steer:o2", "steer:o3", "steer:o4"]);
-			expect(steersOf(driver).filter((c) => c.includes("ompbot"))).toHaveLength(3);
+			expect(steersOf(driver).filter((c) => c.includes("jabbu"))).toHaveLength(3);
 			expect(store.getInbound("peer-cap")?.state).toBe("pending");
 		} finally {
 			await mailbox.close();

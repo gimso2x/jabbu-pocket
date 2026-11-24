@@ -29,8 +29,8 @@ describe("diskHeadroom / diskLow", () => {
 			freeBytes: 3 * 4096,
 			totalBytes: 10 * 4096,
 		});
-		const missing = diskHeadroom("/no/such/path/for/ompbot");
-		expect(missing).toEqual({ path: "/no/such/path/for/ompbot", freeBytes: null, totalBytes: null });
+		const missing = diskHeadroom("/no/such/path/for/jabbu");
+		expect(missing).toEqual({ path: "/no/such/path/for/jabbu", freeBytes: null, totalBytes: null });
 		expect(diskLow(missing)).toBe(false);
 	});
 

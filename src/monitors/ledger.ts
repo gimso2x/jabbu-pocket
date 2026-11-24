@@ -326,7 +326,7 @@ export function nextFireOf(row: MonitorRow): number | null {
 }
 
 /**
- * The `[...]` trigger text of a monitor row, shared by the CLI `monitors list` and the `ompbot_monitor_list` tool —
+ * The `[...]` trigger text of a monitor row, shared by the CLI `monitors list` and the `jabbu_monitor_list` tool —
  * the single place a trigger kind is described. `formatAt` renders an `at` trigger's stored ISO instant (the CLI
  * keeps it raw; the tool shows the bot zone's wall clock) and a script monitor with fire=edge shows its last check state.
  */

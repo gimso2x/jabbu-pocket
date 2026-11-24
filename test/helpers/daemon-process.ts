@@ -22,16 +22,16 @@ export function killSpawned(): void {
 
 /**
  * `bun src/main.ts daemon` with the test-only Discord transport (a JSONL file) so nothing reaches Discord.
- * Extra env (e.g. OMPBOT_TEST_CRASH_AT) is passed through.
+ * Extra env (e.g. JABBU_TEST_CRASH_AT) is passed through.
  */
 export function spawnDaemon(homeDir: string, transportFile: string, env: Record<string, string> = {}): SpawnedDaemon {
 	const proc = Bun.spawn(["bun", MAIN, "daemon"], {
 		env: {
 			...process.env,
-			OMPBOT_HOME: homeDir,
-			OMPBOT_TEST_HOOKS: "1",
-			OMPBOT_TEST_DISCORD_TRANSPORT: transportFile,
-			OMPBOT_TEST_HOST_LOAD: "idle", // gates judge an idle host, not this machine's load
+			JABBU_HOME: homeDir,
+			JABBU_TEST_HOOKS: "1",
+			JABBU_TEST_DISCORD_TRANSPORT: transportFile,
+			JABBU_TEST_HOST_LOAD: "idle", // gates judge an idle host, not this machine's load
 			...env,
 		},
 		stdin: "ignore",
@@ -100,7 +100,7 @@ export interface CliResult {
 /** Runs `bun src/main.ts <args>` against a bot home. */
 export async function runMain(homeDir: string, args: string[], env: Record<string, string> = {}): Promise<CliResult> {
 	const proc = Bun.spawn(["bun", MAIN, ...args], {
-		env: { ...process.env, OMPBOT_HOME: homeDir, ...env },
+		env: { ...process.env, JABBU_HOME: homeDir, ...env },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -118,7 +118,7 @@ export async function runMain(homeDir: string, args: string[], env: Record<strin
 let capturing = false;
 
 /**
- * `runCli(args)` in this process, shaped like {@link runMain}: OMPBOT_HOME is `homeDir` (undefined = none, also not
+ * `runCli(args)` in this process, shaped like {@link runMain}: JABBU_HOME is `homeDir` (undefined = none, also not
  * an inherited one) over `process.env` and `env`. stdout and stderr writes are collected while it runs and the real
  * writers come back afterwards, also when the command throws. One call at a time: a second one while the first runs
  * throws, since both would write into the same replaced writers. Swapping `process.stdout.write` stays inside one
@@ -131,8 +131,8 @@ export async function runCliCapture(
 ): Promise<CliResult> {
 	if (capturing) throw new Error("runCliCapture: another call is still running");
 	capturing = true;
-	const cliEnv: Record<string, string | undefined> = { ...process.env, OMPBOT_HOME: homeDir, ...env };
-	if (cliEnv.OMPBOT_HOME === undefined) delete cliEnv.OMPBOT_HOME;
+	const cliEnv: Record<string, string | undefined> = { ...process.env, JABBU_HOME: homeDir, ...env };
+	if (cliEnv.JABBU_HOME === undefined) delete cliEnv.JABBU_HOME;
 	const out: string[] = [];
 	const err: string[] = [];
 	const decoder = new TextDecoder();

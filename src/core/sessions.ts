@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readdirSync, readSync, realpathSync, s
 import { join, sep } from "node:path";
 import { CURRENT_REQUEST_MARKER } from "./types";
 
-/** One omp session file of an origin, as listed by `/resume-ompbot`. */
+/** One omp session file of an origin, as listed by `/resume-jabbu`. */
 export interface SavedSession {
 	/** Absolute path of the `.jsonl` file. */
 	file: string;
@@ -115,7 +115,7 @@ export function epochDirIsFresh(sessionDir: string): boolean {
 }
 
 /**
- * `/resume-ompbot <arg>`: a 1-based index into `sessions` (when in range), else a unique session-id prefix of at least 4
+ * `/resume-jabbu-pocket <arg>`: a 1-based index into `sessions` (when in range), else a unique session-id prefix of at least 4
  * characters (ids can start with digits).
  */
 export function pickSession(sessions: readonly SavedSession[], arg: string): SavedSession | undefined {

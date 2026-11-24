@@ -11,7 +11,7 @@ let home: string;
 const stops: Array<() => void> = [];
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-tasks-ipc-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-tasks-ipc-"));
 });
 
 afterEach(() => {
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 function serve(handler: (request: unknown) => Promise<unknown>): string {
-	const path = join(home, "ompbot.sock");
+	const path = join(home, "jabbu.sock");
 	const server = startIpcServer(path, handler);
 	stops.push(() => server.stop());
 	return path;
@@ -31,11 +31,11 @@ describe("tasks CLI (qa-i low)", () => {
 		const result = await runCliCapture(home, ["tasks", "list"]);
 		expect(result.code).toBe(0);
 		expect(result.stdout).toBe("no tasks\n");
-		expect(existsSync(join(home, "ompbot.db"))).toBe(false);
+		expect(existsSync(join(home, "jabbu.db"))).toBe(false);
 	});
 
 	test("a daemon that answers ok:false is reported as refusing, not as unreachable", async () => {
-		const ledger = openTaskLedger(join(home, "ompbot.db"), "Asia/Seoul");
+		const ledger = openTaskLedger(join(home, "jabbu.db"), "Asia/Seoul");
 		const row = ledger.register({
 			title: "t",
 			risk: "L2",

@@ -41,7 +41,7 @@ describe("runCheck queues whole-suite runs on heavy-run", () => {
 	};
 
 	beforeEach(() => {
-		dir = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-hr-check-")));
+		dir = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-hr-check-")));
 		calls = [];
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));

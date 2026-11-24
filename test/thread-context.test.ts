@@ -36,9 +36,9 @@ let router: OriginRouter;
 let drivers: FakeOmpDriver[];
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-thread-context-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-thread-context-"));
 	clock = new FakeClock();
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	drivers = [];
 	const sessionStore = new FakeSessionStore();
 	router = new OriginRouter({
@@ -105,7 +105,7 @@ const promptsOf = (driver: FakeOmpDriver): string[] => driver.calls.filter((c) =
 
 describe("thread context injection", () => {
 	test("a fresh thread session's first prompt carries the root message and foreign answers", async () => {
-		const rootText = "카톡 대화 내용 첨부했어\n[첨부: /home/dev/.ompbot/media/inbound/111_222/doc_1.txt]";
+		const rootText = "카톡 대화 내용 첨부했어\n[첨부: /home/dev/.jabbu/media/inbound/111_222/doc_1.txt]";
 		const channelMailbox = router.mailbox(CHANNEL);
 		await turn(channelMailbox, 0, () => router.route(msg(CHANNEL, REF, "C1:111.222", rootText)));
 		// The channel session itself gets no context block: its origin is not a thread session.

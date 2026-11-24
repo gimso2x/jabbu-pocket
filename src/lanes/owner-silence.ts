@@ -4,7 +4,7 @@ import { MAX_MILESTONE_CHARS } from "./manager-constants";
 import type { LaneManagerDeps } from "./manager-types";
 import type { LaneMeta, LaneRow } from "./status";
 
-/** What a lane's `ompbot_lane_progress` may carry. `reversible` + `recommend` on a `needsOwner` question allow the silence fallback. */
+/** What a lane's `jabbu_lane_progress` may carry. `reversible` + `recommend` on a `needsOwner` question allow the silence fallback. */
 export interface LaneProgressOptions {
 	needsOwner?: boolean;
 	evidence?: unknown;

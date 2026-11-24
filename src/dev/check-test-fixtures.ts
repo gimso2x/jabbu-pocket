@@ -19,8 +19,8 @@ const pinnedVersion = (root: string): string => {
 };
 /** 절대 경로 실행 파일이고 `--version`이 고정 버전의 `omp/<버전>`을 내는지. */
 const checkOmp = (exe: string | undefined, pinned: string): { omp: string; version: string } => {
-	if (exe === undefined || exe === "") throw new Error("OMPBOT_OMP_EXECUTABLE이 없습니다");
-	if (!isAbsolute(exe)) throw new Error(`OMPBOT_OMP_EXECUTABLE은 절대 경로여야 합니다: ${exe}`);
+	if (exe === undefined || exe === "") throw new Error("JABBU_OMP_EXECUTABLE이 없습니다");
+	if (!isAbsolute(exe)) throw new Error(`JABBU_OMP_EXECUTABLE은 절대 경로여야 합니다: ${exe}`);
 	if (!statSync(exe, { throwIfNoEntry: false })?.isFile()) throw new Error(`omp 실행 파일이 없습니다: ${exe}`);
 	const ran = spawnSync(exe, ["--version"], { encoding: "utf8" });
 	const version = /^omp\/(\d+\.\d+\.\d+\S*)/.exec(`${ran.stdout}${ran.stderr}`)?.[1];
@@ -28,16 +28,16 @@ const checkOmp = (exe: string | undefined, pinned: string): { omp: string; versi
 	if (version !== pinned) throw new Error(`omp ${version}는 픽스처 고정 ${pinned}와 다릅니다`);
 	return { omp: exe, version };
 };
-/** `OMPBOT_GITLEAKS`나 PATH의 gitleaks가 실제로 도는지. */
+/** `JABBU_GITLEAKS`나 PATH의 gitleaks가 실제로 도는지. */
 const checkGitleaks = (env: Env): string => {
-	const path = env.OMPBOT_GITLEAKS ?? Bun.which("gitleaks", { PATH: env.PATH ?? "" }) ?? undefined;
-	if (path === undefined) throw new Error("gitleaks를 찾지 못했습니다(OMPBOT_GITLEAKS 또는 PATH)");
+	const path = env.JABBU_GITLEAKS ?? Bun.which("gitleaks", { PATH: env.PATH ?? "" }) ?? undefined;
+	if (path === undefined) throw new Error("gitleaks를 찾지 못했습니다(JABBU_GITLEAKS 또는 PATH)");
 	if (spawnSync(path, ["version"]).status !== 0) throw new Error(`gitleaks가 실행되지 않습니다: ${path}`);
 	return path;
 };
 /** 픽스처가 온전한지: 고정 omp가 그 버전으로 실행되고 gitleaks가 돈다. 어긋나면 Error. */
 export async function checkTestFixtures(root: string, env: Env = process.env): Promise<FixtureReport> {
-	const { omp, version } = checkOmp(env.OMPBOT_OMP_EXECUTABLE, pinnedVersion(root));
+	const { omp, version } = checkOmp(env.JABBU_OMP_EXECUTABLE, pinnedVersion(root));
 	return { omp, version, gitleaks: checkGitleaks(env) };
 }
 if (import.meta.main) {

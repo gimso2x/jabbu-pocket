@@ -155,9 +155,9 @@ describe("event log lines and stall detection (mailbox, fake clock)", () => {
 	let driverOptions: FakeOmpDriverOptions;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-ops-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-ops-"));
 		clock = new FakeClock();
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		drivers = [];
 		lines = [];
 		stalls = [];
@@ -735,7 +735,7 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 	let lines: string[];
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-daemon-");
+		home = makeHome("jabbu-ops-daemon-");
 		clock = new FakeClock();
 		clock.t = Date.now();
 		transport = new UpdateWatchingTransport();
@@ -856,7 +856,7 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 		);
 	});
 
-	test("!status answers this conversation's context line, then exactly what `ompbot status` prints", async () => {
+	test("!status answers this conversation's context line, then exactly what `jabbu-pocket status` prints", async () => {
 		await startDaemon(false);
 		await daemon.inject({ origin: ORIGIN, asOwner: true, text: "hello" });
 		await transport.waitForPosts((text) => text.includes("ECHO hello"));
@@ -940,9 +940,9 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 
 describe("alert incidents: owner-notice repeat suppression (store)", () => {
 	test("first occurrence notifies, the same sign stays quiet 24h, then re-alerts; resolve re-arms", () => {
-		const dir = mkdtempSync(join(tmpdir(), "ompbot-incidents-"));
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-incidents-"));
 		const clock = new FakeClock();
-		const store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		const store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		try {
 			const scope = "turns:discord/dm/200000000000000001";
 			expect(store.recordAlertIncident(scope, "Could not restore model: x", clock.now())).toMatchObject({
@@ -977,7 +977,7 @@ function writeBackupStamp(homeDir: string): void {
 	mkdirSync(join(homeDir, "backups"), { recursive: true });
 	writeFileSync(
 		join(homeDir, "backups", STAMP_FILE),
-		`ts=${new Date().toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
+		`ts=${new Date().toISOString()} file=jabbu-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
 	);
 }
 
@@ -990,7 +990,7 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 	let lines: string[];
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-selfdiag-");
+		home = makeHome("jabbu-ops-selfdiag-");
 		clock = new FakeClock();
 		clock.t = Date.now();
 		transport = new WaitingDiscordTransport();
@@ -1145,7 +1145,7 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 
 	/** Status of a gate's alert incident row read straight from the ledger (WAL-safe readonly open). */
 	function gateIncidentStatus(gate: string): string | undefined {
-		const db = new Database(join(home.dir, "ompbot.db"), { readonly: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { readonly: true });
 		try {
 			const row = db.query("select status from alert_incidents where scope = ?").get(`gate:${gate}`) as {
 				status: string;
@@ -1310,11 +1310,11 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 	});
 });
 
-describe("ompbot doctor agy agent", () => {
+describe("jabbu-pocket doctor agy agent", () => {
 	let dir: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-agy-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-doctor-agy-"));
 		chmodSync(dir, 0o700);
 		mkdirSync(join(dir, "secrets"), { recursive: true });
 		writeFileSync(join(dir, "secrets", "discord-bot-token"), "TEST-discord-0\n", { mode: 0o600 });
@@ -1350,11 +1350,11 @@ describe("ompbot doctor agy agent", () => {
 	}, 30_000);
 });
 
-describe("ompbot doctor omp runtime check", () => {
+describe("jabbu-pocket doctor omp runtime check", () => {
 	let dir: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-runtime-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-doctor-runtime-"));
 		mkdirSync(join(dir, "secrets"));
 		writeFileSync(join(dir, "secrets", "discord-bot-token"), "TEST-discord-0\n", { mode: 0o600 });
 	});
@@ -1435,7 +1435,7 @@ describe("ompbot doctor omp runtime check", () => {
 	});
 });
 
-describe("ompbot doctor backup bundle check", () => {
+describe("jabbu-pocket doctor backup bundle check", () => {
 	let dir: string;
 
 	/** A ledger-only home: a stamp from a backup that had no bundle sources, and none since. */
@@ -1443,12 +1443,12 @@ describe("ompbot doctor backup bundle check", () => {
 		mkdirSync(join(dir, "backups"), { recursive: true });
 		writeFileSync(
 			join(dir, "backups", STAMP_FILE),
-			`ts=${new Date().toISOString()} file=ompbot-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
+			`ts=${new Date().toISOString()} file=jabbu-x.db bytes=1 sha256=abc integrity=ok check=quick_check\n`,
 		);
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-doctor-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-doctor-"));
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -1464,11 +1464,11 @@ describe("ompbot doctor backup bundle check", () => {
 		expect(await bundleLine()).toBe("ok backup bundle: sources=none (ledger-only home)");
 
 		mkdirSync(join(dir, "sessions"), { recursive: true });
-		expect(await bundleLine()).toBe("fail backup bundle: bundle=none (run ompbot backup again)");
+		expect(await bundleLine()).toBe("fail backup bundle: bundle=none (run jabbu-pocket backup again)");
 	});
 
 	// before the daemon's first start there is no DB to back up.
-	test("first install (no ompbot.db, no stamp): a warning that never counts as a failure", async () => {
+	test("first install (no jabbu.db, no stamp): a warning that never counts as a failure", async () => {
 		const lines: string[] = [];
 		let failures = 0;
 		checkBackupBundle(
@@ -1485,7 +1485,7 @@ describe("ompbot doctor backup bundle check", () => {
 	});
 
 	test("an apply backup (skipBundle) after a bundled backup keeps the bundle line passing", async () => {
-		new Database(join(dir, "ompbot.db")).close();
+		new Database(join(dir, "jabbu.db")).close();
 		mkdirSync(join(dir, "sessions"), { recursive: true });
 		writeFileSync(join(dir, "sessions", "s.jsonl"), "{}\n");
 		runBackup({ homeDir: dir, now: new Date(Date.now() - 60_000) });
@@ -1503,11 +1503,11 @@ describe("ompbot doctor backup bundle check", () => {
 		);
 		expect(failures).toBe(0);
 		expect(lines).toHaveLength(1);
-		expect(lines[0]).toStartWith("ok backup bundle: bundle=ompbot-bundle-");
+		expect(lines[0]).toStartWith("ok backup bundle: bundle=jabbu-bundle-");
 	});
 
 	test("a DB without a stamp (the daemon ran, no backup succeeded) still fails", async () => {
-		new Database(join(dir, "ompbot.db")).close();
+		new Database(join(dir, "jabbu.db")).close();
 		const line = await bundleLine();
 		expect(line).toStartWith("fail backup bundle: stamp=missing");
 	});
@@ -1516,10 +1516,10 @@ describe("ompbot doctor backup bundle check", () => {
 const FIRST_INSTALL_LINE =
 	"warn backup bundle: stamp=missing (first install: the daemon makes the first backup when it starts)";
 
-describe("ompbot doctor dispatch hosts", () => {
+describe("jabbu-pocket doctor dispatch hosts", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-doctor-hosts-");
+		home = makeHome("jabbu-doctor-hosts-");
 		const path = join(home.dir, "config.json");
 		const config = JSON.parse(readFileSync(path, "utf8"));
 		writeFileSync(
@@ -1688,11 +1688,11 @@ describe("ompbot doctor dispatch hosts", () => {
 	});
 });
 
-describe("ompbot backup bundle size cap (config maxBundleBytes + --max-bundle-bytes)", () => {
+describe("jabbu-pocket backup bundle size cap (config maxBundleBytes + --max-bundle-bytes)", () => {
 	let home: TestHome;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-bundlecap-");
+		home = makeHome("jabbu-ops-bundlecap-");
 	});
 	afterEach(() => {
 		killSpawned();
@@ -1701,7 +1701,7 @@ describe("ompbot backup bundle size cap (config maxBundleBytes + --max-bundle-by
 
 	/** A seeded ledger plus a sessions tree well past a 10-byte cap (and past the config's reach-around). */
 	function seedBackedUpHome(): void {
-		const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { create: true, strict: true });
 		db.run("CREATE TABLE origins (origin_key TEXT PRIMARY KEY)");
 		db.close();
 		mkdirSync(join(home.dir, "sessions", "discord-dm-200000000000000001", "e1"), { recursive: true });
@@ -1774,7 +1774,7 @@ describe("log rotation", () => {
 	let dir: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-ops-log-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-ops-log-"));
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -1784,11 +1784,11 @@ describe("log rotation", () => {
 	});
 
 	test("rotates before a write would pass maxBytes, keeps `files` files in total and drops the oldest", () => {
-		const path = join(dir, "ompbot.log");
+		const path = join(dir, "jabbu.log");
 		const sink = rotatingFileSink(path, { maxBytes: 100, files: 3 });
 		const line = (n: number) => `${String(n).padStart(2, "0")}${"x".repeat(37)}`; // 39 bytes + newline = 40
 		for (let n = 1; n <= 9; n++) sink(line(n));
-		expect(readdirSync(dir).sort()).toEqual(["ompbot.log", "ompbot.log.1", "ompbot.log.2"]);
+		expect(readdirSync(dir).sort()).toEqual(["jabbu.log", "jabbu.log.1", "jabbu.log.2"]);
 		for (const name of readdirSync(dir)) expect(readFileSync(join(dir, name)).length).toBeLessThanOrEqual(100);
 		expect(readFileSync(path, "utf8")).toBe(`${line(9)}\n`);
 		expect(readFileSync(`${path}.1`, "utf8")).toBe(`${line(7)}\n${line(8)}\n`);
@@ -1797,7 +1797,7 @@ describe("log rotation", () => {
 	});
 
 	test("an existing live file counts towards the limit after a restart", () => {
-		const path = join(dir, "ompbot.log");
+		const path = join(dir, "jabbu.log");
 		writeFileSync(path, `${"y".repeat(79)}\n`);
 		rotatingFileSink(path, { maxBytes: 100, files: 2 })("z".repeat(30));
 		expect(readFileSync(`${path}.1`, "utf8")).toBe(`${"y".repeat(79)}\n`);
@@ -1808,7 +1808,7 @@ describe("log rotation", () => {
 describe("refusing to start when the log directory is unusable", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-logdir-");
+		home = makeHome("jabbu-ops-logdir-");
 	});
 	afterEach(() => {
 		killSpawned();
@@ -1837,12 +1837,12 @@ describe("refusing to start when the log directory is unusable", () => {
 		const reason = await daemon.waitLog(/refusing to start: log_dir_unwritable: .*logs/);
 		expect(reason).toContain(home.dir);
 		expect(await daemon.exited).toBe(1);
-		expect(existsSync(join(home.dir, "ompbot.lock"))).toBe(false);
-		expect(existsSync(join(home.dir, "ompbot.sock"))).toBe(false);
+		expect(existsSync(join(home.dir, "jabbu.lock"))).toBe(false);
+		expect(existsSync(join(home.dir, "jabbu.sock"))).toBe(false);
 	});
 });
 
-describe("ompbot gc", () => {
+describe("jabbu-pocket gc", () => {
 	let home: TestHome;
 	const sessionsRoot = () => join(home.dir, "sessions");
 	const sessionOf = (origin: string, epoch: number) => sessionDirFor(sessionsRoot(), origin, epoch);
@@ -1857,8 +1857,8 @@ describe("ompbot gc", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-ops-gc-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin(ORIGIN, sessionOf(ORIGIN, 1));
 		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 2));
 		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 3));
@@ -1901,7 +1901,7 @@ describe("ompbot gc", () => {
 		const link = join(home.dir, "..", `${basename(home.dir)}-link`);
 		symlinkSync(home.dir, link);
 		try {
-			const db = new Database(join(home.dir, "ompbot.db"));
+			const db = new Database(join(home.dir, "jabbu.db"));
 			db.run("UPDATE origins SET session_dir = ? WHERE origin_key = ?", [sessionOf(ORIGIN, 1), ORIGIN]);
 			db.close();
 			const result = gcSessions({ homeDir: link, retentionDays: 30, now: Date.now() });
@@ -1916,7 +1916,7 @@ describe("ompbot gc", () => {
 		expect(gcSessions({ homeDir: home.dir, retentionDays: 90, now: Date.now() }).removed).toEqual([]);
 	});
 
-	test("`ompbot gc` honours --dry-run and then deletes with the default 30-day retention", async () => {
+	test("`jabbu-pocket gc` honours --dry-run and then deletes with the default 30-day retention", async () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
 		expect(dry.stdout).toContain(`gc would_remove path=${sessionOf(ORIGIN, 1)}`);
@@ -1929,11 +1929,11 @@ describe("ompbot gc", () => {
 	});
 });
 
-describe("ompbot gc: a ledger from before later tables existed", () => {
+describe("jabbu-pocket gc: a ledger from before later tables existed", () => {
 	test("a db with only origins and inbound finishes, dry run and real", () => {
-		const home = makeHome("ompbot-ops-gc-old-");
+		const home = makeHome("jabbu-ops-gc-old-");
 		try {
-			const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+			const db = new Database(join(home.dir, "jabbu.db"), { create: true, strict: true });
 			db.run(
 				"CREATE TABLE origins (origin_key TEXT PRIMARY KEY, epoch INTEGER NOT NULL, session_dir TEXT NOT NULL, updated_at INTEGER NOT NULL)",
 			);
@@ -1950,7 +1950,7 @@ describe("ompbot gc: a ledger from before later tables existed", () => {
 	});
 });
 
-describe("ompbot gc: thread-scoped sessions", () => {
+describe("jabbu-pocket gc: thread-scoped sessions", () => {
 	let home: TestHome;
 	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
 
@@ -1967,8 +1967,8 @@ describe("ompbot gc: thread-scoped sessions", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-thread-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-ops-gc-thread-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin(`discord/ch/${CHANNEL}`, sessionOf(`discord/ch/${CHANNEL}`));
 		store.ensureOrigin("discord/ch/300000000000000001/t/100", sessionOf("discord/ch/300000000000000001/t/100")); // fresh thread: kept
 		store.ensureOrigin("discord/ch/300000000000000001/t/50", sessionOf("discord/ch/300000000000000001/t/50")); // expired thread: removed
@@ -1998,7 +1998,7 @@ describe("ompbot gc: thread-scoped sessions", () => {
 		expect(existsSync(sessionOf(`discord/ch/${CHANNEL}`))).toBe(true);
 		expect(existsSync(sessionOf(ORIGIN))).toBe(true);
 		// The ledger row is gone; a later message simply opens a fresh origin.
-		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const check = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		try {
 			expect(check.getOrigin("discord/ch/300000000000000001/t/50")).toBeUndefined();
 			expect(check.getOrigin("discord/ch/300000000000000001/t/100")).toBeDefined();
@@ -2008,7 +2008,7 @@ describe("ompbot gc: thread-scoped sessions", () => {
 	});
 
 	const hasOrigin = (key: string): boolean => {
-		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const check = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		try {
 			return check.getOrigin(key) !== undefined;
 		} finally {
@@ -2018,7 +2018,7 @@ describe("ompbot gc: thread-scoped sessions", () => {
 
 	test("an origin directory swapped for a symlink is skipped: nothing outside sessions/ is deleted (J-9)", () => {
 		// the owner DM moves to epoch 2, and its origin directory becomes a link to a tree whose e1 is old.
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.newEpoch(ORIGIN, sessionOf(ORIGIN, 2));
 		store.close();
 		const outside = join(home.dir, "outside");
@@ -2043,7 +2043,7 @@ describe("ompbot gc: thread-scoped sessions", () => {
 	});
 
 	test("a thread origin with no directory yet is kept while its ledger row is fresh (J-10)", () => {
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin("discord/ch/300000000000000001/t/200", sessionOf("discord/ch/300000000000000001/t/200")); // row now, no directory yet
 		store.close();
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
@@ -2052,7 +2052,7 @@ describe("ompbot gc: thread-scoped sessions", () => {
 	});
 
 	test("an expired thread origin with pending inbound is kept whole (J-11)", () => {
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.run(
 			"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('m1', 'discord/ch/300000000000000001/t/50', 1, 'x', 'pending', 0)",
 		);
@@ -2064,15 +2064,15 @@ describe("ompbot gc: thread-scoped sessions", () => {
 	});
 });
 
-describe("ompbot gc: uncertain inbound keeps its origin", () => {
+describe("jabbu-pocket gc: uncertain inbound keeps its origin", () => {
 	let home: TestHome;
 	const THREAD = "discord/ch/300000000000000001/t/50";
 	const dirOf = () => sessionDirFor(join(home.dir, "sessions"), THREAD, 1);
 	const options = () => ({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-uncertain-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-ops-gc-uncertain-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin(THREAD, dirOf());
 		store.recordInbound({ originKey: THREAD, platformMessageId: "u1", textRef: "x" });
 		store.markUncertain("u1", "steer_threw");
@@ -2083,7 +2083,7 @@ describe("ompbot gc: uncertain inbound keeps its origin", () => {
 		writeFileSync(file, "{}\n");
 		const old = new Date(Date.now() - 60 * DAY_MS);
 		for (const path of [file, dirOf(), dirname(dirOf())]) utimesSync(path, old, old);
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.run("UPDATE origins SET updated_at = ? WHERE origin_key = ?", [old.getTime(), THREAD]);
 		db.close();
 	});
@@ -2099,7 +2099,7 @@ describe("ompbot gc: uncertain inbound keeps its origin", () => {
 		expect(real.threadOriginsRemoved).toEqual([]);
 		expect(existsSync(dirOf())).toBe(true);
 
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.discard("u1", "queue:close");
 		store.close();
 		const after = gcSessions(options());
@@ -2111,7 +2111,7 @@ describe("ompbot gc: uncertain inbound keeps its origin", () => {
 describe.each([
 	["Slack", "slack/dm/D1", "slack/ch/C1/t/50.9"],
 	["Teams", "teams/dm/t0123456789abcdef", "teams/ch/t0123456789abcdef/t/1700000000000"],
-])("ompbot gc: rows left by the removed %s channel", (_name, DM_KEY, THREAD_KEY) => {
+])("jabbu-pocket gc: rows left by the removed %s channel", (_name, DM_KEY, THREAD_KEY) => {
 	let home: TestHome;
 	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
 
@@ -2127,8 +2127,8 @@ describe.each([
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-slack-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-ops-gc-slack-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.ensureOrigin(DM_KEY, sessionOf(DM_KEY, 1));
 		store.newEpoch(DM_KEY, sessionOf(DM_KEY, 2));
 		store.ensureOrigin(THREAD_KEY, sessionOf(THREAD_KEY));
@@ -2147,7 +2147,7 @@ describe.each([
 		expect(result.threadOriginsRemoved).toEqual([THREAD_KEY]);
 		expect(existsSync(sessionOf(DM_KEY, 2))).toBe(true);
 		expect(existsSync(sessionOf(THREAD_KEY))).toBe(false);
-		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const check = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		try {
 			expect(check.getOrigin(THREAD_KEY)).toBeUndefined();
 		} finally {
@@ -2164,7 +2164,7 @@ describe.each([
 	let daemon: Daemon | undefined;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-removed-rows-");
+		home = makeHome("jabbu-ops-removed-rows-");
 	});
 	afterEach(async () => {
 		await daemon?.stop();
@@ -2172,7 +2172,7 @@ describe.each([
 	});
 
 	test("its pending and dispatched rows are discarded at start with inbound_discarded reason=platform_removed, and no turn runs", async () => {
-		const seed = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const seed = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		seed.ensureOrigin(dm, join(home.dir, "sessions", "removed-dm"));
 		seed.ensureOrigin(thread, join(home.dir, "sessions", "removed-thread"));
 		seed.recordInbound({ originKey: dm, platformMessageId: "D1:1.0", textRef: "pending", threadRef: "D1:1.0" });
@@ -2222,7 +2222,7 @@ describe.each([
 	});
 });
 
-describe("ompbot gc: deleted-monitor origins", () => {
+describe("jabbu-pocket gc: deleted-monitor origins", () => {
 	let home: TestHome;
 	const sessionOf = (origin: string, epoch = 1) => sessionDirFor(join(home.dir, "sessions"), origin, epoch);
 
@@ -2237,7 +2237,7 @@ describe("ompbot gc: deleted-monitor origins", () => {
 	}
 
 	function originRow(key: string): boolean {
-		const check = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const check = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		try {
 			return check.getOrigin(key) !== undefined;
 		} finally {
@@ -2246,13 +2246,13 @@ describe("ompbot gc: deleted-monitor origins", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-monitor-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-ops-gc-monitor-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		for (const key of ["monitor/mold", "monitor/mnew", "monitor/mlive", "discord/ch/300000000000000001/t/50"]) {
 			store.ensureOrigin(key, sessionOf(key));
 		}
 		store.close();
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.exec(MONITOR_SCHEMA);
 		db.run(
 			"INSERT INTO monitors (id, name, trigger_json, instruction, cursor_at, created_at, updated_at) VALUES ('mlive', 'live', '{}', 'x', 0, 0, 0)",
@@ -2297,7 +2297,7 @@ describe("ompbot gc: deleted-monitor origins", () => {
 
 	test("an orphan at epoch 2 is removed even though pruning its e1 dir bumps the origin dir mtime", () => {
 		const key = "monitor/mepoch";
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.run("INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 2, ?, 0)", [
 			key,
 			sessionOf(key, 2),
@@ -2314,7 +2314,7 @@ describe("ompbot gc: deleted-monitor origins", () => {
 	});
 
 	test("a home without a monitors table skips the rule instead of failing", () => {
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.exec("DROP TABLE monitor_events; DROP TABLE monitor_slots; DROP TABLE monitor_incidents; DROP TABLE monitors");
 		db.close();
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
@@ -2323,16 +2323,16 @@ describe("ompbot gc: deleted-monitor origins", () => {
 	});
 });
 
-describe("ompbot gc: ledger retention", () => {
+describe("jabbu-pocket gc: ledger retention", () => {
 	let home: TestHome;
 	const NOW = Date.UTC(2026, 10, 13);
 	const KEY = "discord/ch/300000000000000001/t/11";
-	const dbFile = () => join(home.dir, "ompbot.db");
+	const dbFile = () => join(home.dir, "jabbu.db");
 	/** Ids of rows the fixture made, by name. */
 	const ids = new Map<string, number>();
 
 	beforeEach(() => {
-		home = makeHome("ompbot-ops-gc-ledger-");
+		home = makeHome("jabbu-ops-gc-ledger-");
 		const store = openBotStore(dbFile(), { now: () => NOW }, "Asia/Seoul");
 		store.ensureOrigin(KEY, join(home.dir, "sessions", "t"));
 		store.close();
@@ -2461,7 +2461,7 @@ describe("ompbot gc: ledger retention", () => {
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
 	});
 
-	test("`ompbot gc --dry-run` prints the ledger counts in gc_done", async () => {
+	test("`jabbu-pocket gc --dry-run` prints the ledger counts in gc_done", async () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
 		expect(dry.stdout).toMatch(/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+\n/);
@@ -2469,16 +2469,16 @@ describe("ompbot gc: ledger retention", () => {
 	});
 });
 
-describe("examples/ops-check-ompbot.json", () => {
-	test("is a proposal of uniquely identified checks for the ompbot unit and status command", () => {
+describe("examples/ops-check-jabbu.json", () => {
+	test("is a proposal of uniquely identified checks for the jabbu unit and status command", () => {
 		const proposal = JSON.parse(
-			readFileSync(join(import.meta.dir, "..", "examples", "ops-check-ompbot.json"), "utf8"),
+			readFileSync(join(import.meta.dir, "..", "examples", "ops-check-jabbu.json"), "utf8"),
 		) as {
 			checks: Array<{ id: string; type: string; unit?: string; cmd?: string; expect?: string }>;
 		};
 		const ids = proposal.checks.map((check) => check.id);
 		expect(new Set(ids).size).toBe(ids.length);
-		expect(proposal.checks.find((check) => check.type === "systemd")?.unit).toBe("ompbot.service");
+		expect(proposal.checks.find((check) => check.type === "systemd")?.unit).toBe("jabbu.service");
 		const status = proposal.checks.find((check) => check.type === "cmd");
 		expect(status?.cmd).toContain("main.ts status");
 		expect(status?.expect).toBe("데몬 실행 중");

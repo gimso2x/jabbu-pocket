@@ -13,7 +13,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-owner-silence-");
+	home = makeHome("jabbu-owner-silence-");
 	repos = [];
 });
 

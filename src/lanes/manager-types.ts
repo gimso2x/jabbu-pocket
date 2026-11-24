@@ -1,5 +1,5 @@
 import type { ChannelRegistry } from "../channel/registry";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import type { PauseCheck } from "../core/mailbox";
 import type { ChatPlatform } from "../core/origin-key";
 import type { InboundRecord, MailboxClock } from "../core/types";
@@ -65,14 +65,14 @@ export interface LaneManagerDeps {
 	pauseTurn(originKey: string): Promise<PauseCheck>;
 	/** Dispatches the rows that piled up while the lane was held (the owner resumed it). */
 	resumePending(originKey: string): Promise<void>;
-	/** The lane child as the terminal hand-over (`ompbot lanes attach`) needs it. */
+	/** The lane child as the terminal hand-over (`jabbu-pocket lanes attach`) needs it. */
 	session: LaneSessionOps;
 	/** Whether the attaching CLI process still lives (test seam; default signal 0 on this machine). */
 	pidAlive?: (pid: number) => boolean;
 	maxLanes?: number;
 	/** Freeze switch (`<home>/FROZEN`): while it returns a state no lane starts. */
 	frozen?: () => FreezeState | undefined;
-	/** `<ompbot home>/lanes`: a closing lane's file evidence is copied to `<lanes>/<lane>/artifacts/<sha256>` before its worktree goes. */
+	/** `<jabbu home>/lanes`: a closing lane's file evidence is copied to `<lanes>/<lane>/artifacts/<sha256>` before its worktree goes. */
 	lanesDir?: string;
 	/** Test seam; default checks the real git repository. */
 	verify?: (evidence: ClaimEvidence, cwd: string, baseSha?: string, baseBranch?: string) => Promise<VerifyResult>;
@@ -114,15 +114,15 @@ export interface LaneManagerDeps {
 	ownerUserId?: string | ((platform: ChatPlatform) => string | undefined);
 	/** Whether the lane's session is in a turn (the claiming one still writes its report); landing/discard waits for it. Default: never busy. */
 	laneBusy?: (originKey: string) => boolean;
-	/** How the independent review (`taskAutoLand.review`) runs `omp -p`: the omp binary, safety floors, `<ompbot home>/reviews`. Absent: `inconclusive`. */
+	/** How the independent review (`taskAutoLand.review`) runs `omp -p`: the omp binary, safety floors, `<jabbu home>/reviews`. Absent: `inconclusive`. */
 	reviewer?: Omit<LaneReviewDeps, "headOf" | "now">;
-	/** `<ompbot home>/qa-worktrees`: the run QA's copies (leftovers removed at start). Absent: a QA policy finds no runner (`inconclusive`). */
+	/** `<jabbu home>/qa-worktrees`: the run QA's copies (leftovers removed at start). Absent: a QA policy finds no runner (`inconclusive`). */
 	qaWorktreesDir?: string;
 	/** The one review-or-QA slot, shared with the [TASK] gate (default: a slot of the manager's own). */
 	gateSlot?: GateSlot;
 	/** Git for the Outcome card's change summary (test seam; default 10 seconds per call, `computeLaneChanges`). */
 	changesGit?: GitRunner;
-	/** `$OMPBOT_HOME/followups.jsonl`: a merged lane's non-blocking leftovers are appended there (`appendFollowups`); absent: none. */
+	/** `$JABBU_HOME/followups.jsonl`: a merged lane's non-blocking leftovers are appended there (`appendFollowups`); absent: none. */
 	followupsFile?: string;
 	/** The wiki result note of a landed lane (`src/wiki`): draft kept when a landing begins, written once `landed`. Absent: no note. */
 	wikiNotes?: Pick<WikiNotes, "laneDraft" | "laneDropDraft" | "laneLanded">;
@@ -130,7 +130,7 @@ export interface LaneManagerDeps {
 	rebaseGit?: GitRunner;
 	/** `lanes.models`, read at each start (a live setting): the tiers `start({model})` may pick. */
 	laneModels?: () => LaneModelTiers | undefined;
-	ownerSilenceConfig?: () => Pick<OmpbotConfig, "ownerSilenceFallbackMinutes">;
+	ownerSilenceConfig?: () => Pick<JabbuConfig, "ownerSilenceFallbackMinutes">;
 	/** Test seam for the start-capacity gate's memory readers (default this machine's own); a refusal throws, `force` passes. */
 	hostLoad?: Partial<HostLoadReader>;
 	/** `statfs` for the start-capacity gate's disk floor (test seam; default the real one). */

@@ -19,12 +19,12 @@ const hashFile = (path: string): Promise<string> =>
 	});
 
 /**
- * The evidence of an `ompbot_lane_progress` report: exactly one of `{ file }` or `{ toolCallId }`.
+ * The evidence of a `jabbu_lane_progress` report: exactly one of `{ file }` or `{ toolCallId }`.
  * - `{ file }`: a regular file inside the lane's worktree. A symbolic link (the file itself or a directory on its way)
  *   and a path outside the worktree are refused. The core hashes the file, so the report names content that existed
  *   when it was made.
  * - `{ toolCallId }`: a tool call the lane session finished without error (`sessionFile`, the session's jsonl). The
- *   reporting and board tools (`ompbot_*`) cannot vouch for themselves. The core hashes the call's result text.
+ *   reporting and board tools (`jabbu_*`) cannot vouch for themselves. The core hashes the call's result text.
  */
 export async function verifyProgressEvidence(
 	worktree: string,
@@ -86,8 +86,8 @@ async function verifyToolCall(toolCallId: unknown, sessionFile: string | undefin
 	}
 	if (found === undefined) return { ok: false, reason: `no finished tool call ${toolCallId} in the lane session` };
 	if (found.isError) return { ok: false, reason: `tool call ${toolCallId} (${found.tool}) failed` };
-	if (found.tool.startsWith("ompbot_")) {
-		return { ok: false, reason: `tool call ${toolCallId} is ${found.tool}: ompbot tools cannot be evidence` };
+	if (found.tool.startsWith("jabbu_")) {
+		return { ok: false, reason: `tool call ${toolCallId} is ${found.tool}: jabbu tools cannot be evidence` };
 	}
 	return { ok: true, value: { toolCallId, tool: found.tool, sha256: sha256Of(found.text) } };
 }

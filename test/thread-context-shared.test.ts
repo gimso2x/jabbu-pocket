@@ -26,8 +26,8 @@ let drivers: FakeOmpDriver[];
 let roots: Map<string, ThreadMessage[]>;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-thread-ctx-"));
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-thread-ctx-"));
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	drivers = [];
 	roots = new Map();
 	const sessions = new FakeSessionStore();

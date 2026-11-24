@@ -5,14 +5,14 @@
 마크다운으로 출력한다. 섹션 순서는 고정이다.
   1. 소스 상태: reflections, db, log, meetings 각각 ok/missing/error
   2. 자체회고: <home>/workspace/reflections/<날짜>.md의 '## 문제'·'## 다음 행동' 절
-  3. 모니터 실행: ompbot.db monitor_events의 모니터별 stage 개수와 실패 오류 첫 줄
-  4. TASK: ompbot.db tasks의 열린 TASK(working·blocked·review)와 창 안 종료 개수
-  5. 경고 이벤트: <home>/logs/ompbot.log의 level=warn|error 줄 event별 개수
+  3. 모니터 실행: jabbu.db monitor_events의 모니터별 stage 개수와 실패 오류 첫 줄
+  4. TASK: jabbu.db tasks의 열린 TASK(working·blocked·review)와 창 안 종료 개수
+  5. 경고 이벤트: <home>/logs/jabbu.log의 level=warn|error 줄 event별 개수
   6. 지난 회의: <home>/workspace/meetings/<YYYY>-W<ww>.md 중 이번 주 이전 최근 4개의 열린 안건
 못 읽은 소스는 본문 섹션 대신 '소스 상태'에 missing/error로 남긴다. DB는 mode=ro로만 열고
 어떤 파일도 쓰지 않는다.
 
-입력: --home <dir>(기본 ~/.ompbot), --now <ISO8601>(기본 현재 시각; 시간대 없으면 BOT_TZ), --days N(기본 7)
+입력: --home <dir>(기본 ~/.jabbu), --now <ISO8601>(기본 현재 시각; 시간대 없으면 BOT_TZ), --days N(기본 7)
 종료 코드: 0 = 출력함(소스 일부를 못 읽어도 0), 2 = 인자 오류
 """
 
@@ -29,10 +29,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 def bot_timezone() -> dt.tzinfo:
-    """봇 시간대: OMPBOT_TZ 환경 변수 → <OMPBOT_HOME 또는 ~/.ompbot>/config.json의 timezone → 시스템 시간대."""
-    name = os.environ.get("OMPBOT_TZ", "").strip()
+    """봇 시간대: JABBU_TZ 환경 변수 → <JABBU_HOME 또는 ~/.jabbu>/config.json의 timezone → 시스템 시간대."""
+    name = os.environ.get("JABBU_TZ", "").strip()
     if not name:
-        config = Path(os.environ.get("OMPBOT_HOME") or Path.home() / ".ompbot") / "config.json"
+        config = Path(os.environ.get("JABBU_HOME") or Path.home() / ".jabbu") / "config.json"
         try:
             name = str(json.loads(config.read_text(encoding="utf-8")).get("timezone") or "").strip()
         except (OSError, ValueError, AttributeError):
@@ -127,7 +127,7 @@ def collect_reflections(home: Path, dates: list[dt.date]) -> tuple[str, str | No
 
 
 def open_db(home: Path) -> tuple[sqlite3.Connection | None, str]:
-    path = home / "ompbot.db"
+    path = home / "jabbu.db"
     if not path.is_file():
         return None, "missing"
     try:
@@ -188,7 +188,7 @@ def collect_tasks(db: sqlite3.Connection, start_ms: int, end_ms: int) -> str:
 
 
 def collect_log(home: Path, start: dt.datetime, end: dt.datetime) -> tuple[str, str | None]:
-    path = home / "logs" / "ompbot.log"
+    path = home / "logs" / "jabbu.log"
     if not path.is_file():
         return "missing", None
     counts: Counter = Counter()
@@ -262,7 +262,7 @@ def task_status(db: sqlite3.Connection | None, task_id: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="주간 개선 회의 수집기 (읽기 전용)")
-    parser.add_argument("--home", type=Path, default=Path.home() / ".ompbot")
+    parser.add_argument("--home", type=Path, default=Path.home() / ".jabbu")
     parser.add_argument("--now", type=parse_now, default=None)
     parser.add_argument("--days", type=positive_int, default=7)
     args = parser.parse_args()

@@ -21,7 +21,7 @@ import {
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-usage-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-usage-"));
 });
 
 afterEach(() => {

@@ -1,7 +1,7 @@
 /*
  * Tool repeat-loop detection, ported to TypeScript from omp-bot:
  * https://github.com/jryang1997/omp-bot commit 2173ea1, `src/stuck.mjs` (MIT License,
- * Copyright (c) 2026 omp-bot contributors). Messages were rewritten in Korean; exempt tools were added for ompbot.
+ * Copyright (c) 2026 omp-bot contributors). Messages were rewritten in Korean; exempt tools were added for jabbu.
  *
  * Fingerprint = tool name + args + result (with isError). Same args with a changed result is progress (a poll that
  * reached a new state), not a repeat. Counts span the whole turn, not only consecutive calls, so an A,B,A,B loop is
@@ -90,11 +90,11 @@ const POLLING_READ = /^(proc|agent):\/\//;
 
 /**
  * Tools whose identical result is normal (waiting, polling), checked against omp 18.16's built-in tool list
- * (`BUILTIN_TOOL_NAMES`; it has `wait`, no `await`) and ompbot's host tools: `wait`, `ompbot_request_approval`, and
+ * (`BUILTIN_TOOL_NAMES`; it has `wait`, no `await`) and jabbu's host tools: `wait`, `jabbu_request_approval`, and
  * `read` of a `proc://` / `agent://` path.
  */
 function isStuckExempt(toolName: string, args: unknown): boolean {
-	if (toolName === "wait" || toolName === "ompbot_request_approval") return true;
+	if (toolName === "wait" || toolName === "jabbu_request_approval") return true;
 	if (toolName !== "read" || args === null || typeof args !== "object") return false;
 	return "path" in args && typeof args.path === "string" && POLLING_READ.test(args.path);
 }
@@ -157,7 +157,7 @@ export function createStuckDetector({ exempt = isStuckExempt }: StuckDetectorOpt
 
 /** Steer sent to the child at the steer threshold. */
 export function stuckSteerText(toolName: string, count: number): string {
-	return `[ompbot 알림] 같은 인자로 ${toolName}을(를) ${count}번 불렀는데 결과가 그대로입니다. 이 단계를 되풀이하지 말고 방법을 바꾸세요. 정말 할 수 없으면 멈추고 어디서 막혔는지, 누가 무엇을 해야 하는지 말하세요.`;
+	return `[jabbu 알림] 같은 인자로 ${toolName}을(를) ${count}번 불렀는데 결과가 그대로입니다. 이 단계를 되풀이하지 말고 방법을 바꾸세요. 정말 할 수 없으면 멈추고 어디서 막혔는지, 누가 무엇을 해야 하는지 말하세요.`;
 }
 
 /** Failure reason of a turn stopped for a loop: `stuck-loop: <sentence>`. */

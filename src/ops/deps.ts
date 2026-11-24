@@ -11,9 +11,9 @@ import {
 import type { Runner } from "./run-types";
 
 /** The install marker: the deps hash of the package.json/bun.lock that `node_modules` was last installed from. */
-export const DEPS_MARKER = join("node_modules", ".ompbot-deps");
+export const DEPS_MARKER = join("node_modules", ".jabbu-deps");
 /** Per checkout (git dir): installs of the homes sharing it run one at a time. */
-export const INSTALL_LOCK_FILE = "ompbot-install.lock";
+export const INSTALL_LOCK_FILE = "jabbu-install.lock";
 export const INSTALL_TIMEOUT_S = 300;
 /** A live install holder is waited for this long: its install timeout plus a minute. */
 export const INSTALL_LOCK_WAIT_MS = (INSTALL_TIMEOUT_S + 60) * 1_000;
@@ -57,9 +57,9 @@ function readMarker(repoDir: string): string | undefined {
 }
 
 /**
- * Installs the checkout's dependencies when `node_modules/.ompbot-deps` does not hold the working tree's deps hash:
+ * Installs the checkout's dependencies when `node_modules/.jabbu-deps` does not hold the working tree's deps hash:
  * the old marker goes first (an interrupted install installs again next time), then `bun install --frozen-lockfile`,
- * and only a successful install writes the new marker. The install runs under `<git dir>/ompbot-install.lock`
+ * and only a successful install writes the new marker. The install runs under `<git dir>/jabbu-install.lock`
  * (the apply-lock rules: a live holder is waited for, a dead one taken over) and checks the marker again once held.
  */
 export async function ensureDeps(repoDir: string, deps: EnsureDepsDeps): Promise<EnsureDepsResult> {

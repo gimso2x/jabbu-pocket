@@ -22,7 +22,7 @@ const running: Array<Bun.Subprocess> = [];
 
 beforeEach(() => {
 	home = mkdtempSync(join(tmpdir(), "heavy-run-test-"));
-	paths = heavyRunPaths(0, { OMPBOT_HEAVY_RUN_DIR: home });
+	paths = heavyRunPaths(0, { JABBU_HEAVY_RUN_DIR: home });
 });
 
 afterEach(() => {
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 function env(extra: Record<string, string> = {}): Record<string, string> {
-	const base = { ...process.env, OMPBOT_HEAVY_RUN_DIR: home } as Record<string, string>;
+	const base = { ...process.env, JABBU_HEAVY_RUN_DIR: home } as Record<string, string>;
 	delete base[HEAVY_RUN_HELD_ENV];
 	return { ...base, ...extra };
 }
@@ -156,7 +156,7 @@ describe("heavy-run: stale state files", () => {
 		pid,
 		cwd: "/x",
 		argv: ["bun", "test"],
-		label: "ompbot-t-x",
+		label: "jabbu-t-x",
 		state: "waiting",
 		since: 1,
 	});
@@ -209,7 +209,7 @@ describe("heavy-run: stale state files", () => {
 
 describe("heavy-run: label", () => {
 	test("the worktree name under /work/, else the last segment", () => {
-		expect(heavyRunLabel("/srv/work/ompbot-t-20261119-07/src")).toBe("ompbot-t-20261119-07");
+		expect(heavyRunLabel("/srv/work/jabbu-t-20261119-07/src")).toBe("jabbu-t-20261119-07");
 		expect(heavyRunLabel("/srv/checkout")).toBe("checkout");
 	});
 });

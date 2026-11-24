@@ -116,12 +116,12 @@ describe("normalizePeerInbound", () => {
 describe("store: inbound.peer_user_id", () => {
 	let dir: string;
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-peer-store-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-peer-store-"));
 	});
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 	test("(j) the migration adds the column once to an older ledger and leaves old rows NULL", () => {
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		const clock = { now: () => 5_000 };
 		const first = openStore({ timezone: "Asia/Seoul", path, clock, redact });
 		first.ensureOrigin(`discord/dm/${DM}`, join(dir, "s"));
@@ -248,7 +248,7 @@ describe("daemon: peer bot input", () => {
 	const noticePosts = () => transport.posts((text) => text === PEER_HOP_NOTICE);
 
 	beforeEach(() => {
-		home = makeHome("ompbot-peer-");
+		home = makeHome("jabbu-peer-");
 		logs = new LogLines();
 		sessions = new FakeSessionStore();
 		clock = { t: Date.now(), now: () => clock.t };
@@ -363,7 +363,7 @@ describe("daemon: peer bot input", () => {
 		await boot();
 		await send(ownerEvent(4001, "owner first"));
 		await logs.waitFor(() => built.length >= 1, "owner child");
-		expect(built[0]?.tools).toContain("ompbot_work_start");
+		expect(built[0]?.tools).toContain("jabbu_work_start");
 
 		await send(peerEvent(4002, `<@${BOT}> 검토`));
 		const origin = thread(4002);
@@ -372,10 +372,10 @@ describe("daemon: peer bot input", () => {
 				.hostToolsFor(origin)
 				.map((t) => t.name)
 				.sort();
-		const expected = ["discord_send_file", "ompbot_dispatch", "ompbot_request_approval"];
+		const expected = ["discord_send_file", "jabbu_dispatch", "jabbu_request_approval"];
 		expect(names(daemon as Daemon)).toEqual(expected);
 		// The owner's own thread is untouched by the peer in another thread.
-		expect(daemon?.hostToolsFor(thread(4001)).map((t) => t.name)).toContain("ompbot_work_start");
+		expect(daemon?.hostToolsFor(thread(4001)).map((t) => t.name)).toContain("jabbu_work_start");
 
 		await daemon?.stop();
 		daemon = undefined;
@@ -400,7 +400,7 @@ describe("daemon: peer bot input", () => {
 			name: "peerlane",
 			title: "lane",
 			threadRef: `${CH}:${sf(6001)}`,
-			originKey: "ompbot/work/peerlane",
+			originKey: "jabbu/work/peerlane",
 			cwd: home.dir,
 			sessionDir: join(home.dir, "sessions", "peerlane"),
 			meta: { startedAt: 0, lastProgressAt: 0, steerSeq: 0 },
@@ -422,8 +422,8 @@ describe("daemon: peer bot input", () => {
 		await send(ownerEvent(7001, "오너 질문"));
 		await logs.waitFor(() => logs.count(/event=turn_start /) >= 1, "owner turn_start");
 		expect(built).toHaveLength(1);
-		expect(built[0]?.tools).toContain("ompbot_work_start");
-		const workStart = built[0]?.defs.find((tool) => tool.name === "ompbot_work_start");
+		expect(built[0]?.tools).toContain("jabbu_work_start");
+		const workStart = built[0]?.defs.find((tool) => tool.name === "jabbu_work_start");
 
 		await send(peerEvent(7002, `<@${BOT}> 검토`, 7001));
 		expect(row(7002)).toMatchObject({ state: "pending", peerUserId: PEER, originKey: origin });
@@ -456,7 +456,7 @@ describe("daemon: peer bot input", () => {
 		expect(prompts()[2]).not.toContain(peerTouchedTurnNotice(origin));
 		// An owner-opened turn on the same child is refused too.
 		await expect(workStart?.execute({}, { signal })).rejects.toThrow(PEER_TOOL_DENIED);
-		expect(logs.count(/event=host_tool_denied_peer .*tool=ompbot_work_start/)).toBe(3);
+		expect(logs.count(/event=host_tool_denied_peer .*tool=jabbu_work_start/)).toBe(3);
 		built[0]?.driver.release();
 
 		// AC-4: a child started after the taint gets the reduced set and no notice (its system prompt says so).
@@ -469,7 +469,7 @@ describe("daemon: peer bot input", () => {
 		await logs.waitFor(() => logs.count(/event=turn_start /) >= 1, "turn_start after restart");
 		const after = built.at(-1);
 		expect(after?.origin).toBe(origin);
-		expect(after?.tools.sort()).toEqual(["discord_send_file", "ompbot_dispatch", "ompbot_request_approval"]);
+		expect(after?.tools.sort()).toEqual(["discord_send_file", "jabbu_dispatch", "jabbu_request_approval"]);
 		const restartedPrompt = after?.driver.calls.find((c) => c.startsWith("prompt:")) ?? "";
 		expect(restartedPrompt).not.toContain(peerTouchedTurnNotice(origin));
 	});
@@ -507,20 +507,20 @@ describe("daemon: peer bot input", () => {
 			};
 
 			// Before any peer row: each restricted tool runs (AC-2 first half).
-			const started = await tool(dmTools, "ompbot_work_start")({ title: "guard lane", cwd: repo });
+			const started = await tool(dmTools, "jabbu_work_start")({ title: "guard lane", cwd: repo });
 			expect(started).toContain("lane guard-lane started");
 			const lane = daemon?.store.getLane("guard-lane");
 			if (lane === undefined) throw new Error("no lane");
 			await logs.waitFor(() => built.some((b) => b.origin === lane.originKey), "lane child");
 			const laneTools = built.find((b) => b.origin === lane.originKey)?.defs ?? [];
-			const added = await tool(dmTools, "ompbot_monitor_add")({ name: "m1", trigger: FAR, instruction: "x" });
+			const added = await tool(dmTools, "jabbu_monitor_add")({ name: "m1", trigger: FAR, instruction: "x" });
 			expect(added).toContain("m1");
-			expect(await tool(dmTools, "ompbot_monitor_list")({})).toContain("m1");
-			expect(await tool(dmTools, "ompbot_monitor_remove")({ name: "m1" })).toBeString();
-			expect(await tool(laneTools, "ompbot_lane_progress")({ text: "중간 보고" })).toBeString();
-			await expect(tool(laneTools, "ompbot_claim_done")({ repo })).rejects.toThrow("commit is required");
-			expect(await tool(dmTools, "ompbot_board_post")({ text: "공지" })).toBe("posted #1 to general");
-			expect(await tool(laneTools, "ompbot_board_read")({})).toContain("공지");
+			expect(await tool(dmTools, "jabbu_monitor_list")({})).toContain("m1");
+			expect(await tool(dmTools, "jabbu_monitor_remove")({ name: "m1" })).toBeString();
+			expect(await tool(laneTools, "jabbu_lane_progress")({ text: "중간 보고" })).toBeString();
+			await expect(tool(laneTools, "jabbu_claim_done")({ repo })).rejects.toThrow("commit is required");
+			expect(await tool(dmTools, "jabbu_board_post")({ text: "공지" })).toBe("posted #1 to general");
+			expect(await tool(laneTools, "jabbu_board_read")({})).toContain("공지");
 			expect(logs.count(/event=host_tool_denied_peer /)).toBe(0);
 
 			// Peer rows on both origins, left pending: the peer messages are still queued.
@@ -533,33 +533,33 @@ describe("daemon: peer bot input", () => {
 			// AC-3: the refused set is the one the reduced list used to drop, by name.
 			const dmRestricted = restricted(dm, dmTools);
 			expect(dmRestricted).toEqual([
-				"ompbot_work_start",
-				"ompbot_monitor_add",
-				"ompbot_monitor_list",
-				"ompbot_monitor_remove",
-				"ompbot_board_post",
-				"ompbot_board_read",
+				"jabbu_work_start",
+				"jabbu_monitor_add",
+				"jabbu_monitor_list",
+				"jabbu_monitor_remove",
+				"jabbu_board_post",
+				"jabbu_board_read",
 			]);
 			const laneRestricted = restricted(lane.originKey, laneTools);
 			expect(laneRestricted).toEqual([
-				"ompbot_lane_progress",
-				"ompbot_claim_done",
-				"ompbot_board_post",
-				"ompbot_board_read",
+				"jabbu_lane_progress",
+				"jabbu_claim_done",
+				"jabbu_board_post",
+				"jabbu_board_read",
 			]);
 
 			// AC-5: a model calling them with valid arguments is refused; no lane, monitor or lane-state change follows.
 			const lanesBefore = JSON.stringify(daemon?.store.listLanes());
 			const monitorsBefore = daemon?.store.monitors.listMonitors().length;
 			const valid: Record<string, Record<string, unknown>> = {
-				ompbot_work_start: { title: "second lane", cwd: repo },
-				ompbot_monitor_add: { name: "m2", trigger: FAR, instruction: "x" },
-				ompbot_monitor_list: {},
-				ompbot_monitor_remove: { name: "m2" },
-				ompbot_lane_progress: { text: "피어 뒤 보고" },
-				ompbot_claim_done: { repo, commit: "HEAD", summary: "done" },
-				ompbot_board_post: { text: "피어 뒤 글" },
-				ompbot_board_read: {},
+				jabbu_work_start: { title: "second lane", cwd: repo },
+				jabbu_monitor_add: { name: "m2", trigger: FAR, instruction: "x" },
+				jabbu_monitor_list: {},
+				jabbu_monitor_remove: { name: "m2" },
+				jabbu_lane_progress: { text: "피어 뒤 보고" },
+				jabbu_claim_done: { repo, commit: "HEAD", summary: "done" },
+				jabbu_board_post: { text: "피어 뒤 글" },
+				jabbu_board_read: {},
 			};
 			for (const [defs, names] of [
 				[dmTools, dmRestricted],

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { createLogger } from "../src/log";
 import { clearSecretIndex, indexSecretValue, REDACTED, redact, secretIndexSize } from "../src/redact";
 import { indexEnvSecrets, indexRuntimeSecrets } from "../src/safety/secret-index";
@@ -79,7 +79,7 @@ describe("indexRuntimeSecrets", () => {
 	let home: string;
 
 	beforeEach(() => {
-		home = mkdtempSync(join(tmpdir(), "ompbot-secret-index-"));
+		home = mkdtempSync(join(tmpdir(), "jabbu-secret-index-"));
 	});
 
 	afterEach(() => {
@@ -87,11 +87,11 @@ describe("indexRuntimeSecrets", () => {
 		clearSecretIndex();
 	});
 
-	function fakeConfig(botTokenFile: string): OmpbotConfig {
+	function fakeConfig(botTokenFile: string): JabbuConfig {
 		return {
 			homeDir: home,
 			channels: { discord: { ownerUserId: "100000000000000001", botTokenFile } },
-		} as unknown as OmpbotConfig;
+		} as unknown as JabbuConfig;
 	}
 
 	function tokenFile(name: string, value: string): string {
@@ -110,7 +110,7 @@ describe("indexRuntimeSecrets", () => {
 		const guardFile = join(home, "extra.json");
 		writeFileSync(guardFile, JSON.stringify({ anthropic_key: `sk-ant-${TOKEN}`, model: "exampleproxy/glm-5.3-flash" }));
 
-		indexRuntimeSecrets(fakeConfig(tokenFile("bot", botToken)), { OMPBOT_SECRET_GUARD_FILES: guardFile }, logger());
+		indexRuntimeSecrets(fakeConfig(tokenFile("bot", botToken)), { JABBU_SECRET_GUARD_FILES: guardFile }, logger());
 
 		expect(redact(`bot ${botToken}`)).toBe(`bot ${REDACTED}`);
 		expect(redact(`key sk-ant-${TOKEN}`)).toBe(`key ${REDACTED}`);
@@ -143,7 +143,7 @@ describe("indexRuntimeSecrets", () => {
 		const indexed = indexEnvSecrets({
 			DEPLOY_TOKEN: envValue,
 			DISCORD_BOT_TOKEN_FILE: unreadable,
-			OMPBOT_SECRET_GUARD_FILES: `${guardFile}:${join(home, "missing-guard")}`,
+			JABBU_SECRET_GUARD_FILES: `${guardFile}:${join(home, "missing-guard")}`,
 		});
 
 		expect(indexed).toBe(2);

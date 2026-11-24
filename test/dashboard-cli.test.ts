@@ -24,7 +24,7 @@ const SNAPSHOT_KEYS = [
 	"backup",
 	"jobs",
 	"heavyRun",
-	"ompbotCli",
+	"jabbuCli",
 	"discordGuild",
 ];
 
@@ -32,10 +32,10 @@ let home: TestHome;
 let proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
 
 beforeEach(() => {
-	home = makeHome("ompbot-dash-cli-");
+	home = makeHome("jabbu-dash-cli-");
 	openStore({
 		timezone: "Asia/Seoul",
-		path: join(home.dir, "ompbot.db"),
+		path: join(home.dir, "jabbu.db"),
 		clock: { now: () => Date.now() },
 		redact: (text) => text,
 	}).close();
@@ -62,10 +62,10 @@ function setDashboardConfig(dashboard: unknown, extra: Record<string, unknown> =
 	writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), dashboard, ...extra }));
 }
 
-/** Starts `ompbot dashboard …` and resolves with its URL once it printed the listening line (bounded wait). */
+/** Starts `jabbu-pocket dashboard …` and resolves with its URL once it printed the listening line (bounded wait). */
 async function startDashboard(args: string[]): Promise<string> {
 	const child = Bun.spawn([process.execPath, MAIN, "dashboard", ...args], {
-		env: { OMPBOT_HOME: home.dir, HOME: home.dir, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		env: { JABBU_HOME: home.dir, HOME: home.dir, PATH: process.env.PATH ?? "/usr/bin:/bin" },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -91,7 +91,7 @@ async function startDashboard(args: string[]): Promise<string> {
 	return match[1] as string;
 }
 
-describe("ompbot dashboard", () => {
+describe("jabbu-pocket dashboard", () => {
 	test("AC-1: --port <p> serves HTML at / and the snapshot JSON at /api/snapshot and /x/api/snapshot", async () => {
 		const port = freePort();
 		const url = await startDashboard(["--port", String(port)]);
@@ -100,7 +100,7 @@ describe("ompbot dashboard", () => {
 		const page = await fetch(url);
 		expect(page.status).toBe(200);
 		expect(page.headers.get("content-type")).toStartWith("text/html");
-		expect(await page.text()).toContain("ompbot 현황판");
+		expect(await page.text()).toContain("jabbu 현황판");
 
 		for (const path of ["api/snapshot", "x/api/snapshot"]) {
 			const response = await fetch(`${url}${path}`);
@@ -246,10 +246,10 @@ describe("ompbot dashboard", () => {
 	});
 
 	test("AC-8: no port in flags or config exits 2; a non-loopback --bind exits 2", async () => {
-		expect(await runCli(["dashboard"], { OMPBOT_HOME: home.dir })).toBe(2);
-		expect(await runCli(["dashboard", "--port", "7331", "--bind", "0.0.0.0"], { OMPBOT_HOME: home.dir })).toBe(2);
+		expect(await runCli(["dashboard"], { JABBU_HOME: home.dir })).toBe(2);
+		expect(await runCli(["dashboard", "--port", "7331", "--bind", "0.0.0.0"], { JABBU_HOME: home.dir })).toBe(2);
 		setDashboardConfig({ port: 7331, bind: "0.0.0.0" });
 		// The config itself is refused (ConfigError → exit 1) before any port is opened.
-		expect(await runCli(["dashboard"], { OMPBOT_HOME: home.dir })).toBe(1);
+		expect(await runCli(["dashboard"], { JABBU_HOME: home.dir })).toBe(1);
 	});
 });

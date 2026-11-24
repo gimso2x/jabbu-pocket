@@ -7,7 +7,7 @@ import { CHANNEL, makeHome, type TestHome } from "./helpers/bot-home";
 import { makeRepo } from "./helpers/git-fixtures";
 import { laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
-// `ompbot_lane_progress` evidence `{ toolCallId }`: a finished, successful, non-ompbot tool call of the lane session.
+// `jabbu_lane_progress` evidence `{ toolCallId }`: a finished, successful, non-jabbu tool call of the lane session.
 
 const sha256 = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
 
@@ -15,7 +15,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-toolcall-home-");
+	home = makeHome("jabbu-lane-toolcall-home-");
 	repos = [];
 });
 
@@ -70,21 +70,21 @@ describe("lane progress: tool call evidence (AC-1)", () => {
 		h.close();
 	});
 
-	test("a failed call, an ompbot_* call, an unfinished call, an unknown id and file+toolCallId are refused with a reason", async () => {
+	test("a failed call, a jabbu_* call, an unfinished call, an unknown id and file+toolCallId are refused with a reason", async () => {
 		const { h, lane } = await laneWithSession(
 			call("bad", "bash") +
 				result("bad", "exit 1", { isError: true, toolName: "bash" }) +
-				call("own", "ompbot_lane_progress") +
-				result("own", "progress recorded", { toolName: "ompbot_lane_progress" }) +
-				call("board", "ompbot_board_post") +
+				call("own", "jabbu_lane_progress") +
+				result("own", "progress recorded", { toolName: "jabbu_lane_progress" }) +
+				call("board", "jabbu_board_post") +
 				result("board", "posted") +
 				call("running", "bash"),
 		);
 		const before = h.store.getLane(lane.name);
 		const cases: Array<[unknown, string]> = [
 			[{ toolCallId: "bad" }, "failed"],
-			[{ toolCallId: "own" }, "ompbot tools cannot be evidence"],
-			[{ toolCallId: "board" }, "ompbot tools cannot be evidence"],
+			[{ toolCallId: "own" }, "jabbu tools cannot be evidence"],
+			[{ toolCallId: "board" }, "jabbu tools cannot be evidence"],
 			[{ toolCallId: "running" }, "no finished tool call"],
 			[{ toolCallId: "nope" }, "no finished tool call"],
 			[{ toolCallId: "" }, "non-empty"],

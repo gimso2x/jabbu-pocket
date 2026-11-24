@@ -57,7 +57,7 @@ let repos: string[];
 let workRepo: string | undefined;
 
 beforeEach(() => {
-	home = makeHome("ompbot-lanes-home-");
+	home = makeHome("jabbu-lanes-home-");
 	repos = [];
 	workRepo = undefined;
 });
@@ -101,7 +101,7 @@ function harness(
 ): Harness {
 	let now = START;
 	const clock = { now: () => now };
-	const store = openBotStore(join(home.dir, "ompbot.db"), clock, "Asia/Seoul");
+	const store = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 	const transport = laneTransport();
 	const sessions = new FakeSessionStore();
 	const drivers = new Map<string, FakeOmpDriver>();
@@ -225,8 +225,8 @@ describe("lane trigger parsing", () => {
 		expect(prompt).toContain("/tmp/p-l-20261110-01");
 		expect(prompt).toContain("lane/L-20261110-01");
 		expect(prompt).toContain("AC-1: README 한 줄");
-		expect(prompt).toContain("ompbot_claim_done");
-		expect(prompt).toContain("ompbot_lane_progress");
+		expect(prompt).toContain("jabbu_claim_done");
+		expect(prompt).toContain("jabbu_lane_progress");
 	});
 });
 
@@ -300,7 +300,7 @@ describe("verifyClaim (real git)", () => {
 		git(inner, "commit", "-q", "--allow-empty", "-m", "inner");
 		const above = await verifyClaim({ repo: outer, commit: "HEAD", summary: "s" }, inner);
 		expect(above.ok === false && above.reasons.join()).toContain("repo_mismatch");
-		const bare = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-lanes-repo-")));
+		const bare = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-lanes-repo-")));
 		repos.push(bare);
 		const outside = await verifyClaim({ repo: outer, commit: "HEAD", summary: "s" }, bare);
 		expect(outside.ok === false && outside.reasons.join()).toContain("not inside a git repository");
@@ -418,16 +418,16 @@ describe("lane start and registry", () => {
 		expect(lane).toMatchObject({
 			name: "demo-task",
 			title: "Demo task",
-			originKey: "ompbot/work/demo-task",
+			originKey: "jabbu/work/demo-task",
 			status: "working",
 			threadRef: `${CHANNEL}:${root?.id}`,
 			cwd: lane.meta.worktree,
 		});
 		expect(lane.meta.worktree).toStartWith(`${cwdOf()}-l-`);
 		expect(lane.meta.statusTs).toBe(status?.id);
-		expect(lane.sessionDir).toBe(sessionDirFor(join(home.dir, "sessions"), "ompbot/work/demo-task", 1));
-		expect(h.store.getOrigin("ompbot/work/demo-task")?.sessionDir).toBe(lane.sessionDir);
-		const prompt = h.drivers.get("ompbot/work/demo-task")?.calls.find((call) => call.startsWith("prompt:")) ?? "";
+		expect(lane.sessionDir).toBe(sessionDirFor(join(home.dir, "sessions"), "jabbu/work/demo-task", 1));
+		expect(h.store.getOrigin("jabbu/work/demo-task")?.sessionDir).toBe(lane.sessionDir);
+		const prompt = h.drivers.get("jabbu/work/demo-task")?.calls.find((call) => call.startsWith("prompt:")) ?? "";
 		expect(prompt.startsWith("prompt:작업: Demo task\n")).toBe(true);
 		expect(prompt).toContain("Demo task");
 		expect(prompt).toContain("write the thing");
@@ -1002,7 +1002,7 @@ describe("done claims are verified by the core", () => {
 		const wt = lane.cwd;
 		await h.settle();
 		const tools = buildLaneTools(h.manager, lane.originKey);
-		expect(tools.map((tool) => tool.name)).toEqual(["ompbot_lane_progress", "ompbot_claim_done"]);
+		expect(tools.map((tool) => tool.name)).toEqual(["jabbu_lane_progress", "jabbu_claim_done"]);
 		const signal = new AbortController().signal;
 		const [progress, claim] = tools;
 		await expect(claim?.execute({ repo: wt }, { signal })).rejects.toThrow("commit is required");
@@ -1147,7 +1147,7 @@ describe("lane progress evidence", () => {
 
 	test("a symbolic link (the file or a directory on its way) is refused", async () => {
 		const { h, lane, worktree } = await startedLane();
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-evidence-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-evidence-"));
 		repos.push(outside);
 		writeFileSync(join(outside, "secret.txt"), "s");
 		symlinkSync(join(outside, "secret.txt"), join(worktree, "link.txt"));
@@ -1336,43 +1336,43 @@ describe("lanes inside the daemon", () => {
 		const lane = daemon.store.getLane("demo");
 		const wt = lane?.meta.worktree ?? "";
 		expect(wt).toStartWith(`${repo}-l-`);
-		expect(lane).toMatchObject({ status: "working", originKey: "ompbot/work/demo", cwd: wt });
+		expect(lane).toMatchObject({ status: "working", originKey: "jabbu/work/demo", cwd: wt });
 		const root = transport.posts((text) => text === "🔄 demo")[0];
 		expect(lane?.threadRef).toBe(`${CHANNEL}:${root?.id}`);
 		// The lane's own omp session got the lane prompt; the DM conversation's session never saw the trigger text.
 		await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 		// The daemon plants the lane's todos right before that first prompt.
-		expect(drivers.get("ompbot/work/demo")?.calls[1]).toBe("setTodos");
-		expect(drivers.get("ompbot/work/demo")?.calls[2]).toContain("README에 한 줄 추가");
+		expect(drivers.get("jabbu/work/demo")?.calls[1]).toBe("setTodos");
+		expect(drivers.get("jabbu/work/demo")?.calls[2]).toContain("README에 한 줄 추가");
 		expect(drivers.has(DM_ORIGIN)).toBe(false);
-		expect(daemon.cwdFor("ompbot/work/demo")).toBe(wt);
+		expect(daemon.cwdFor("jabbu/work/demo")).toBe(wt);
 		expect(daemon.cwdFor(DM_ORIGIN)).toBe(home.config.workspaceDir);
 
 		// Owner message in the lane thread -> lane origin.
 		await ownerMessage("keep going", "710000000000000100", root?.id ?? "");
 		await transport.waitForPosts((text) => text.startsWith("ECHO keep going"));
 		expect(daemon.store.getInbound(`${CHANNEL}:710000000000000100`)).toMatchObject({
-			originKey: "ompbot/work/demo",
+			originKey: "jabbu/work/demo",
 			state: "answered",
 		});
-		expect(drivers.get("ompbot/work/demo")?.calls).toContain("prompt:keep going");
+		expect(drivers.get("jabbu/work/demo")?.calls).toContain("prompt:keep going");
 		expect(drivers.has(DM_ORIGIN)).toBe(false);
 
-		// Lane tools exist for the lane origin only; DM origin gets ompbot_work_start.
-		const laneTools = daemon.hostToolsFor("ompbot/work/demo").map((tool) => tool.name);
+		// Lane tools exist for the lane origin only; DM origin gets jabbu_work_start.
+		const laneTools = daemon.hostToolsFor("jabbu/work/demo").map((tool) => tool.name);
 		expect(laneTools).toEqual([
 			"discord_send_file",
-			"ompbot_request_approval",
-			"ompbot_lane_progress",
-			"ompbot_claim_done",
-			"ompbot_board_post",
-			"ompbot_board_read",
+			"jabbu_request_approval",
+			"jabbu_lane_progress",
+			"jabbu_claim_done",
+			"jabbu_board_post",
+			"jabbu_board_read",
 		]);
-		expect(daemon.hostToolsFor(DM_ORIGIN).map((tool) => tool.name)).toContain("ompbot_work_start");
-		expect(laneTools).not.toContain("ompbot_work_start");
+		expect(daemon.hostToolsFor(DM_ORIGIN).map((tool) => tool.name)).toContain("jabbu_work_start");
+		expect(laneTools).not.toContain("jabbu_work_start");
 
 		// A claim with a clean commit closes the lane through the tool.
-		const claim = daemon.hostToolsFor("ompbot/work/demo").find((tool) => tool.name === "ompbot_claim_done");
+		const claim = daemon.hostToolsFor("jabbu/work/demo").find((tool) => tool.name === "jabbu_claim_done");
 		const signal = new AbortController().signal;
 		commitMore(wt);
 		expect(await claim?.execute({ repo: wt, commit: "HEAD", summary: "done" }, { signal })).toContain("검증 통과");
@@ -1387,7 +1387,7 @@ describe("lanes inside the daemon", () => {
 		expect(daemon.store.getLane("demo")?.status).toBe("working");
 		expect(rootUpdates().at(-1)).toBe("🔄 demo");
 		expect(daemon.store.getLane("demo")?.history.map((entry) => entry.event)).toContain("reopened");
-		expect(drivers.get("ompbot/work/demo")?.calls).toContain("openSession");
+		expect(drivers.get("jabbu/work/demo")?.calls).toContain("openSession");
 		// Lane reports never stamp ✅ on the thread root as a reaction.
 		expect(
 			transport.calls.filter((c) => c.method === "addReaction" && c.emoji === "✅" && c.messageId === root?.id),
@@ -1400,7 +1400,7 @@ describe("lanes inside the daemon", () => {
 		await daemon.inject({ origin: DM_ORIGIN, asOwner: true, text: `작업: ask @${repo}` });
 		await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 		const root = transport.posts((text) => text === "🔄 ask")[0];
-		const claim = daemon.hostToolsFor("ompbot/work/ask").find((tool) => tool.name === "ompbot_claim_done");
+		const claim = daemon.hostToolsFor("jabbu/work/ask").find((tool) => tool.name === "jabbu_claim_done");
 		const wt = daemon.store.getLane("ask")?.cwd ?? "";
 		commitMore(wt);
 		const signal = new AbortController().signal;
@@ -1414,12 +1414,12 @@ describe("lanes inside the daemon", () => {
 		expect(lane?.history.at(-1)?.event).toBe("owner_question");
 		expect(lane?.history.map((entry) => entry.event)).not.toContain("reopened");
 		expect(daemon.store.getInbound(`${CHANNEL}:710000000000000400`)).toMatchObject({
-			originKey: "ompbot/work/ask",
+			originKey: "jabbu/work/ask",
 			state: "answered",
 		});
 		expect(drivers.has(DM_ORIGIN)).toBe(false);
 		// The lane session is told the lane is closed: answer only, `!reopen` for changes.
-		const prompt = drivers.get("ompbot/work/ask")?.calls.find((call) => call.includes("이거 왜 이렇게 했어?"));
+		const prompt = drivers.get("jabbu/work/ask")?.calls.find((call) => call.includes("이거 왜 이렇게 했어?"));
 		expect(prompt).toContain("!reopen");
 		expect(prompt).toContain("closed");
 		// A day later it is no orphan working lane; only its unmerged land (pending) is counted.
@@ -1432,14 +1432,14 @@ describe("lanes inside the daemon", () => {
 		await ownerMessage("!queue", "710000000000000500", root?.id ?? "");
 		await transport.waitForPosts((text) => text.includes("대기열 비어 있음"));
 		expect(daemon.store.getInbound(`${CHANNEL}:710000000000000500`)?.textRef).toBe("!queue");
-		expect(drivers.get("ompbot/work/ask")?.calls.some((call) => call.includes("!queue"))).toBe(false);
+		expect(drivers.get("jabbu/work/ask")?.calls.some((call) => call.includes("!queue"))).toBe(false);
 		expect(daemon.store.getLane("ask")?.status).toBe("closed");
 	});
 
-	test("the host tool ompbot_work_start starts a lane; the cap refuses further lanes with a clear reply", async () => {
+	test("the host tool jabbu_work_start starts a lane; the cap refuses further lanes with a clear reply", async () => {
 		const repo = makeRepo(repos);
 		const daemon = await startDaemon(1);
-		const start = daemon.hostToolsFor(DM_ORIGIN).find((tool) => tool.name === "ompbot_work_start");
+		const start = daemon.hostToolsFor(DM_ORIGIN).find((tool) => tool.name === "jabbu_work_start");
 		const signal = new AbortController().signal;
 		const started = await start?.execute({ title: "tool lane", cwd: repo, brief: "b" }, { signal });
 		expect(started).toContain("lane tool-lane started");
@@ -1466,7 +1466,7 @@ describe("lanes inside the daemon", () => {
 		expect(second.store.getLane("persist")?.status).toBe("working");
 		await ownerMessage("after restart", "710000000000000300", root?.id ?? "");
 		await transport.waitForPosts((text) => text.startsWith("ECHO after restart"));
-		expect(second.store.getInbound(`${CHANNEL}:710000000000000300`)?.originKey).toBe("ompbot/work/persist");
+		expect(second.store.getInbound(`${CHANNEL}:710000000000000300`)?.originKey).toBe("jabbu/work/persist");
 	});
 });
 
@@ -1515,7 +1515,7 @@ describe("lane todos (set_todos)", () => {
 					name: "마무리",
 					tasks: [
 						{ content: "변경 모두 커밋", status: "pending" },
-						{ content: "ompbot_claim_done 호출", status: "pending" },
+						{ content: "jabbu_claim_done 호출", status: "pending" },
 					],
 				},
 			],
@@ -1533,7 +1533,7 @@ describe("lane todos (set_todos)", () => {
 				name: "마무리",
 				tasks: [
 					{ content: "변경 모두 커밋", status: "pending" },
-					{ content: "ompbot_claim_done 호출", status: "pending" },
+					{ content: "jabbu_claim_done 호출", status: "pending" },
 				],
 			},
 		]);
@@ -1569,7 +1569,7 @@ describe("lane todos (set_todos)", () => {
 		const logs: string[] = [];
 		const log = createLogger({ sink: (line) => logs.push(line), clock: { now: () => START }, redact });
 		const phases = buildLaneTodos([{ id: "AC-1", text: "x" }]);
-		const root = mkdtempSync(join(tmpdir(), "ompbot-plant-drivers-"));
+		const root = mkdtempSync(join(tmpdir(), "jabbu-plant-drivers-"));
 		repos.push(root);
 		await new AgyOmpDriver({
 			agyExecutable: join(root, "no-agy"),

@@ -69,7 +69,7 @@ function withDefaultChannel(params: Record<string, unknown>, originKey: string):
 	return { ...params, channel: ref.conversationId };
 }
 
-/** `ompbot_monitor_add/list/remove`; empty for any origin that is not an owner-DM persona session. */
+/** `jabbu_monitor_add/list/remove`; empty for any origin that is not an owner-DM persona session. */
 export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 	if (!isPersonaOrigin(deps.originKey)) return [];
 	const { ledger, scriptsRoot, watcherRoots, workspaceDir, webhook, timezone, log, originKey } = deps;
@@ -77,7 +77,7 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 	const offset = offsetLabel((deps.now ?? Date.now)(), timezone);
 	return [
 		{
-			name: "ompbot_monitor_add",
+			name: "jabbu_monitor_add",
 			label: "Add monitor",
 			description: `Register a monitor: at the given time(s) the bot runs \`instruction\` in its own session and posts the result to the owner DM as a top-level message starting with ⏰. trigger is one of {kind:'at', at:<ISO time, ${timezone} (now ${offset}) unless an offset is given>} (once), {kind:'cron', schedule:<5 fields>, timezone?:<default ${timezone}>, command?:<as script>} (recurring; with command, deliver:'verbatim' posts stdout), {kind:'script', command:[<absolute path under the bot scripts dir>, ...args], intervalMs:60000..31622400000, fire?:'edge'|'every', once?:boolean} (the script exits 0 while the condition holds; its stdout is passed to the run), {kind:'webhook'} (runs when an external system POSTs to the loopback URL returned on creation with the returned bearer token; the request body, cut to 16 KiB, is passed to the run as untrusted outside input; needs webhook in the bot config), {kind:'watcher', root:<absolute directory inside the configured watcherRoots>, debounceMs?:100-60000, default 1000} (runs when files under root changed and stayed quiet for debounceMs; the changed paths are passed to the run; .git is ignored; needs watcherRoots in the bot config). For a script trigger, by default (fire:'edge') it fires once when the condition turns true and re-arms only after the script has failed again; fire:'every' fires on every check that passes. Set once:true for a one-off watch so the monitor turns itself off after its first fire. Compute \`at\` from the current time in ${timezone} (check with \`date\`). Returns the monitor id and the next fire time (${timezone}).`,
 			parameters: {
@@ -195,13 +195,13 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 				if (row.trigger.kind === "webhook") {
 					// The only time the token is shown to the model; the list tool never repeats it.
 					const url = webhookUrl(webhook, row.trigger.id);
-					return `monitor ${row.id} "${row.name}" created; POST ${url} with header "Authorization: Bearer ${row.trigger.token}" (token is shown only now; owner can read it with \`ompbot monitors show\`)`;
+					return `monitor ${row.id} "${row.name}" created; POST ${url} with header "Authorization: Bearer ${row.trigger.token}" (token is shown only now; owner can read it with \`jabbu-pocket monitors show\`)`;
 				}
 				return `monitor ${row.id} "${row.name}" created; next fire ${describeNext(row, timezone)}`;
 			},
 		},
 		{
-			name: "ompbot_monitor_list",
+			name: "jabbu_monitor_list",
 			label: "List monitors",
 			description: `List the registered monitors with trigger and next fire time (${timezone}).`,
 			parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -211,7 +211,7 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 			},
 		},
 		{
-			name: "ompbot_monitor_remove",
+			name: "jabbu_monitor_remove",
 			label: "Remove monitor",
 			description: "Delete a monitor (with its history) by id or name.",
 			parameters: {

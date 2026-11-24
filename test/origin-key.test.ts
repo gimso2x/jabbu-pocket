@@ -89,7 +89,7 @@ describe("parseChatOrigin / chatOriginKey", () => {
 
 	test.each([
 		"monitor/x",
-		"ompbot/work/a",
+		"jabbu/work/a",
 		"discord/ch/",
 		"discord/xx/111",
 		"discord/ch/111/t/",
@@ -103,7 +103,7 @@ describe("parseChatOrigin / chatOriginKey", () => {
 		expect(parseChatOrigin("discord/ch/111/t/100")?.conversationId).toBe("111");
 		expect(parseChatOrigin("discord/ch/111")?.conversationId).toBe("111");
 		expect(parseChatOrigin("discord/dm/222")?.conversationId).toBe("222");
-		expect(parseChatOrigin("ompbot/work/lane")?.conversationId).toBeUndefined();
+		expect(parseChatOrigin("jabbu/work/lane")?.conversationId).toBeUndefined();
 	});
 
 	test("an id with no plausible length (4000 characters) is no conversation of any platform", () => {

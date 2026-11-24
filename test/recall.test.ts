@@ -33,9 +33,9 @@ let store: Store;
 let seq = 0;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-recall-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-recall-"));
 	clock = new FakeClock();
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock, redact });
 	seq = 0;
 });
 
@@ -335,7 +335,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		inbound(
 			"discord/ch/300000000000000001/t/1000001",
 			"300000000000000001:1000001",
-			"자료 봐줘\n[첨부: /home/dev/.ompbot/media/inbound/1_2/doc_report.txt (text/plain)]",
+			"자료 봐줘\n[첨부: /home/dev/.jabbu/media/inbound/1_2/doc_report.txt (text/plain)]",
 		);
 		const ranked = rankRecall(
 			"저번에 올린 report media 파일\n[첨부: /x/doc_report.txt]",

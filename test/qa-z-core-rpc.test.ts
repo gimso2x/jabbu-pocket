@@ -17,7 +17,7 @@ import { redact } from "../src/redact";
 import type { Store } from "../src/store/db";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
 
-const root = mkdtempSync(join(tmpdir(), "ompbot-qa-z-core-"));
+const root = mkdtempSync(join(tmpdir(), "jabbu-qa-z-core-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let dirCounter = 0;
 const freshDir = (): string => {
@@ -130,7 +130,7 @@ describe("drain counts a turn whose child is still starting (qa-z #16)", () => {
 	beforeEach(() => {
 		dir = freshDir();
 		const clock = { now: () => 1_000_000 };
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		const sessions = new FakeSessionStore();
 		router = new OriginRouter({
 			conversationContext: () => undefined,

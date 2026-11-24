@@ -11,7 +11,7 @@ const homeGates = <T extends { name: string }>(gates: T[]): T[] =>
 let home: TestHome;
 
 beforeEach(() => {
-	home = makeHome("ompbot-proc-");
+	home = makeHome("jabbu-proc-");
 });
 
 afterEach(() => {
@@ -45,7 +45,7 @@ test("real daemon process: status --json schema, second instance refused, SIGTER
 	await second.waitLog(/already_running/);
 	expect(daemon.logs()).not.toContain("daemon_stop");
 
-	const badInject = await runMain(home.dir, ["inject", "--origin", "ompbot/work/x", "--as-owner", "--text", "hi"]);
+	const badInject = await runMain(home.dir, ["inject", "--origin", "jabbu/work/x", "--as-owner", "--text", "hi"]);
 	expect(badInject.code).toBe(1);
 	expect(badInject.stderr).toContain("inject failed");
 	const noOwner = await runMain(home.dir, ["inject", "--origin", "discord/dm/200000000000000001", "--text", "hi"]);
@@ -54,8 +54,8 @@ test("real daemon process: status --json schema, second instance refused, SIGTER
 	daemon.signal("SIGTERM");
 	expect(await daemon.exited).toBe(0);
 	await daemon.waitLog(/event=daemon_stop/);
-	expect(existsSync(join(home.dir, "ompbot.lock"))).toBe(false);
-	expect(existsSync(join(home.dir, "ompbot.sock"))).toBe(false);
+	expect(existsSync(join(home.dir, "jabbu.lock"))).toBe(false);
+	expect(existsSync(join(home.dir, "jabbu.sock"))).toBe(false);
 
 	const after = await runMain(home.dir, ["status", "--json"]);
 	expect(after.code).toBe(0);

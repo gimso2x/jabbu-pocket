@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, sep } from "node:path";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { parseChatOrigin } from "../core/origin-key";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { pidAlive } from "../daemon/lock";
@@ -105,7 +105,7 @@ export interface DaemonInfo {
 	};
 	/** `git rev-parse --short HEAD` of the checkout this process runs from; absent when git cannot tell. */
 	commit?: string;
-	/** When the running daemon took `ompbot.lock`; absent while it is down or the lock is unreadable. */
+	/** When the running daemon took `jabbu.lock`; absent while it is down or the lock is unreadable. */
 	started?: { at: string; ageMs: number };
 	/** Running omp RPC sessions on this host and the ceiling a lane/[TASK] start is judged against (0 = off). */
 	hostSessions?: StatusReport["hostSessions"];
@@ -641,7 +641,7 @@ export interface DashboardSnapshot {
 	/** `peerErrors`: one line per peer install whose monitors could not be read in full; absent without any. */
 	monitors: Section<{ items: MonitorInfo[]; peerErrors?: Array<{ install: string; error: string }> }>;
 	alerts: Section<{ items: AlertInfo[] }>;
-	/** Every health gate, as `ompbot gates` lists them. */
+	/** Every health gate, as `jabbu-pocket gates` lists them. */
 	gates: Section<{ items: Gate[] }>;
 	backup: Section<BackupInfo>;
 	/** Progress files of long-running jobs outside the bot (`<home>/jobs/*.json`), newest update first. */
@@ -651,10 +651,10 @@ export interface DashboardSnapshot {
 	 * show commands with it for the owner to paste — the dashboard never runs them. Always built; optional only so
 	 * hand-made snapshots still type.
 	 */
-	ompbotCli?: string[];
+	jabbuCli?: string[];
 	/**
 	 * The one Discord server (config `channels.discord.guildIds` with exactly one id) the turn panels' 디스코드에서
-	 * 답하기 link needs for server channels and lanes; null otherwise (DM links do not need it). Optional like `ompbotCli`.
+	 * 답하기 link needs for server channels and lanes; null otherwise (DM links do not need it). Optional like `jabbuCli`.
 	 */
 	discordGuild?: string | null;
 	/** The top-bar test chip: the full test run holding this host's heavy-run lock and those queued behind it. Read fresh every time. */
@@ -669,7 +669,7 @@ export interface DashboardSnapshot {
 
 export type DashboardConfig = Partial<
 	Pick<
-		OmpbotConfig,
+		JabbuConfig,
 		| "agent"
 		| "ompExecutable"
 		| "ompProfile"
@@ -723,7 +723,7 @@ export interface SnapshotDeps {
 	collectGates?: (options: GatesOptions) => Gate[];
 	/** Whether a job's `pid` still runs; default {@link pidAlive}. */
 	isAlive?: (pid: number) => boolean;
-	/** User home for allowed job roots (`$HOME/work`, `$HOME/.ompbot-*`); defaults to `process.env.HOME ?? homedir()`. */
+	/** User home for allowed job roots (`$HOME/work`, `$HOME/.jabbu-*`); defaults to `process.env.HOME ?? homedir()`. */
 	userHome?: string;
 	/** Read the model limit commands (default false): the dashboard server only; the daemon's `!brief` never runs them. */
 	usageLimits?: boolean;
@@ -1140,12 +1140,12 @@ const underRoot = (root: string, path: string): boolean =>
 
 export const hasSecretsSegment = (path: string): boolean => path.split(/[\\/]/).includes("secrets");
 
-/** Allowed real directories for job `progress` and `cwd` paths: `<ompbot home>`, `$HOME/work`, `$HOME/.ompbot-*`. */
+/** Allowed real directories for job `progress` and `cwd` paths: `<jabbu home>`, `$HOME/work`, `$HOME/.jabbu-*`. */
 export function jobAllowedRoots(homeDir: string, userHome: string): string[] {
 	const candidates = [homeDir, join(userHome, "work")];
 	try {
 		for (const entry of readdirSync(userHome, { withFileTypes: true })) {
-			if (entry.name.startsWith(".ompbot-")) candidates.push(join(userHome, entry.name));
+			if (entry.name.startsWith(".jabbu-")) candidates.push(join(userHome, entry.name));
 		}
 	} catch {
 		// unreadable userHome: keep homeDir and work only
@@ -1377,15 +1377,15 @@ function readJobs(
 		.slice(0, JOB_LIMIT);
 }
 
-/** Running `systemd-run --user --unit=ompbot-<name>` (or `kencrew-<name>`) work is a job even without a progress file. */
-const UNIT_JOB_PREFIXES = ["ompbot-", "kencrew-"];
-/** `ompbot-job-*` units only write a job file for another unit: listing them too would show that work twice. */
-const UNIT_HELPER_PREFIX = "ompbot-job-";
+/** Running `systemd-run --user --unit=jabbu-<name>` work is a job even without a progress file. */
+const UNIT_JOB_PREFIXES = ["jabbu-"];
+/** `jabbu-job-*` units only write a job file for another unit: listing them too would show that work twice. */
+const UNIT_HELPER_PREFIX = "jabbu-job-";
 const UNIT_TIMEOUT_MS = 5_000;
 const UNIT_PROPERTIES = ["Id", "Description", "Transient", "ActiveState", "ActiveEnterTimestamp", "MainPID"];
 
 /**
- * The user's running transient `ompbot-*.service` and `kencrew-*.service` units (`systemd-run`), as `running` jobs named
+ * The user's running transient `jabbu-*.service` units (`systemd-run`), as `running` jobs named
  * without the prefix. A unit that a job file or an earlier unit already shows (same name or pid) or a helper unit is left
  * out. A host without `systemctl` has none; any other failure comes back as one `invalid` row so the files still show.
  */
@@ -1458,7 +1458,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 	const guildIds = config?.channels?.discord?.guildIds;
 	const discordGuild = guildIds?.length === 1 ? (guildIds[0] ?? null) : null;
 	const iso = (ms: number): string => localIso(ms, timezone);
-	const dbPath = join(deps.homeDir, "ompbot.db");
+	const dbPath = join(deps.homeDir, "jabbu.db");
 	const db = existsSync(dbPath) ? new Database(dbPath, { readonly: true, strict: true }) : undefined;
 	try {
 		const needDb = (): Database => {
@@ -1491,7 +1491,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const daemon = section(async (): Promise<DaemonInfo> => {
 			let report: StatusReport | undefined;
 			try {
-				const response = await deps.callDaemon(join(deps.homeDir, "ompbot.sock"), { op: "status" }, IPC_TIMEOUT_MS);
+				const response = await deps.callDaemon(join(deps.homeDir, "jabbu.sock"), { op: "status" }, IPC_TIMEOUT_MS);
 				if (isStatusResponse(response)) report = { ...response.status, daemonRunning: true };
 			} catch {
 				report = undefined; // no daemon answering: the database file tells the rest
@@ -1932,7 +1932,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			const peerErrors: Array<{ install: string; error: string }> = [];
 			for (const peer of deps.peers ?? []) {
 				const problems = peer.configError === undefined ? [] : [peer.configError];
-				const peerDbPath = join(peer.home, "ompbot.db");
+				const peerDbPath = join(peer.home, "jabbu.db");
 				if (existsSync(peerDbPath)) {
 					let peerDb: Database | undefined;
 					try {
@@ -1946,7 +1946,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 						peerDb?.close();
 					}
 				} else {
-					problems.push("ompbot.db가 없음");
+					problems.push("jabbu.db가 없음");
 				}
 				if (problems.length > 0)
 					peerErrors.push({ install: peer.name, error: redact(problems.join("; ")).slice(0, ERROR_CHARS) });
@@ -2026,7 +2026,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			backup: await backup,
 			jobs: await jobs,
 			heavyRun: await heavyRun,
-			ompbotCli: ["bun", join(deps.repoDir, "src", "main.ts")],
+			jabbuCli: ["bun", join(deps.repoDir, "src", "main.ts")],
 			discordGuild,
 			...(hostChecks === undefined ? {} : { hostChecks: await hostChecks }),
 			...(opsStatus?.url === undefined ? {} : { hostChecksUrl: opsStatus.url }),
@@ -2042,7 +2042,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
  * without a database or a tasks table has none.
  */
 export function readBoardTasks(homeDir: string): BoardTaskRef[] {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return [];
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	try {
@@ -2060,7 +2060,7 @@ export function readBoardTasks(homeDir: string): BoardTaskRef[] {
  * 마지막 지시; none without a database or before the daemon created the table.
  */
 export function readBoardPrompts(homeDir: string): BoardPromptRef[] {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return [];
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	try {

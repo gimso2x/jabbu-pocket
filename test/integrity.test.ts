@@ -227,7 +227,7 @@ describe("collectLaneDiff after a rebase (qa50b H-5)", () => {
 	};
 	/** main with one commit, a lane branch with `feature.ts`, then main gains a skipped test and the lane rebases. */
 	function rebasedLane(): { dir: string; base0: string; head: string } {
-		const dir = mkdtempSync(join(tmpdir(), "ompbot-integrity-"));
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-integrity-"));
 		roots.push(dir);
 		git(dir, "init", "-q", "-b", "main");
 		const base0 = commit(dir, "README.md", "base\n", "base");
@@ -309,7 +309,7 @@ describe("lane and task diffs never run diff.external (qa-d M-3)", () => {
 		}).trim();
 	/** A repository on `main` with two commits of `f.txt` whose `diff.external` runs `script` (written executable). */
 	function externalDiffRepo(script: (root: string) => string): { root: string; dir: string; first: string } {
-		const root = mkdtempSync(join(tmpdir(), "ompbot-extdiff-"));
+		const root = mkdtempSync(join(tmpdir(), "jabbu-extdiff-"));
 		roots.push(root);
 		const dir = join(root, "repo");
 		mkdirSync(dir);
@@ -523,7 +523,7 @@ describe("qa-z lane integrity edges", () => {
 	});
 
 	test("#105: a plan path the worker turned into a FIFO, a symlink or a link out of the tree declares nothing and never blocks", async () => {
-		const root = mkdtempSync(join(tmpdir(), "ompbot-declared-"));
+		const root = mkdtempSync(join(tmpdir(), "jabbu-declared-"));
 		try {
 			mkdirSync(join(root, "doc", "plans"), { recursive: true });
 			writeFileSync(join(root, "doc", "plans", "ok.md"), "계획 본문");
@@ -543,8 +543,8 @@ describe("qa-z lane integrity edges", () => {
 	});
 
 	test("plansRoot: a plan named by the brief is read from the records repository, not the worktree", async () => {
-		const worktree = mkdtempSync(join(tmpdir(), "ompbot-declared-wt-"));
-		const records = mkdtempSync(join(tmpdir(), "ompbot-declared-rec-"));
+		const worktree = mkdtempSync(join(tmpdir(), "jabbu-declared-wt-"));
+		const records = mkdtempSync(join(tmpdir(), "jabbu-declared-rec-"));
 		try {
 			mkdirSync(join(records, "doc", "plans"), { recursive: true });
 			writeFileSync(join(records, "doc", "plans", "x.md"), "기록 저장소 계획");
@@ -558,8 +558,8 @@ describe("qa-z lane integrity edges", () => {
 	});
 
 	test("plansRoot: a plans directory or file that links out of the records repository declares nothing", async () => {
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-declared-out-"));
-		const records = mkdtempSync(join(tmpdir(), "ompbot-declared-rec-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-declared-out-"));
+		const records = mkdtempSync(join(tmpdir(), "jabbu-declared-rec-"));
 		try {
 			mkdirSync(join(outside, "plans"), { recursive: true });
 			writeFileSync(join(outside, "plans", "dir.md"), "밖의 디렉터리 비밀");

@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 /**
  * Host-wide serialisation of the full test run (`scripts/heavy-run`). The lock is `flock(1)` on one fixed file; the
  * state files next to it only describe who runs and who waits, for the dashboard chip and the waiting notice.
- * `OMPBOT_HEAVY_RUN_DIR` moves the directory for tests only (the prefix keeps `dispatchEnv` from passing it on).
+ * `JABBU_HEAVY_RUN_DIR` moves the directory for tests only (the prefix keeps `dispatchEnv` from passing it on).
  */
 
 export const HEAVY_RUN_HELD_ENV = "HEAVY_RUN_HELD";
@@ -35,7 +35,7 @@ export function heavyRunPaths(
 	uid: number = process.getuid?.() ?? 0,
 	env: NodeJS.ProcessEnv = process.env,
 ): HeavyRunPaths {
-	const dir = env.OMPBOT_HEAVY_RUN_DIR ?? `/tmp/ompbot-heavy-${uid}`;
+	const dir = env.JABBU_HEAVY_RUN_DIR ?? `/tmp/jabbu-heavy-${uid}`;
 	return { dir, lock: join(dir, "lock"), states: join(dir, "state") };
 }
 

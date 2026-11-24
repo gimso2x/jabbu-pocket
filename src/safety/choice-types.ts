@@ -2,7 +2,7 @@
 export interface ChoiceCard {
 	/** Card body; redacted and cut by the broker. */
 	text: string;
-	/** Button labels; button `n` carries `ompbot:choice:<n>:<channel>:<ts>`. Empty: the owner answers by reply only. */
+	/** Button labels; button `n` carries `jabbu:choice:<n>:<channel>:<ts>`. Empty: the owner answers by reply only. */
 	buttons: readonly string[];
 	/** Indexes of the recommended buttons (one per `ask` question at most): drawn `primary`, the rest unstyled. */
 	recommended?: readonly number[] | undefined;

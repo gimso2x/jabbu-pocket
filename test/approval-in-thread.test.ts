@@ -164,8 +164,8 @@ describe("broker: mirror card in the asking thread", () => {
 	}
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-approval-thread-"));
-		store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 1_000 }, redact });
+		dir = mkdtempSync(join(tmpdir(), "jabbu-approval-thread-"));
+		store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 1_000 }, redact });
 		transport = new WatchTransport();
 		transport.setChannel({ id: ESC, type: 0, guildId: GUILD });
 		transport.setChannel({ id: REQ, type: 0, guildId: GUILD });
@@ -379,7 +379,7 @@ describe("broker: mirror card in the asking thread", () => {
 		const { result, canonicalTs, mirrorTs } = await askInThread(b);
 		timers.fireAll();
 		expect(await result).toBe("timeout");
-		const retry = `ompbot:approval:retry:${ESC}:${canonicalTs}`;
+		const retry = `jabbu:approval:retry:${ESC}:${canonicalTs}`;
 		const canonical = transport.edits(ESC, canonicalTs).at(-1);
 		const mirror = transport.edits(REQ, mirrorTs ?? "").at(-1);
 		expect(actionIds(canonical?.components)).toEqual([retry]);
@@ -422,7 +422,7 @@ describe("broker: mirror card in the asking thread", () => {
 		row(ROW_3, "no thread");
 		row(ROW_4, "❓ 질문 카드", `${REQ}:${THREAD}`);
 		expect(await broker().expireStale(false)).toBe(4);
-		const retryOf = (ts: string) => [`ompbot:approval:retry:${ESC}:${ts}`];
+		const retryOf = (ts: string) => [`jabbu:approval:retry:${ESC}:${ts}`];
 		expect(actionIds(transport.edits(ESC, ROW_1).at(-1)?.components)).toEqual(retryOf(ROW_1));
 		expect(actionIds(transport.edits(REQ, MIRROR_ID).at(-1)?.components)).toEqual(retryOf(ROW_1));
 		expect(transport.edits(REQ, MIRROR_ID).at(-1)?.content).toBe(transport.edits(ESC, ROW_1).at(-1)?.content);
@@ -448,7 +448,7 @@ describe("daemon: 다시 요청 on a timed-out approval card", () => {
 	let interactionSeq = 0n;
 
 	beforeEach(async () => {
-		home = makeHome("ompbot-approval-retry-");
+		home = makeHome("jabbu-approval-retry-");
 		logs = [];
 		transport = new WaitingDiscordTransport();
 		transport.setChannel({ id: ESC, type: 0, guildId: GUILD });
@@ -517,7 +517,7 @@ describe("daemon: 다시 요청 on a timed-out approval card", () => {
 			token: `token-${interactionSeq}`,
 			channel_id: from.channel,
 			user: { id: user },
-			data: { custom_id: `ompbot:approval:retry:${ESC}:${canonicalTs}`, component_type: 2 },
+			data: { custom_id: `jabbu:approval:retry:${ESC}:${canonicalTs}`, component_type: 2 },
 			message: { id: from.ts, channel_id: from.channel },
 		};
 		return transport.emitInteraction(interaction);
@@ -540,7 +540,7 @@ describe("daemon: 다시 요청 on a timed-out approval card", () => {
 		expect(inbound).toHaveLength(1);
 		// A Discord DM has no threads: the owner message is its own thread root, anchored on the marker it follows.
 		expect(inbound[0]).toMatchObject({ originKey: ORIGIN, threadRef: `${DM}:${markers()[0]?.id}` });
-		expect(inbound[0]?.textRef).toContain("ompbot_request_approval");
+		expect(inbound[0]?.textRef).toContain("jabbu_request_approval");
 		for (const [channel, ts] of [
 			[ESC, canonicalTs],
 			[DM, mirrorTs ?? ""],

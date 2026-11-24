@@ -20,7 +20,7 @@ import {
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-a4-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-a4-"));
 	clearSecretIndex();
 });
 

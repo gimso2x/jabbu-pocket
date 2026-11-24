@@ -565,7 +565,7 @@ function locateTurn(
  * A pending row has no trace yet.
  */
 export function readTurnTrace(homeDir: string, inboundId: number, now: number, where: TraceWhere): TurnTrace {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	try {
@@ -594,7 +594,7 @@ export function readTurnTrace(homeDir: string, inboundId: number, now: number, w
 	}
 }
 
-/** What `ompbot trace-inputs` reads of a turn: the session file and window, and the workers it delegated to. */
+/** What `jabbu-pocket trace-inputs` reads of a turn: the session file and window, and the workers it delegated to. */
 export type TurnSource =
 	| {
 			ok: true;
@@ -606,7 +606,7 @@ export type TurnSource =
 	| { ok: false; error: TraceError };
 
 export function readTurnSource(homeDir: string, inboundId: number, now: number, where: TraceWhere): TurnSource {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	try {

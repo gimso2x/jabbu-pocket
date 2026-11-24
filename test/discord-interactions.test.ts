@@ -99,8 +99,8 @@ async function threadCard(port: DiscordChannel): Promise<string> {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-discord-interactions-"));
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 1_000 }, redact });
+	dir = mkdtempSync(join(tmpdir(), "jabbu-discord-interactions-"));
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 1_000 }, redact });
 	transport = new FakeDiscordTransport({ botUserId: BOT, applicationId: APP });
 	transport.setChannel({ id: CH, type: 0, guildId: GUILD });
 	transport.setChannel({ id: THREAD, type: 11, parentId: CH, guildId: GUILD });
@@ -189,12 +189,12 @@ describe("owner clicks", () => {
 		transport.setChannel({ id: DM, type: 1 });
 		const ref = await port.post(
 			{ conversationId: DM },
-			{ text: "카드", buttons: [{ actionId: "ompbot:x:1", label: "예" }] },
+			{ text: "카드", buttons: [{ actionId: "jabbu:x:1", label: "예" }] },
 		);
-		await transport.emitInteraction(click("ompbot:x:1", { id: ref.messageId, channelId: DM }, { guild: false }));
+		await transport.emitInteraction(click("jabbu:x:1", { id: ref.messageId, channelId: DM }, { guild: false }));
 		expect(actions).toEqual([
 			{
-				actionId: "ompbot:x:1",
+				actionId: "jabbu:x:1",
 				value: undefined,
 				userId: OWNER,
 				channel: DM,

@@ -35,7 +35,7 @@ export function formatProviderLimitNotice(info: ProviderLimitInfo, count: number
 
 /**
  * `⚠️ [자가보고] … N분째 응답이 없습니다`: a turn that keeps stalling. A conversation turn is left running — the
- * owner picks between waiting and `/new-ompbot` (which aborts it); an unattended monitor turn was already aborted and
+ * owner picks between waiting and `/new-jabbu` (which aborts it); an unattended monitor turn was already aborted and
  * recorded as a failed event, which retries on its own backoff.
  */
 export function formatStallNotice(info: StallEscalation): string {
@@ -70,7 +70,7 @@ export function formatPendingDispatchNotice(
 		`마지막 사인: ${oneLine(reason)}`,
 		"스위프가 계속 재시도합니다 — 원인이 해소되면 자동으로 전송됩니다.",
 		// The queue list only numbers plain and followup rows (mailbox #waitingRows): a stranded chat command
-		// (/new-ompbot with a wedged abort) is invisible there, so the hint must not promise it can be cancelled.
+		// (/new-jabbu with a wedged abort) is invisible there, so the hint must not promise it can be cancelled.
 		`대기 중인 일반 메시지는 \`${COMMAND_TEXT.queue}\`에서 취소할 수 있습니다.`,
 	].join("\n");
 }
@@ -97,7 +97,7 @@ export function formatGateOpenNotice(gate: Gate, firstAt: number, now: number): 
  * ledger the daemon has just created), so the notice says what to do instead of reading like a failure.
  */
 export const NO_BACKUP_YET_HINT =
-	"백업이 아직 한 번도 없습니다. 첫 설치 직후라면 정상입니다 — 서버에서 `ompbot backup`(체크아웃에서는 `bun src/main.ts backup`)을 한 번 돌리고 `ompbot-backup.timer`를 켜 두면 닫힙니다.";
+	"백업이 아직 한 번도 없습니다. 첫 설치 직후라면 정상입니다 — 서버에서 `jabbu-pocket backup`(체크아웃에서는 `bun src/main.ts backup`)을 한 번 돌리고 `jabbu-backup.timer`를 켜 두면 닫힙니다.";
 
 /** `✅ [자가진단] 게이트 … 회복`: sent only when the open period had actually alerted the owner. */
 export function formatGateClosedNotice(gate: Gate): string {

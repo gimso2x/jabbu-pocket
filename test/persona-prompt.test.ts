@@ -7,8 +7,8 @@ import {
 	CARD_SKELETONS,
 	FLOORS_DYNAMIC_HEADING,
 	floorsSystemPrompt,
+	jabbuCli,
 	OWNER_NOTES_MAX_BYTES,
-	ompbotCli,
 	PERSONA_MAX_BYTES,
 	type PersonaFiles,
 	SOUL_MAX_BYTES,
@@ -18,7 +18,7 @@ import { buildTaskPrompt } from "../src/tasks/prompt";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-persona-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-persona-"));
 });
 
 afterEach(() => {
@@ -144,7 +144,7 @@ describe("floorsSystemPrompt persona injection", () => {
 		const path = personaFile("말투: 짧고 담백하게");
 		const dm = floorsSystemPrompt(SECRETS, DM, path);
 		const channel = floorsSystemPrompt(SECRETS, "discord/ch/300000000000000001", path);
-		const lane = floorsSystemPrompt(SECRETS, "ompbot/work/readme-line", path);
+		const lane = floorsSystemPrompt(SECRETS, "jabbu/work/readme-line", path);
 		const monitor = floorsSystemPrompt(SECRETS, "monitor/m1", path);
 		expect(dm).toContain("말투: 짧고 담백하게");
 		expect(channel).toContain("말투: 짧고 담백하게");
@@ -205,8 +205,8 @@ describe("floorsSystemPrompt soul and owner notes", () => {
 	});
 
 	test("lane and review origins get none of the three", () => {
-		const base = floorsSystemPrompt(SECRETS, "ompbot/work/readme-line");
-		expect(floorsSystemPrompt(SECRETS, "ompbot/work/readme-line", all())).toBe(base);
+		const base = floorsSystemPrompt(SECRETS, "jabbu/work/readme-line");
+		expect(floorsSystemPrompt(SECRETS, "jabbu/work/readme-line", all())).toBe(base);
 		const review = floorsSystemPrompt(SECRETS, "review/skills");
 		expect(floorsSystemPrompt(SECRETS, "review/skills", all())).toBe(review);
 		expect(floorsSystemPrompt(SECRETS, undefined, all())).toBe(floorsSystemPrompt(SECRETS));
@@ -235,7 +235,7 @@ describe("floorsSystemPrompt soul and owner notes", () => {
 });
 
 describe("chat origin system prompt per platform", () => {
-	const BASE_SECRETS = "/home/owner/.ompbot/secrets";
+	const BASE_SECRETS = "/home/owner/.jabbu/secrets";
 	const base = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "prompt-base.json"), "utf8")) as {
 		prompts: Record<string, string>;
 	};
@@ -258,8 +258,8 @@ describe("chat origin system prompt per platform", () => {
 			// path of the thread lookup line as placeholders.
 			expect(
 				actual
-					.replaceAll(ompbotCli(), "<bun> <ompbot>/src/main.ts")
-					.replaceAll("`/home/owner/.ompbot/ompbot.db`", "`<home>/ompbot.db`"),
+					.replaceAll(jabbuCli(), "<bun> <jabbu>/src/main.ts")
+					.replaceAll("`/home/owner/.jabbu/jabbu.db`", "`<home>/jabbu.db`"),
 			).toBe(base.prompts[key] ?? "");
 		}
 	});
@@ -278,7 +278,7 @@ describe("chat origin system prompt per platform", () => {
 		expect(discord).not.toContain("slack_send_file");
 		expect(discord).toContain("discord_send_file");
 		// The owner DM registers monitors.
-		expect(discord).toContain("ompbot_monitor_add");
+		expect(discord).toContain("jabbu_monitor_add");
 	});
 
 	test("a Discord chat origin is told it runs on Discord, with Discord links and the card line saying charts go ASCII", () => {
@@ -329,7 +329,7 @@ describe("chat origin system prompt per platform", () => {
 				expect(lines(prompt).some((l) => l.startsWith(card))).toBe(true);
 			}
 		}
-		for (const origin of ["monitor/m1", "ompbot/work/lane1"]) {
+		for (const origin of ["monitor/m1", "jabbu/work/lane1"]) {
 			for (const dialogs of [false, true]) {
 				const prompt = buildFloorsPrompt(BASE_SECRETS, origin, false, dialogs);
 				expect(prompt).not.toContain(decision);
@@ -346,7 +346,7 @@ describe("chat origin system prompt per platform", () => {
 				expect(prompt).not.toContain("how to undo");
 				expect(prompt).toContain("보고에 한 일을 적는다");
 				expect(prompt).toContain("say what was done in the report");
-				expect(prompt).toContain("ompbot_request_approval(summary, external?, action?, why?, impact?, rollback?)");
+				expect(prompt).toContain("jabbu_request_approval(summary, external?, action?, why?, impact?, rollback?)");
 				expect(prompt).toContain("되돌릴 수 없는 이유(rollback)");
 				expect(prompt).toContain("fill at least `rollback` and `impact`");
 			}

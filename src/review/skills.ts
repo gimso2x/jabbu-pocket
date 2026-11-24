@@ -225,7 +225,7 @@ function renderAdoptionChecks(proposal: SkillProposal): string {
 	if (proposal.content.includes("## 채택 검증")) return "";
 	const lines = ["", "## 채택 검증", ""];
 	lines.push(
-		`설치 뒤 아래 짝을 실제 대화에서 한 번씩 돌려 확인한다. 어긋나면 \`ompbot skills rollback ${proposal.name}\`.`,
+		`설치 뒤 아래 짝을 실제 대화에서 한 번씩 돌려 확인한다. 어긋나면 \`jabbu-pocket skills rollback ${proposal.name}\`.`,
 	);
 	lines.push("");
 	for (const check of proposal.checks) lines.push(`- ${check.situation} → ${check.expect}`);
@@ -315,8 +315,8 @@ export async function runSkillReview(
 	const failed = proposals.length - installed.length;
 	await deps.notify(
 		`📝 스킬 ${installed.length}개 설치: ${installed.join(", ")} — 다음 세션부터 스킬 목록에 나타납니다.${
-			failed === 0 ? "" : `\n${failed}개는 설치하지 못했습니다(ompbot.log skill_install_failed).`
-		}\n나빠지면 \`ompbot skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
+			failed === 0 ? "" : `\n${failed}개는 설치하지 못했습니다(jabbu.log skill_install_failed).`
+		}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
 	);
 	return { proposals: proposals.length, installed: installed.length };
 }
@@ -450,7 +450,7 @@ export function savePendingProposals(homeDir: string, proposals: SkillProposal[]
 }
 
 /**
- * The agent skills directory ompbot installs into (`~/.omp/agent/managed-skills`, the same store omp's
+ * The agent skills directory jabbu installs into (`~/.omp/agent/managed-skills`, the same store omp's
  * `learn`/`manage_skill` write, so one revision snapshot, weekly report and unused-archive covers both);
  * `userHome` is a test seam.
  */
@@ -520,7 +520,7 @@ export function listSkillRevisions(dir: string): string[] {
 }
 
 /**
- * Rolls the skill back to its newest revision (`ompbot skills rollback`). The swap keeps today's content in the
+ * Rolls the skill back to its newest revision (`jabbu-pocket skills rollback`). The swap keeps today's content in the
  * revision slot, so running it again restores it — an approved patch is always reversible in both directions.
  */
 export function rollbackSkill(dir: string): string {

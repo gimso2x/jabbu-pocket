@@ -1,4 +1,4 @@
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { ownerSilenceFallbackMinutes, silenceFailedNotice, silenceNotice, silencePrompt } from "../owner-silence";
 import type { TaskJudgement } from "./checker";
 import type { TaskLedger, TaskRow } from "./ledger";
@@ -10,7 +10,7 @@ import type { TaskLedger, TaskRow } from "./ledger";
  * retry prompt), so a restart or a repeated sweep never sends it twice. A frozen bot or a paused task waits.
  */
 export async function silenceFallback(
-	deps: { ledger: TaskLedger; config?: Pick<OmpbotConfig, "ownerSilenceFallbackMinutes">; frozen: boolean },
+	deps: { ledger: TaskLedger; config?: Pick<JabbuConfig, "ownerSilenceFallbackMinutes">; frozen: boolean },
 	act: { remind(text: string): Promise<boolean>; post(text: string): Promise<unknown> },
 	row: TaskRow,
 	judgement: TaskJudgement,

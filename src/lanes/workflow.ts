@@ -15,7 +15,7 @@ export const WORKFLOW_NAMES = [
 ] as const;
 export type WorkflowName = (typeof WORKFLOW_NAMES)[number];
 
-/** The head's pick (`ompbot_work_start` `workflow`): the name goes on the prompt's first line, the reason is shown. */
+/** The head's pick (`jabbu_work_start` `workflow`): the name goes on the prompt's first line, the reason is shown. */
 export interface WorkflowChoice {
 	name: WorkflowName;
 	reason: string;
@@ -68,7 +68,7 @@ export function leadingWorkflow(text: string): { name: WorkflowName; length: num
 	return { name: "ulw", length: prefix + plain[0].length };
 }
 
-/** `ompbot_work_start` `workflow` as the tool received it; `undefined` = none chosen. */
+/** `jabbu_work_start` `workflow` as the tool received it; `undefined` = none chosen. */
 export function workflowChoice(value: unknown): WorkflowChoice | undefined {
 	if (value === undefined) return undefined;
 	const refused = () =>

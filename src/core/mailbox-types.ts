@@ -155,7 +155,7 @@ export interface MailboxDeps {
 	timezone: string;
 	statusProvider: StatusProvider;
 	/**
-	 * `/usage-ompbot` answer for an origin: the token and cost totals from ompbot's own session files, then the account
+	 * `/usage-jabbu` answer for an origin: the token and cost totals from jabbu's own session files, then the account
 	 * limits of `omp usage` (src/omp/usage-json.ts) as one block under them. Without it the command says it is not wired.
 	 */
 	usageProvider?: (originKey: string) => Promise<string>;
@@ -167,7 +167,7 @@ export interface MailboxDeps {
 	budgetProvider?: () => Promise<string>;
 	/** Read on every new turn: whether its prompt may carry channel-scoped recall. Absent = never. */
 	recallEnabled?: () => boolean;
-	/** Read when a child starts: whether it gets ompbot host tools (an omp child; agy gets none). Absent = yes. */
+	/** Read when a child starts: whether it gets jabbu host tools (an omp child; agy gets none). Absent = yes. */
 	hostTools?: () => boolean;
 	/**
 	 * Live `costCap` from config, read per assistant call: `turnUsd` steers a turn at the ceiling and stops it at
@@ -230,7 +230,7 @@ export interface MailboxDeps {
 	 */
 	isFrozen?: () => boolean;
 	/**
-	 * True while the origin's session is handed to a terminal omp (`ompbot lanes attach`): no child starts — not even
+	 * True while the origin's session is handed to a terminal omp (`jabbu-pocket lanes attach`): no child starts — not even
 	 * for a `!` command, which stays pending like any other row until the session comes back.
 	 */
 	isAttached?: () => boolean;
@@ -430,7 +430,7 @@ export interface SessionMismatchInfo {
 	originKey: string;
 	/** Thread of the message whose turn (or command) opened the session. */
 	threadRef: string;
-	/** The file to resume: `/resume-ompbot`'s pin, else the newest session of the epoch dir before the child started. */
+	/** The file to resume: `/resume-jabbu`'s pin, else the newest session of the epoch dir before the child started. */
 	expected: string;
 	/** The file the child reported as open. */
 	actual: string;
@@ -523,7 +523,7 @@ export interface ActiveTurn {
 }
 
 /**
- * The session file the next child open should resume: the file pinned by `/resume-ompbot`, else the newest session of
+ * The session file the next child open should resume: the file pinned by `/resume-jabbu`, else the newest session of
  * the origin's session dir (undefined for an empty or missing dir). Read it before the child starts — a started child
  * may already have created a new file in the dir.
  */
@@ -533,7 +533,7 @@ export function sessionToResume(origin: OriginRow): string | undefined {
 }
 
 /**
- * Binds the origin's session in a started driver: the file pinned by `/resume-ompbot`, else the newest session of the
+ * Binds the origin's session in a started driver: the file pinned by `/resume-jabbu`, else the newest session of the
  * origin's session dir. Recovery uses the same rule so it reads the session the turn ran in. Then compares the file
  * the child reports as open with `expected` (`sessionToResume`, read before start); no verdict when either is unknown.
  */

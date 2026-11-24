@@ -40,7 +40,7 @@ let daemon: Daemon | undefined;
 let drivers: PromptedDriver[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-cost-cap-daemon-");
+	home = makeHome("jabbu-cost-cap-daemon-");
 	clock = {
 		t: T0,
 		now() {

@@ -80,7 +80,7 @@ const prompts = (): string[] =>
 	drivers.flatMap((d) => d.calls.filter((c) => c.startsWith("prompt:")).map((c) => c.slice("prompt:".length)));
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-ctx-");
+	home = makeHome("jabbu-discord-ctx-");
 	drivers = [];
 	lines = [];
 	seq = 0n;

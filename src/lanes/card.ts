@@ -19,15 +19,15 @@ import { INCONCLUSIVE_APPROVED, INTEGRITY_APPROVED, type LaneRow, OWNER_ACCEPTED
  * (`buildReachedCard`); `text` is the whole card as one string for notifications and clients without cards.
  */
 
-const LANE_MERGE_ACTION_PREFIX = "ompbot:lane:merge:";
-const LANE_DISCARD_ACTION_PREFIX = "ompbot:lane:discard:";
-const LANE_PAUSE_ACTION_PREFIX = "ompbot:lane:pause:";
-const LANE_RESUME_ACTION_PREFIX = "ompbot:lane:resume:";
+const LANE_MERGE_ACTION_PREFIX = "jabbu:lane:merge:";
+const LANE_DISCARD_ACTION_PREFIX = "jabbu:lane:discard:";
+const LANE_PAUSE_ACTION_PREFIX = "jabbu:lane:pause:";
+const LANE_RESUME_ACTION_PREFIX = "jabbu:lane:resume:";
 /** `PR 게시`·`보류` of an external PR lane's card. */
-const LANE_PUBLISH_ACTION_PREFIX = "ompbot:lane:publish:";
-const LANE_HOLD_ACTION_PREFIX = "ompbot:lane:hold:";
-/** `ompbot:lane:session:<name>:<n>`: the owner picks which session file a lane continues after a terminal hand-back. */
-const LANE_SESSION_ACTION_PREFIX = "ompbot:lane:session:";
+const LANE_PUBLISH_ACTION_PREFIX = "jabbu:lane:publish:";
+const LANE_HOLD_ACTION_PREFIX = "jabbu:lane:hold:";
+/** `jabbu:lane:session:<name>:<n>`: the owner picks which session file a lane continues after a terminal hand-back. */
+const LANE_SESSION_ACTION_PREFIX = "jabbu:lane:session:";
 /** Lane names are slugs (`slugify` in the manager) with an optional `-n` suffix. */
 const LANE_NAME = /^[a-z0-9가-힣-]{1,64}$/;
 const SUMMARY_MAX = 300;

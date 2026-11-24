@@ -18,7 +18,7 @@ let home: TestHome;
 const stops: Array<() => void> = [];
 
 beforeEach(() => {
-	home = makeHome("ompbot-cli-qa-j-");
+	home = makeHome("jabbu-cli-qa-j-");
 });
 
 afterEach(() => {
@@ -29,7 +29,7 @@ afterEach(() => {
 /** A socket that reads the request and closes without answering: the daemon "took it but gave no answer". */
 function silentDaemon(): void {
 	const server = Bun.listen({
-		unix: join(home.dir, "ompbot.sock"),
+		unix: join(home.dir, "jabbu.sock"),
 		socket: {
 			data(socket) {
 				socket.end();
@@ -71,13 +71,13 @@ describe("inject and tasks against a silent daemon (qa-j n24, n59)", () => {
 	});
 
 	test("tasks close, pause and resume do not report an unanswered request as unreachable", async () => {
-		const id = registerTask(join(home.dir, "ompbot.db"));
+		const id = registerTask(join(home.dir, "jabbu.db"));
 		silentDaemon();
 		const close = await runCliCapture(home.dir, ["tasks", "close", id, "--as", "cancelled"]);
 		expect(close.code).toBe(0);
 		expect(close.stderr).toContain("no daemon answer");
 		expect(close.stderr).not.toContain("not reachable");
-		const ledger = openTaskLedger(join(home.dir, "ompbot.db"), "Asia/Seoul");
+		const ledger = openTaskLedger(join(home.dir, "jabbu.db"), "Asia/Seoul");
 		const second = ledger.register({
 			title: "t2",
 			risk: "L2",
@@ -94,7 +94,7 @@ describe("inject and tasks against a silent daemon (qa-j n24, n59)", () => {
 			expect(result.stderr).toContain("no daemon answer");
 			expect(result.stderr).not.toContain("not reachable");
 		}
-		const check = openTaskLedger(join(home.dir, "ompbot.db"), "Asia/Seoul");
+		const check = openTaskLedger(join(home.dir, "jabbu.db"), "Asia/Seoul");
 		expect(check.isPaused(check.get(second.taskId) as never)).toBe(false);
 		check.close();
 	});
@@ -102,7 +102,7 @@ describe("inject and tasks against a silent daemon (qa-j n24, n59)", () => {
 
 describe("tasks CLI (qa-j n58, n122)", () => {
 	test("tasks list and show read a ledger that cannot be written", async () => {
-		const dbPath = join(home.dir, "ompbot.db");
+		const dbPath = join(home.dir, "jabbu.db");
 		// A plain (non-WAL) file: the old write-mode open had to switch it to WAL and failed on a read-only one.
 		const db = new Database(dbPath, { create: true, strict: true });
 		db.close();
@@ -116,7 +116,7 @@ describe("tasks CLI (qa-j n58, n122)", () => {
 	});
 
 	test("tasks list on a ledger without a tasks table is empty and creates nothing", async () => {
-		const dbPath = join(home.dir, "ompbot.db");
+		const dbPath = join(home.dir, "jabbu.db");
 		new Database(dbPath, { create: true, strict: true }).close();
 		const list = await runCliCapture(home.dir, ["tasks", "list"]);
 		expect(list.code, list.stderr).toBe(0);
@@ -124,7 +124,7 @@ describe("tasks CLI (qa-j n58, n122)", () => {
 	});
 
 	test("resume without a daemon on a TASK that was never paused says so and does not claim a resume", async () => {
-		const id = registerTask(join(home.dir, "ompbot.db"));
+		const id = registerTask(join(home.dir, "jabbu.db"));
 		const result = await runCliCapture(home.dir, ["tasks", "resume", id]);
 		expect(result.code).toBe(0);
 		const out = JSON.parse(result.stdout) as { ok: boolean; resumed: boolean; paused: boolean; note: string };
@@ -153,7 +153,7 @@ function registerPlainLedgerTask(dbPath: string): string {
 
 describe("status (qa-j n15, n16)", () => {
 	test("a monitor row that does not parse does not blank the counts or open ledger_unreadable", () => {
-		const dbPath = join(home.dir, "ompbot.db");
+		const dbPath = join(home.dir, "jabbu.db");
 		const store = openBotStore(dbPath, { now: () => Date.now() }, "Asia/Seoul");
 		store.close();
 		const db = new Database(dbPath, { strict: true });
@@ -169,9 +169,9 @@ describe("status (qa-j n15, n16)", () => {
 	});
 
 	test("a daemon reply that is not a status report falls back to the database report", async () => {
-		const dbPath = join(home.dir, "ompbot.db");
+		const dbPath = join(home.dir, "jabbu.db");
 		openBotStore(dbPath, { now: () => Date.now() }, "Asia/Seoul").close();
-		const server = startIpcServer(join(home.dir, "ompbot.sock"), async () => ({ ok: true, status: {} }));
+		const server = startIpcServer(join(home.dir, "jabbu.sock"), async () => ({ ok: true, status: {} }));
 		stops.push(() => server.stop());
 		const result = await runCliCapture(home.dir, ["status", "--json"]);
 		expect(result.code, result.stderr).toBe(0);
@@ -185,7 +185,7 @@ describe("inject origin ids (qa-j n26)", () => {
 	let daemon: Daemon;
 	let ownerHome: TestHome;
 	beforeEach(async () => {
-		ownerHome = makeHome("ompbot-inject-ids-");
+		ownerHome = makeHome("jabbu-inject-ids-");
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
 			config: ownerHome.config,

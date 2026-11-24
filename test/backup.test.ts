@@ -20,7 +20,7 @@ const sha256OfFile = (path: string): string => createHash("sha256").update(readF
 let home: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-backup-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-backup-"));
 });
 
 afterEach(() => {
@@ -32,7 +32,7 @@ describe("runBackup", () => {
 		seedDb(home);
 		const result = runBackup({ homeDir: home, now: new Date(2026, 9, 23, 4, 30, 0) });
 
-		expect(result.file.endsWith("ompbot-20261023-043000.db")).toBe(true);
+		expect(result.file.endsWith("jabbu-20261023-043000.db")).toBe(true);
 		expect(existsSync(result.file)).toBe(true);
 		expect(result.bytes).toBeGreaterThan(0);
 		expect(existsSync(`${result.file}-wal`)).toBe(false);
@@ -48,7 +48,7 @@ describe("runBackup", () => {
 
 		const stamp = readStamp(join(home, "backups"));
 		expect(stamp).toBeDefined();
-		expect(stamp?.file).toBe("ompbot-20261023-043000.db");
+		expect(stamp?.file).toBe("jabbu-20261023-043000.db");
 		expect(stamp?.bytes).toBe(result.bytes);
 		expect(stamp?.sha256).toBe(result.sha256);
 	});
@@ -68,7 +68,7 @@ describe("runBackup", () => {
 	});
 
 	test("a FIFO in the ledger's place fails as missing instead of blocking the open", () => {
-		expect(Bun.spawnSync(["mkfifo", join(home, "ompbot.db")]).exitCode).toBe(0);
+		expect(Bun.spawnSync(["mkfifo", join(home, "jabbu.db")]).exitCode).toBe(0);
 		expect(() => runBackup({ homeDir: home })).toThrow(/db_missing/);
 		expect(existsSync(join(home, "backups", STAMP_FILE))).toBe(false);
 	});
@@ -79,43 +79,43 @@ describe("runBackup", () => {
 		mkdirSync(backupsDir, { recursive: true });
 		// Five old daily backups: names sort chronologically.
 		const dailies = [
-			"ompbot-20261020-043000.db",
-			"ompbot-20261021-043000.db",
-			"ompbot-20261022-043000.db",
-			"ompbot-20261023-043000.db",
-			"ompbot-20261024-043000.db",
+			"jabbu-20261020-043000.db",
+			"jabbu-20261021-043000.db",
+			"jabbu-20261022-043000.db",
+			"jabbu-20261023-043000.db",
+			"jabbu-20261024-043000.db",
 		];
 		for (const name of dailies) writeFileSync(join(backupsDir, name), "x");
 		// Files the prune pattern must never touch.
-		writeFileSync(join(backupsDir, "ompbot-pre-upgrade-20261019T000000Z.db"), "x");
+		writeFileSync(join(backupsDir, "jabbu-pre-upgrade-20261019T000000Z.db"), "x");
 		writeFileSync(join(backupsDir, "config.json.bak-20261020"), "x");
 		writeFileSync(join(backupsDir, STAMP_FILE), "ts=old\n");
 
 		const result = runBackup({ homeDir: home, keep: 2, now: new Date(2026, 9, 25, 4, 30, 0) });
 
 		// keep=2: the new backup plus the newest old one survive.
-		expect(dailyBackupNames(home)).toEqual(["ompbot-20261024-043000.db", "ompbot-20261025-043000.db"]);
-		expect(existsSync(join(backupsDir, "ompbot-pre-upgrade-20261019T000000Z.db"))).toBe(true);
+		expect(dailyBackupNames(home)).toEqual(["jabbu-20261024-043000.db", "jabbu-20261025-043000.db"]);
+		expect(existsSync(join(backupsDir, "jabbu-pre-upgrade-20261019T000000Z.db"))).toBe(true);
 		expect(existsSync(join(backupsDir, "config.json.bak-20261020"))).toBe(true);
 		expect(result.removed).toHaveLength(4);
 		// The stamp was overwritten by the new successful backup, not left at "ts=old".
-		expect(readStamp(backupsDir)?.file).toBe("ompbot-20261025-043000.db");
+		expect(readStamp(backupsDir)?.file).toBe("jabbu-20261025-043000.db");
 	});
 
 	test("keep=0 disables pruning", () => {
 		seedDb(home);
 		const backupsDir = join(home, "backups");
 		mkdirSync(backupsDir, { recursive: true });
-		writeFileSync(join(backupsDir, "ompbot-20260101-000000.db"), "x");
+		writeFileSync(join(backupsDir, "jabbu-20260101-000000.db"), "x");
 		runBackup({ homeDir: home, keep: 0, now: new Date(2026, 9, 23, 4, 30, 0) });
-		expect(dailyBackupNames(home)).toEqual(["ompbot-20260101-000000.db", "ompbot-20261023-043000.db"]);
+		expect(dailyBackupNames(home)).toEqual(["jabbu-20260101-000000.db", "jabbu-20261023-043000.db"]);
 	});
 
 	test("stamp content is grep-stable and the mtime fallback parses", () => {
 		seedDb(home);
 		const result = runBackup({ homeDir: home, now: new Date(2026, 9, 23, 4, 30, 0) });
 		const text = readFileSync(join(home, "backups", STAMP_FILE), "utf8");
-		expect(text).toContain(`file=ompbot-20261023-043000.db`);
+		expect(text).toContain(`file=jabbu-20261023-043000.db`);
 		expect(text).toContain(`sha256=${result.sha256}`);
 		expect(text).toContain("integrity=ok");
 		expect(readStamp(join(home, "backups"))?.ts.getTime()).toBeGreaterThan(0);
@@ -162,7 +162,7 @@ describe("backup bundle (sessions + config.json)", () => {
 			tarBin: warningTar("tar: sessions/discord-dm-200000000000000001/e1/s.jsonl: file changed as we read it"),
 		});
 		expect(existsSync(result.bundle as string)).toBe(true);
-		expect(readStamp(join(home, "backups"))?.bundle).toBe("ompbot-bundle-20261023-043000.tar.gz");
+		expect(readStamp(join(home, "backups"))?.bundle).toBe("jabbu-bundle-20261023-043000.tar.gz");
 	});
 
 	test("tar exit 1 with any other message fails the whole backup", () => {
@@ -178,13 +178,13 @@ describe("backup bundle (sessions + config.json)", () => {
 		seedSources();
 		const result = runBackup({ homeDir: home, now: new Date(2026, 9, 23, 4, 30, 0) });
 
-		expect(result.bundle?.endsWith("ompbot-bundle-20261023-043000.tar.gz")).toBe(true);
+		expect(result.bundle?.endsWith("jabbu-bundle-20261023-043000.tar.gz")).toBe(true);
 		expect(existsSync(result.bundle as string)).toBe(true);
 		expect(result.bundleBytes).toBeGreaterThan(0);
 		expect(result.bundleSha256).toBe(sha256OfFile(result.bundle as string));
 
 		const stamp = readStamp(join(home, "backups"));
-		expect(stamp?.bundle).toBe("ompbot-bundle-20261023-043000.tar.gz");
+		expect(stamp?.bundle).toBe("jabbu-bundle-20261023-043000.tar.gz");
 		expect(stamp?.bundleSha256).toBe(result.bundleSha256);
 		expect(readFileSync(join(home, "backups", STAMP_FILE), "utf8")).toContain("bundle=");
 
@@ -206,7 +206,7 @@ describe("backup bundle (sessions + config.json)", () => {
 
 		const result = runBackup({ homeDir: home, now: new Date(2026, 9, 23, 9, 0, 0), skipBundle: true });
 
-		expect(result.file.endsWith("ompbot-20261023-090000.db")).toBe(true);
+		expect(result.file.endsWith("jabbu-20261023-090000.db")).toBe(true);
 		expect(result.sha256).toBe(sha256OfFile(result.file));
 		const copy = new Database(result.file, { readonly: true, strict: true });
 		const check = copy.query("PRAGMA quick_check").get() as { quick_check: string };
@@ -217,7 +217,7 @@ describe("backup bundle (sessions + config.json)", () => {
 		expect(result.bundleSha256).toBeUndefined();
 		expect(result.stamp).toBeUndefined();
 		expect(readdirSync(backupsDir).filter((name) => BUNDLE_FILE_PATTERN.test(name))).toEqual([
-			"ompbot-bundle-20261023-043000.tar.gz",
+			"jabbu-bundle-20261023-043000.tar.gz",
 		]);
 		expect(readFileSync(join(backupsDir, STAMP_FILE), "utf8")).toBe(stampBefore);
 	});
@@ -228,17 +228,17 @@ describe("backup bundle (sessions + config.json)", () => {
 		const backupsDir = join(home, "backups");
 		mkdirSync(backupsDir, { recursive: true });
 		for (const day of ["20261020", "20261021", "20261022"]) {
-			writeFileSync(join(backupsDir, `ompbot-${day}-043000.db`), "x");
-			writeFileSync(join(backupsDir, `ompbot-bundle-${day}-043000.tar.gz`), "x");
+			writeFileSync(join(backupsDir, `jabbu-${day}-043000.db`), "x");
+			writeFileSync(join(backupsDir, `jabbu-bundle-${day}-043000.tar.gz`), "x");
 		}
 		runBackup({ homeDir: home, now: new Date(2026, 9, 23, 9, 0, 0), keep: 2, skipBundle: true });
 		expect(existsSync(join(backupsDir, STAMP_FILE))).toBe(false);
-		expect(dailyBackupNames(home)).toEqual(["ompbot-20261022-043000.db", "ompbot-20261023-090000.db"]);
+		expect(dailyBackupNames(home)).toEqual(["jabbu-20261022-043000.db", "jabbu-20261023-090000.db"]);
 		expect(
 			readdirSync(backupsDir)
 				.filter((name) => BUNDLE_FILE_PATTERN.test(name))
 				.sort(),
-		).toEqual(["ompbot-bundle-20261021-043000.tar.gz", "ompbot-bundle-20261022-043000.tar.gz"]);
+		).toEqual(["jabbu-bundle-20261021-043000.tar.gz", "jabbu-bundle-20261022-043000.tar.gz"]);
 	});
 
 	test("workspace/ and scripts/ are bundled; secrets/ is not; a home without scripts/ still backs up", () => {
@@ -291,7 +291,7 @@ describe("backup bundle (sessions + config.json)", () => {
 			const verbose = Bun.spawnSync(["tar", "-tvzf", result.bundle as string]).stdout.toString();
 			const inner = verbose.split("\n").find((line) => line.includes("sessions/inner-link"));
 			expect(inner?.startsWith("l")).toBe(true);
-			expect(readStamp(join(home, "backups"))?.bundle).toBe("ompbot-bundle-20261111-043000.tar.gz");
+			expect(readStamp(join(home, "backups"))?.bundle).toBe("jabbu-bundle-20261111-043000.tar.gz");
 		});
 
 		test("the size cap measures the link target", () => {
@@ -433,18 +433,18 @@ describe("backup bundle (sessions + config.json)", () => {
 		seedSources();
 		const backupsDir = join(home, "backups");
 		mkdirSync(backupsDir, { recursive: true });
-		writeFileSync(join(backupsDir, "ompbot-bundle-20200101-000000.tar.gz"), "old");
-		writeFileSync(join(backupsDir, "ompbot-bundle-pre-upgrade.tar.gz"), "manual"); // not a daily name
+		writeFileSync(join(backupsDir, "jabbu-bundle-20200101-000000.tar.gz"), "old");
+		writeFileSync(join(backupsDir, "jabbu-bundle-pre-upgrade.tar.gz"), "manual"); // not a daily name
 
 		const result = runBackup({ homeDir: home, keep: 1, now: new Date(2026, 9, 25, 4, 30, 0) });
 		const bundles = readdirSync(backupsDir)
 			.filter((name) => BUNDLE_FILE_PATTERN.test(name))
 			.sort();
-		expect(bundles).toEqual(["ompbot-bundle-20261025-043000.tar.gz"]);
-		expect(result.removed).toContain(join(backupsDir, "ompbot-bundle-20200101-000000.tar.gz"));
-		expect(existsSync(join(backupsDir, "ompbot-bundle-pre-upgrade.tar.gz"))).toBe(true);
+		expect(bundles).toEqual(["jabbu-bundle-20261025-043000.tar.gz"]);
+		expect(result.removed).toContain(join(backupsDir, "jabbu-bundle-20200101-000000.tar.gz"));
+		expect(existsSync(join(backupsDir, "jabbu-bundle-pre-upgrade.tar.gz"))).toBe(true);
 		// The daily db file of the same run is kept too.
-		expect(readdirSync(backupsDir).some((name) => name === "ompbot-20261025-043000.db")).toBe(true);
+		expect(readdirSync(backupsDir).some((name) => name === "jabbu-20261025-043000.db")).toBe(true);
 	});
 
 	test("keep counts days: every file of the run's day, the latest of each other day, nothing past keep days", () => {
@@ -463,12 +463,12 @@ describe("backup bundle (sessions + config.json)", () => {
 			"20261022-120000",
 		];
 		for (const stamp of stamps) {
-			writeFileSync(join(backupsDir, `ompbot-${stamp}.db`), "x");
-			writeFileSync(join(backupsDir, `ompbot-bundle-${stamp}.tar.gz`), "x");
+			writeFileSync(join(backupsDir, `jabbu-${stamp}.db`), "x");
+			writeFileSync(join(backupsDir, `jabbu-bundle-${stamp}.tar.gz`), "x");
 		}
 		const manual = [
-			"ompbot-pre-upgrade-20261001T000000Z.db",
-			"ompbot-20261001-000000.db.bak-1",
+			"jabbu-pre-upgrade-20261001T000000Z.db",
+			"jabbu-20261001-000000.db.bak-1",
 			"config.json.bak-20261001",
 		];
 		for (const name of manual) writeFileSync(join(backupsDir, name), "x");
@@ -477,42 +477,42 @@ describe("backup bundle (sessions + config.json)", () => {
 
 		// keep=3 days: the run's day (all three) + the two newest other days (2030-10-10, 2026-10-24), one each.
 		const survivors = ["20261024-230000", "20261025-010000", "20261025-020000", "20261025-043000", "20301010-120000"];
-		expect(dailyBackupNames(home)).toEqual(survivors.map((s) => `ompbot-${s}.db`));
+		expect(dailyBackupNames(home)).toEqual(survivors.map((s) => `jabbu-${s}.db`));
 		expect(
 			readdirSync(backupsDir)
 				.filter((name) => BUNDLE_FILE_PATTERN.test(name))
 				.sort(),
-		).toEqual(survivors.map((s) => `ompbot-bundle-${s}.tar.gz`));
+		).toEqual(survivors.map((s) => `jabbu-bundle-${s}.tar.gz`));
 		const gone = ["20301010-000000", "20261024-010000", "20261023-120000", "20261022-120000"];
 		expect(result.removed).toEqual([
-			...gone.map((s) => join(backupsDir, `ompbot-${s}.db`)),
-			...gone.map((s) => join(backupsDir, `ompbot-bundle-${s}.tar.gz`)),
+			...gone.map((s) => join(backupsDir, `jabbu-${s}.db`)),
+			...gone.map((s) => join(backupsDir, `jabbu-bundle-${s}.tar.gz`)),
 		]);
 		for (const name of manual) expect(existsSync(join(backupsDir, name))).toBe(true);
 		expect(existsSync(join(backupsDir, STAMP_FILE))).toBe(true);
 		// kept = every daily .db left after retention, newest name first (bundles are not counted).
-		expect(result.kept).toEqual([...survivors].reverse().map((s) => join(backupsDir, `ompbot-${s}.db`)));
+		expect(result.kept).toEqual([...survivors].reverse().map((s) => join(backupsDir, `jabbu-${s}.db`)));
 	});
 
 	test("without a protected file the newest day is the base day, kept whole", () => {
 		const names = [
-			"ompbot-20261024-010000.db",
-			"ompbot-20261024-020000.db",
-			"ompbot-20261023-010000.db",
-			"ompbot-20261023-020000.db",
-			"ompbot-20261022-010000.db",
-			"ompbot-pre-upgrade-20261001T000000Z.db",
-			"ompbot-bundle-20261024-010000.tar.gz",
+			"jabbu-20261024-010000.db",
+			"jabbu-20261024-020000.db",
+			"jabbu-20261023-010000.db",
+			"jabbu-20261023-020000.db",
+			"jabbu-20261022-010000.db",
+			"jabbu-pre-upgrade-20261001T000000Z.db",
+			"jabbu-bundle-20261024-010000.tar.gz",
 		];
 		expect(retentionDoomed(names, 2, [], BACKUP_FILE_PATTERN)).toEqual([
-			"ompbot-20261023-010000.db",
-			"ompbot-20261022-010000.db",
+			"jabbu-20261023-010000.db",
+			"jabbu-20261022-010000.db",
 		]);
 		// A protected name pins its day as the base day even when it is not the newest.
-		expect(retentionDoomed(names, 1, ["ompbot-20261023-010000.db"], BACKUP_FILE_PATTERN)).toEqual([
-			"ompbot-20261024-020000.db",
-			"ompbot-20261024-010000.db",
-			"ompbot-20261022-010000.db",
+		expect(retentionDoomed(names, 1, ["jabbu-20261023-010000.db"], BACKUP_FILE_PATTERN)).toEqual([
+			"jabbu-20261024-020000.db",
+			"jabbu-20261024-010000.db",
+			"jabbu-20261022-010000.db",
 		]);
 	});
 

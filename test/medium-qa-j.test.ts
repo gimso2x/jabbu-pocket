@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 function layout(): { root: string; home: string } {
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-qaj-ws-")));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-qaj-ws-")));
 	dirs.push(root);
 	const home = join(root, "home");
 	mkdirSync(join(home, "secrets"), { recursive: true });

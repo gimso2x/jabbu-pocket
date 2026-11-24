@@ -83,7 +83,7 @@ describe("collectLaneDiff binary files (qa-j 52)", () => {
 		}).trim();
 
 	test("a NUL byte or `-diff` attribute does not hide a stub from the judge", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "ompbot-integrity-qa-j-"));
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-integrity-qa-j-"));
 		roots.push(dir);
 		git(dir, "init", "-q", "-b", "main");
 		writeFileSync(join(dir, "README.md"), "base\n");

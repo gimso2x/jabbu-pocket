@@ -115,7 +115,7 @@ export function githubRepoOfUrl(url: string): string | undefined {
 	return repo !== undefined && GITHUB_REPO.test(repo) ? repo : undefined;
 }
 
-/** `ompbot_work_start` `externalPr` (and `!pr`) as given: every field optional, each checked for shape. */
+/** `jabbu_work_start` `externalPr` (and `!pr`) as given: every field optional, each checked for shape. */
 export interface ExternalPrInput {
 	repo?: string;
 	base?: string;
@@ -484,7 +484,7 @@ export async function publishPr(
 	if (plan.kind === "update") return { ok: true, url: plan.pr.url, branch, pushed: true };
 	const body = readPrBody(input.worktree, pr.bodyFile);
 	if (!body.ok) return body;
-	const bodyDir = mkdtempSync(join(tmpdir(), "ompbot-pr-"));
+	const bodyDir = mkdtempSync(join(tmpdir(), "jabbu-pr-"));
 	const bodyPath = join(bodyDir, "body.md");
 	let create: ProcResult;
 	try {

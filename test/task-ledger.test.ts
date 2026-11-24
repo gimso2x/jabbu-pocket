@@ -356,7 +356,7 @@ describe("TaskLedger", () => {
 		};
 		let dir: string;
 		beforeEach(() => {
-			dir = mkdtempSync(join(tmpdir(), "ompbot-task-land-"));
+			dir = mkdtempSync(join(tmpdir(), "jabbu-task-land-"));
 		});
 		afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -576,7 +576,7 @@ describe("host ops (fake runner)", () => {
 	describe("local, real temp git repo", () => {
 		let dir: string;
 		beforeEach(() => {
-			dir = mkdtempSync(join(tmpdir(), "ompbot-task-host-"));
+			dir = mkdtempSync(join(tmpdir(), "jabbu-task-host-"));
 		});
 		afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -734,10 +734,10 @@ describe("evaluateTask", () => {
 	});
 });
 
-describe("ompbot tasks (CLI)", () => {
+describe("jabbu-pocket tasks (CLI)", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-tasks-cli-");
+		home = makeHome("jabbu-tasks-cli-");
 	});
 	afterEach(() => {
 		killSpawned();
@@ -745,7 +745,7 @@ describe("ompbot tasks (CLI)", () => {
 	});
 
 	test("list / show / close round trip; close is the only way to done", async () => {
-		const ledger = openTaskLedger(join(home.dir, "ompbot.db"), "Asia/Seoul");
+		const ledger = openTaskLedger(join(home.dir, "jabbu.db"), "Asia/Seoul");
 		const row = ledger.register({ ...base, repo: join(home.dir, "repo") });
 		ledger.close();
 
@@ -794,7 +794,7 @@ describe("ompbot tasks (CLI)", () => {
 	}, 30_000); // a dozen CLI child processes: slow on a 2-core machine
 
 	test("AC-11: read-only tasks list over a pre-tier ledger succeeds and shows the three tier values as null", async () => {
-		const db = new Database(join(home.dir, "ompbot.db"), { create: true, strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { create: true, strict: true });
 		db.run(PRE_TIER_TASKS);
 		db.run(OLD_ROW);
 		db.close();
@@ -804,7 +804,7 @@ describe("ompbot tasks (CLI)", () => {
 			expect.objectContaining({ taskId: "T-20261001-01", workerModel: null, tier: null, tierReason: null }),
 		]);
 		// A read never migrates: the ledger file still has the old columns only.
-		const after = new Database(join(home.dir, "ompbot.db"), { readonly: true });
+		const after = new Database(join(home.dir, "jabbu.db"), { readonly: true });
 		const columns = (after.query("PRAGMA table_info(tasks)").all() as Array<{ name: string }>).map((c) => c.name);
 		after.close();
 		expect(columns).not.toContain("tier");

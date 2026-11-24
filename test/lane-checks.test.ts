@@ -23,7 +23,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-checks-home-");
+	home = makeHome("jabbu-lane-checks-home-");
 	repos = [];
 });
 
@@ -378,7 +378,7 @@ describe("a timed-out check is inconclusive, not a violation", () => {
 				{ id: "AC-1", signal: 'command ["sh","-c","test -f a.txt"]', ok: true, detail: "exit 0" },
 				{ id: "AC-2", signal: 'command ["sh","-c","exit 0 # slow"]', ok: true, detail: "exit 0" },
 			],
-			runtime: { head: sha, omp: "unknown", kencrew: "unknown", os: process.platform, arch: process.arch },
+			runtime: { head: sha, omp: "unknown", source: "unknown", os: process.platform, arch: process.arch },
 		});
 		expect(closed?.meta.land?.autoLandHeld).toBeUndefined();
 		expect(asked.asked).toHaveLength(0);

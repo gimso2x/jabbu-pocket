@@ -365,9 +365,9 @@ export function buildTurnsSection(
 	const threads = [...own.threads];
 	const peerErrors: PeerTurnError[] = [];
 	for (const peer of opts.peers ?? []) {
-		const peerDbPath = join(peer.home, "ompbot.db");
+		const peerDbPath = join(peer.home, "jabbu.db");
 		if (!existsSync(peerDbPath)) {
-			peerErrors.push({ install: peer.name, error: "ompbot.db가 없음" });
+			peerErrors.push({ install: peer.name, error: "jabbu.db가 없음" });
 			continue;
 		}
 		let peerDb: Database | undefined;

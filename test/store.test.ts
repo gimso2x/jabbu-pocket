@@ -42,8 +42,8 @@ function open(hooks?: Parameters<typeof openStore>[0]["hooks"]): Store {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-store-"));
-	dbPath = join(dir, "ompbot.db");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-store-"));
+	dbPath = join(dir, "jabbu.db");
 	clock = new FakeClock();
 });
 
@@ -327,7 +327,7 @@ describe("schema 7: the removed Teams channel's tables", () => {
 		expect(names).not.toContain(qaIndex);
 		const check = new Database(dbPath, { readonly: true });
 		try {
-			expect(readSchemaVersion(check)).toBe(8);
+			expect(readSchemaVersion(check)).toBe(9);
 		} finally {
 			check.close();
 		}

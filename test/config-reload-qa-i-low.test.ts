@@ -13,7 +13,7 @@ import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 
 let home: TestHome;
 beforeEach(() => {
-	home = makeHome("ompbot-config-qa-i-low-");
+	home = makeHome("jabbu-config-qa-i-low-");
 });
 afterEach(() => home.remove());
 
@@ -119,7 +119,7 @@ describe("dispatchHosts.<h>.ssh", () => {
 
 describe("doctor code rollback line", () => {
 	test("control characters in the journal cannot start a second line", () => {
-		const repo = mkdtempSync(join(tmpdir(), "ompbot-doctor-journal-"));
+		const repo = mkdtempSync(join(tmpdir(), "jabbu-doctor-journal-"));
 		try {
 			expect(Bun.spawnSync(["git", "init", "-q", repo]).exitCode).toBe(0);
 			mkdirSync(join(repo, ".git"), { recursive: true });

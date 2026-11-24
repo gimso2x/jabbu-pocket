@@ -29,7 +29,7 @@ let drivers: Map<string, FakeOmpDriver>;
 let transport: WaitingDiscordTransport;
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-followup-");
+	home = makeHome("jabbu-lane-followup-");
 	repos = [];
 	daemons = [];
 	drivers = new Map();
@@ -49,7 +49,7 @@ function commitMore(repo: string): void {
 	git(repo, "commit", "-q", "-m", "work");
 }
 
-/** A daemon with one lane `ask` that did real work and was closed through `ompbot_claim_done`; returns its root message id. */
+/** A daemon with one lane `ask` that did real work and was closed through `jabbu_claim_done`; returns its root message id. */
 async function closedLane(): Promise<{ daemon: Daemon; rootId: string }> {
 	const repo = makeRepo(repos);
 	const sessions = new FakeSessionStore();
@@ -74,7 +74,7 @@ async function closedLane(): Promise<{ daemon: Daemon; rootId: string }> {
 	await daemon.inject({ origin: `discord/dm/${OWNER_DM}`, asOwner: true, text: `작업: ask @${repo}` });
 	await transport.waitForPosts((text) => text.startsWith("ECHO 작업:"));
 	const rootId = transport.posts((text) => text === "🔄 ask")[0]?.id ?? "";
-	const claim = daemon.hostToolsFor("ompbot/work/ask").find((tool) => tool.name === "ompbot_claim_done");
+	const claim = daemon.hostToolsFor("jabbu/work/ask").find((tool) => tool.name === "jabbu_claim_done");
 	// The lane works in its own worktree beside `repo`; that is where its commit lands.
 	const worktree = daemon.store.getLane("ask")?.cwd ?? "";
 	commitMore(worktree);
@@ -88,7 +88,7 @@ const send = (content: string, id: string, rootId: string, author = OWNER) =>
 	transport.emitMessage({ id, channel_id: rootId, guild_id: GUILD, author: { id: author }, content, type: 0 });
 
 const laneEvents = (daemon: Daemon) => daemon.store.getLane("ask")?.history.map((entry) => entry.event) ?? [];
-const lanePrompts = () => drivers.get("ompbot/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
+const lanePrompts = () => drivers.get("jabbu/work/ask")?.calls.filter((call) => call.startsWith("prompt:")) ?? [];
 
 describe("owner messages in a closed lane's thread", () => {
 	test("a plain question is answered by the lane session and does not reopen the lane", async () => {
@@ -100,7 +100,7 @@ describe("owner messages in a closed lane's thread", () => {
 		expect(laneEvents(daemon)).not.toContain("reopened");
 		expect(laneEvents(daemon).at(-1)).toBe("owner_question");
 		expect(daemon.store.getInbound(`${CHANNEL}:7100000000000000100`)).toMatchObject({
-			originKey: "ompbot/work/ask",
+			originKey: "jabbu/work/ask",
 			state: "answered",
 		});
 		expect(lanePrompts().at(-1)).toContain("!reopen");

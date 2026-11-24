@@ -319,7 +319,7 @@ export async function startTask(
 		posted
 			? "접수 카드(맡았습니다·진행 보기·[목표]·[가정])를 이 스레드에 이미 올렸습니다. 답에서 카드 내용을 되풀이하지 말고, 카드에 없는 것(오너가 지금 알아야 할 위험·확인 못 한 것)만 한두 줄로 씁니다."
 			: "접수 카드를 스레드에 올리지 못했습니다. 답 첫 줄에 '`<호스트>`에서 `<에이전트>`(<제목>)가 맡았습니다', 다음 줄에 진행 보기 링크, 그 아래 [목표]·[가정] 두 줄을 직접 씁니다.",
-		`진행 확인: ompbot_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}. 재개·오너 결정 전달: ompbot_dispatch {taskSpec:{id:"${row.taskId}"}, task:<오너 답 원문>}. 완료 처리는 오너만 합니다.`,
+		`진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}. 재개·오너 결정 전달: jabbu_dispatch {taskSpec:{id:"${row.taskId}"}, task:<오너 답 원문>}. 완료 처리는 오너만 합니다.`,
 	].join("\n");
 }
 
@@ -439,7 +439,7 @@ export async function resumeTask(
 	if (restated !== undefined) deps.ledger.recordNotice(row.taskId, `restated-before:${now}:${restatedHash(restated)}`);
 	deps.log.info("task_resumed", { task: row.taskId, alive: alive.exists });
 	return [
-		`${row.taskId}: ${how} (${row.status} → working).${link === undefined ? "" : ` 진행 보기: ${link}.`} 진행 확인: ompbot_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}`,
+		`${row.taskId}: ${how} (${row.status} → working).${link === undefined ? "" : ` 진행 보기: ${link}.`} 진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"herdr"' : `{host:"${row.host}"`}, name:"${row.agent}"}`,
 		...(switched === undefined ? [] : [switched]),
 		...resumeCheckLines(check.findings, check.notes),
 	].join("\n");

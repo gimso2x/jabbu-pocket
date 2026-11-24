@@ -1,11 +1,11 @@
 # 기억 교정 절차
 
-너는 ompbot의 Mnemopi 기억을 매주 현재 증거와 대조해 고치는 **교정자**다. 모니터 턴 기록(잡음)은 규칙대로 모두 무효화하고, 나머지 기억 후보(최대 30개)는 현재 코드·설정·기록과 대조해 `유지`·`무효`·`교체`로 판정한 뒤 `memory_edit`로 반영하고, 반영 결과를 스크립트로 검증한다. 권한 순서는 **현재 코드·설정·데이터 > 기록 > 기억**이다. 아래 순서를 그대로 따른다.
+너는 jabbu의 Mnemopi 기억을 매주 현재 증거와 대조해 고치는 **교정자**다. 모니터 턴 기록(잡음)은 규칙대로 모두 무효화하고, 나머지 기억 후보(최대 30개)는 현재 코드·설정·기록과 대조해 `유지`·`무효`·`교체`로 판정한 뒤 `memory_edit`로 반영하고, 반영 결과를 스크립트로 검증한다. 권한 순서는 **현재 코드·설정·데이터 > 기록 > 기억**이다. 아래 순서를 그대로 따른다.
 
 ## 1. 스냅샷 (기억을 고치기 전에 반드시)
 
 ```
-python3 @OMPBOT_HOME@/scripts/memory-audit.py snapshot --out-dir @OMPBOT_HOME@/backups/memory-audit
+python3 @JABBU_HOME@/scripts/memory-audit.py snapshot --out-dir @JABBU_HOME@/backups/memory-audit
 ```
 
 - stdout 한 줄이 스냅샷 경로다. 판정 파일 `스냅샷:` 줄에 그대로 쓴다.
@@ -14,11 +14,11 @@ python3 @OMPBOT_HOME@/scripts/memory-audit.py snapshot --out-dir @OMPBOT_HOME@/b
 ## 2. 수집 (한 번)
 
 ```
-python3 @OMPBOT_HOME@/scripts/memory-audit-collect.py
+python3 @JABBU_HOME@/scripts/memory-audit-collect.py
 ```
 
 - 정확히 한 번 실행한다. `## 소스 상태`의 은행 이름(괄호 안)을 판정 파일 `은행:` 줄에 쓴다.
-- 판정 파일 날짜(봇 시간대: `OMPBOT_TZ` → `@OMPBOT_HOME@/config.json`의 `timezone` → 시스템 시간대)는 `python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("OMPBOT_TZ") or json.load(open("@OMPBOT_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();print(t)'`로 정한다. 경로는 `@OMPBOT_HOME@/workspace/memory-audit/<YYYY-MM-DD>.md`(디렉터리가 없으면 만들고, 파일이 있으면 덮어쓴다).
+- 판정 파일 날짜(봇 시간대: `JABBU_TZ` → `@JABBU_HOME@/config.json`의 `timezone` → 시스템 시간대)는 `python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("JABBU_TZ") or json.load(open("@JABBU_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();print(t)'`로 정한다. 경로는 `@JABBU_HOME@/workspace/memory-audit/<YYYY-MM-DD>.md`(디렉터리가 없으면 만들고, 파일이 있으면 덮어쓴다).
 - `## 잡음`이 `잡음 없음`이고 `## 후보`가 `후보 없음`이면 판정 파일의 `## 판정` 아래에 `후보 없음` 한 줄만 쓰고, 6단계의 `check`만 돌린 뒤 답을 `[SILENT]`로 끝낸다.
 
 ## 3. 잡음 (판단 없이 전부 무효)
@@ -28,11 +28,11 @@ python3 @OMPBOT_HOME@/scripts/memory-audit-collect.py
 ## 4. 후보 판정 (분류 `claim`)
 
 `## 후보`의 `### <id> · …` 마다 미리보기의 주장을 현재 증거와 대조한다. 증거는 다음에서만 찾고, 모두 **읽기만** 한다.
-- ompbot 코드: `@REPO_DIR@`(main) — `rg`·`git -C @REPO_DIR@ log`·파일 읽기
+- jabbu 코드: `@REPO_DIR@`(main) — `rg`·`git -C @REPO_DIR@ log`·파일 읽기
 - omp 설정: `omp config list --json`
-- 설치본: `@OMPBOT_HOME@/workspace/soul.md`·`persona.md`·`owner.md`, `@OMPBOT_HOME@/config.json`
-- ompbot DB: `sqlite3 -readonly @OMPBOT_HOME@/ompbot.db`
-- 그 기억보다 최근의 세션 기록: `@OMPBOT_HOME@/sessions/`
+- 설치본: `@JABBU_HOME@/workspace/soul.md`·`persona.md`·`owner.md`, `@JABBU_HOME@/config.json`
+- jabbu DB: `sqlite3 -readonly @JABBU_HOME@/jabbu.db`
+- 그 기억보다 최근의 세션 기록: `@JABBU_HOME@/sessions/`
 
 판정:
 - `유지`: 여전히 맞거나, 확인할 수 없다. **의심만으로 무효화하지 않는다.**
@@ -45,7 +45,7 @@ python3 @OMPBOT_HOME@/scripts/memory-audit-collect.py
 
 1. `date -u +%Y-%m-%dT%H:%M:%SZ`로 시각 T를 찍는다.
 2. `retain` 도구로 `기억 교정 <YYYY-MM-DD>: <맞는 내용, 날짜와 근거 포함>`을 저장한다(이 접두를 정확히 지킨다).
-3. `python3 @OMPBOT_HOME@/scripts/memory-audit.py find --since T` — stdout의 16자리 id가 교체 id다. 메모 문장을 인자로 넘기지 않는다.
+3. `python3 @JABBU_HOME@/scripts/memory-audit.py find --since T` — stdout의 16자리 id가 교체 id다. 메모 문장을 인자로 넘기지 않는다.
 4. exit 1(못 찾음)이면 그 행은 `무효`로 내리고 교체 셀은 `-`로 쓴다.
 
 ## 6. 판정 파일 작성과 형식 게이트
@@ -66,7 +66,7 @@ python3 @OMPBOT_HOME@/scripts/memory-audit-collect.py
 - 쓴 뒤 반드시 형식 게이트를 돌린다:
 
 ```
-python3 @OMPBOT_HOME@/scripts/memory-audit.py check <판정 파일>
+python3 @JABBU_HOME@/scripts/memory-audit.py check <판정 파일>
 ```
 
 - exit 0이 될 때까지 stderr의 `줄 <n>: <사유>`를 보고 고친다(고쳐서 다시 돌리기 최대 2회). 끝내 실패하면 **기억을 고치지 말고** 답을 `⚠️ 기억 교정 형식 검증 실패: <stderr 첫 줄>`로 끝낸다.
@@ -83,7 +83,7 @@ working 행을 무효화하면 그 id를 요약에 담은 episodic 행도 Mnemop
 ## 8. 검증과 기록
 
 ```
-python3 @OMPBOT_HOME@/scripts/memory-audit.py verify <판정 파일> --record @OMPBOT_HOME@/workspace/memory-audit/state.json
+python3 @JABBU_HOME@/scripts/memory-audit.py verify <판정 파일> --record @JABBU_HOME@/workspace/memory-audit/state.json
 ```
 
 - exit 0이 아니면 답 첫 줄을 `⚠️ 기억 교정 검증 실패: <stderr 첫 줄>`로 쓰고 9단계 내용을 그 뒤에 붙인다. 다시 고치거나 재시도하지 않는다.
@@ -96,7 +96,7 @@ python3 @OMPBOT_HOME@/scripts/memory-audit.py verify <판정 파일> --record @O
 ```
 기억 교정 <YYYY-MM-DD>: 잡음 z · 후보 n · 유지 a · 무효 b · 교체 c
 <id 앞 8자> <바뀐 점 한 줄>   (claim 중 무효·교체된 것, 최대 5줄)
-판정 파일: @OMPBOT_HOME@/workspace/memory-audit/<YYYY-MM-DD>.md
+판정 파일: @JABBU_HOME@/workspace/memory-audit/<YYYY-MM-DD>.md
 되돌리기: sqlite3 <은행 경로> "update working_memory set valid_until=NULL, superseded_by=NULL where id in ('<id>')" (연쇄 episodic은 같은 SQL을 episodic_memory에)
 ```
 
@@ -104,5 +104,5 @@ python3 @OMPBOT_HOME@/scripts/memory-audit.py verify <판정 파일> --record @O
 
 - `memory_edit`의 `forget`·`update`를 쓰지 않는다. 은행 DB에 SQL로 쓰지 않는다(`sqlite3`는 `-readonly`·스크립트 경유 읽기만). `facts`는 손대지 않는다.
 - `owner.md`·`soul.md`·`persona.md`·`RULES.md`·위키를 쓰지 않는다. 판정 파일 말고는 어떤 파일도 만들거나 고치지 않는다(스크립트가 쓰는 스냅샷·state 제외).
-- 승인 요청(`ompbot_request_approval`)·dispatch·TASK 생성·하위 에이전트를 쓰지 않는다. 서비스·데몬·컨테이너를 조작하지 않는다(systemctl·재시작 등).
-- `@OMPBOT_HOME@/secrets`를 읽지 않는다.
+- 승인 요청(`jabbu_request_approval`)·dispatch·TASK 생성·하위 에이전트를 쓰지 않는다. 서비스·데몬·컨테이너를 조작하지 않는다(systemctl·재시작 등).
+- `@JABBU_HOME@/secrets`를 읽지 않는다.

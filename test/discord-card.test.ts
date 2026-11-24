@@ -126,8 +126,8 @@ describe("OutboundMessage card → one embed", () => {
 				title: "승인 요청",
 				body: "x",
 				buttons: [
-					{ label: "승인", actionId: "ompbot:approval:approve:C1:1", style: "primary" },
-					{ label: "거부", actionId: "ompbot:approval:deny:C1:1", style: "danger" },
+					{ label: "승인", actionId: "jabbu:approval:approve:C1:1", style: "primary" },
+					{ label: "거부", actionId: "jabbu:approval:deny:C1:1", style: "danger" },
 				],
 			},
 		);

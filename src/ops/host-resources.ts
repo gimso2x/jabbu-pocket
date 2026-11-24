@@ -86,13 +86,13 @@ export const IDLE_HOST_LOAD: HostLoadReader = {
 
 /**
  * Test-only host readers for child processes, which cannot take {@link IDLE_HOST_LOAD} as an argument.
- * `OMPBOT_TEST_HOST_LOAD=idle` is read only when `OMPBOT_TEST_HOOKS=1` (like `OMPBOT_TEST_CRASH_AT`), so a stray
+ * `JABBU_TEST_HOST_LOAD=idle` is read only when `JABBU_TEST_HOOKS=1` (like `JABBU_TEST_CRASH_AT`), so a stray
  * variable in production never hides real load. `undefined` = this machine's own readings.
  */
 export function testHostLoad(env: Record<string, string | undefined> = process.env): HostLoadReader | undefined {
-	const value = env.OMPBOT_TEST_HOOKS === "1" ? env.OMPBOT_TEST_HOST_LOAD : undefined;
+	const value = env.JABBU_TEST_HOOKS === "1" ? env.JABBU_TEST_HOST_LOAD : undefined;
 	if (value === undefined) return undefined;
-	if (value !== "idle") throw new Error(`OMPBOT_TEST_HOST_LOAD: unknown value ${value}`);
+	if (value !== "idle") throw new Error(`JABBU_TEST_HOST_LOAD: unknown value ${value}`);
 	return IDLE_HOST_LOAD;
 }
 

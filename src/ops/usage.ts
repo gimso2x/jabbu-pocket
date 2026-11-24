@@ -1,4 +1,4 @@
-// `/usage-ompbot`: token and cost totals read straight from the omp session JSONL files ompbot keeps — no ledger
+// `/usage-jabbu`: token and cost totals read straight from the omp session JSONL files jabbu keeps — no ledger
 // table, no omp call. Assistant messages carry `message.usage`; extension model calls are `model_usage` records with
 // a top-level `usage` (same fields). Sessions gc already removed are not counted, and the answer says so.
 import { existsSync } from "node:fs";

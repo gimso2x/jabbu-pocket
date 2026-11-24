@@ -1,10 +1,10 @@
-import type { OmpbotConfig } from "./config";
+import type { JabbuConfig } from "./config";
 
 /** `ownerSilenceFallbackMinutes` when the key is left out. */
 export const OWNER_SILENCE_DEFAULT_MINUTES = 30;
 
 /** Minutes an owner question waits before the recommendation goes ahead; 0: the fallback is off. */
-export function ownerSilenceFallbackMinutes(config: Pick<OmpbotConfig, "ownerSilenceFallbackMinutes">): number {
+export function ownerSilenceFallbackMinutes(config: Pick<JabbuConfig, "ownerSilenceFallbackMinutes">): number {
 	return config.ownerSilenceFallbackMinutes ?? OWNER_SILENCE_DEFAULT_MINUTES;
 }
 

@@ -34,8 +34,8 @@ let home: string;
 let userHome: string;
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "ompbot-omp-cli-"));
-	home = join(root, "ompbot-home");
+	root = mkdtempSync(join(tmpdir(), "jabbu-omp-cli-"));
+	home = join(root, "jabbu-home");
 	userHome = join(root, "user");
 	mkdirSync(home, { mode: 0o700 });
 	mkdirSync(userHome);
@@ -121,17 +121,17 @@ function deps(
 const omp = (f: Fake, ...args: string[]) => ompCommand(args, home, {}, deps(f));
 const TRIAL_STAGES = ["runtime", "rpc", "print-exit", "print-timeout", "print-no-ok"] as const;
 
-describe("ompbot omp trial", () => {
+describe("jabbu-pocket omp trial", () => {
 	test("all three stages pass: exit 0, run against config ompExecutable with the bot env", async () => {
-		writeConfig({ ompProfile: "ompbot", model: "zai/glm-5" });
+		writeConfig({ ompProfile: "jabbu", model: "zai/glm-5" });
 		const f = fake();
 		expect(await omp(f, "trial")).toBe(0);
 		expect(f.rpcCalls).toHaveLength(1);
-		expect(f.rpcCalls[0]).toMatchObject({ cliPath: "/usr/local/bin/omp", profile: "ompbot", model: "zai/glm-5" });
+		expect(f.rpcCalls[0]).toMatchObject({ cliPath: "/usr/local/bin/omp", profile: "jabbu", model: "zai/glm-5" });
 		const print = f.calls.filter((c) => c.cmd[1] === "-p");
 		expect(print).toHaveLength(1);
 		expect(print[0]?.cmd).toEqual(["/usr/local/bin/omp", "-p", "--no-title", "--model", "zai/glm-5", TRIAL_PROMPT]);
-		expect(print[0]?.opts.env?.OMP_PROFILE).toBe("ompbot");
+		expect(print[0]?.opts.env?.OMP_PROFILE).toBe("jabbu");
 		expect(print[0]?.opts.env).not.toHaveProperty("PI_CODING_AGENT_DIR");
 		expect(print[0]?.opts.timeoutMs).toBe(120_000);
 		expect(f.lines).toEqual([
@@ -205,7 +205,7 @@ describe("ompbot omp trial", () => {
 
 describe("AC-6b: login check and profile-aware doctor/gates", () => {
 	test("omp status fails when the omp reads no login (models=0), passes with models", async () => {
-		writeConfig({ ompProfile: "ompbot" });
+		writeConfig({ ompProfile: "jabbu" });
 		const f = fake();
 		f.models = 0;
 		expect(await omp(f, "status")).toBe(1);
@@ -217,7 +217,7 @@ describe("AC-6b: login check and profile-aware doctor/gates", () => {
 		expect(await omp(f, "status")).toBe(0);
 		expect(f.lines).toContain("ompExecutable=/usr/local/bin/omp");
 		expect(f.lines).toContain("login ok models=5");
-		expect(f.lines.some((l) => l.startsWith(`profile=ompbot dir=${profileAgentDir(userHome, "ompbot")}`))).toBe(true);
+		expect(f.lines.some((l) => l.startsWith(`profile=jabbu dir=${profileAgentDir(userHome, "jabbu")}`))).toBe(true);
 		expect(f.lines).toContain(
 			"last_sync=never pending_changes=unknown (source agent dir /inherited/agent does not exist)",
 		);
@@ -235,27 +235,27 @@ describe("AC-6b: login check and profile-aware doctor/gates", () => {
 		const script = join(root, "omp-models");
 		writeFileSync(
 			script,
-			'#!/bin/sh\nif [ "$OMP_PROFILE" = ompbot ] && [ -z "$PI_CODING_AGENT_DIR" ]; then echo \'{"models":[1,2]}\'; else echo \'{"models":[]}\'; fi\n',
+			'#!/bin/sh\nif [ "$OMP_PROFILE" = jabbu ] && [ -z "$PI_CODING_AGENT_DIR" ]; then echo \'{"models":[1,2]}\'; else echo \'{"models":[]}\'; fi\n',
 		);
 		chmodSync(script, 0o755);
 		const base = { PATH: "/usr/bin:/bin", PI_CODING_AGENT_DIR: "/inherited/agent" };
-		expect(await countOmpModels(script, 10_000, "ompbot", base)).toBe(2);
+		expect(await countOmpModels(script, 10_000, "jabbu", base)).toBe(2);
 		expect(await countOmpModels(script, 10_000, undefined, base)).toBe(0);
 	});
 
 	test("the disk gate's default paths include the profile agent dir", () => {
 		mkdirSync(join(userHome, ".omp", "agent"), { recursive: true });
-		mkdirSync(profileAgentDir(userHome, "ompbot"), { recursive: true });
+		mkdirSync(profileAgentDir(userHome, "jabbu"), { recursive: true });
 		expect(defaultDiskPaths(home, undefined, userHome)).toEqual([home, join(userHome, ".omp", "agent")]);
-		expect(defaultDiskPaths(home, "ompbot", userHome)).toEqual([
+		expect(defaultDiskPaths(home, "jabbu", userHome)).toEqual([
 			home,
 			join(userHome, ".omp", "agent"),
-			profileAgentDir(userHome, "ompbot"),
+			profileAgentDir(userHome, "jabbu"),
 		]);
 	});
 });
 
-describe("AC-5: ompbot omp sync", () => {
+describe("AC-5: jabbu-pocket omp sync", () => {
 	let source: string;
 	let target: string;
 	let shared: string;
@@ -286,7 +286,7 @@ describe("AC-5: ompbot omp sync", () => {
 
 	beforeEach(() => {
 		source = join(userHome, ".omp", "agent");
-		target = profileAgentDir(userHome, "ompbot");
+		target = profileAgentDir(userHome, "jabbu");
 		shared = join(userHome, ".local", "share", "omp-sync", "skills", "s1");
 		put(join(shared, "SKILL.md"), "shared skill\n");
 		put(join(source, "RULES.md"), "rules\n");
@@ -311,14 +311,14 @@ describe("AC-5: ompbot omp sync", () => {
 		put(join(source, "sessions", "x.jsonl"), "{}\n");
 		put(join(source, "history.db"), "h");
 		put(join(source, "models.db"), "m");
-		writeConfig({ ompProfile: "ompbot" });
+		writeConfig({ ompProfile: "jabbu" });
 	});
 
 	function sync(init = false): { code: number; lines: string[] } {
 		const lines: string[] = [];
 		const code = runProfileSync({
 			homeDir: home,
-			profile: "ompbot",
+			profile: "jabbu",
 			env: { HOME: userHome },
 			...(init ? { init: true } : {}),
 			out: (line) => lines.push(line),
@@ -414,7 +414,7 @@ describe("AC-5: ompbot omp sync", () => {
 		expect(readFileSync(join(target, "managed-skills", "m2", "SKILL.md"), "utf8")).toBe("m2 v1\n");
 	});
 
-	test("ompbot omp sync: --init flag through the command, and a home without ompProfile is refused", async () => {
+	test("jabbu-pocket omp sync: --init flag through the command, and a home without ompProfile is refused", async () => {
 		const f = fake();
 		expect(await ompCommand(["sync", "--init"], home, {}, deps(f, { HOME: userHome }))).toBe(0);
 		expect(f.lines.at(-1)).toMatch(/^omp_profile_sync changed=\d+$/);

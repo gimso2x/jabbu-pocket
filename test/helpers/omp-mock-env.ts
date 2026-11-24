@@ -44,7 +44,7 @@ export function mockModelsYml(baseUrl: string): string {
  * user-level discovery (`~/.claude`, `~/.agents` skills, rules and context files) finds nothing.
  */
 export function createOmpMockEnv(baseUrl: string): OmpMockEnv {
-	const root = mkdtempSync(join(tmpdir(), "ompbot-omp-mock-"));
+	const root = mkdtempSync(join(tmpdir(), "jabbu-omp-mock-"));
 	const agentDir = join(root, "agent");
 	const workspace = join(root, "workspace");
 	const sessionsRoot = join(root, "sessions");

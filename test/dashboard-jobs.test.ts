@@ -19,7 +19,7 @@ const LIVE_PID = 4242;
 let home: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-jobs-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-jobs-"));
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -27,7 +27,7 @@ afterEach(() => rmSync(home, { recursive: true, force: true }));
 function deps(overrides: Partial<SnapshotDeps> = {}): SnapshotDeps {
 	return {
 		homeDir: home,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: undefined,
 		now: () => NOW,
@@ -198,7 +198,7 @@ describe("dashboard jobs section", () => {
 		beforeEach(() => {
 			openStore({
 				timezone: "Asia/Seoul",
-				path: join(home, "ompbot.db"),
+				path: join(home, "jabbu.db"),
 				clock: { now: () => NOW },
 				redact: (text) => text,
 			}).close();
@@ -322,15 +322,15 @@ describe("dashboard jobs from systemd-run units", () => {
 		async (cmd: string[]) =>
 			cmd[0] === "systemctl" ? { code, stdout, timedOut: false } : { code: 1, stdout: "", timedOut: false };
 
-	test("a running transient ompbot-* unit is a running job; services, helpers, inactive and file-backed units are not", async () => {
+	test("a running transient jabbu-* unit is a running job; services, helpers, inactive and file-backed units are not", async () => {
 		writeJob("audit.json", { state: "running", updatedAt: iso(NOW - MINUTE), pid: LIVE_PID });
 		const stdout = [
-			transient("ompbot-fable-diet7.service", 501),
-			unit({ MainPID: "502", Id: "ompbot.service", ActiveState: "active", Transient: "no" }),
-			transient("ompbot-job-fable-diet7.service", 503),
-			transient("ompbot-old.service", 0, { ActiveState: "inactive" }),
-			transient("ompbot-audit.service", 504),
-			transient("ompbot-same-pid.service", LIVE_PID),
+			transient("jabbu-fable-diet7.service", 501),
+			unit({ MainPID: "502", Id: "jabbu.service", ActiveState: "active", Transient: "no" }),
+			transient("jabbu-job-fable-diet7.service", 503),
+			transient("jabbu-old.service", 0, { ActiveState: "inactive" }),
+			transient("jabbu-audit.service", 504),
+			transient("jabbu-same-pid.service", LIVE_PID),
 		].join("\n\n");
 		const jobs = await jobsOf({ run: listing(stdout) });
 		expect(jobs.map((job) => [job.name, job.state, job.health])).toEqual([
@@ -338,30 +338,27 @@ describe("dashboard jobs from systemd-run units", () => {
 			["audit", "running", "ok"],
 		]);
 		expect(jobs[0]).toMatchObject({
-			title: "/srv/ompbot-fable-diet7.service.sh",
+			title: "/srv/jabbu-fable-diet7.service.sh",
 			pid: 501,
 			startedAt: "2026-11-04T22:46:40+09:00",
-			detail: "systemd 유닛 ompbot-fable-diet7.service",
+			detail: "systemd 유닛 jabbu-fable-diet7.service",
 		});
 	});
 
-	test("kencrew-* units are jobs too, and a name both prefixes share shows once", async () => {
+	test("only jabbu-* units are jobs: another prefix is not asked for and not listed", async () => {
 		let asked: string[] = [];
 		const stdout = [
-			transient("ompbot-intake.service", 601),
-			transient("kencrew-intake.service", 602),
-			transient("kencrew-fable-intake.service", 603),
+			transient("jabbu-intake.service", 601),
+			transient("other-intake.service", 602),
+			transient("other-fable-intake.service", 603),
 		].join("\n\n");
 		const run = async (cmd: string[]) => {
 			if (cmd[0] === "systemctl") asked = cmd;
 			return listing(stdout)(cmd);
 		};
 		const jobs = await jobsOf({ run });
-		expect(asked).toEqual(expect.arrayContaining(["ompbot-*.service", "kencrew-*.service"]));
-		expect(jobs.map((job) => [job.name, job.pid])).toEqual([
-			["intake", 601],
-			["fable-intake", 603],
-		]);
+		expect(asked.filter((arg) => arg.endsWith("*.service"))).toEqual(["jabbu-*.service"]);
+		expect(jobs.map((job) => [job.name, job.pid])).toEqual([["intake", 601]]);
 	});
 
 	test("no systemctl on the host means no unit jobs; a failing systemctl is one invalid row beside the files", async () => {
@@ -387,7 +384,7 @@ interface ThreadSeed {
 }
 
 function seedThreads(rows: ThreadSeed[]): void {
-	const dbPath = join(home, "ompbot.db");
+	const dbPath = join(home, "jabbu.db");
 	openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
 	const db = new Database(dbPath, { strict: true });
 	for (const origin of new Set(rows.map((row) => row.origin))) {
@@ -631,11 +628,11 @@ describe("dashboard jobs in thread board (AC-1, AC-2)", () => {
 
 describe("job progress tail & security checks (AC-3)", () => {
 	test("AC-3: reads masked last 40 lines from tail 64KiB inside allowed roots; blocks outside, secrets, symlinks, non-regular", async () => {
-		const userRoot = mkdtempSync(join(tmpdir(), "ompbot-user-home-"));
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-outside-"));
+		const userRoot = mkdtempSync(join(tmpdir(), "jabbu-user-home-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-outside-"));
 		try {
 			const workDir = join(userRoot, "work", "proj");
-			const altHome = join(userRoot, ".ompbot-alt");
+			const altHome = join(userRoot, ".jabbu-alt");
 			const secretsInHome = join(home, "secrets");
 			const secretsInAlt = join(altHome, "secrets");
 			mkdirSync(workDir, { recursive: true });
@@ -761,8 +758,8 @@ describe("job trace API and detail tabs (AC-4)", () => {
 	afterEach(() => stop?.());
 
 	test("AC-4: api/job/trace returns 200 ok, 400 invalid name, 404 unknown_job/no_session/trace_disabled, live:false for dead/done, shares readCwdTrace", async () => {
-		const userRoot = mkdtempSync(join(tmpdir(), "ompbot-job-trace-user-"));
-		const outside = mkdtempSync(join(tmpdir(), "ompbot-job-trace-out-"));
+		const userRoot = mkdtempSync(join(tmpdir(), "jabbu-job-trace-user-"));
+		const outside = mkdtempSync(join(tmpdir(), "jabbu-job-trace-out-"));
 		try {
 			const sessionsRoot = join(userRoot, "sessions");
 			const workDir = join(userRoot, "work", "fable");

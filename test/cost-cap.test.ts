@@ -45,9 +45,9 @@ let escalateAfter: number | undefined;
 let sessionStore: FakeSessionStore;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-cost-cap-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-cost-cap-"));
 	clock = new FakeClock();
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock, redact });
 	drivers = [];
 	logLines = [];
 	escalations = [];
@@ -521,7 +521,7 @@ describe("agy turns in the daily ledger", () => {
 
 	/** The origin's ledger row read straight from the database file (the store has no calls reader). */
 	function ledgerRow(day: string): { cost: number; calls: number } | null {
-		const db = new Database(join(dir, "ompbot.db"), { readonly: true });
+		const db = new Database(join(dir, "jabbu.db"), { readonly: true });
 		try {
 			return db.query("SELECT cost, calls FROM usage_daily WHERE day = ? AND origin_key = ?").get(day, ORIGIN) as {
 				cost: number;

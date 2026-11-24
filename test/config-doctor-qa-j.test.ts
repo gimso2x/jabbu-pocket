@@ -24,7 +24,7 @@ const CHILD_TEST_MS = 30_000;
 
 let dir: string;
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-qa-j-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-qa-j-"));
 });
 afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
@@ -38,7 +38,7 @@ describe("secret and journal reads refuse a FIFO (qa-j #2 #10)", () => {
 	test(
 		"#2 a FIFO in a token file's place is a config error, not a hang",
 		async () => {
-			const home = makeHome("ompbot-qa-j-secret-");
+			const home = makeHome("jabbu-qa-j-secret-");
 			try {
 				const token = join(home.dir, "secrets", "discord-bot-token");
 				rmSync(token);
@@ -92,7 +92,7 @@ describe("gate stamps (qa-j #17 #18)", () => {
 	);
 
 	test("#18 monitors_stalled without any heartbeat stamp is unknown (stamp=missing), not closed heartbeat=old", () => {
-		const db = new Database(join(dir, "ompbot.db"), { create: true, strict: true });
+		const db = new Database(join(dir, "jabbu.db"), { create: true, strict: true });
 		db.run("CREATE TABLE inbound (platform_message_id TEXT, state TEXT, dispatched_at INTEGER)");
 		db.run("CREATE TABLE deliveries (state TEXT, next_at INTEGER)");
 		db.close();
@@ -106,7 +106,7 @@ describe("gate stamps (qa-j #17 #18)", () => {
 describe("doctor (qa-j #11 #12 #13 #107)", () => {
 	let home: TestHome;
 	beforeEach(() => {
-		home = makeHome("ompbot-qa-j-doctor-");
+		home = makeHome("jabbu-qa-j-doctor-");
 	});
 	afterEach(() => home.remove());
 
@@ -135,9 +135,9 @@ describe("doctor (qa-j #11 #12 #13 #107)", () => {
 			seen.push(opts.env);
 			return { code: 0, stdout: "", stderr: "", timedOut: false };
 		};
-		const saved = { SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN, OMPBOT_HOME: process.env.OMPBOT_HOME };
+		const saved = { SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN, JABBU_HOME: process.env.JABBU_HOME };
 		process.env.SLACK_BOT_TOKEN = "xoxb-TEST-0";
-		process.env.OMPBOT_HOME = home.dir;
+		process.env.JABBU_HOME = home.dir;
 		try {
 			await doctorCommand(home.dir, () => {}, { doctor: async () => 0, run });
 		} finally {
@@ -149,7 +149,7 @@ describe("doctor (qa-j #11 #12 #13 #107)", () => {
 		expect(seen.length).toBeGreaterThanOrEqual(3);
 		for (const env of seen) {
 			expect(env).toBeDefined();
-			expect(Object.keys(env ?? {}).filter((key) => /^(SLACK_|OMPBOT_|GIT_)/.test(key))).toEqual([]);
+			expect(Object.keys(env ?? {}).filter((key) => /^(SLACK_|JABBU_|GIT_)/.test(key))).toEqual([]);
 		}
 	});
 
@@ -158,7 +158,7 @@ describe("doctor (qa-j #11 #12 #13 #107)", () => {
 		mkdirSync(join(home.dir, "backups"), { recursive: true });
 		writeFileSync(
 			join(home.dir, "backups", STAMP_FILE),
-			`ts=${new Date().toISOString()} file=x bundle=ompbot\u001b[2Jbundle.tar.gz\n`,
+			`ts=${new Date().toISOString()} file=x bundle=jabbu\u001b[2Jbundle.tar.gz\n`,
 		);
 		const lines: string[] = [];
 		checkBackupBundle(
@@ -173,15 +173,15 @@ describe("doctor (qa-j #11 #12 #13 #107)", () => {
 
 describe("units (qa-j #7 #8)", () => {
 	test("#7 a path with a space is quoted in PATH= and ExecStart=", () => {
-		const template = readFileSync(join(import.meta.dir, "..", "packaging", "ompbot.service"), "utf8");
-		const text = renderUnit("ompbot.service", template, {
+		const template = readFileSync(join(import.meta.dir, "..", "packaging", "jabbu.service"), "utf8");
+		const text = renderUnit("jabbu.service", template, {
 			bun: "/opt/my bun/bin/bun",
 			repoDir: "/srv/my repo",
 			home: "/home/a b",
 		});
 		expect(text).toContain('ExecStart="/opt/my bun/bin/bun" --no-env-file "/srv/my repo/src/main.ts" daemon');
 		expect(text).toMatch(/^Environment="PATH=\/opt\/my bun\/bin:\/home\/a b\/\.local\/bin:/m);
-		const plain = renderUnit("ompbot.service", template, { bun: "/opt/bun", repoDir: "/srv/repo", home: "/home/a" });
+		const plain = renderUnit("jabbu.service", template, { bun: "/opt/bun", repoDir: "/srv/repo", home: "/home/a" });
 		expect(plain).toContain("ExecStart=/opt/bun --no-env-file /srv/repo/src/main.ts daemon");
 	});
 

@@ -62,7 +62,7 @@ export interface BoardCard {
 	tabLabel: string;
 	/** Display label (omp's `π <glyph> ` title prefix removed). */
 	paneLabel: string;
-	/** herdr agent name: the pane's `name`, else `<name>` of an ompbot worker workspace labelled `ompbot · <name>`. */
+	/** herdr agent name: the pane's `name`, else `<name>` of a jabbu worker workspace labelled `jabbu · <name>`. */
 	name: string;
 	/** Agent kind. */
 	agent: string;
@@ -87,7 +87,7 @@ export interface BoardCard {
 	blocked?: string;
 	lastSay?: string;
 	sayError?: string;
-	/** The newest prompt ompbot gave this agent name (local cards: local herdr only), as a masked one-line preview. */
+	/** The newest prompt jabbu gave this agent name (local cards: local herdr only), as a masked one-line preview. */
 	lastPrompt?: { preview: string; at: number; kind: BoardPromptKind };
 }
 
@@ -214,7 +214,7 @@ export function buildCards(
 			paneLabel: redact(
 				displayLabel(text(pane.label) || text(pane.title) || text(pane.terminal_title_stripped) || paneId),
 			),
-			name: redact(text(pane.name) || (/^ompbot · (\S+)$/.exec(workspaces.get(workspaceId) ?? "")?.[1] ?? "")),
+			name: redact(text(pane.name) || (/^jabbu · (\S+)$/.exec(workspaces.get(workspaceId) ?? "")?.[1] ?? "")),
 			agent,
 			status,
 			column,

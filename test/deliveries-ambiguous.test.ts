@@ -1,4 +1,4 @@
-// Held (`failed_ambiguous`) deliveries: the owner's `ompbot deliveries list|ack|resend` path, the one notice a held
+// Held (`failed_ambiguous`) deliveries: the owner's `jabbu-pocket deliveries list|ack|resend` path, the one notice a held
 // row gets, and the resend that keeps the parts already posted.
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -40,8 +40,8 @@ const daemons: Daemon[] = [];
 const homes: TestHome[] = [];
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-deliveries-"));
-	dbPath = join(dir, "ompbot.db");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-deliveries-"));
+	dbPath = join(dir, "jabbu.db");
 	clock = new FakeClock();
 	store = openStore({ timezone: "Asia/Seoul", path: dbPath, clock, redact });
 });
@@ -159,7 +159,7 @@ describe("listAmbiguous: what the owner works through", () => {
 	});
 });
 
-describe("ompbot deliveries (CLI)", () => {
+describe("jabbu-pocket deliveries (CLI)", () => {
 	const cli = (...args: string[]) => runCliCapture(dir, ["deliveries", ...args]);
 
 	test("list / ack / resend over the ledger another process holds", async () => {
@@ -233,8 +233,8 @@ describe("notice: one owner notice per held delivery", () => {
 		expect(store.noticeAmbiguous(answer.deliveryId, OWNER)).toBe(false);
 		const notice = store.listDeliveries().find((r) => r.opRef === `ambiguous-notice:${answer.deliveryId}`);
 		expect(notice).toMatchObject({ threadRef: "111111111111111111:700000000000000001", state: "pending", part: 0 });
-		expect(notice?.body).toContain(`ompbot deliveries ack ${answer.deliveryId}`);
-		expect(notice?.body).toContain(`ompbot deliveries resend ${answer.deliveryId}`);
+		expect(notice?.body).toContain(`jabbu-pocket deliveries ack ${answer.deliveryId}`);
+		expect(notice?.body).toContain(`jabbu-pocket deliveries resend ${answer.deliveryId}`);
 		expect(notice?.body).toContain("전달 불확실");
 		// A group channel needs the mention; the thread is not 1:1 with the owner.
 		expect(notice?.body).toContain(`{{mention:${OWNER}}}`);
@@ -362,7 +362,7 @@ describe("the daemon holds and notices (real pump, real adapter)", () => {
 	const BOOT_ID = "kernel-boot-id";
 
 	async function startDaemon(transport: WaitingDiscordTransport): Promise<Daemon> {
-		const home: TestHome = makeHome("ompbot-deliveries-daemon-");
+		const home: TestHome = makeHome("jabbu-deliveries-daemon-");
 		homes.push(home);
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
@@ -406,7 +406,7 @@ describe("the daemon holds and notices (real pump, real adapter)", () => {
 		expect(transport.posts((text) => text.includes("전달 불확실"))).toHaveLength(1);
 		expect(notices()).toHaveLength(1);
 		expect(transport.posts((text) => text.includes("전달 불확실"))[0]?.content).toContain(
-			`ompbot deliveries resend ${answer.deliveryId}`,
+			`jabbu-pocket deliveries resend ${answer.deliveryId}`,
 		);
 
 		// The fake transport logged the post before raising, which is exactly the ambiguity: the answer may be out.

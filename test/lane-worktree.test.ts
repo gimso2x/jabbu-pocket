@@ -17,7 +17,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-wt-home-");
+	home = makeHome("jabbu-lane-wt-home-");
 	repos = [];
 });
 
@@ -91,7 +91,7 @@ describe("lane start creates its own worktree and branch (AC-1)", () => {
 
 describe("lane start refusals and concurrency (AC-2)", () => {
 	test("a path outside any git repository is refused: no row, no thread, no worktree", async () => {
-		const plain = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-lane-plain-")));
+		const plain = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-lane-plain-")));
 		repos.push(plain);
 		const h = laneHarness(home.dir);
 		const refused = await h.manager.start({ title: "plain", cwd: plain, channel: CHANNEL }).catch((e: unknown) => e);
@@ -118,7 +118,7 @@ describe("lane start refusals and concurrency (AC-2)", () => {
 	});
 
 	test("a repository path outside TASK_PATH_PATTERN (space, Hangul) is refused: no row, no worktree", async () => {
-		const repo = makeRepo(repos, "ompbot 레인 repo-");
+		const repo = makeRepo(repos, "jabbu 레인 repo-");
 		const h = laneHarness(home.dir);
 		const refused = await h.manager.start({ title: "unsafe", cwd: repo, channel: CHANNEL }).catch((e: unknown) => e);
 		expect(refused).toBeInstanceOf(LaneInputError);
@@ -161,7 +161,7 @@ describe("lane start refusals and concurrency (AC-2)", () => {
 	});
 });
 
-describe("ompbot_work_start acceptance and risk (AC-3)", () => {
+describe("jabbu_work_start acceptance and risk (AC-3)", () => {
 	test("the tool schema offers acceptance and risk", () => {
 		const h = laneHarness(home.dir);
 		const tool = buildWorkStartTool(h.manager, CHANNEL, `discord/ch/${CHANNEL}`);
@@ -192,7 +192,7 @@ describe("ompbot_work_start acceptance and risk (AC-3)", () => {
 			],
 		});
 		await h.settle();
-		const prompt = h.prompts("ompbot/work/accepted")[0] ?? "";
+		const prompt = h.prompts("jabbu/work/accepted")[0] ?? "";
 		expect(prompt).toContain("AC-1");
 		expect(prompt).toContain("문서를 고친다");
 		h.close();

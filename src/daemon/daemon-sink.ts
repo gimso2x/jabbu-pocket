@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
@@ -405,7 +405,7 @@ export class DaemonInbound {
 				const active = this.#activeTasksOf(row.threadRef);
 				const only = active.length === 1 ? active[0] : undefined;
 				return only === undefined
-					? `이 스레드에 활성 TASK가 여럿입니다(${active.map((task) => task.taskId).join(", ")}) — 아무것도 ${control === "pause" ? "멈추지" : "재개하지"} 않았습니다. \`ompbot tasks ${control} <id>\`로 하나를 고르세요.`
+					? `이 스레드에 활성 TASK가 여럿입니다(${active.map((task) => task.taskId).join(", ")}) — 아무것도 ${control === "pause" ? "멈추지" : "재개하지"} 않았습니다. \`jabbu-pocket tasks ${control} <id>\`로 하나를 고르세요.`
 					: (await this.controlTask(only.taskId, control)).text;
 			} catch (error) {
 				this.#ctx.log.error("task_control_failed", { thread: row.threadRef, control, error: String(error) });
@@ -435,7 +435,7 @@ export class DaemonInbound {
 	}
 
 	/**
-	 * Owner pause/resume of one [TASK] (thread phrase or `ompbot tasks pause|resume`). A pause marks the ledger first
+	 * Owner pause/resume of one [TASK] (thread phrase or `jabbu-pocket tasks pause|resume`). A pause marks the ledger first
 	 * (the sweep holds its prompts, stale notice and auto-merge from then on), then sends the worker an Esc and reports
 	 * only what herdr re-read. A resume lifts the sweep hold only; it never prompts the worker. `ok: false` = nothing
 	 * was applied.
@@ -451,7 +451,7 @@ export class DaemonInbound {
 			this.#ctx.log.info("task_resumed", { task: taskId });
 			return {
 				ok: true,
-				text: `▶ ${taskId} 재개했습니다 — 스윕 재촉·stale 알림·자동 머지 보류를 풀었습니다. 워커에 재개 프롬프트는 보내지 않았습니다(필요하면 ompbot_dispatch로 보냅니다).`,
+				text: `▶ ${taskId} 재개했습니다 — 스윕 재촉·stale 알림·자동 머지 보류를 풀었습니다. 워커에 재개 프롬프트는 보내지 않았습니다(필요하면 jabbu_dispatch로 보냅니다).`,
 			};
 		}
 		if (row.status !== "working" && row.status !== "blocked") {
@@ -485,7 +485,7 @@ export class DaemonInbound {
 		const lead = stopped ? `⏸ ${taskId} 멈췄습니다` : `⚠️ ${taskId} 스윕만 멈췄습니다(워커 멈춤 미확인)`;
 		return {
 			ok: true,
-			text: `${lead} — 스윕 재촉·stale 알림·자동 머지를 보류합니다. 워커: ${worker}. 재개는 \`계속\` 또는 \`ompbot tasks resume ${taskId}\`.`,
+			text: `${lead} — 스윕 재촉·stale 알림·자동 머지를 보류합니다. 워커: ${worker}. 재개는 \`계속\` 또는 \`jabbu-pocket tasks resume ${taskId}\`.`,
 		};
 	}
 
@@ -625,7 +625,7 @@ export class DaemonInbound {
 /** Each adapter takes only the deliveries whose thread ref is an id of its own platform. */
 export function deliverySources(
 	store: DaemonStore,
-	config: OmpbotConfig,
+	config: JabbuConfig,
 	crash: (point: CrashPoint) => void,
 ): (platform: ChatPlatform) => DeliverySource {
 	const itemOf = (row: DeliveryRow): DeliveryItem => ({
@@ -668,7 +668,7 @@ export function deliverySources(
 		},
 		fail: (deliveryId, error, outcome, sentParts, replyTs) => {
 			if (outcome === "ambiguous") {
-				// The parts already posted stay on the row: an owner `ompbot deliveries resend` sends only the rest.
+				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
 				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
 				// One owner notice per held delivery, into the thread the answer was headed for (Cataly noticeHeld).
 				store.noticeAmbiguous(deliveryId, config.channels.discord?.ownerUserId);

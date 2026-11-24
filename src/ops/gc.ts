@@ -81,7 +81,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		turnSnapshotsRemoved: 0,
 		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0 },
 	};
-	const dbPath = join(options.homeDir, "ompbot.db");
+	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
 	// A FIFO in the ledger's place would block the open forever.
 	assertRegularLedger(dbPath);
@@ -139,7 +139,7 @@ export function gcSessions(options: GcOptions): GcResult {
 			const epoch = EPOCH_DIR.exec(name)?.[1];
 			if (epoch === undefined || Number(epoch) >= origin.epoch) continue;
 			const path = join(originDir, name);
-			// `/resume-ompbot` can make an older epoch's directory the live one again.
+			// `/resume-jabbu` can make an older epoch's directory the live one again.
 			// Compared by real path: a symlinked home must not make the live directory look like another one.
 			if (realpathOrResolve(path) === realpathOrResolve(origin.session_dir)) continue;
 			if (!lstatSync(path).isDirectory()) continue;
@@ -240,7 +240,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 
 /**
  * `!undo` rows past the turn-snapshot retention (7 days, independent of the session window) leave the ledger, and the
- * `refs/ompbot/turns/<id>/…` that kept their trees alive go with them. Runs on the writable handle `gcSessions` already
+ * `refs/jabbu/turns/<id>/…` that kept their trees alive go with them. Runs on the writable handle `gcSessions` already
  * opened; a dry run reads the count and writes nothing.
  */
 function gcTurnSnapshots(db: Database, options: GcOptions): number {

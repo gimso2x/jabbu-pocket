@@ -1,4 +1,4 @@
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { type ProcessRunner, realProcessRunner } from "../dispatch/omp";
 import { landModeOf } from "../lanes/manager-pr-land";
 import type { PrTools } from "../lanes/pr";
@@ -16,13 +16,13 @@ import { repoMatchesCommonDir } from "./repo-match";
 
 /**
  * The PR landing of a reached [TASK] on a `dispatchHosts` host: its branch is
- * fetched into the bot's own clone of the repository (`refs/ompbot/task/<id>`), judged where it lives, and pushed from
+ * fetched into the bot's own clone of the repository (`refs/jabbu/task/<id>`), judged where it lives, and pushed from
  * the fetched commit; after the merge the host's worktree, branch and base branch are cleaned up over ssh.
  */
 
 /** What a landing takes from the daemon: the host ops' process runner, the local git and the network tools. */
 export interface RemoteLandEnv {
-	config: Pick<OmpbotConfig, "dispatchHosts" | "recordsRepo">;
+	config: Pick<JabbuConfig, "dispatchHosts" | "recordsRepo">;
 	/** Runs the ssh commands of the host ops and of the cleanup (`herdrRun` in the daemon); absent = real processes. */
 	run: ProcessRunner | undefined;
 	tools: PrTools;
@@ -42,11 +42,11 @@ const TASK_BRANCH = /^task\/T-\d{8}-\d{2,}$/;
 const TASK_ID = /^T-\d{8}-\d{2,}$/;
 
 /** The local temporary ref the host branch is fetched into: the PR push's source, never a branch. */
-export const tempRefOf = (taskId: string): string => `refs/ompbot/task/${taskId}`;
+export const tempRefOf = (taskId: string): string => `refs/jabbu/task/${taskId}`;
 
 /** The `lanes.land` entry a task lands by: its repository's own, or (on a host) the one whose `remotes[host]` is its repository. */
 export const landModeOfRow = (
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
 	row: TaskRow,
 ): Promise<LaneLandMode | RemoteLandMode | undefined> =>
 	row.host === null ? landModeOf(config, row.repo) : Promise.resolve(landModeOfRemote(config, row.host, row.repo));
@@ -60,7 +60,7 @@ export const localRepoOf = (row: TaskRow, mode: LaneLandMode | RemoteLandMode | 
 
 /** Host ops of a task row's host; a host's commands run through `run` when given. */
 export function hostOpsOf(
-	config: Pick<OmpbotConfig, "dispatchHosts" | "recordsRepo">,
+	config: Pick<JabbuConfig, "dispatchHosts" | "recordsRepo">,
 	host: string | null,
 	run?: ProcessRunner,
 ): TaskHostOps {
@@ -70,7 +70,7 @@ export function hostOpsOf(
 
 /** Whether the task's repository is one of `repos` (`taskAutoLand.repos`): its local clone for a task on a host. */
 export async function repoMatchesTask(
-	config: Pick<OmpbotConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
+	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
 	row: TaskRow,
 	repos: readonly string[],
 ): Promise<boolean> {

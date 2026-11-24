@@ -41,7 +41,7 @@ let judge: (row: TaskRow) => Promise<TaskEvaluation>;
 let landCalls: number;
 
 beforeEach(async () => {
-	root = mkdtempSync(join(tmpdir(), "ompbot-task-land-"));
+	root = mkdtempSync(join(tmpdir(), "jabbu-task-land-"));
 	origin = join(root, "origin.git");
 	repo = join(root, "repo");
 	execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env: dispatchEnv(process.env) });
@@ -56,7 +56,7 @@ beforeEach(async () => {
 	git(repo, "push", "-q", "origin", "main");
 	judge = async () => passed();
 	landCalls = 0;
-	home = makeHome("ompbot-task-land-home-");
+	home = makeHome("jabbu-task-land-home-");
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
 		config: home.config,

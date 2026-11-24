@@ -101,7 +101,7 @@ describe("lane attach / detach through the daemon", () => {
 	let alivePids: Set<number>;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-lane-attach-");
+		home = makeHome("jabbu-lane-attach-");
 		repos = [];
 		drivers = [];
 		transport = new WaitingDiscordTransport();
@@ -291,9 +291,9 @@ describe("lane attach / detach through the daemon", () => {
 		expect(d.store.getOrigin(lane.originKey)?.sessionFile).toBe(file);
 		const card = transport.posts((text) => text.includes("이어 쓸 파일을 고르세요"))[0];
 		const actions = JSON.stringify(card?.components ?? []);
-		expect(actions).toContain(`ompbot:lane:session:${lane.name}:0`);
-		expect(actions).toContain(`ompbot:lane:session:${lane.name}:1`);
-		expect(parseLaneActionId(`ompbot:lane:session:${lane.name}:1`)).toEqual({
+		expect(actions).toContain(`jabbu:lane:session:${lane.name}:0`);
+		expect(actions).toContain(`jabbu:lane:session:${lane.name}:1`);
+		expect(parseLaneActionId(`jabbu:lane:session:${lane.name}:1`)).toEqual({
 			kind: "session",
 			name: lane.name,
 			index: 1,
@@ -307,7 +307,7 @@ describe("lane attach / detach through the daemon", () => {
 			channel_id: card?.channelId ?? "",
 			guild_id: GUILD,
 			member: { user: { id: OWNER } },
-			data: { custom_id: `ompbot:lane:session:${lane.name}:1`, component_type: 2 },
+			data: { custom_id: `jabbu:lane:session:${lane.name}:1`, component_type: 2 },
 			message: { id: card?.id ?? "", channel_id: card?.channelId ?? "" },
 		});
 		await transport.waitForPosts((text) => text.includes("이어 쓸 파일을"));
@@ -432,7 +432,7 @@ describe("lane attach / detach through the daemon", () => {
 		};
 		expect(await lanesCommand(["attach", "nope"], home.dir, opts)).toBe(1);
 		expect(out).toEqual([
-			"ERR lanes attach: the daemon is not running (no ompbot.sock); attach needs it to release the lane",
+			"ERR lanes attach: the daemon is not running (no jabbu.sock); attach needs it to release the lane",
 		]);
 		await startDaemon();
 		out.length = 0;

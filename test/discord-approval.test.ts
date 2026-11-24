@@ -51,7 +51,7 @@ async function boot(approvalTimeoutMs?: number, escalationChannelId?: string): P
 }
 
 function ask(summary = "force push main"): Promise<string> {
-	const tool = daemon?.hostToolsFor(ORIGIN).find((t) => t.name === "ompbot_request_approval");
+	const tool = daemon?.hostToolsFor(ORIGIN).find((t) => t.name === "jabbu_request_approval");
 	if (!tool) throw new Error("tool missing");
 	return tool.execute({ summary }, { signal: new AbortController().signal });
 }
@@ -92,7 +92,7 @@ function click(customId: string, card: string): Promise<void> {
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-approval-");
+	home = makeHome("jabbu-discord-approval-");
 	seq = 0n;
 });
 

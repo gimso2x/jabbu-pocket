@@ -14,7 +14,7 @@ import { TASK_SCHEMA } from "../src/tasks/ledger-schema";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 
 const LANE = "watch-lane";
-const LANE_ORIGIN = `ompbot/work/${LANE}`;
+const LANE_ORIGIN = `jabbu/work/${LANE}`;
 const THREAD_ORIGIN = "discord/ch/C1/t/T1";
 const MAIN = join(import.meta.dir, "..", "src", "main.ts");
 /** A home directory and a host name, put together at run time so the public core carries neither literal. */
@@ -57,21 +57,21 @@ function collector() {
 
 function runMain(args: string[], home: string): { code: number; stderr: string; stdout: string } {
 	const result = Bun.spawnSync([process.execPath, MAIN, ...args], {
-		env: { ...process.env, OMPBOT_HOME: home },
+		env: { ...process.env, JABBU_HOME: home },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
 	return { code: result.exitCode ?? -1, stderr: result.stderr.toString(), stdout: result.stdout.toString() };
 }
 
-describe("ompbot lanes watch", () => {
+describe("jabbu-pocket lanes watch", () => {
 	let home: TestHome;
 	let laneDir: string;
 	let threadDir: string;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-lanes-watch-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-lanes-watch-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		laneDir = sessionDirFor(join(home.dir, "sessions"), LANE_ORIGIN, 1);
 		threadDir = sessionDirFor(join(home.dir, "sessions"), THREAD_ORIGIN, 1);
 		store.insertLane({
@@ -144,8 +144,8 @@ describe("ompbot lanes watch", () => {
 		expect(await fileOf(async () => ({ kind: "down", reason: "no socket" }))).toBe(newer);
 		expect(await fileOf(async () => ({ kind: "open", file: older }))).toBe(older);
 
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
-		store.newEpoch(LANE_ORIGIN, laneDir, undefined, older); // what `/resume-ompbot` pins
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.newEpoch(LANE_ORIGIN, laneDir, undefined, older); // what `/resume-jabbu` pins
 		store.close();
 		expect(await fileOf(async () => ({ kind: "none" }))).toBe(older);
 	});
@@ -203,7 +203,7 @@ describe("daemon session_file op", () => {
 	let daemon: Daemon | undefined;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-lanes-watch-daemon-");
+		home = makeHome("jabbu-lanes-watch-daemon-");
 	});
 
 	afterEach(async () => {
@@ -262,13 +262,13 @@ describe("daemon session_file op", () => {
 	});
 });
 
-describe("ompbot lanes watch <TASK id>", () => {
+describe("jabbu-pocket lanes watch <TASK id>", () => {
 	let home: TestHome;
 	let env: Record<string, string>;
 
 	/** A `tasks` row as the dispatcher writes it; `host` null is a local TASK. */
 	function insertTask(taskId: string, host: string | null, worktree: string): void {
-		const db = new Database(join(home.dir, "ompbot.db"), { strict: true });
+		const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
 		db.run(TASK_SCHEMA);
 		db.query(
 			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
@@ -278,8 +278,8 @@ describe("ompbot lanes watch <TASK id>", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-lanes-watch-task-");
-		const store = openBotStore(join(home.dir, "ompbot.db"), { now: () => Date.now() }, "Asia/Seoul");
+		home = makeHome("jabbu-lanes-watch-task-");
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		store.close();
 		// The worker's HOME and agent dir live in the test home: nothing reads the real ~/.omp.
 		env = { HOME: join(home.dir, "user"), PI_CODING_AGENT_DIR: join(home.dir, "user", ".omp", "agent") };
@@ -289,8 +289,8 @@ describe("ompbot lanes watch <TASK id>", () => {
 	afterEach(() => home.remove());
 
 	test("AC-4: the session folder name follows omp's rule (measured 11-13: home-relative, / as -)", () => {
-		expect(ompSessionDirFor(`${HOME}/work/ompbot-t-20261113-03`, HOME, "/s", "/tmp")).toBe(
-			"/s/-work-ompbot-t-20261113-03",
+		expect(ompSessionDirFor(`${HOME}/work/jabbu-t-20261113-03`, HOME, "/s", "/tmp")).toBe(
+			"/s/-work-jabbu-t-20261113-03",
 		);
 		expect(ompSessionDirFor("/tmp/a/b", HOME, "/s", "/tmp")).toBe("/s/-tmp-a-b");
 		expect(ompSessionDirFor("/opt/x/y", HOME, "/s", "/tmp")).toBe("/s/--opt-x-y--");

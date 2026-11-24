@@ -379,7 +379,7 @@ describe("AC-3: the unread dot and the column's unread line", () => {
 				.replace(/ is-unread/g, "");
 		expect(strip(marked)).toBe(plain);
 		expect(inboxAttention(s, BOARD).map((entry) => entry.id)).toEqual(["T-20261104-74", "w3:x", "w3:y"]);
-		expect(tabSignal(s, BOARD, false).title).toBe("(3) 확인 필요 · ompbot 현황판");
+		expect(tabSignal(s, BOARD, false).title).toBe("(3) 확인 필요 · jabbu 현황판");
 	});
 
 	test("nothing unread: no dot, no unread line", () => {
@@ -395,7 +395,7 @@ describe("AC-4: the page ships the read-mark functions and constants", () => {
 		for (const name of ["entrySig", "unreadIds", "seedStore", "markSeen", "pruneStore", "readUnread", "unreadReady"]) {
 			expect(html).toContain(`const ${name} = function ${name}(`);
 		}
-		expect(html).toContain('const UNREAD_KEY = "ompbot-inbox-seen";');
+		expect(html).toContain('const UNREAD_KEY = "jabbu-inbox-seen";');
 		expect(html).toContain(`const UNREAD_KEEP_MS = ${14 * DAY};`);
 		expect(html).toContain("const UNREAD_MAX = 1000;");
 	});

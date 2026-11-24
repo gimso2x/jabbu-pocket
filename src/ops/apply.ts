@@ -35,7 +35,7 @@ import {
 import { type EnsureDepsResult, ensureDeps } from "./deps";
 import type { Gate } from "./gates";
 import type { Runner, RunOptions, RunResult } from "./run-types";
-import { UnitHomeUnreadableError, unitOmpbotHome } from "./unit-home";
+import { UnitHomeUnreadableError, unitJabbuHome } from "./unit-home";
 
 /** How long the restarted daemon gets to answer IPC `status` from a fresh start. */
 export const READY_TIMEOUT_MS = 120_000;
@@ -51,7 +51,7 @@ export const DEFAULT_DRAIN_CUT_MIN = 5;
 /** The `[자동 후속]` report inject is tried this many times while the daemon socket refuses connections. */
 const REPORT_INJECT_ATTEMPTS = 6;
 const REPORT_INJECT_RETRY_MS = 5_000;
-export const SYSTEMD_UNIT = "ompbot";
+export const SYSTEMD_UNIT = "jabbu";
 
 /**
  * The apply report goes to a Discord DM or channel origin (`discord/ch/<id>`, `discord/dm/<id>`), never a thread origin.
@@ -106,7 +106,7 @@ export interface ApplyOptions {
 /** Everything `runApply` touches outside the home directory; tests replace the external effects with fakes. */
 export interface ApplyDeps {
 	homeDir: string;
-	/** systemd user unit running the daemon of `homeDir` (`ompbot`, `ompbot-<instance>`). */
+	/** systemd user unit running the daemon of `homeDir` (`jabbu`, `jabbu-<instance>`). */
 	unit: string;
 	/** Checkout holding `src/main.ts`; the daemon loads its code from here. */
 	repoDir: string;
@@ -132,11 +132,11 @@ export interface ApplyDeps {
 	gates: () => Gate[];
 	doctor: () => Promise<{ code: number; lines: string[] }>;
 	/**
-	 * `ompbot omp sync` of the bot profile (config `ompProfile`), run before the drain; absent without a profile. A
+	 * `jabbu-pocket omp sync` of the bot profile (config `ompProfile`), run before the drain; absent without a profile. A
 	 * failure (thrown) ends the apply with nothing drained or restarted.
 	 */
 	ompSync?: () => { changed: number };
-	/** `startedAt` (ms) of the process holding `ompbot.lock`; undefined when there is no readable lock. */
+	/** `startedAt` (ms) of the process holding `jabbu.lock`; undefined when there is no readable lock. */
 	lockStartedAt: () => number | undefined;
 	/** `<home>/sweep-heartbeat` as the daemon last wrote it; undefined when absent or unreadable. */
 	heartbeat: () => SweepHeartbeat | undefined;
@@ -151,7 +151,7 @@ export interface ApplyDeps {
 	log: (line: string) => void;
 	/**
 	 * Test-only crash points between steps (default: `crashHook()` over the environment, inert unless
-	 * `OMPBOT_TEST_HOOKS=1`): a test proves that a re-run after a death anywhere finishes or cleanly reverts.
+	 * `JABBU_TEST_HOOKS=1`): a test proves that a re-run after a death anywhere finishes or cleanly reverts.
 	 */
 	crash?: (point: CrashPoint) => void;
 }
@@ -169,7 +169,7 @@ interface DaemonUnit {
 }
 
 /**
- * Active user units running `<repoDir>/src/main.ts daemon`, with the home each uses (`Environment=OMPBOT_HOME=`, else
+ * Active user units running `<repoDir>/src/main.ts daemon`, with the home each uses (`Environment=JABBU_HOME=`, else
  * `defaultHome`). Second installs (`units render --instance`) share the checkout.
  */
 export async function findDaemonUnits(
@@ -188,7 +188,7 @@ export async function findDaemonUnits(
 }
 
 /**
- * Active `ompbot*` user units whose ExecStart runs `<repoDir>/src/main.ts <command>`, with their home and when they
+ * Active `jabbu*` user units whose ExecStart runs `<repoDir>/src/main.ts <command>`, with their home and when they
  * last became active (ms; undefined when systemd does not say).
  */
 async function findCheckoutUnits(
@@ -200,7 +200,7 @@ async function findCheckoutUnits(
 ): Promise<Array<DaemonUnit & { activeSince: number | undefined }>> {
 	const env = { PATH: pathEnv };
 	const listed = await run(
-		["systemctl", "--user", "list-units", "--type=service", "--state=active", "--no-legend", "--plain", "ompbot*"],
+		["systemctl", "--user", "list-units", "--type=service", "--state=active", "--no-legend", "--plain", "jabbu*"],
 		{ env, timeoutMs: SYSTEMCTL_TIMEOUT_MS },
 	);
 	if (listed.code !== 0) throw new Error(`systemctl list-units rc=${listed.code}: ${listed.stderr.trim()}`);
@@ -233,7 +233,7 @@ async function findCheckoutUnits(
 		if (id === undefined || !(props.get("ExecStart") ?? "").includes(argv)) continue;
 		found.push({
 			unit: id.replace(/\.service$/, ""),
-			homeDir: unitOmpbotHome(id, props.get("Environment") ?? "") ?? defaultHome,
+			homeDir: unitJabbuHome(id, props.get("Environment") ?? "") ?? defaultHome,
 			activeSince: parseUnixTimestamp(props.get("ActiveEnterTimestamp") ?? ""),
 		});
 	}
@@ -360,11 +360,11 @@ export function recordLastGoodConfig(
 const msg = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
- * `<git dir>/ompbot-code-rollback.json`: written by a `detach` code rollback before it checks out head.last-good. It
+ * `<git dir>/jabbu-code-rollback.json`: written by a `detach` code rollback before it checks out head.last-good. It
  * belongs to the checkout, so every home on it sees it: while it exists, apply runs only on that detached commit
  * (the peers too) or on a main that moved past the commit that broke the daemon (which removes it).
  */
-export const CODE_ROLLBACK_JOURNAL = "ompbot-code-rollback.json";
+export const CODE_ROLLBACK_JOURNAL = "jabbu-code-rollback.json";
 
 export interface CodeRollbackJournal {
 	/** The commit checked out detached (head.last-good). */
@@ -485,7 +485,7 @@ interface CheckoutCheck {
 	/** Informational preflight notes (`--clear-rollback` removing the journal). */
 	notes: string[];
 	head: string | undefined;
-	/** `<git dir>/ompbot-code-rollback.json`; "" when the git dir is unknown. */
+	/** `<git dir>/jabbu-code-rollback.json`; "" when the git dir is unknown. */
 	journalPath: string;
 	/** A journal while HEAD is a main past the commit that broke the daemon: the apply that comes up removes it. */
 	journalOnMain: boolean;
@@ -569,13 +569,13 @@ export async function checkCheckout(
 	return result;
 }
 
-/** Prefix of every unit `apply --detach` (and `!restart`) starts; `ompbot-apply-<stamp>-<4 hex>`. */
-export const APPLY_UNIT_PREFIX = "ompbot-apply-";
+/** Prefix of every unit `apply --detach` (and `!restart`) starts; `jabbu-apply-<stamp>-<4 hex>`. */
+export const APPLY_UNIT_PREFIX = "jabbu-apply-";
 
 /**
  * The `systemd-run` command that runs `apply <childArgs>` as a transient user unit, for `apply --detach` and
  * `!restart` alike. The unit name carries a random suffix so two launches in the same second never collide; the
- * receipt keeps the bare stamp. `homeEnv`: pass `OMPBOT_HOME` (the caller runs under a non-default home).
+ * receipt keeps the bare stamp. `homeEnv`: pass `JABBU_HOME` (the caller runs under a non-default home).
  */
 export function detachedApplyCommand(input: {
 	bun: string;
@@ -587,7 +587,7 @@ export function detachedApplyCommand(input: {
 }): { unit: string; argv: string[] } {
 	const unit = `${APPLY_UNIT_PREFIX}${input.stamp}-${crypto.randomUUID().slice(0, 4)}`;
 	const setenv = [`--setenv=PATH=${input.pathEnv}`];
-	if (input.homeEnv !== undefined) setenv.push(`--setenv=OMPBOT_HOME=${input.homeEnv}`);
+	if (input.homeEnv !== undefined) setenv.push(`--setenv=JABBU_HOME=${input.homeEnv}`);
 	return {
 		unit,
 		argv: [
@@ -717,7 +717,7 @@ async function applyUnderLock(
 		writeAtomic0600(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
 	};
 
-	// A test asks the environment to kill this process at a point (`OMPBOT_TEST_HOOKS=1` + `OMPBOT_TEST_CRASH_AT`);
+	// A test asks the environment to kill this process at a point (`JABBU_TEST_HOOKS=1` + `JABBU_TEST_CRASH_AT`);
 	// in production the hook never fires.
 	const crash = deps.crash ?? crashHook();
 	const systemctlOptions: RunOptions = { env: { PATH: deps.pathEnv }, timeoutMs: SYSTEMCTL_TIMEOUT_MS };
@@ -880,7 +880,7 @@ async function applyUnderLock(
 	const skipReasons: string[] = [];
 	let bun: string | undefined;
 	let alreadyApplied: string | undefined;
-	// `<git dir>/ompbot-code-rollback.json`, known once preflight passed.
+	// `<git dir>/jabbu-code-rollback.json`, known once preflight passed.
 	let journalPath = "";
 	// A journal while HEAD is a main past the commit that broke the daemon: the apply that comes up removes it.
 	let journalOnMain = false;
@@ -1413,7 +1413,7 @@ async function applyUnderLock(
 /** Reads the daemon lock `startedAt` (ms); undefined when absent or malformed. */
 export function readLockStartedAt(homeDir: string): number | undefined {
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(join(homeDir, "ompbot.lock"), "utf8"));
+		const parsed: unknown = JSON.parse(readFileSync(join(homeDir, "jabbu.lock"), "utf8"));
 		if (
 			typeof parsed === "object" &&
 			parsed !== null &&

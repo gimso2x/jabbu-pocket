@@ -16,7 +16,7 @@ afterEach(() => {
 
 /** A temp `--out` path (`dir` makes it an existing directory), registered for removal. */
 function shotOut(name: string, dir = false): string {
-	const out = dir ? mkdtempSync(join(tmpdir(), `ompbot-shot-${name}-`)) : join(tmpdir(), `ompbot-shot-${name}`);
+	const out = dir ? mkdtempSync(join(tmpdir(), `jabbu-shot-${name}-`)) : join(tmpdir(), `jabbu-shot-${name}`);
 	outputs.push(out);
 	return out;
 }
@@ -74,7 +74,7 @@ describe("AC-2: renderPng", () => {
 		expect(second).toContain(`--screenshot=${out}`);
 		// The same single temp file feeds both stages, and it is gone once the render is over.
 		const htmlPath = htmlPathOf(first);
-		expect(htmlPath).toContain("ompbot-briefing-");
+		expect(htmlPath).toContain("jabbu-briefing-");
 		expect(htmlPathOf(second)).toBe(htmlPath);
 		expect(existsSync(htmlPath)).toBe(false);
 	});
@@ -197,13 +197,13 @@ describe("AC-2: renderPng", () => {
 	});
 });
 
-/** `OMPBOT_E2E_CHROMIUM=1` only: a real chromium writes a 1080-wide PNG. */
-const chromium = process.env.OMPBOT_E2E_CHROMIUM === "1" ? (Bun.which("chromium") ?? undefined) : undefined;
-if (process.env.OMPBOT_E2E_CHROMIUM !== "1") {
-	console.log("[skip] screenshot e2e: set OMPBOT_E2E_CHROMIUM=1 to render with a real chromium");
+/** `JABBU_E2E_CHROMIUM=1` only: a real chromium writes a 1080-wide PNG. */
+const chromium = process.env.JABBU_E2E_CHROMIUM === "1" ? (Bun.which("chromium") ?? undefined) : undefined;
+if (process.env.JABBU_E2E_CHROMIUM !== "1") {
+	console.log("[skip] screenshot e2e: set JABBU_E2E_CHROMIUM=1 to render with a real chromium");
 }
 
-// The spec itself gates the real render on OMPBOT_E2E_CHROMIUM=1: plain `bun test`
+// The spec itself gates the real render on JABBU_E2E_CHROMIUM=1: plain `bun test`
 // must stay green on hosts without chromium.
 const chromiumE2e = describe.skipIf(chromium === undefined); // skipped only where no chromium is installed
 chromiumE2e("AC-2: real chromium", () => {

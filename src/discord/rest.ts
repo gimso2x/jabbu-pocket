@@ -24,7 +24,7 @@ import {
 export const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 /** Discord requires `DiscordBot (<url>, <version>)`; the version names this client, not the bot release. */
-const DEFAULT_USER_AGENT = "DiscordBot (https://ompbot.invalid, 1)";
+const DEFAULT_USER_AGENT = "DiscordBot (https://jabbu.invalid, 1)";
 
 export interface DiscordRestOptions {
 	token: string;

@@ -18,14 +18,14 @@ import {
 import { pickE2eModel } from "./helpers/omp-model";
 
 /**
- * Work-lane E2E: a REAL omp lane behind the real daemon process, file-backed fake Discord, temp OMPBOT_HOME with FAKE
- * tokens and a throwaway git repository (the lane works in its own worktree beside it). Costs tokens: OMPBOT_E2E_OMP=1 only. Judged by the registry, git and the
+ * Work-lane E2E: a REAL omp lane behind the real daemon process, file-backed fake Discord, temp JABBU_HOME with FAKE
+ * tokens and a throwaway git repository (the lane works in its own worktree beside it). Runs only with JABBU_E2E_OMP=1 (costs tokens). Judged by the registry, git and the
  * delivered Discord calls; waits are on daemon log events and file changes, never fixed sleeps.
  */
-const enabled = process.env.OMPBOT_E2E_OMP === "1";
-if (!enabled) console.log("[skip] lane.e2e.test.ts: set OMPBOT_E2E_OMP=1 to run against a real omp (costs tokens)");
+const enabled = process.env.JABBU_E2E_OMP === "1";
+if (!enabled) console.log("[skip] lane.e2e.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");
 
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
 // Model is picked from what the real omp offers (no tokens), so a stale default skips instead of dispatch-failing.
 const picked = enabled ? await pickE2eModel(OMP_EXECUTABLE) : undefined;
 if (enabled && picked?.model === undefined)
@@ -62,12 +62,12 @@ async function git(repo: string, ...args: string[]): Promise<string> {
 
 /** `<tmp>/lane-repo` with one initial commit. `blockCommits` installs a pre-commit hook that always refuses. */
 async function makeRepo(blockCommits: boolean): Promise<string> {
-	repoParent = mkdtempSync(join(tmpdir(), "ompbot-lane-"));
+	repoParent = mkdtempSync(join(tmpdir(), "jabbu-lane-"));
 	const repo = join(repoParent, "lane-repo");
 	mkdirSync(repo);
 	await git(repo, "init", "-q");
-	await git(repo, "config", "user.name", "ompbot test");
-	await git(repo, "config", "user.email", "ompbot-test@example.invalid");
+	await git(repo, "config", "user.name", "jabbu test");
+	await git(repo, "config", "user.email", "jabbu-test@example.invalid");
 	writeFileSync(join(repo, "README.md"), "# lane repo\n");
 	await git(repo, "add", "README.md");
 	await git(repo, "commit", "-q", "-m", "initial");
@@ -84,7 +84,7 @@ const realRepoPath = (path: string): string => Bun.spawnSync(["realpath", path])
 const firstLaneWorktree = (repo: string): string => `${repo}-l-${localDay(Date.now(), "Asia/Seoul")}-01`;
 
 function newHome(): TestHome {
-	return makeHome("ompbot-e2e-lane-", REAL);
+	return makeHome("jabbu-e2e-lane-", REAL);
 }
 
 interface LaneSnapshot {
@@ -96,7 +96,7 @@ interface LaneSnapshot {
 
 /** Read-only look at the registry (never opens a `Store`, which would touch the live daemon's rows). */
 function readLane(homeDir: string, name: string): LaneSnapshot {
-	const db = new Database(join(homeDir, "ompbot.db"), { readonly: true, strict: true });
+	const db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
 	try {
 		const row = db.query("SELECT status, thread_ref, history, meta FROM lanes WHERE name = ?").get(name) as {
 			status: LaneStatus;
@@ -205,7 +205,7 @@ describe.skipIf(!enabled || REAL === undefined)("work lane with a real omp", () 
 				[
 					`Work only in ${worktree}. Append exactly one line "lane was here" to README.md, then run`,
 					'`git add README.md` and `git commit -m "add lane line"` (never use `git add -A`, `git add .` or `git commit -a`).',
-					`Then call the host tool ompbot_claim_done with repo=${worktree}, commit=<the sha printed by \`git rev-parse HEAD\`> and a one-line summary.`,
+					`Then call the host tool jabbu_claim_done with repo=${worktree}, commit=<the sha printed by \`git rev-parse HEAD\`> and a one-line summary.`,
 				].join("\n"),
 			);
 			await lane.daemon.waitLog(/event=lane_closed lane=readme-line\b/, EVENT_TIMEOUT_MS);
@@ -245,14 +245,14 @@ describe.skipIf(!enabled || REAL === undefined)("work lane with a real omp", () 
 				repo,
 				[
 					`Work only in ${worktree}. Append exactly one line "dirty line" to README.md. Do NOT commit anything.`,
-					`Then immediately call the host tool ompbot_claim_done with repo=${worktree}, commit=<the sha printed by \`git rev-parse HEAD\`> and the summary "edited README".`,
+					`Then immediately call the host tool jabbu_claim_done with repo=${worktree}, commit=<the sha printed by \`git rev-parse HEAD\`> and the summary "edited README".`,
 					"If the claim is rejected, do not change anything else: just report the rejection.",
 				].join("\n"),
 			);
 			await lane.daemon.waitLog(/event=lane_not_done lane=readme-dirty\b/, EVENT_TIMEOUT_MS);
 			await waitSessionLine(
 				home.dir,
-				(line) => line.includes('"role":"user"') && line.includes("[ompbot]") && line.includes("not-done"),
+				(line) => line.includes('"role":"user"') && line.includes("[jabbu]") && line.includes("not-done"),
 				"the not-done reasons steered into the lane session",
 			);
 			await lane.stop();

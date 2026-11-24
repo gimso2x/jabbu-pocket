@@ -27,7 +27,7 @@ let repos: string[];
 let scratch: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-pr-land-home-");
+	home = makeHome("jabbu-pr-land-home-");
 	repos = [];
 	scratch = [];
 });
@@ -70,12 +70,12 @@ interface Fixture {
 /** A repository whose `origin` is a GitHub address backed by a local bare repository, plus the fake `gh` over it. */
 function fixture(config: Partial<LaneLandRepoConfig> = {}): Fixture {
 	const repo = makeRepo(repos);
-	const bare = tempDir("ompbot-pr-land-bare-");
+	const bare = tempDir("jabbu-pr-land-bare-");
 	git(bare, "init", "-q", "--bare");
 	git(repo, "remote", "add", "origin", GITHUB_URL);
 	git(repo, "config", `url.${bare}.insteadOf`, GITHUB_URL);
 	git(repo, "push", "-q", "origin", "main");
-	const records = tempDir("ompbot-pr-land-records-");
+	const records = tempDir("jabbu-pr-land-records-");
 	const denylistFile = join(records, "denylist.txt");
 	writeFileSync(denylistFile, `# planted\n${PLANTED}\n`);
 	// A gitleaks that finds nothing: the leak check itself (git, denylist) is the real one.

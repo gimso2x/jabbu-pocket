@@ -37,14 +37,14 @@ import { runProfileSync } from "./omp";
 
 export const APPLY_USAGE = `  apply [--detach] [--stamp <YYYYMMDD-HHMMSS>] [--timeout <min>] [--cut-after <min>] [--merged-at <iso>] [--report-origin <discord/ch/<id>|discord/dm/<id>> --report-thread <message id> [--report-plain]] [--no-code-rollback] [--clear-rollback] [--allow-detached] [--json]
                                  precheck (main, HEAD==main, clean src, bun) → backup + config copy → with config ompProfile,
-                                 ompbot omp sync (a failure stops here) → drain --wait (default 60 min) → systemctl --user
+                                 jabbu-pocket omp sync (a failure stops here) → drain --wait (default 60 min) → systemctl --user
                                  restart <this home's unit> → wait for a fresh daemon (2 min) → wait for its heartbeat
                                  after the restart with no Discord transport down (2 min) → gates/doctor summary; ok
                                  with doctor rc=0 and no omp_runtime/turns_failing gate open records the loaded commit in
                                  <home>/head.last-good. On failure restores config and restarts once; if that restart
                                  fails too, the code goes back to head.last-good (main only, no staged or uncommitted
                                  tracked change) as config apply.codeRollback says: detach (default) writes
-                                 <git dir>/ompbot-code-rollback.json and checks head.last-good out detached, main
+                                 <git dir>/jabbu-code-rollback.json and checks head.last-good out detached, main
                                  untouched; push makes one revert commit on main with its tree and runs git push origin
                                  main; off reverts nothing and names the revert command. Then bun install
                                  --frozen-lockfile when package.json/bun.lock differ, restarts once more, writes
@@ -58,7 +58,7 @@ export const APPLY_USAGE = `  apply [--detach] [--stamp <YYYYMMDD-HHMMSS>] [--ti
                                  --cut-after <min> (default 5): a drain still busy then restarts anyway; the daemon records
                                  the cut turns (<home>/restart-cut.json) and the next process resumes each once in its
                                  session. --cut-after 0: no cut, a --timeout cancels the drain and nothing restarts.
-                                 Then the same apply runs for every other active install on this checkout (ompbot-<instance>,
+                                 Then the same apply runs for every other active install on this checkout (jabbu-<instance>,
                                  own home and receipt); a failed one makes the exit 1. Receipt:
                                  <home>/logs/apply-<stamp>.json. --detach re-launches it as a systemd-run unit and returns.
                                  --stamp YYYYMMDD-HHMMSS: fix the receipt/backup stamp (--detach passes its own to the unit).
@@ -71,7 +71,7 @@ export const APPLY_USAGE = `  apply [--detach] [--stamp <YYYYMMDD-HHMMSS>] [--ti
                                  --merged-at: skip when the daemon already started after that time. exit 0 ok/already
                                  applied, 1 failed, 2 usage, 3 precheck SKIP. --report-origin asks the model of that thread
                                  to report (an [자동 후속] turn); with --report-plain the daemon posts the result line
-                                 itself (IPC notify, no model turn). The --detach unit is ompbot-apply-<stamp>-<4 hex>.
+                                 itself (IPC notify, no model turn). The --detach unit is jabbu-apply-<stamp>-<4 hex>.
 `;
 
 /** Checkout holding this very file's `src/main.ts` (src/cli/apply.ts → repo root). */
@@ -82,7 +82,7 @@ function usageError(message: string): number {
 	return 2;
 }
 
-/** `ompbot apply`; resolves with the exit code. */
+/** `jabbu-pocket apply`; resolves with the exit code. */
 export async function applyCommand(
 	args: string[],
 	homeDir: string,
@@ -127,9 +127,9 @@ export async function applyCommand(
 	if (values.stamp !== undefined && !STAMP_PATTERN.test(values.stamp))
 		return usageError("--stamp must be YYYYMMDD-HHMMSS");
 	// Refused before anything is written: the lock and the receipt would otherwise create the home (a stray empty
-	// `~/.ompbot` with only `logs/`) and the apply would end on a bare ENOENT.
+	// `~/.jabbu` with only `logs/`) and the apply would end on a bare ENOENT.
 	if (!existsSync(join(homeDir, "config.json"))) {
-		process.stderr.write(`apply: home not initialized: ${homeDir} has no config.json (run ompbot init first)\n`);
+		process.stderr.write(`apply: home not initialized: ${homeDir} has no config.json (run jabbu-pocket init first)\n`);
 		return 1;
 	}
 
@@ -214,9 +214,9 @@ export function peerApplyOptions(options: ApplyOptions, afterCodeRollback: boole
  * restarted daemon: a crash loop, then the code rollback).
  */
 export function checkBackupMigrates(backupFile: string, timezone: string): void {
-	const dir = mkdtempSync(join(tmpdir(), "ompbot-apply-schema-"));
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-apply-schema-"));
 	try {
-		const copy = join(dir, "ompbot.db");
+		const copy = join(dir, "jabbu.db");
 		copyFileSync(backupFile, copy);
 		openBotStore(copy, { now: () => Date.now() }, timezone).close();
 	} catch (error) {
@@ -235,7 +235,7 @@ export function checkBackupMigrates(backupFile: string, timezone: string): void 
  */
 export function homeDeps(homeDir: string, unit: string, pathEnv: string, guard?: DrainSignalGuard): ApplyDeps {
 	const config = existsSync(join(homeDir, "config.json")) ? loadConfig(homeDir) : undefined;
-	const socketPath = join(homeDir, "ompbot.sock");
+	const socketPath = join(homeDir, "jabbu.sock");
 	return {
 		homeDir,
 		unit,
@@ -344,7 +344,7 @@ async function detach(input: {
 		pathEnv,
 		stamp,
 		childArgs,
-		...(env.OMPBOT_HOME === undefined ? {} : { homeEnv: homeDir }),
+		...(env.JABBU_HOME === undefined ? {} : { homeEnv: homeDir }),
 	});
 	const result = await spawnRunner(argv, { env: { PATH: pathEnv }, timeoutMs: SYSTEMCTL_TIMEOUT_MS });
 	if (result.code !== 0) {

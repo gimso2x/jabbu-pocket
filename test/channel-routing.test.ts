@@ -75,7 +75,7 @@ async function seedThread(): Promise<string> {
 }
 
 function ask(summary = "force push main"): Promise<string> {
-	const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "ompbot_request_approval");
+	const tool = daemon.hostToolsFor(ORIGIN).find((t) => t.name === "jabbu_request_approval");
 	if (!tool) throw new Error("tool missing");
 	return tool.execute({ summary }, { signal: new AbortController().signal });
 }
@@ -119,7 +119,7 @@ function click(customId: string, channel: string, ts: string) {
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-routing-");
+	home = makeHome("jabbu-routing-");
 	logs = [];
 });
 

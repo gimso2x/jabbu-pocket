@@ -28,9 +28,9 @@ let store: Store;
 let logs: string[];
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-answer-idempotency-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-answer-idempotency-"));
 	logs = [];
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 1_000 }, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 1_000 }, redact });
 });
 
 afterEach(() => {
@@ -88,7 +88,7 @@ const click = (broker: ApprovalBroker, decision: "approve" | "deny", ts: string,
 type AnswerRow = { answer_id: string; value: string; verdict: string };
 
 const answerRows = (): AnswerRow[] => {
-	const db = new Database(join(dir, "ompbot.db"), { readonly: true });
+	const db = new Database(join(dir, "jabbu.db"), { readonly: true });
 	try {
 		return db
 			.query("SELECT answer_id, value, verdict FROM card_answers ORDER BY created_at, rowid")
@@ -145,7 +145,7 @@ describe("answer idempotency", () => {
 		// New process: a new broker over the same database file has no pending card in memory.
 		const reopened = openStore({
 			timezone: "Asia/Seoul",
-			path: join(dir, "ompbot.db"),
+			path: join(dir, "jabbu.db"),
 			clock: { now: () => 2_000 },
 			redact,
 		});

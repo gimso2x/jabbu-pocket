@@ -104,7 +104,7 @@ function buildRouter(): OriginRouter {
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-undo-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-undo-"));
 	home = join(dir, "home");
 	Bun.spawnSync(["mkdir", "-p", home]);
 	clock = new FakeClock();
@@ -114,7 +114,7 @@ beforeEach(() => {
 	cardWaiter = undefined;
 	store = openStore({
 		timezone: "Asia/Seoul",
-		path: join(home, "ompbot.db"),
+		path: join(home, "jabbu.db"),
 		clock,
 		redact,
 		hooks: {

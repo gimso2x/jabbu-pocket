@@ -46,12 +46,12 @@ const downloads = () =>
 	);
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-discord-files-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-discord-files-"));
 	homeDir = join(dir, "home");
 	workspaceDir = join(homeDir, "workspace");
 	mkdirSync(join(homeDir, "secrets"), { recursive: true });
 	mkdirSync(workspaceDir, { recursive: true });
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock: { now: () => 0 }, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock: { now: () => 0 }, redact });
 	transport = new FakeDiscordTransport({ botUserId: BOT });
 	transport.setChannel({ id: CH, type: 0, guildId: GUILD });
 	transport.setChannel({ id: THREAD, type: 11, parentId: CH, guildId: GUILD });

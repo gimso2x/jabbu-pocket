@@ -2,7 +2,7 @@ import { accessSync, constants, existsSync, readFileSync, statSync } from "node:
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ConfigError, HOME_MODE, loadConfig, type OmpbotConfig, readDiscordToken, SECRET_MODE } from "../config";
+import { ConfigError, HOME_MODE, type JabbuConfig, loadConfig, readDiscordToken, SECRET_MODE } from "../config";
 import { DiscordRest } from "../discord/rest";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
 import { checkOmpRuntime } from "../omp/runtime-check";
@@ -185,7 +185,7 @@ type Report = (ok: boolean, name: string, detail: string) => void;
  * `GET /gateway/bot` (gateway URL). Only ids, names and URLs are printed. Off: no line at all.
  */
 export async function checkDiscord(
-	config: OmpbotConfig,
+	config: JabbuConfig,
 	report: Report,
 	fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
@@ -225,13 +225,13 @@ export async function checkDiscord(
 export function checkBackupBundle(homeDir: string, report: Report, warn: (name: string, detail: string) => void): void {
 	const stamp = readStamp(join(homeDir, "backups"));
 	const bundleSources = BUNDLE_SOURCES.filter((name) => existsSync(join(homeDir, name)));
-	if (stamp === undefined && !existsSync(join(homeDir, "ompbot.db"))) {
+	if (stamp === undefined && !existsSync(join(homeDir, "jabbu.db"))) {
 		// The daemon has never started: there is nothing to back up yet, and its first start makes the first backup.
 		warn("backup bundle", "stamp=missing (first install: the daemon makes the first backup when it starts)");
 	} else if (stamp === undefined) {
-		report(false, "backup bundle", "stamp=missing (run ompbot backup once and enable ompbot-backup.timer)");
+		report(false, "backup bundle", "stamp=missing (run jabbu-pocket backup once and enable jabbu-backup.timer)");
 	} else if (stamp.bundle === undefined && bundleSources.length > 0) {
-		report(false, "backup bundle", "bundle=none (run ompbot backup again)");
+		report(false, "backup bundle", "bundle=none (run jabbu-pocket backup again)");
 	} else if (stamp.bundle === undefined) {
 		report(true, "backup bundle", "sources=none (ledger-only home)");
 	} else if (!existsSync(join(homeDir, "backups", stamp.bundle))) {
@@ -334,7 +334,7 @@ export async function runDoctor(
 	};
 	const warn = (name: string, detail: string): void => write(`warn ${name}: ${detail}`);
 
-	let config: OmpbotConfig | undefined;
+	let config: JabbuConfig | undefined;
 	try {
 		if (!statSync(homeDir).isDirectory()) {
 			report(false, "home", `${homeDir} is not a directory`);
@@ -395,7 +395,7 @@ export async function runDoctor(
 				typeof models === "number"
 					? models > 0
 						? `available=${models}`
-						: "available=0 (run: omp login, or set a provider API key, as the account that runs ompbot)"
+						: "available=0 (run: omp login, or set a provider API key, as the account that runs jabbu)"
 					: models,
 			);
 			// A missing judge role fails at runtime (worker-tier calls, auto review), so it is a `warn` here: the role is

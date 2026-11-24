@@ -53,7 +53,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-hostcap-home-");
+	home = makeHome("jabbu-hostcap-home-");
 	repos = [];
 });
 

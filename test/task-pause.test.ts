@@ -237,7 +237,7 @@ describe("the sweep holds a paused task (AC-1)", () => {
 		expect(autoLands.count).toBe(0);
 		expect(posts(paused)).toHaveLength(1);
 		expect(postText(posts(paused)[0])).toContain("멈춤 중");
-		expect(postText(posts(paused)[0])).toContain("ompbot:task:merge:");
+		expect(postText(posts(paused)[0])).toContain("jabbu:task:merge:");
 		expect(paused.reminders).toEqual([]);
 
 		// Paused while this very sweep judged it (the checks can take minutes): still held.
@@ -440,7 +440,7 @@ describe("pause from the task thread and the CLI (AC-2)", () => {
 	let repos: string[];
 
 	beforeEach(async () => {
-		home = makeHome("ompbot-task-pause-");
+		home = makeHome("jabbu-task-pause-");
 		transport = new WaitingDiscordTransport();
 		transport.setChannel({ id: CH, type: 0, guildId: GUILD });
 		for (const thread of [T1, T2, T3]) transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
@@ -527,7 +527,7 @@ describe("pause from the task thread and the CLI (AC-2)", () => {
 		const answer = transport.posts((text: string) => text.includes(mine.taskId) && text.includes("멈췄습니다"))[0];
 		expect(answer?.content).toContain("멈춤을 확인했습니다");
 		expect(daemon.store.getLane("side-lane")?.status).toBe("working");
-		expect(drivers.get("ompbot/work/side-lane")?.calls.includes("abort")).toBe(false);
+		expect(drivers.get("jabbu/work/side-lane")?.calls.includes("abort")).toBe(false);
 
 		await ownerMessage("계속", M2, T1);
 		await transport.waitForPosts((text: string) => text.includes("재개했습니다") && text.includes(mine.taskId));
@@ -558,7 +558,7 @@ describe("pause from the task thread and the CLI (AC-2)", () => {
 		expect(prompted()).toEqual([]);
 	});
 
-	test("`ompbot tasks pause|resume <id>` does the same through the daemon", async () => {
+	test("`jabbu-pocket tasks pause|resume <id>` does the same through the daemon", async () => {
 		const mine = seed(T1);
 		const other = seed(T2, "다른 일");
 		expect(await tasksCommand(["pause", mine.taskId], home.dir)).toBe(0);

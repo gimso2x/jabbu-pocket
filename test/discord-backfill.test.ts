@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { CoreSink, DeliverySource } from "../src/channel/types";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import type { DiscordAdapter } from "../src/discord/adapter";
 import { snowflakeAt } from "../src/discord/backfill";
@@ -29,7 +29,7 @@ const LOCKED = "111111111111111119";
 const WATERMARK = "99999999999999999";
 
 let home: TestHome;
-let config: OmpbotConfig;
+let config: JabbuConfig;
 let store: Store;
 let transport: FakeDiscordTransport;
 let inbound: string[];
@@ -88,7 +88,7 @@ const calls = <M extends FakeDiscordCall["method"]>(method: M) =>
 const eyes = () => calls("addReaction").filter((c) => c.emoji === "👀");
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-backfill-");
+	home = makeHome("jabbu-discord-backfill-");
 	config = home.config;
 	store = openStore({
 		timezone: "Asia/Seoul",
@@ -294,7 +294,7 @@ describe("recover()", () => {
 		expect(inbound).toEqual([`${CH}:100000000000000001`]);
 	});
 
-	test("an open work lane's thread is scanned though its origin is ompbot/work/<name> (qa-z #31)", async () => {
+	test("an open work lane's thread is scanned though its origin is jabbu/work/<name> (qa-z #31)", async () => {
 		const thread = "222222222222222222";
 		const closedThread = "222222222222222223";
 		for (const [name, id] of [
@@ -474,7 +474,7 @@ describe("daemon start", () => {
 		store.close();
 		const ledger = openStore({
 			timezone: "Asia/Seoul",
-			path: join(home.dir, "ompbot.db"),
+			path: join(home.dir, "jabbu.db"),
 			clock: { now: () => Date.now() },
 			redact,
 		});

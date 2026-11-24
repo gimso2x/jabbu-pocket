@@ -76,7 +76,7 @@ export class DiscordSocketTransport implements DiscordTransport {
 				handlers.fatal?.(error);
 			},
 			onError: (error) => {
-				console.error(redact(`[ompbot] discord gateway: ${error.message}`));
+				console.error(redact(`[jabbu] discord gateway: ${error.message}`));
 				lifecycle({ type: "error", detail: error.message });
 			},
 			onReconnect: (reason) => lifecycle({ type: "reconnecting", detail: reason }),
@@ -94,7 +94,7 @@ export class DiscordSocketTransport implements DiscordTransport {
 		if (displayName !== undefined) {
 			await this.#rest
 				.patchCurrentUser({ displayName })
-				.catch((err: Error) => console.error(redact(`[ompbot] discord display_name: ${err.message}`)));
+				.catch((err: Error) => console.error(redact(`[jabbu] discord display_name: ${err.message}`)));
 		}
 		return ids;
 	}

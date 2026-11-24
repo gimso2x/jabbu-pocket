@@ -23,7 +23,7 @@ import {
 import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext } from "./spec";
 
 /**
- * Host-independent monitor files (`ompbot monitors export|apply`): one JSON file per monitor holding only the spec
+ * Host-independent monitor files (`jabbu-pocket monitors export|apply`): one JSON file per monitor holding only the spec
  * fields, with paths under the scripts root and the workspace written as `@SCRIPTS@/…` and `@WORKSPACE@/…`, so the
  * same file applies on a home with other paths. Webhook triggers carry no id or token; ids, cursors, state and
  * timestamps stay in the database.

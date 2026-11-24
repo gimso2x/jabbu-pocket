@@ -286,7 +286,7 @@ const contentOf = (call: { method: string; content?: string | undefined } | unde
 const call = (h: Harness, params: Record<string, unknown>) =>
 	h.tool.execute(params, { signal: new AbortController().signal });
 
-describe("ompbot_dispatch taskSpec: new task", () => {
+describe("jabbu_dispatch taskSpec: new task", () => {
 	test("one call creates worktree, four docs, registry row, agent, card and ⏳", async () => {
 		const h = harness();
 		const result = await call(h, { taskSpec: GOOD_SPEC, task: "회전을 구현해" });
@@ -509,7 +509,7 @@ describe("ompbot_dispatch taskSpec: new task", () => {
 	});
 });
 
-describe("ompbot_dispatch taskSpec: secrets never reach the ledger, the documents or the card", () => {
+describe("jabbu_dispatch taskSpec: secrets never reach the ledger, the documents or the card", () => {
 	// Fake token shapes only, built at run time.
 	const XOX = ["xoxb", "TEST", "0", "ledger"].join("-");
 	const GH = `ghp_${"T".repeat(36)}`;
@@ -613,7 +613,7 @@ describe("ompbot_dispatch taskSpec: secrets never reach the ledger, the document
 		const h = harness();
 		const acceptance = [
 			"파일이 그대로다 [check: file test/x.test.ts sha256=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08]",
-			'절대 경로 테스트가 통과한다 [check: command ["bun","test","/home/owner/work/ompbot/test/x.test.ts"]]',
+			'절대 경로 테스트가 통과한다 [check: command ["bun","test","/home/owner/work/jabbu/test/x.test.ts"]]',
 			'가림 테스트가 통과한다 [check: command ["bun","test","test/redact.test.ts"]]',
 		];
 		expect(await call(h, { taskSpec: { ...GOOD_SPEC, acceptance }, task: "go" })).toContain("등록·시작했습니다");
@@ -621,7 +621,7 @@ describe("ompbot_dispatch taskSpec: secrets never reach the ledger, the document
 	});
 });
 
-describe("ompbot_dispatch taskSpec: resume and read", () => {
+describe("jabbu_dispatch taskSpec: resume and read", () => {
 	async function started(): Promise<Harness> {
 		const h = harness();
 		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
@@ -666,11 +666,11 @@ describe("ompbot_dispatch taskSpec: resume and read", () => {
 		h.promptStalled.value = true;
 		h.agents.add("plain");
 		expect(await call(h, { mode: "herdr", name: "plain", task: "후속" })).toBe(
-			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: ompbot_dispatch {mode:"herdr", name:"plain"}',
+			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: jabbu_dispatch {mode:"herdr", name:"plain"}',
 		);
 		h.agents.add("remote1");
 		expect(await call(h, { host: "wsl", name: "remote1", task: "후속" })).toBe(
-			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: ompbot_dispatch {host:"wsl", name:"remote1"}',
+			'전달은 했지만 작업 시작이 확인되지 않았습니다(agent_prompt_stalled). 진행 확인: jabbu_dispatch {host:"wsl", name:"remote1"}',
 		);
 	});
 
@@ -831,7 +831,7 @@ describe("ompbot_dispatch taskSpec: resume and read", () => {
 	});
 });
 
-describe("ompbot_dispatch handoff risk scan", () => {
+describe("jabbu_dispatch handoff risk scan", () => {
 	const HIGH = "정리 후 git push --force origin main 해";
 	const HIGH_RULES = "git_push_force, git_push_protected";
 	/** A herdr call that hands `text` to an agent (start+prompt, resume prompt, follow-up prompt, ssh prompt). */
@@ -938,7 +938,7 @@ describe("ompbot_dispatch handoff risk scan", () => {
 		const h = harness({ approval: "denied" });
 		h.agents.add("plain");
 		const out = await call(h, { mode: "herdr", name: "plain", task: "로그 회전을 구현해" });
-		expect(out).toBe('후속 지시를 plain에 전달했습니다. 진행 확인: ompbot_dispatch {mode:"herdr", name:"plain"}');
+		expect(out).toBe('후속 지시를 plain에 전달했습니다. 진행 확인: jabbu_dispatch {mode:"herdr", name:"plain"}');
 		expect(h.approvals).toEqual([]);
 	});
 
@@ -947,7 +947,7 @@ describe("ompbot_dispatch handoff risk scan", () => {
 		const out = await call(h, {
 			mode: "herdr",
 			name: "plain",
-			task: "bun install 뒤 테스트를 돌린다\n머지·push·데몬 재시작(systemctl --user restart ompbot)은 하지 않는다",
+			task: "bun install 뒤 테스트를 돌린다\n머지·push·데몬 재시작(systemctl --user restart jabbu)는 하지 않는다",
 		});
 		expect(delivered(h, "하지 않는다")).toBe(true);
 		expect(out.split("\n").at(-1)).toBe("위험 검사: advisory (package_install, service_control)");
@@ -1000,7 +1000,7 @@ describe("worker omp arguments (workerOmpArgs, dispatchHosts.<h>.ompArgs)", () =
 		expect(starts(h)).toEqual([[...BASE_START, "--", "--prewalk"]]);
 	});
 
-	test("remote starts never inherit workerOmpArgs (TASK start, TASK resume, ompbot_dispatch host)", async () => {
+	test("remote starts never inherit workerOmpArgs (TASK start, TASK resume, jabbu_dispatch host)", async () => {
 		const h = harness({ workerOmpArgs: PREWALK });
 		await call(h, { taskSpec: GOOD_SPEC, task: "go", host: "wsl" });
 		h.agents.clear();
@@ -1012,7 +1012,7 @@ describe("worker omp arguments (workerOmpArgs, dispatchHosts.<h>.ompArgs)", () =
 		expect(remote.some((args) => args.includes("--prewalk") || args.includes("--"))).toBe(false);
 	});
 
-	test("the host's ompArgs reach its remote starts (TASK start, TASK resume, ompbot_dispatch host)", async () => {
+	test("the host's ompArgs reach its remote starts (TASK start, TASK resume, jabbu_dispatch host)", async () => {
 		const h = harness({ wslOmpArgs: PREWALK });
 		await call(h, { taskSpec: GOOD_SPEC, task: "go", host: "wsl" });
 		h.agents.clear();
@@ -1391,15 +1391,15 @@ describe("agy worker trial (taskSpec worker: agy, config workerAgy)", () => {
 		const prompts = firstPrompts(h);
 		expect(prompts).toHaveLength(2);
 		for (const prompt of prompts) {
-			expect(prompt.startsWith("# ompbot 워커 안내 / ompbot worker floors\n")).toBe(true);
+			expect(prompt.startsWith("# jabbu 워커 안내 / jabbu worker floors\n")).toBe(true);
 			expect(prompt).toContain("`task/T-20261026-01` 브랜치에만");
 			expect(prompt).toContain("needs_owner: yes");
 			expect(prompt).toContain("사람에게 보이는 글(PROGRESS·outcome·커밋 메시지·답)은 한국어로 쓴다");
 			expect(prompt).toContain(
 				"outcome 요약이나 답에서 '통과·검증됨·확인함'을 주장할 때는 같은 문장에 실제로 돌린 명령과 결과 숫자를 함께 쓴다",
 			);
-			expect(prompt).not.toContain("ompbot apply");
-			expect(prompt).not.toContain("ompbot workspace");
+			expect(prompt).not.toContain("jabbu-pocket apply");
+			expect(prompt).not.toContain("jabbu workspace");
 		}
 	});
 
@@ -1483,7 +1483,7 @@ describe("[TASK] 프롬프트: 비기록 모드와 기록 모드(recordsRepo)", 
 			`너는 ${TASK} 담당이다. 작업 디렉터리는 ${WORKTREE} (branch task/${TASK}), 기준 문서는 ${docsDir}/ (저장소 밖 기록 디렉터리)다.`,
 		);
 		const rule2 = lines.find((line) => line.startsWith("2. ")) ?? "";
-		expect(rule2).toContain("문서를 커밋하지 말고 저장만 한다 — ompbot이 기록 저장소에 커밋한다");
+		expect(rule2).toContain("문서를 커밋하지 말고 저장만 한다 — jabbu가 기록 저장소에 커밋한다");
 		expect(rule2).not.toContain("단계 커밋에는");
 		// The other rules are the same words in both modes.
 		const plain = harness();

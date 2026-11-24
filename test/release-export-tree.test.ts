@@ -36,7 +36,7 @@ let exportCode = -1;
 
 beforeAll(async () => {
 	if (mod === undefined) return;
-	const dir = makeRepo(scratch, "ompbot-release-tree-");
+	const dir = makeRepo(scratch, "jabbu-release-tree-");
 	git(dir, "config", "user.name", "release");
 	git(dir, "config", "user.email", "release@example.com");
 	const lines: string[] = [];
@@ -94,7 +94,7 @@ if (mod !== undefined) {
 				expect(files.length).toBeGreaterThan(0);
 				for (const file of files) {
 					const text = readFileSync(join(tree, file), "utf8");
-					for (const word of ["secrets.", "self-hosted", "/home/", "doc/", "kencrew"])
+					for (const word of ["secrets.", "self-hosted", "/home/", "doc/", "records-private"])
 						expect(text.toLowerCase().includes(word), `${file}: ${word}`).toBe(false);
 				}
 			},
@@ -134,10 +134,10 @@ if (mod !== undefined) {
 	];
 	const BLOCK = [
 		ACCOUNT,
-		`${ACCOUNT}/kencrew-private`,
-		`github.com/${ACCOUNT}/kencrew-private`,
-		`https://github.com/${ACCOUNT}/kencrew-private`,
-		`git@github.com:${ACCOUNT}/kencrew-private.git`,
+		`${ACCOUNT}/records-private`,
+		`github.com/${ACCOUNT}/records-private`,
+		`https://github.com/${ACCOUNT}/records-private`,
+		`git@github.com:${ACCOUNT}/records-private.git`,
 		`${ACCOUNT}/jabbu-pocket.private`,
 		`ssh://${ACCOUNT}/jabbu-pocket`,
 		`/home/${ACCOUNT}/jabbu-pocket`,

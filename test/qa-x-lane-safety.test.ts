@@ -150,7 +150,7 @@ describe("5. lane integrity: a renamed file pairs its edited guard (qa-x #73)", 
 describe("6. hiddenChanges: a mode change under assume-unchanged (qa-x #74)", () => {
 	let dir: string;
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "ompbot-qa-x-mode-"));
+		dir = mkdtempSync(join(tmpdir(), "jabbu-qa-x-mode-"));
 		git(dir, "init", "-q");
 		writeFileSync(join(dir, "run.sh"), "echo hi\n");
 		writeFileSync(join(dir, "data.txt"), "same\n");
@@ -216,7 +216,7 @@ describe("8-11. lane reservations", () => {
 	let repo: string;
 
 	beforeEach(() => {
-		home = makeHome("ompbot-qa-x-lane-home-");
+		home = makeHome("jabbu-qa-x-lane-home-");
 		repos = [];
 		repo = makeRepo(repos);
 		h = laneHarness(home.dir);

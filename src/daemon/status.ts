@@ -27,11 +27,11 @@ export interface StatusReport {
 	ledger: { pending: number; inflight: number; confirmed: number; ambiguous: number; expired: number };
 	inbound: Record<InboundState, number>;
 	monitors: MonitorsStatus;
-	/** Open health gates (the same projection as `ompbot gates`); empty when every gate is closed. */
+	/** Open health gates (the same projection as `jabbu-pocket gates`); empty when every gate is closed. */
 	openGates: OpenGateSummary[];
 	/** Present while `<home>/FROZEN` exists: no autonomous action runs, owner conversation continues. */
 	frozen?: FreezeState;
-	/** Present while `ompbot drain` holds new work back for a restart: what is still unfinished. */
+	/** Present while `jabbu-pocket drain` holds new work back for a restart: what is still unfinished. */
 	drain?: DrainCounts;
 	/** Running omp RPC sessions on this host and the ceiling a lane/[TASK] start is judged against (0 = off). */
 	hostSessions?: HostSessionsInfo;

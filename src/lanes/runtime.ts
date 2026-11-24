@@ -5,12 +5,12 @@ import { defaultGit, type GitRunner } from "./verify";
 
 /**
  * What a review, QA or check run was observed on: the identity of this process
- * (`omp` version, kencrew source commit, OS/arch) fixed at the daemon's start, and `receiptStale` — the pure rule that
+ * (`omp` version, source checkout commit, OS/arch) fixed at the daemon's start, and `receiptStale` — the pure rule that
  * tells whether a receipt made on another runtime no longer counts. Everything else a receipt records (`head`, `base`,
  * `overlay`, `argv`) is what its maker observed.
  */
 
-/** Paths whose change between two kencrew commits can change what a receipt means (the gates and how they run `omp -p`). */
+/** Paths whose change between two source commits can change what a receipt means (the gates and how they run `omp -p`). */
 export const GATE_PATHS = [
 	"src/lanes/review.ts",
 	"src/lanes/qa.ts",
@@ -30,7 +30,7 @@ export const GATE_PATHS = [
 const UNKNOWN = "unknown";
 const DIRTY = "+dirty";
 
-let identity: RuntimeIdentity = { omp: UNKNOWN, kencrew: UNKNOWN, os: process.platform, arch: process.arch };
+let identity: RuntimeIdentity = { omp: UNKNOWN, source: UNKNOWN, os: process.platform, arch: process.arch };
 let source: { dir: string; git: GitRunner; log?: Pick<Logger, "warn"> } | undefined;
 /** `gatePathsChanged` results by `<recorded>\0<current>`: one git call and one warning per pair. */
 const gateChanges = new Map<string, boolean | undefined>();
@@ -40,7 +40,7 @@ export const currentRuntime = (): RuntimeIdentity => identity;
 
 /**
  * Fixes the runtime of this process at the daemon's start: the `omp` version (`ompVersion` as read then) and the HEAD of
- * the kencrew source checkout in `sourceDir` (`+dirty` with uncommitted changes, `unknown` when git cannot tell).
+ * the source checkout in `sourceDir` (`+dirty` with uncommitted changes, `unknown` when git cannot tell).
  */
 export async function bootRuntime(input: {
 	omp: string;
@@ -53,7 +53,7 @@ export async function bootRuntime(input: {
 	gateChanges.clear();
 	identity = {
 		omp: input.omp,
-		kencrew: await sourceCommit(git, input.sourceDir),
+		source: await sourceCommit(git, input.sourceDir),
 		os: process.platform,
 		arch: process.arch,
 	};
@@ -87,7 +87,7 @@ export function receiptRuntime(
 		head: observed.head,
 		...(observed.base === undefined ? {} : { base: observed.base }),
 		omp: now.omp,
-		kencrew: now.kencrew,
+		source: now.source,
 		...(observed.overlay === undefined ? {} : { overlay: observed.overlay }),
 		os: now.os,
 		arch: now.arch,
@@ -107,7 +107,7 @@ export interface StaleContext {
 	model: string | undefined;
 	/** `overlayHash` of the overlay a run would get now. */
 	overlay: string | undefined;
-	/** Whether the gate paths differ between the receipt's kencrew commit and the current one (`gatePathsChanged`). */
+	/** Whether the gate paths differ between the receipt's source commit and the current one (`gatePathsChanged`). */
 	gateSourceChanged: boolean | undefined;
 }
 
@@ -141,7 +141,7 @@ export function receiptStale(
 }
 
 /**
- * Whether the gate paths differ between kencrew commits `recorded` and `current`: `git diff --name-only` in the source
+ * Whether the gate paths differ between source commits `recorded` and `current`: `git diff --name-only` in the source
  * checkout, once per pair (later calls read the cache). `undefined` when either is `unknown` or `+dirty`, there is no
  * checkout or git fails — warned once per pair (`receipt_runtime_unknown`); such a receipt stays valid.
  */
@@ -162,23 +162,23 @@ export async function gatePathsChanged(recorded: string, current: string): Promi
 
 /** `gatePathsChanged` result of a cached pair, for the sync gates: `undefined` before `primeGateChanges` ran for it. */
 export function gateChangedOf(recorded: string | undefined): boolean | undefined {
-	if (recorded === undefined || recorded === identity.kencrew) return false;
-	return gateChanges.get(`${recorded}\0${identity.kencrew}`);
+	if (recorded === undefined || recorded === identity.source) return false;
+	return gateChanges.get(`${recorded}\0${identity.source}`);
 }
 
-/** Computes (and caches) the gate-path change of the receipts' kencrew commits against the current one. */
+/** Computes (and caches) the gate-path change of the receipts' source commits against the current one. */
 export async function primeGateChanges(receipts: {
 	review?: LaneReview | undefined;
 	qa?: LaneQa | undefined;
 }): Promise<void> {
 	for (const receipt of [receipts.review, receipts.qa]) {
-		if (receipt?.runtime !== undefined) await gatePathsChanged(receipt.runtime.kencrew, identity.kencrew);
+		if (receipt?.runtime !== undefined) await gatePathsChanged(receipt.runtime.source, identity.source);
 	}
 }
 
 /** A short key of what makes a gate run comparable to an earlier one on the same commit (notice keys of the task gate). */
 export function runtimeKey(input: { model: string | undefined; overlay: string | undefined }): string {
 	const omp = ompMinor(identity.omp) ?? UNKNOWN;
-	const kencrew = identity.kencrew.slice(0, 12);
-	return overlayHash(omp, input.overlay ?? "", input.model ?? "", kencrew).slice(0, 8);
+	const source = identity.source.slice(0, 12);
+	return overlayHash(omp, input.overlay ?? "", input.model ?? "", source).slice(0, 8);
 }

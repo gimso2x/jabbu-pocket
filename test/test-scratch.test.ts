@@ -24,7 +24,7 @@ async function spawnDeadPid(): Promise<number> {
 }
 
 describe("test scratch tmpdir preload", () => {
-	test("preload points tmpdir() and child process TMPDIR to ompbot-test-<pid>-*", () => {
+	test("preload points tmpdir() and child process TMPDIR to jabbu-test-<pid>-*", () => {
 		const currentTmp = tmpdir();
 		expect(process.env.TMPDIR).toBe(currentTmp);
 		expect(basename(currentTmp).startsWith(`${SCRATCH_DIR_PREFIX}${process.pid}-`)).toBe(true);
@@ -53,7 +53,7 @@ describe("test scratch tmpdir preload", () => {
 
 		const deadDir = join(base, `${SCRATCH_DIR_PREFIX}${deadPid}-dead`);
 		const aliveDir = join(base, `${SCRATCH_DIR_PREFIX}${process.pid}-alive`);
-		const otherDir = join(base, "ompbot-other-123");
+		const otherDir = join(base, "jabbu-other-123");
 		const targetDir = join(base, "keep-target");
 		const symlinkDir = join(base, `${SCRATCH_DIR_PREFIX}${deadPid}-link`);
 
@@ -140,7 +140,7 @@ describe("test scratch tmpdir preload", () => {
 		const deadPid = await spawnDeadPid();
 		const staleDir = join(e2eBase, `${SCRATCH_DIR_PREFIX}${deadPid}-stale`);
 		const liveDir = join(e2eBase, `${SCRATCH_DIR_PREFIX}${process.pid}-live`);
-		const unrelatedDir = join(e2eBase, "ompbot-unrelated-999");
+		const unrelatedDir = join(e2eBase, "jabbu-unrelated-999");
 		mkdirSync(staleDir);
 		mkdirSync(liveDir);
 		mkdirSync(unrelatedDir);
@@ -155,7 +155,7 @@ describe("test scratch tmpdir preload", () => {
 				'test("isolated scratch", () => {',
 				"\tconst t = tmpdir();",
 				`\texpect(dirname(t)).toBe(${JSON.stringify(e2eBase)});`,
-				`\texpect(basename(t).startsWith("ompbot-test-" + process.pid + "-")).toBe(true);`,
+				`\texpect(basename(t).startsWith("jabbu-test-" + process.pid + "-")).toBe(true);`,
 				"});",
 				"",
 			].join("\n"),

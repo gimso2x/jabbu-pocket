@@ -21,7 +21,7 @@ export interface WebhookServerDeps {
 	/** Called after an event was admitted, so the scheduler routes it without waiting for the next sweep. */
 	onFired?: () => void;
 	/**
-	 * The freeze switch (`ompbot freeze`). While it is on a post is still answered 202 but recorded as skipped
+	 * The freeze switch (`jabbu-pocket freeze`). While it is on a post is still answered 202 but recorded as skipped
 	 * (`frozen`), like a cron slot that falls due while frozen: an admitted event kept waiting would fire after unfreeze.
 	 */
 	frozen?: () => unknown;

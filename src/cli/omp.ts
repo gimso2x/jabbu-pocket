@@ -20,7 +20,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { loadConfig, type OmpbotConfig } from "../config";
+import { type JabbuConfig, loadConfig } from "../config";
 import { countOmpModels } from "../daemon/doctor";
 import { botRpcEnv, splitModel } from "../daemon/run";
 import { dispatchEnv, type ProcessRunner, realProcessRunner } from "../dispatch/omp";
@@ -63,7 +63,7 @@ export interface TrialResult {
 export interface OmpCliDeps {
 	homeDir: string;
 	/** The bot's config (ompProfile, model, ompExecutable); absent when the home has no config.json. */
-	config?: OmpbotConfig;
+	config?: JabbuConfig;
 	/** Parent env: HOME, PATH, PI_CODING_AGENT_DIR. */
 	env: Record<string, string | undefined>;
 	/** `--version` and the `omp -p` trial. */
@@ -88,7 +88,7 @@ function readLink(path: string): string | undefined {
 	}
 }
 
-/** `ompbot omp trial`: the omp named by `--executable`, else config `ompExecutable`, with the bot's env: runtime check, one RPC turn, one `omp -p`. */
+/** `jabbu-pocket omp trial`: the omp named by `--executable`, else config `ompExecutable`, with the bot's env: runtime check, one RPC turn, one `omp -p`. */
 async function ompTrial(deps: OmpCliDeps, executable: string | undefined): Promise<number> {
 	if (deps.config === undefined) {
 		deps.out(`omp trial failed: no config.json in ${deps.homeDir} (ompExecutable unknown)`);
@@ -107,7 +107,7 @@ async function ompTrial(deps: OmpCliDeps, executable: string | undefined): Promi
 	if (problem !== undefined) return fail("runtime", `${problem.code} ${problem.message}`);
 	deps.out("omp_trial stage=runtime ok=true");
 
-	const cwd = mkdtempSync(join(tmpdir(), "ompbot-omp-trial-"));
+	const cwd = mkdtempSync(join(tmpdir(), "jabbu-omp-trial-"));
 	try {
 		const rpc = await deps.rpcTrial({
 			cliPath,
@@ -135,7 +135,7 @@ async function ompTrial(deps: OmpCliDeps, executable: string | undefined): Promi
 	return 0;
 }
 
-/** `ompbot omp status`; exit 1 when the omp of `ompExecutable` (else the global one) cannot read the login. */
+/** `jabbu-pocket omp status`; exit 1 when the omp of `ompExecutable` (else the global one) cannot read the login. */
 async function ompStatus(deps: OmpCliDeps): Promise<number> {
 	const profile = deps.config?.ompProfile;
 	const globalOmp = Bun.which("omp", { PATH: deps.env.PATH ?? "" });
@@ -413,7 +413,7 @@ function syncProfile(input: {
 }
 
 /**
- * `ompbot omp sync`: the profile of `config.ompProfile` from the owner's agent dir. Prints every change and ends with
+ * `jabbu-pocket omp sync`: the profile of `config.ompProfile` from the owner's agent dir. Prints every change and ends with
  * `omp_profile_sync changed=<n>`; records the time in `<home>/omp/last-sync`. Throws when there is no profile to sync.
  */
 export function runProfileSync(input: {
@@ -502,7 +502,7 @@ function realDeps(homeDir: string, env: Record<string, string | undefined>, out:
 	};
 }
 
-/** `ompbot omp <sub>`; resolves with the exit code. */
+/** `jabbu-pocket omp <sub>`; resolves with the exit code. */
 export async function ompCommand(
 	args: string[],
 	homeDir: string,

@@ -267,9 +267,7 @@ describe("dashboard inbox", () => {
 	test("AC-2: the desktop first render has the top bar, the side navigation and three inbox columns", async () => {
 		const html = await (await fetch(`${serve()}/`)).text();
 		expect(html).toMatch(/<header class="topbar"[^>]*>/);
-		expect(html).toMatch(
-			/<nav class="crumbs" aria-label="위치"><span>ompbot<\/span>.*<span[^>]*>인박스<\/span><\/nav>/,
-		);
+		expect(html).toMatch(/<nav class="crumbs" aria-label="위치"><span>jabbu<\/span>.*<span[^>]*>인박스<\/span><\/nav>/);
 		expect(html).toContain('class="status-chips"');
 		expect(html).toMatch(/data-layout="board"[^>]*>Board</);
 		expect(html).toMatch(/data-layout="list"[^>]*>List</);
@@ -597,7 +595,7 @@ describe("dashboard polish", () => {
 			NOW,
 		);
 		expect(down).toContain("데몬 꺼짐");
-		expect(down).toContain("systemctl --user status ompbot");
+		expect(down).toContain("systemctl --user status jabbu");
 		expect(down).toContain("에이전트 보드 연결 안 됨");
 		expect(down).toContain("herdr-web-ui 서비스");
 		expect(STYLE).toContain("@media (prefers-reduced-motion: reduce)");

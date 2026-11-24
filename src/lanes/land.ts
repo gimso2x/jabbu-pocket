@@ -72,7 +72,7 @@ export interface LanderDeps {
 	removeWorktree(input: { repo: string; worktree: string; branch: string }): Promise<void>;
 	/**
 	 * Test-only crash points between steps (default: `crashHook()` over the environment, inert unless
-	 * `OMPBOT_TEST_HOOKS=1`): a test kills the process mid-landing and proves the re-run finishes it.
+	 * `JABBU_TEST_HOOKS=1`): a test kills the process mid-landing and proves the re-run finishes it.
 	 */
 	crash?: (point: CrashPoint) => void;
 }
@@ -195,7 +195,7 @@ async function pushOnce(
  */
 export async function landLane(request: LandRequest, deps: LanderDeps, hooks: LandHooks = {}): Promise<LandResult> {
 	const git = deps.git ?? defaultGit;
-	// `OMPBOT_TEST_HOOKS=1` + `OMPBOT_TEST_CRASH_AT` kill this process at a point; production never sets them.
+	// `JABBU_TEST_HOOKS=1` + `JABBU_TEST_CRASH_AT` kill this process at a point; production never sets them.
 	const crash = deps.crash ?? crashHook();
 	const { repo, baseBranch, sha } = request;
 	const baseRef = `refs/heads/${baseBranch}`;
@@ -546,7 +546,7 @@ export function receiptStaleOf(
 	return receiptStale(kind, receipt, now.identity, {
 		model: expected?.model,
 		overlay: expected?.overlay,
-		gateSourceChanged: gateChangedOf(receipt.runtime?.kencrew),
+		gateSourceChanged: gateChangedOf(receipt.runtime?.source),
 	});
 }
 

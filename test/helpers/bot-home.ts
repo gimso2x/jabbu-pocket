@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChannelBinding } from "../../src/channel/adapter";
-import type { OmpbotConfig } from "../../src/config";
+import type { JabbuConfig } from "../../src/config";
 import { DiscordBinding } from "../../src/discord/binding";
 import { DiscordChannel } from "../../src/discord/channel";
 import type {
@@ -26,7 +26,7 @@ export const GUILD = "400000000000000001";
 export interface TestHome {
 	dir: string;
 	/** Same shape `loadConfig` returns for this home: `channels.discord` with owner `OWNER` and a 0600 fake token. */
-	config: OmpbotConfig;
+	config: JabbuConfig;
 	remove(): void;
 }
 
@@ -35,7 +35,7 @@ export interface TestHome {
  * `omp` that only answers `--version`. Nothing here can talk to Discord or start a real omp.
  */
 export function makeHome(
-	prefix = "ompbot-home-",
+	prefix = "jabbu-home-",
 	real: { ompExecutable: string; model: string } | undefined = undefined,
 ): TestHome {
 	const dir = mkdtempSync(join(tmpdir(), prefix));

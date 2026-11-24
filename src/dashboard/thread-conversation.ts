@@ -222,7 +222,7 @@ export function readSessionConversation(file: string, before?: string): Extract<
  * `*.jsonl` of its `session_dir`, as the trace finds it), a page ending before entry `before`.
  */
 export function readThreadConversation(homeDir: string, originKey: string, before?: string): ThreadConversation {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	let origin: { session_dir: string; session_file: string | null } | null;

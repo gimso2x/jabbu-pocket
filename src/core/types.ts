@@ -1,4 +1,4 @@
-/** Already-normalized inbound message handed to the core (the channel adapters and `ompbot inject` produce the same shape). */
+/** Already-normalized inbound message handed to the core (the channel adapters and `jabbu-pocket inject` produce the same shape). */
 export interface InboundRecord {
 	platformMessageId: string;
 	originKey: string;
@@ -6,7 +6,7 @@ export interface InboundRecord {
 	text: string;
 	/** Where replies go (the platform's thread id). */
 	threadRef: string;
-	/** Put in by `ompbot inject` (`OwnerIngest.injected`): recorded as such, it never answers an ask card. */
+	/** Put in by `jabbu-pocket inject` (`OwnerIngest.injected`): recorded as such, it never answers an ask card. */
 	injected?: boolean | undefined;
 }
 
@@ -32,29 +32,29 @@ export type CommandKind =
 	| "restart";
 
 /**
- * Slash command name of each kind (`-ompbot` suffix: several bots share the workspace). `distill` and `btw` are typed
+ * Slash command name of each kind (`-jabbu` suffix: several bots share the workspace). `distill` and `btw` are typed
  * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `undo` restores the newest
  * conversation turn's files, so its slash name is registered. `stop`
  * is typed as `!stop` only too, so it works without re-applying the manifests. `restart`
  * is typed as `!restart` only as well: the daemon restarts without a model turn.
  */
 export const COMMAND_TEXT: Record<CommandKind, string> = {
-	new: "/new-ompbot",
-	status: "/status-ompbot",
-	model: "/model-ompbot",
-	thinking: "/thinking-ompbot",
-	compact: "/compact-ompbot",
-	resume: "/resume-ompbot",
-	queue: "/queue-ompbot",
-	followup: "/followup-ompbot",
-	usage: "/usage-ompbot",
-	distill: "/distill-ompbot",
-	btw: "/btw-ompbot",
-	undo: "/undo-ompbot",
-	budget: "/budget-ompbot",
-	brief: "/brief-ompbot",
-	stop: "/stop-ompbot",
-	restart: "/restart-ompbot",
+	new: "/new-jabbu",
+	status: "/status-jabbu",
+	model: "/model-jabbu",
+	thinking: "/thinking-jabbu",
+	compact: "/compact-jabbu",
+	resume: "/resume-jabbu",
+	queue: "/queue-jabbu",
+	followup: "/followup-jabbu",
+	usage: "/usage-jabbu",
+	distill: "/distill-jabbu",
+	btw: "/btw-jabbu",
+	undo: "/undo-jabbu",
+	budget: "/budget-jabbu",
+	brief: "/brief-jabbu",
+	stop: "/stop-jabbu",
+	restart: "/restart-jabbu",
 };
 
 /**
@@ -125,7 +125,7 @@ export interface ParsedCommand {
 }
 
 /**
- * A message is a command when it starts with `/<name>-ompbot` or `!<name>` (`!model` works typed
+ * A message is a command when it starts with `/<name>-jabbu` or `!<name>` (`!model` works typed
  * as text in a DM or channel without a registered slash command).
  */
 export function parseCommand(text: string): ParsedCommand | undefined {
@@ -164,7 +164,7 @@ export function isTurnPromptFor(entryText: string, promptText: string): boolean 
 	return entryText === promptText || entryText.endsWith(`\n\n${CURRENT_REQUEST_MARKER}\n${promptText}`);
 }
 
-/** Response-only provider behind `/status-ompbot`; the mailbox only stores its text as a delivery. */
+/** Response-only provider behind `/status-jabbu`; the mailbox only stores its text as a delivery. */
 export type StatusProvider = (originKey: string) => string | Promise<string>;
 
 /**
@@ -214,6 +214,6 @@ export const MONITOR_STALL_ABORT_MS = 20 * 60 * 1000;
 
 /**
  * A running turn's latest omp event is written to `inbound.last_event_at` at most this often, so the read-only
- * `ompbot gates` can tell a long but working turn from a hung one.
+ * `jabbu-pocket gates` can tell a long but working turn from a hung one.
  */
 export const EVENT_PERSIST_MS = 60_000;

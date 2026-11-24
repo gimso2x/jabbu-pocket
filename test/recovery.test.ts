@@ -37,8 +37,8 @@ let logLines: string[];
 let drivers: FakeOmpDriver[];
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-recovery-"));
-	store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+	dir = mkdtempSync(join(tmpdir(), "jabbu-recovery-"));
+	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	store.ensureOrigin(ORIGIN, SESSION_DIR);
 	sessions = new FakeSessionStore();
 	logLines = [];
@@ -152,7 +152,7 @@ describe("recovery rule (2): dispatched rows of a dead process", () => {
 		expect(result).toEqual({ answered: 1, interrupted: 0, continued: 0 });
 		expect(store.getInbound("m1")?.opRef).toBe(opRef);
 		store.close();
-		store = openBotStore(join(dir, "ompbot.db"), clock, "Asia/Seoul");
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 		expect(store.getInbound("u1")).toMatchObject({ state: "uncertain", uncertainReason: "steer_threw" });
 		expect(store.listInbound({ state: "pending" })).toEqual([]); // what the boot replay reads
 		expect(drivers.flatMap((driver) => driver.calls).some((call) => call.includes("불확실"))).toBe(false);
@@ -230,7 +230,7 @@ describe("recovery rule (2): dispatched rows of a dead process", () => {
 		store.recordInbound({
 			originKey: ORIGIN,
 			platformMessageId: "m1",
-			textRef: "/followup-ompbot B 작업",
+			textRef: "/followup-jabbu B 작업",
 			threadRef: "200000000000000001:m1",
 		});
 		store.markDispatched("m1", { opRef, entryCursor: leaf });

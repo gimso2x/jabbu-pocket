@@ -72,7 +72,7 @@ export function notifyProviderLimit(ctx: DaemonContext, info: ProviderLimitInfo)
 	void owner.adapter.postNotice(owner.channel, formatProviderLimitNotice(info, incident.count));
 }
 
-/** The gate transitions the sweep reports to the owner (the self-diagnosis loop of `ompbot gates`). */
+/** The gate transitions the sweep reports to the owner (the self-diagnosis loop of `jabbu-pocket gates`). */
 export class GateSweep {
 	readonly #ctx: DaemonContext;
 	/** Gate states of the previous gate sweep (closed→open transitions and per-open "did we alert" bookkeeping). */
@@ -87,7 +87,7 @@ export class GateSweep {
 	}
 
 	/**
-	 * Self-diagnosis loop: every `gateSweepMs` the daemon runs the same gate projection as `ompbot gates` and reports
+	 * Self-diagnosis loop: every `gateSweepMs` the daemon runs the same gate projection as `jabbu-pocket gates` and reports
 	 * transitions to the owner DM. An opening gate notifies once and re-alerts daily while it stands (the same gate
 	 * within 24h stays quiet), and a close after an alerted open sends the recovery notice — so a flapping gate
 	 * cannot spam and a dead backup timer still reaches the only channel the owner watches. Two exceptions: the

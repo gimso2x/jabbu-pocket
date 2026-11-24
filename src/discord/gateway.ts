@@ -280,7 +280,7 @@ export class DiscordGateway extends SocketBase<{ botUserId: string; applicationI
 						d: {
 							token: this.#opts.token,
 							intents: this.#intents,
-							properties: { os: process.platform, browser: "ompbot", device: "ompbot" },
+							properties: { os: process.platform, browser: "jabbu", device: "jabbu" },
 							// Without a presence the bot shows offline in the member list; a resume keeps the session's.
 							presence: { status: "online", since: null, activities: [], afk: false },
 						},

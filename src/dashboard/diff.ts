@@ -128,7 +128,7 @@ export async function readDiff(
 	subject: DiffSubject,
 	git: GitRunner = gitRunner(GIT_TIMEOUT_MS),
 ): Promise<DiffAnswer> {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	let range: Range | Miss;

@@ -88,7 +88,7 @@ describe("ci.yml", () => {
 			const steps = workflow.jobs[job].steps.filter((step) => step.run?.includes("gitleaks"));
 			expect(steps.length).toBe(1);
 			expect(steps[0]?.run).toContain('bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"');
-			expect(steps[0]?.run).toContain('echo "OMPBOT_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"');
+			expect(steps[0]?.run).toContain('echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"');
 		}
 		for (const job of JOB_IDS)
 			for (const step of workflow.jobs[job].steps) expect(step.run ?? "").not.toContain("curl");
@@ -106,7 +106,7 @@ describe("ci.yml", () => {
 		expect(check).toBeGreaterThanOrEqual(0);
 		expect(check).toBeLessThan(e2e);
 		const e2eStep = workflow.jobs["e2e-omp-mock"].steps.find((step) => step.run?.includes("test/omp-mock.e2e.test.ts"));
-		expect(e2eStep?.env).toEqual({ OMPBOT_E2E_OMP_MOCK: "1" });
+		expect(e2eStep?.env).toEqual({ JABBU_E2E_OMP_MOCK: "1" });
 	});
 });
 

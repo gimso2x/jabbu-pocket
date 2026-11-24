@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
@@ -27,14 +27,14 @@ let logs: string[];
 let driverOrigins: string[];
 
 /** The test home's Discord-only config. */
-function discordOnly(extra: Partial<OmpbotConfig> = {}): OmpbotConfig {
+function discordOnly(extra: Partial<JabbuConfig> = {}): JabbuConfig {
 	const discordConfig = home.config.channels.discord;
 	if (discordConfig === undefined) throw new Error("makeHome sets channels.discord");
 	// The server channel answers the owner without a mention, so `!home` can be typed there as is.
 	return { ...home.config, channels: { discord: { ...discordConfig, mentionFreeChannels: [DISCORD_CH] } }, ...extra };
 }
 
-async function boot(config: OmpbotConfig): Promise<void> {
+async function boot(config: JabbuConfig): Promise<void> {
 	discord = new WaitingDiscordTransport();
 	discord.setChannel({ id: DISCORD_CH, type: 0, guildId: GUILD });
 	const sessions = new FakeSessionStore();
@@ -78,7 +78,7 @@ async function ownerSays(id: string, channelId: string, content: string, guildId
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-owner-home-");
+	home = makeHome("jabbu-owner-home-");
 	logs = [];
 	driverOrigins = [];
 });

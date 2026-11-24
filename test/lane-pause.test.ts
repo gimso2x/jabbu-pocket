@@ -40,7 +40,7 @@ let repos: string[];
 let scratch: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-pause-home-");
+	home = makeHome("jabbu-lane-pause-home-");
 	repos = [];
 	scratch = [];
 });
@@ -183,8 +183,7 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 		const root = transport.posts((text) => text === `🔄 ${title}`)[0];
 		expect(root).toBeDefined();
 		await until(
-			() =>
-				(drivers.get(`ompbot/work/${title}`)?.calls.filter((call) => call.startsWith("prompt:")) ?? []).length === 1,
+			() => (drivers.get(`jabbu/work/${title}`)?.calls.filter((call) => call.startsWith("prompt:")) ?? []).length === 1,
 		);
 		const lane = daemon.store.getLane(title);
 		expect(lane?.status).toBe("working");
@@ -301,7 +300,7 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 			channel_id: rootId,
 			guild_id: GUILD,
 			member: { user: { id: OWNER } },
-			data: { custom_id: `ompbot:lane:resume:${lane.name}`, component_type: 2 },
+			data: { custom_id: `jabbu:lane:resume:${lane.name}`, component_type: 2 },
 			message: { id: lane.meta.statusTs ?? "", channel_id: rootId },
 		});
 		await transport.waitForPosts((text) => text.includes("재개했습니다"));
@@ -325,7 +324,7 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 		writeFileSync(join(lane?.cwd ?? "", "a.txt"), "a\n");
 		git(lane?.cwd ?? "", "add", "--", "a.txt");
 		git(lane?.cwd ?? "", "commit", "-q", "-m", "add a.txt");
-		const claim = daemon.hostToolsFor(lane?.originKey ?? "").find((tool) => tool.name === "ompbot_claim_done");
+		const claim = daemon.hostToolsFor(lane?.originKey ?? "").find((tool) => tool.name === "jabbu_claim_done");
 		await claim?.execute(
 			{ repo: lane?.cwd ?? "", commit: "HEAD", summary: "a.txt 추가" },
 			{ signal: new AbortController().signal },
@@ -685,7 +684,7 @@ describe("the lanes CHECK constraint and the stuck gate (AC-8)", () => {
 	test("a fresh database is created with `paused` in the lanes CHECK", () => {
 		const h = laneHarness(home.dir);
 		h.close();
-		expect(lanesDdl(join(home.dir, "ompbot.db"))).toContain("'paused'");
+		expect(lanesDdl(join(home.dir, "jabbu.db"))).toContain("'paused'");
 	});
 
 	test("a pre-pause `lanes` table is rebuilt with its rows once `paused` arrives", () => {
@@ -709,7 +708,7 @@ describe("the lanes CHECK constraint and the stuck gate (AC-8)", () => {
 			updated_at INTEGER NOT NULL
 		)`);
 		raw.run(
-			"INSERT INTO lanes (name, title, thread_ref, origin_key, cwd, session_dir, status, history, meta, created_at, updated_at) VALUES ('old', '옛 레인', '300000000000000001:900000000000000001', 'ompbot/work/old', '/tmp/x', '/tmp/x', 'working', '[]', '{}', 1, 1)",
+			"INSERT INTO lanes (name, title, thread_ref, origin_key, cwd, session_dir, status, history, meta, created_at, updated_at) VALUES ('old', '옛 레인', '300000000000000001:900000000000000001', 'jabbu/work/old', '/tmp/x', '/tmp/x', 'working', '[]', '{}', 1, 1)",
 		);
 		raw.close();
 
@@ -752,14 +751,14 @@ describe("the pause/resume buttons ride the status message (AC-5)", () => {
 		// The working status message (a post at the start, then edits) carries the pause button.
 		const working = h.transport.posts().find((post) => post.id === statusTs);
 		expect(working?.content).toContain("⏳ button-view");
-		expect(JSON.stringify(working?.components ?? [])).toContain(`ompbot:lane:pause:${lane.name}`);
+		expect(JSON.stringify(working?.components ?? [])).toContain(`jabbu:lane:pause:${lane.name}`);
 
 		await h.manager.pause(lane.name, "button");
 		await h.settle();
 		const paused = lastStatus();
 		expect(paused?.content).toContain("⏸ button-view");
 		expect(paused?.content).toContain("멈춤");
-		expect(JSON.stringify(paused?.components ?? [])).toContain(`ompbot:lane:resume:${lane.name}`);
+		expect(JSON.stringify(paused?.components ?? [])).toContain(`jabbu:lane:resume:${lane.name}`);
 
 		await h.manager.resume(lane.name, "button");
 		await h.settle();

@@ -12,19 +12,19 @@ export interface PickedModel {
 
 /**
  * Pick the model for the real-omp e2e files from what the pinned omp actually offers, so provider-side
- * model expiry degrades to a skip instead of mid-run dispatch failures. OMPBOT_E2E_OMP_MODEL pins the id
- * (skip reason when not offered) and OMPBOT_E2E_OMP_PROVIDER narrows the provider; without overrides the
+ * model expiry degrades to a skip instead of mid-run dispatch failures. JABBU_E2E_OMP_MODEL pins the id
+ * (skip reason when not offered) and JABBU_E2E_OMP_PROVIDER narrows the provider; without overrides the
  * cheap default id `glm-5.3-flash` is preferred, falling back to the first offered model. Costs no tokens:
  * only `getAvailableModels` on a throwaway child that never prompts.
  */
 export async function pickE2eModel(
 	ompExecutable: string,
 	overrides: { provider?: string; model?: string } = {
-		provider: process.env.OMPBOT_E2E_OMP_PROVIDER,
-		model: process.env.OMPBOT_E2E_OMP_MODEL,
+		provider: process.env.JABBU_E2E_OMP_PROVIDER,
+		model: process.env.JABBU_E2E_OMP_MODEL,
 	},
 ): Promise<PickedModel> {
-	const root = mkdtempSync(join(tmpdir(), "ompbot-model-probe-"));
+	const root = mkdtempSync(join(tmpdir(), "jabbu-model-probe-"));
 	const driver = new RpcOmpDriver({
 		ompExecutable,
 		cwd: join(root, "workspace"),
@@ -43,7 +43,7 @@ export async function pickE2eModel(
 			if (hit) return { model: hit };
 			const shown = candidates.slice(0, 5).join(", ");
 			return {
-				reason: `OMPBOT_E2E_OMP_MODEL=${pin} is not offered by omp (available: ${shown}${candidates.length > 5 ? ", …" : ""})`,
+				reason: `JABBU_E2E_OMP_MODEL=${pin} is not offered by omp (available: ${shown}${candidates.length > 5 ? ", …" : ""})`,
 			};
 		}
 		const chosen = candidates.find((model) => idOf(model) === "glm-5.3-flash") ?? candidates[0];

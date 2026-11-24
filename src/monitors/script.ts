@@ -51,8 +51,8 @@ function notRun(error: string): ScriptResult {
 
 /**
  * Runs a watch script once. The command is re-checked against the scripts root on every run (a symlink swapped
- * after `add` must not escape), it gets a minimal environment (`PATH`, `LANG`, `HOME`, `OMPBOT_HOME` = `homeDir`,
- * `OMPBOT_MONITOR_ID`), and the whole process group is killed on timeout or when `signal` aborts.
+ * after `add` must not escape), it gets a minimal environment (`PATH`, `LANG`, `HOME`, `JABBU_HOME` = `homeDir`,
+ * `JABBU_MONITOR_ID`), and the whole process group is killed on timeout or when `signal` aborts.
  */
 export async function runScript(
 	command: readonly string[],
@@ -83,8 +83,8 @@ export async function runScript(
 				PATH: process.env.PATH ?? "/usr/bin:/bin",
 				LANG: process.env.LANG ?? "C.UTF-8",
 				...(process.env.HOME === undefined ? {} : { HOME: process.env.HOME }),
-				...(options.homeDir === undefined ? {} : { OMPBOT_HOME: options.homeDir }),
-				...(options.monitorId === undefined ? {} : { OMPBOT_MONITOR_ID: options.monitorId }),
+				...(options.homeDir === undefined ? {} : { JABBU_HOME: options.homeDir }),
+				...(options.monitorId === undefined ? {} : { JABBU_MONITOR_ID: options.monitorId }),
 			},
 		});
 	} catch (error) {

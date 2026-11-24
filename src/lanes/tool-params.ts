@@ -4,7 +4,7 @@ export function stringParam(params: Record<string, unknown>, key: string): strin
 	return value;
 }
 
-/** The `ompbot_lane_progress` parameters that make a `needsOwner` question reversible. */
+/** The `jabbu_lane_progress` parameters that make a `needsOwner` question reversible. */
 export const SILENCE_PROPERTIES = {
 	recommend: {
 		type: "string",

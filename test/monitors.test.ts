@@ -81,7 +81,7 @@ let frozenState: { since: string; reason: string; by: string } | undefined;
 const scriptsRoot = () => join(dir, "scripts");
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-monitors-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-monitors-"));
 	mkdirSync(scriptsRoot());
 	mkdirSync(join(dir, "workspace"));
 	clock = new FakeClock();
@@ -91,7 +91,7 @@ beforeEach(() => {
 	frozenState = undefined;
 	const sessions = new FakeSessionStore();
 	const log = createLogger({ sink: (line) => logLines.push(line), clock, redact });
-	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock, redact });
+	store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock, redact });
 	store.ensureOrigin(OWNER_DM_ORIGIN, "sess/owner-dm");
 	router = new OriginRouter({
 		timezone: "Asia/Seoul",
@@ -695,7 +695,7 @@ describe("monitors: verbatim delivery", () => {
 
 	test("a database without the deliver column gains it and its monitors become turn monitors", () => {
 		const added = cronMonitor("* * * * *", { name: "old" });
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		store.close();
 		const raw = new Database(path);
 		raw.run("ALTER TABLE monitors DROP COLUMN deliver");
@@ -975,8 +975,8 @@ describe("monitors: cron command (verbatim, no turn)", () => {
 		expect(bodies(monitor.id)).toEqual(["⏰ brief\n[SILENT]", "⏰ brief\n[SILENT]"]);
 	});
 
-	test("environment: HOME, OMPBOT_HOME, OMPBOT_MONITOR_ID, PATH and LANG reach the command and a script check, nothing else of the daemon's", async () => {
-		const allowed = ["HOME", "OMPBOT_HOME", "OMPBOT_MONITOR_ID", "PATH", "LANG", "PWD", "SHLVL", "_"];
+	test("environment: HOME, JABBU_HOME, JABBU_MONITOR_ID, PATH and LANG reach the command and a script check, nothing else of the daemon's", async () => {
+		const allowed = ["HOME", "JABBU_HOME", "JABBU_MONITOR_ID", "PATH", "LANG", "PWD", "SHLVL", "_"];
 		const keysOf = (text: string | null | undefined) =>
 			new Map(
 				(text ?? "")
@@ -984,7 +984,7 @@ describe("monitors: cron command (verbatim, no turn)", () => {
 					.filter((line) => line.includes("="))
 					.map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
 			);
-		process.env.OMPBOT_TEST_DAEMON_ONLY = "leak";
+		process.env.JABBU_TEST_DAEMON_ONLY = "leak";
 		try {
 			const command = commandMonitor("#!/bin/sh\nenv\n");
 			const check = store.monitors.addMonitor({
@@ -1006,7 +1006,7 @@ describe("monitors: cron command (verbatim, no turn)", () => {
 				const [event] = store.monitors.listEvents({ monitorId: monitor.id });
 				const env = keysOf(event?.answer);
 				expect([...env.keys()].filter((key) => !allowed.includes(key))).toEqual([]);
-				expect([env.get("HOME"), env.get("OMPBOT_HOME"), env.get("OMPBOT_MONITOR_ID")]).toEqual([
+				expect([env.get("HOME"), env.get("JABBU_HOME"), env.get("JABBU_MONITOR_ID")]).toEqual([
 					process.env.HOME,
 					dir,
 					monitor.id,
@@ -1014,7 +1014,7 @@ describe("monitors: cron command (verbatim, no turn)", () => {
 				expect(env.has("PATH") && env.has("LANG")).toBe(true);
 			}
 		} finally {
-			delete process.env.OMPBOT_TEST_DAEMON_ONLY;
+			delete process.env.JABBU_TEST_DAEMON_ONLY;
 		}
 	});
 
@@ -1049,7 +1049,7 @@ describe("monitors: cron command (verbatim, no turn)", () => {
 
 		const reopened = openStore({
 			timezone: "Asia/Seoul",
-			path: join(dir, "ompbot.db"),
+			path: join(dir, "jabbu.db"),
 			clock,
 			redact,
 		});
@@ -1265,7 +1265,7 @@ describe("monitors: schema migration", () => {
 			threadRef: `${OWNER_DM}:1001`,
 			parts: ["old answer"],
 		});
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		cronMonitor("* * * * *");
 		store.close();
 
@@ -1318,7 +1318,7 @@ describe("monitors: schema migration", () => {
 			["plain", null, null],
 		]);
 		store.monitors.updateMonitor(added.id, { ...spec, model: "fake/beta", thinking: "low" });
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		store.close();
 		const raw = new Database(path);
 		raw.run("ALTER TABLE monitors DROP COLUMN model");
@@ -1351,7 +1351,7 @@ describe("monitors: schema migration", () => {
 		);
 		expect(store.monitors.updateMonitor(added.id, spec)?.copyChannel).toBeNull();
 		store.monitors.updateMonitor(added.id, { ...spec, copyChannel: COPY_CHANNEL });
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		store.close();
 		const raw = new Database(path);
 		raw.run("ALTER TABLE monitors DROP COLUMN copy_channel");
@@ -1373,7 +1373,7 @@ describe("monitors: schema migration", () => {
 
 	test("monitor rows survive a reopen", () => {
 		cronMonitor("* * * * *");
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		store.close();
 		store = openStore({ timezone: "Asia/Seoul", path, clock, redact });
 		expect(store.monitors.listMonitors().map((m) => m.name)).toEqual(["watch"]);
@@ -1688,7 +1688,7 @@ describe("monitors: script edge triggering", () => {
 		// A second process on the same database file: only the durable state carries over.
 		const reopened = openStore({
 			timezone: "Asia/Seoul",
-			path: join(dir, "ompbot.db"),
+			path: join(dir, "jabbu.db"),
 			clock,
 			redact,
 		});
@@ -1812,7 +1812,7 @@ describe("monitors: script edge triggering", () => {
 
 	test("rows from before the check error columns gain them with a zero streak", () => {
 		const monitor = addWatch();
-		const path = join(dir, "ompbot.db");
+		const path = join(dir, "jabbu.db");
 		store.close();
 		const raw = new Database(path);
 		raw.run("ALTER TABLE monitors DROP COLUMN last_check_error");
@@ -1982,9 +1982,9 @@ describe("monitors: event retention (gc)", () => {
 	let home: string;
 
 	beforeEach(() => {
-		home = mkdtempSync(join(tmpdir(), "ompbot-monitor-gc-"));
-		openStore({ timezone: "Asia/Seoul", path: join(home, "ompbot.db"), clock: new FakeClock(), redact }).close();
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		home = mkdtempSync(join(tmpdir(), "jabbu-monitor-gc-"));
+		openStore({ timezone: "Asia/Seoul", path: join(home, "jabbu.db"), clock: new FakeClock(), redact }).close();
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(
 			"INSERT INTO monitors (id, name, trigger_json, instruction, cursor_at, created_at, updated_at) VALUES ('m1', 'm', '{}', 'x', 0, 0, 0)",
 		);
@@ -1998,7 +1998,7 @@ describe("monitors: event retention (gc)", () => {
 	afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 	function stages(): string[] {
-		const db = new Database(join(home, "ompbot.db"), { readonly: true });
+		const db = new Database(join(home, "jabbu.db"), { readonly: true });
 		try {
 			return (
 				db.query("SELECT stage, updated_at FROM monitor_events ORDER BY event_id").all() as Array<{

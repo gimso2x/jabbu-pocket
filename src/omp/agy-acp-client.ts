@@ -20,7 +20,7 @@ export const AGY_ACP_ARGS = ["acp", "--disable-telemetry", "--dangerously-skip-p
  * Env omp gives agy (`host.ts` startTransport, `credentials.ts` agyCredentialEnv): no self-update mid-session, and a
  * non-empty SSH_TTY so agy keeps its login in files instead of probing a desktop keychain.
  */
-const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "ompbot-agy-file-auth" };
+const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-auth" };
 
 const STDERR_TAIL_BYTES = 4_000;
 

@@ -8,14 +8,14 @@ import { pickE2eModel } from "./helpers/omp-model";
 
 /**
  * Monitor E2E: a REAL omp persona session behind the real daemon process, file-backed fake Discord and a temp
- * OMPBOT_HOME with FAKE tokens. The owner DM asks for a reminder one minute ahead; the persona registers an `at`
- * monitor through the `ompbot_monitor_add` host tool, the scheduler fires it, and the owner DM gets exactly one
- * top-level `⏰` post. Costs tokens: OMPBOT_E2E_OMP=1 only.
+ * JABBU_HOME with FAKE tokens. The owner DM asks for a reminder one minute ahead; the persona registers an `at`
+ * monitor through the `jabbu_monitor_add` host tool, the scheduler fires it, and the owner DM gets exactly one
+ * top-level `⏰` post. Runs only with JABBU_E2E_OMP=1 (costs tokens).
  */
-const enabled = process.env.OMPBOT_E2E_OMP === "1";
-if (!enabled) console.log("[skip] monitor.e2e.test.ts: set OMPBOT_E2E_OMP=1 to run against a real omp (costs tokens)");
+const enabled = process.env.JABBU_E2E_OMP === "1";
+if (!enabled) console.log("[skip] monitor.e2e.test.ts: set JABBU_E2E_OMP=1 to run against a real omp (costs tokens)");
 
-const OMP_EXECUTABLE = process.env.OMPBOT_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
+const OMP_EXECUTABLE = process.env.JABBU_OMP_EXECUTABLE ?? Bun.which("omp") ?? "omp";
 // Model is picked from what the real omp offers (no tokens), so a stale default skips instead of dispatch-failing.
 const picked = enabled ? await pickE2eModel(OMP_EXECUTABLE) : undefined;
 if (enabled && picked?.model === undefined)
@@ -46,7 +46,7 @@ interface MonitorSnapshot {
 
 /** Read-only look at the ledger (never opens a `Store`, which would touch the live daemon's rows). */
 function readMonitors(homeDir: string): MonitorSnapshot[] {
-	const db = new Database(join(homeDir, "ompbot.db"), { readonly: true, strict: true });
+	const db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
 	try {
 		const rows = db
 			.query<{ id: string; name: string; trigger_json: string; enabled: number }, []>(
@@ -72,10 +72,10 @@ describe.skipIf(!enabled || REAL === undefined)("monitor with a real omp", () =>
 	test(
 		"a DM asking for a reminder in a minute registers an at monitor that posts exactly one top-level ⏰ message",
 		async () => {
-			home = makeHome("ompbot-e2e-monitor-", REAL);
+			home = makeHome("jabbu-e2e-monitor-", REAL);
 			const log = new TransportLog(join(home.dir, "transport.jsonl"));
-			// A short sweep so a due monitor is claimed within seconds; only honoured with OMPBOT_TEST_HOOKS (set by spawnDaemon).
-			const daemon = spawnDaemon(home.dir, log.path, { OMPBOT_SWEEP_MS: "2000" });
+			// A short sweep so a due monitor is claimed within seconds; only honoured with JABBU_TEST_HOOKS (set by spawnDaemon).
+			const daemon = spawnDaemon(home.dir, log.path, { JABBU_SWEEP_MS: "2000" });
 			await daemon.waitLog(/event=daemon_ready/);
 
 			const nonce = Math.random().toString(36).slice(2, 10);

@@ -92,7 +92,7 @@ export const AGY_DENIED_COMMANDS = [
 	"git reset --hard",
 	"git clean",
 	"systemctl",
-	"ompbot",
+	"jabbu",
 	"bun src/main.ts",
 	"rm -rf /",
 ] as const;
@@ -111,12 +111,12 @@ export function agySettings(workspaces: readonly string[], secretsDirs: readonly
 }
 
 /**
- * The secrets directories an agy worker's `read_file` is refused: this bot home's and the default `~/.ompbot/secrets`.
+ * The secrets directories an agy worker's `read_file` is refused: this bot home's and the default `~/.jabbu/secrets`.
  * Concrete paths only — agy 1.5.9 does not expand a `*` in a `read_file(…)` rule (measured). A shell read (`cat`) is
  * not a `read_file` and passes; the worker floors forbid it.
  */
 export function agySecretsDirs(secretsDir: string): string[] {
-	const fallback = join(homedir(), ".ompbot", "secrets");
+	const fallback = join(homedir(), ".jabbu", "secrets");
 	return fallback === secretsDir ? [secretsDir] : [secretsDir, fallback];
 }
 

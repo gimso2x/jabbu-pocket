@@ -250,7 +250,7 @@ function deps(overrides: Partial<SnapshotDeps> = {}): SnapshotDeps & { ipcCalls:
 	const result = {
 		ipcCalls: 0,
 		homeDir: home.dir,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: {
 			ompExecutable: home.config.ompExecutable,
@@ -286,8 +286,8 @@ const taskOf = (snapshot: DashboardSnapshot, id: string): TaskInfo => {
 };
 
 beforeEach(() => {
-	home = makeHome("ompbot-dash-");
-	dbPath = join(home.dir, "ompbot.db");
+	home = makeHome("jabbu-dash-");
+	dbPath = join(home.dir, "jabbu.db");
 	clock = new FakeClock();
 	seedDatabase();
 });
@@ -567,11 +567,11 @@ function seedTurns(): void {
 			 VALUES (?, ?, 1, ?, ?, ?, ?)`,
 			[id, origin, text, state, NOW - 500, thread],
 		);
-	add("slash:300000000000000009:aa", "discord/ch/300000000000000009", "/new-ompbot", "pending", "300000000000000009:-"); // 4
+	add("slash:300000000000000009:aa", "discord/ch/300000000000000009", "/new-jabbu", "pending", "300000000000000009:-"); // 4
 	add(
 		"300000000000000009:700000000000000002",
 		"discord/ch/300000000000000009",
-		"/new-ompbot",
+		"/new-jabbu",
 		"pending",
 		"300000000000000009:700000000000000002",
 	); // 5
@@ -586,7 +586,7 @@ function seedTurns(): void {
 	add(
 		"300000000000000009:700000000000000004",
 		"discord/ch/300000000000000009",
-		"/followup-ompbot 이어서  해 줘",
+		"/followup-jabbu 이어서  해 줘",
 		"pending",
 		"300000000000000009:700000000000000004",
 	); // 8
@@ -657,12 +657,12 @@ describe("dashboard turn context", () => {
 	test("AC-2: slash and /command rows are commands, monitor rows have no preview, [자동 후속] is auto", async () => {
 		const turns = turnsOf(await buildSnapshot(deps()));
 		const pick = (id: number) => [turns.get(id)?.kind, turns.get(id)?.preview];
-		expect(pick(4)).toEqual(["command", "/new-ompbot"]);
-		expect(pick(5)).toEqual(["command", "/new-ompbot"]);
+		expect(pick(4)).toEqual(["command", "/new-jabbu"]);
+		expect(pick(5)).toEqual(["command", "/new-jabbu"]);
 		expect(pick(6)).toEqual(["monitor", null]);
 		expect(turns.get(7)?.kind).toBe("auto");
 		expect(turns.get(7)?.preview).toBe("[자동 후속] apply 결과 ok. 영수증을 읽고 보고");
-		expect(pick(8)).toEqual(["command", "/followup-ompbot 이어서 해 줘"]);
+		expect(pick(8)).toEqual(["command", "/followup-jabbu 이어서 해 줘"]);
 		expect(pick(2)).toEqual(["message", "second request"]);
 		expect(turns.get(9)?.kind).toBe("message");
 		expect([turns.get(4)?.slash, turns.get(5)?.slash]).toEqual([true, false]);
@@ -758,7 +758,7 @@ describe("dashboard turn context", () => {
 	test("AC-6: thread cards show the first request as title, kind·place, the last turn's wait reason, and the drain line only while draining", async () => {
 		const draining = await buildSnapshot(deps(withStatus(DRAIN)));
 		const html = renderDashboardMain(draining, undefined, NOW, { view: "turns" });
-		expect(html).toContain('<p class="card-title">/new-ompbot</p>');
+		expect(html).toContain('<p class="card-title">/new-jabbu</p>');
 		expect(html).toContain('<p class="card-title">첫 줄 둘째 줄 [REDACTED] [REDACTED] [첨부] 끝</p>');
 		expect(html).toContain('<p class="card-title">nightly</p>');
 		for (const label of [
@@ -775,7 +775,7 @@ describe("dashboard turn context", () => {
 		expect(html).toContain("진행 중인 턴 2개가 끝나면 재시작합니다 (가장 오래된 턴 경과 1시간 0분)");
 		expect(html).toContain("그동안 들어온 요청은 재시작 뒤 처리됩니다.");
 		const detail = renderItemDetail(draining, "turns", "4");
-		for (const fact of ["명령", "재시작 대기", "/new-ompbot", "/followup-ompbot 이어서 해 줘"])
+		for (const fact of ["명령", "재시작 대기", "/new-jabbu", "/followup-jabbu 이어서 해 줘"])
 			expect(detail).toContain(fact);
 
 		const calm = await buildSnapshot(deps());
@@ -816,8 +816,8 @@ describe("dashboard server", () => {
 		expect(post.headers.get("allow")).toBe("GET, HEAD");
 		expect((await fetch(`${base}/nope`)).status).toBe(404);
 		expect((await fetch(`${base}/api/snapshot`, { method: "HEAD" })).status).toBe(200);
-		expect(await (await fetch(`${base}/ompbot/healthz`)).text()).toBe("ok");
-		const prefixed = await fetch(`${base}/ompbot/`);
+		expect(await (await fetch(`${base}/jabbu/healthz`)).text()).toBe("ok");
+		const prefixed = await fetch(`${base}/jabbu/`);
 		expect(prefixed.headers.get("content-type")).toContain("text/html");
 	});
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../src/channel/adapter";
-import type { OmpbotConfig } from "../src/config";
+import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordBinding } from "../src/discord/binding";
 import { DiscordChannel } from "../src/discord/channel";
@@ -60,7 +60,7 @@ function waitForLog(done: () => boolean, what: string): Promise<void> {
 	return promise;
 }
 
-async function boot(config: OmpbotConfig, discord: WaitingDiscordTransport, hold = false): Promise<Daemon> {
+async function boot(config: JabbuConfig, discord: WaitingDiscordTransport, hold = false): Promise<Daemon> {
 	const sessions = new FakeSessionStore();
 	const discordConfig = config.channels.discord;
 	const channels: ChannelBinding[] = [
@@ -95,7 +95,7 @@ async function boot(config: OmpbotConfig, discord: WaitingDiscordTransport, hold
 	return started;
 }
 
-function withPeers(): OmpbotConfig {
+function withPeers(): JabbuConfig {
 	const config = home.config;
 	const discord = config.channels.discord;
 	if (discord === undefined) throw new Error("home without channels.discord");
@@ -106,7 +106,7 @@ function withPeers(): OmpbotConfig {
 }
 
 beforeEach(() => {
-	home = makeHome("ompbot-discord-peer-");
+	home = makeHome("jabbu-discord-peer-");
 	lines = [];
 	waiters = new Set();
 	built = [];
@@ -193,10 +193,8 @@ describe("daemon: a Discord peer request (AC-5)", () => {
 		expect(made.peerTouched(origin)).toBe(true);
 		expect(built[0]?.origin).toBe(origin);
 		// The reduced set: no lane tool, which an untouched thread of the same channel has.
-		expect(built[0]?.tools).not.toContain("ompbot_work_start");
-		expect(made.hostToolsFor(`discord/ch/${CH}/t/700000000000000099`).map((t) => t.name)).toContain(
-			"ompbot_work_start",
-		);
+		expect(built[0]?.tools).not.toContain("jabbu_work_start");
+		expect(made.hostToolsFor(`discord/ch/${CH}/t/700000000000000099`).map((t) => t.name)).toContain("jabbu_work_start");
 	});
 
 	test("frozen: the peer row is recorded and the thread is made, with no turn and no ⏳ status", async () => {
@@ -236,7 +234,7 @@ describe("daemon: a Discord peer request (AC-5)", () => {
 		const origin = `discord/ch/${CH}/t/${root}`;
 		await waitForLog(() => lines.some((line) => line.includes("event=turn_start")), "owner turn_start");
 		expect(built.map((b) => b.origin)).toEqual([origin]);
-		expect(built[0]?.tools).toContain("ompbot_work_start");
+		expect(built[0]?.tools).toContain("jabbu_work_start");
 		await discord.waitForPosts((text) => text.startsWith("ECHO "), 1, WAIT_MS);
 
 		discord.setChannel({ id: root, type: 11, parentId: CH, guildId: GUILD });

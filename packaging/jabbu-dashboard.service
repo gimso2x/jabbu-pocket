@@ -1,18 +1,14 @@
 [Unit]
-Description=ompbot (chat bot driving omp --mode rpc)
+Description=jabbu-pocket dashboard: read-only status page on a loopback port (config dashboard.port)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 Environment=PATH=@PATH@
-ExecStart=@BUN@ --no-env-file @REPO_DIR@/src/main.ts daemon
+ExecStart=@BUN@ --no-env-file @REPO_DIR@/src/main.ts dashboard
 Restart=on-failure
 RestartSec=5
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=90
-LimitCORE=0
 
 [Install]
 WantedBy=default.target

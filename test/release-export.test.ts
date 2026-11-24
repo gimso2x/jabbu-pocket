@@ -68,7 +68,7 @@ function put(root: string, files: Record<string, string>): void {
 
 /** A development repository: allowlisted files plus the private ones that must never ship. */
 function makeDevRepo(): string {
-	const dev = makeRepo(repos, "ompbot-release-dev-");
+	const dev = makeRepo(repos, "jabbu-release-dev-");
 	put(dev, {
 		"src/app.ts": "export const answer = 42;\n",
 		"src/old.ts": "export const legacy = true;\n",
@@ -93,14 +93,14 @@ function commitFiles(dev: string, files: Record<string, string>, message: string
 }
 
 function makePublic(): string {
-	const pub = makeRepo(repos, "ompbot-release-pub-");
+	const pub = makeRepo(repos, "jabbu-release-pub-");
 	git(pub, "config", "user.name", "release");
 	git(pub, "config", "user.email", "release@example.com");
 	return pub;
 }
 
 function denylist(): string {
-	const file = join(tempDir("ompbot-release-deny-"), "denylist.txt");
+	const file = join(tempDir("jabbu-release-deny-"), "denylist.txt");
 	writeFileSync(file, `# injected for tests\n${PLANTED.replace(/\d+$/, "\\d+")}\n`);
 	return file;
 }

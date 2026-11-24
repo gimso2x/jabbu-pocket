@@ -38,7 +38,7 @@ let landAnswer: TaskLandResult | undefined;
 let landCalls: number;
 
 beforeEach(async () => {
-	home = makeHome("ompbot-merge-button-");
+	home = makeHome("jabbu-merge-button-");
 	logs = [];
 	landAnswer = undefined;
 	landCalls = 0;
@@ -114,7 +114,7 @@ function pressButton(customId: string, cardId: string): Promise<void> {
 	});
 }
 
-const click = (taskId: string, cardTs: string): Promise<void> => pressButton(`ompbot:task:merge:${taskId}`, cardTs);
+const click = (taskId: string, cardTs: string): Promise<void> => pressButton(`jabbu:task:merge:${taskId}`, cardTs);
 
 const markerFailure = () => new DiscordCallError("definitive", "discord_http_404:10003 Unknown Channel", 404, 10003);
 
@@ -242,7 +242,7 @@ describe("TASK merge button: 막힌 PR 착지는 다시 시도 버튼을 남긴�
 			stopped(taskId, state);
 			await click(taskId, cardTs);
 			const last = cardEdits(cardTs).at(-1);
-			expect(buttons(last)).toContain(`ompbot:task:merge:${taskId}`);
+			expect(buttons(last)).toContain(`jabbu:task:merge:${taskId}`);
 			expect(buttons(last)).toContain("다시 시도");
 			expect(cardText(last)).toContain(taskLandNote(landAnswer));
 			expect(landCalls).toBe(1);
@@ -303,7 +303,7 @@ describe("blocked card: 추천대로 button", () => {
 		const card = buildBlockedCard(row, judged("A안: /var/lib xoxb-TEST-0"), OWNER, "https://board/x");
 		expect(card.buttons).toEqual([
 			{
-				actionId: "ompbot:task:recommend:T-20261109-07",
+				actionId: "jabbu:task:recommend:T-20261109-07",
 				label: "추천대로",
 				value: "A안: /var/lib [REDACTED]",
 				style: "primary",
@@ -312,8 +312,8 @@ describe("blocked card: 추천대로 button", () => {
 		expect(card.note).toBe(
 			"추천대로 = 위 추천 그대로 진행 · 다른 결정은 이 스레드에 답장 · 작업 보드: https://board/x",
 		);
-		expect(parseTaskRecommendActionId("ompbot:task:recommend:T-20261109-07")).toBe("T-20261109-07");
-		expect(parseTaskRecommendActionId("ompbot:task:merge:T-20261109-07")).toBeUndefined();
+		expect(parseTaskRecommendActionId("jabbu:task:recommend:T-20261109-07")).toBe("T-20261109-07");
+		expect(parseTaskRecommendActionId("jabbu:task:merge:T-20261109-07")).toBeUndefined();
 		const without = buildBlockedCard(row, judged(""), OWNER);
 		expect(without.buttons).toBeUndefined();
 		expect(without.note).toBeUndefined();
@@ -338,7 +338,7 @@ describe("blocked card: 추천대로 button", () => {
 
 describe("TASK recommend button (막힘 카드 추천대로)", () => {
 	const recommendClick = (taskId: string, cardTs: string): Promise<void> =>
-		pressButton(`ompbot:task:recommend:${taskId}`, cardTs);
+		pressButton(`jabbu:task:recommend:${taskId}`, cardTs);
 	const recommendMarkers = () => transport.posts((text: string) => text === "🔘 추천대로 (버튼)");
 	const recommendInbounds = () => daemon.store.listInbound().filter((row) => row.textRef.trim().startsWith("추천대로"));
 

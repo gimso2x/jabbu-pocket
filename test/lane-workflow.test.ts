@@ -20,7 +20,7 @@ let home: TestHome;
 let repos: string[];
 
 beforeEach(() => {
-	home = makeHome("ompbot-lane-workflow-home-");
+	home = makeHome("jabbu-lane-workflow-home-");
 	repos = [];
 });
 

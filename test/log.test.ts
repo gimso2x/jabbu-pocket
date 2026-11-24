@@ -11,7 +11,7 @@ const clock = { now: () => Date.UTC(2026, 9, 19, 12, 0, 0) };
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-log-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-log-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -103,8 +103,8 @@ describe("logger", () => {
 		expect(text.split("\n").filter(Boolean)).toHaveLength(2);
 		expect(text.match(/xox[a-z]-TEST|xapp-TEST/g)?.length ?? 0).toBe(0);
 		expect(statSync(path).mode & 0o777).toBe(0o600);
-		if (process.env.OMPBOT_TEST_LOG_OUT) {
-			Bun.write(process.env.OMPBOT_TEST_LOG_OUT, text);
+		if (process.env.JABBU_TEST_LOG_OUT) {
+			Bun.write(process.env.JABBU_TEST_LOG_OUT, text);
 		}
 	});
 });

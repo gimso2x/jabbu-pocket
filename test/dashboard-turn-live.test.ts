@@ -223,7 +223,7 @@ describe("live event stream", () => {
 
 	test("AC-7: a failing read is told once as daemon_unreachable, and the next answer comes through", async () => {
 		const fail = async (): Promise<LiveView | null> => {
-			throw new Error("ENOENT ompbot.sock");
+			throw new Error("ENOENT jabbu.sock");
 		};
 		const { base, scheduler, subscribers } = setup([fail, fail, view(3)]);
 		const client = await LiveStream.open(base);

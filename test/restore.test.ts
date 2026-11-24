@@ -22,7 +22,7 @@ import { RestoreError, runRestore } from "../src/ops/restore";
 let home: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-restore-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-restore-"));
 	chmodSync(home, 0o700);
 });
 
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 function seed(marker: string): void {
-	const db = new Database(join(home, "ompbot.db"), { create: true, strict: true });
+	const db = new Database(join(home, "jabbu.db"), { create: true, strict: true });
 	db.run("PRAGMA journal_mode=WAL");
 	for (const table of ["origins", "inbound", "deliveries"]) db.run(`CREATE TABLE IF NOT EXISTS ${table} (id)`);
 	db.run("CREATE TABLE IF NOT EXISTS marker (v TEXT)");
@@ -56,7 +56,7 @@ function goodBackupThenDrift(): string {
 	seed("good");
 	const { file } = runBackup({ homeDir: home });
 	seed("drifted");
-	writeFileSync(join(home, "ompbot.db-wal"), "stale-wal");
+	writeFileSync(join(home, "jabbu.db-wal"), "stale-wal");
 	return file;
 }
 
@@ -65,11 +65,11 @@ describe("runRestore", () => {
 		const file = goodBackupThenDrift();
 		const result = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon });
 		expect(result.applied).toBe(true);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("good");
-		expect(existsSync(join(home, "ompbot.db-wal"))).toBe(false);
-		expect(readdirSync(result.plan.preRestoreDir).sort()).toEqual(["ompbot.db", "ompbot.db-wal"]);
-		expect(markerOf(join(result.plan.preRestoreDir, "ompbot.db"))).toBe("drifted");
-		expect(existsSync(join(home, "ompbot.lock"))).toBe(false); // lock released
+		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
+		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(false);
+		expect(readdirSync(result.plan.preRestoreDir).sort()).toEqual(["jabbu.db", "jabbu.db-wal"]);
+		expect(markerOf(join(result.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
+		expect(existsSync(join(home, "jabbu.lock"))).toBe(false); // lock released
 		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
 	});
 
@@ -78,14 +78,14 @@ describe("runRestore", () => {
 		const name = file.split("/").pop() as string;
 		const result = await runRestore({ homeDir: home, source: name, yes: true, probeDaemon: noDaemon });
 		expect(result.plan.source).toBe(file);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("good");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
 	});
 
 	test("without --yes nothing changes", async () => {
 		const file = goodBackupThenDrift();
 		const result = await runRestore({ homeDir: home, source: file, yes: false, probeDaemon: noDaemon });
 		expect(result.applied).toBe(false);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 		expect(existsSync(result.plan.preRestoreDir)).toBe(false);
 	});
 
@@ -94,7 +94,7 @@ describe("runRestore", () => {
 		await expect(
 			runRestore({ homeDir: home, source: file, yes: true, probeDaemon: async () => ({ ok: true }) }),
 		).rejects.toMatchObject({ code: "daemon_running" });
-		const lock = acquireLock(join(home, "ompbot.lock"));
+		const lock = acquireLock(join(home, "jabbu.lock"));
 		try {
 			await expect(runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon })).rejects.toMatchObject(
 				{
@@ -104,7 +104,7 @@ describe("runRestore", () => {
 		} finally {
 			lock.release();
 		}
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 	});
 
 	test("a backup failing quick_check or not being a database leaves the live ledger untouched", async () => {
@@ -116,8 +116,8 @@ describe("runRestore", () => {
 		);
 		expect(error).toBeInstanceOf(RestoreError);
 		expect(error.code).toBe("integrity_check_failed");
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
-		expect(existsSync(join(home, "ompbot.db-wal"))).toBe(true);
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
+		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(true);
 		expect(readdirSync(home).filter((n) => n.includes(".tmp") || n.startsWith("pre-restore"))).toEqual([]);
 		expect(
 			existsSync(join(home, "backups"))
@@ -141,18 +141,18 @@ describe("runRestore", () => {
 			},
 		}).catch((e) => e);
 		expect(error.code).toBe("restore_failed");
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
-		expect(existsSync(join(home, "ompbot.db-wal"))).toBe(true);
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
+		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(true);
 		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
 	});
 
 	test("rejects sources that are neither a daily backup name nor an absolute file", async () => {
 		goodBackupThenDrift();
 		for (const source of [
-			"../ompbot.db",
-			"ompbot.db",
+			"../jabbu.db",
+			"jabbu.db",
 			"backups/nope.db",
-			"ompbot-20260101-000000.db",
+			"jabbu-20260101-000000.db",
 			join(home, "missing.db"),
 		]) {
 			const error = await runRestore({ homeDir: home, source, yes: true, probeDaemon: noDaemon }).catch((e) => e);
@@ -166,30 +166,30 @@ describe("runRestore", () => {
 		const error = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon }).catch((e) => e);
 		expect(error.code).toBe("bad_source");
 		expect(error.message).toContain("-wal");
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 	});
 
 	test("a symlinked or hard-linked source cannot dodge the -wal refusal (J-6)", async () => {
 		goodBackupThenDrift();
 		// The live ledger has a -wal beside it; a link to it from elsewhere must be refused like the ledger itself.
 		const viaSymlink = join(home, "via-symlink.db");
-		symlinkSync(join(home, "ompbot.db"), viaSymlink);
+		symlinkSync(join(home, "jabbu.db"), viaSymlink);
 		const e1 = await runRestore({ homeDir: home, source: viaSymlink, yes: true, probeDaemon: noDaemon }).catch(
 			(e) => e,
 		);
 		expect(e1.code).toBe("bad_source");
 		expect(e1.message).toContain("-wal");
 		const viaHardlink = join(home, "via-hardlink.db");
-		linkSync(join(home, "ompbot.db"), viaHardlink);
+		linkSync(join(home, "jabbu.db"), viaHardlink);
 		const e2 = await runRestore({ homeDir: home, source: viaHardlink, yes: true, probeDaemon: noDaemon }).catch(
 			(e) => e,
 		);
 		expect(e2.code).toBe("bad_source");
 		expect(e2.message).toContain("hard link");
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 	});
 
-	test("an empty file or a sqlite db without the ompbot tables is refused (J-7)", async () => {
+	test("an empty file or a sqlite db without the jabbu tables is refused (J-7)", async () => {
 		goodBackupThenDrift();
 		const empty = join(home, "empty.db");
 		writeFileSync(empty, "");
@@ -203,7 +203,7 @@ describe("runRestore", () => {
 		const e2 = await runRestore({ homeDir: home, source: foreign, yes: true, probeDaemon: noDaemon }).catch((e) => e);
 		expect(e2.code).toBe("integrity_check_failed");
 		expect(e2.message).toContain("origins");
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
 	});
 
@@ -214,30 +214,30 @@ describe("runRestore", () => {
 		seed("second-drift");
 		const second = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon, now });
 		expect(second.plan.preRestoreDir).not.toBe(first.plan.preRestoreDir);
-		expect(markerOf(join(first.plan.preRestoreDir, "ompbot.db"))).toBe("drifted");
-		expect(markerOf(join(second.plan.preRestoreDir, "ompbot.db"))).toBe("second-drift");
+		expect(markerOf(join(first.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
+		expect(markerOf(join(second.plan.preRestoreDir, "jabbu.db"))).toBe("second-drift");
 	});
 
 	test("restores into a home that has no ledger yet", async () => {
 		seed("good");
 		const { file } = runBackup({ homeDir: home });
-		rmSync(join(home, "ompbot.db"));
-		rmSync(join(home, "ompbot.db-wal"), { force: true });
-		rmSync(join(home, "ompbot.db-shm"), { force: true });
+		rmSync(join(home, "jabbu.db"));
+		rmSync(join(home, "jabbu.db-wal"), { force: true });
+		rmSync(join(home, "jabbu.db-shm"), { force: true });
 		mkdirSync(join(home, "backups"), { recursive: true });
 		const result = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon });
 		expect(result.plan.moves).toEqual([]);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("good");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
 	});
 });
 
-describe("ompbot restore (CLI)", () => {
+describe("jabbu-pocket restore (CLI)", () => {
 	test("exit codes: 2 without a path, 3 without --yes, 0 with --yes", async () => {
 		const file = goodBackupThenDrift();
 		expect(await restoreCommand([], home)).toBe(2);
 		expect(await restoreCommand([file], home)).toBe(3);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("drifted");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 		expect(await restoreCommand([file, "--yes"], home)).toBe(0);
-		expect(markerOf(join(home, "ompbot.db"))).toBe("good");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
 	});
 });

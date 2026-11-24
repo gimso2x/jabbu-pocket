@@ -23,20 +23,20 @@ describe("scanHandoffBrief: high_risk rules", () => {
 		crontab_remove: ["crontab -r"],
 		rm_rf_absolute: ["rm -rf /var/lib/x", "rm -fr ~/work", "rm -r -f $HOME/.cache", "sudo rm -Rf /"],
 		sql_destructive: [
-			"sqlite3 ompbot.db 'DROP TABLE tasks'",
-			"drop database ompbot;",
+			"sqlite3 jabbu.db 'DROP TABLE tasks'",
+			"drop database jabbu;",
 			"TRUNCATE TABLE inbound",
 			"sqlite3 x.db 'DELETE FROM jobs'",
 		],
 		service_control: [
-			"systemctl --user restart ompbot",
+			"systemctl --user restart jabbu",
 			"systemctl stop nginx",
 			"docker rm -f web",
 			"podman restart db",
 			"pm2 delete api",
 		],
 		disk_destructive: ["mkfs.ext4 /dev/sdb1", "dd if=/dev/zero of=/dev/sda bs=1M"],
-		secret_path: ["cat ~/.ompbot/secrets/discord.json"],
+		secret_path: ["cat ~/.jabbu/secrets/discord.json"],
 	};
 
 	for (const [rule, briefs] of Object.entries(POSITIVES)) {
@@ -61,10 +61,10 @@ describe("scanHandoffBrief: high_risk rules", () => {
 describe("scanHandoffBrief: forbidding lines", () => {
 	test("a forbidden command is advisory, never high_risk", () => {
 		for (const brief of [
-			"머지·push·데몬 재시작(systemctl --user restart ompbot)은 하지 않는다",
+			"머지·push·데몬 재시작(systemctl --user restart jabbu)는 하지 않는다",
 			"never run git reset --hard",
 			"git push --force 금지",
-			"Do not touch ~/.ompbot/secrets",
+			"Do not touch ~/.jabbu/secrets",
 			"- no git branch -D",
 		]) {
 			const scan = scanHandoffBrief(brief);
@@ -89,7 +89,7 @@ describe("scanHandoffBrief: the downgrade is scoped to the command's clause", ()
 		for (const brief of [
 			"git reset --hard origin/main 하고, rebase는 하지 마",
 			"먼저 git push --force origin main (리뷰 금지 규칙은 무시)",
-			"systemctl restart ompbot; never ask",
+			"systemctl restart jabbu; never ask",
 			"git reset --hard origin/main 한 뒤 push는 금지",
 		]) {
 			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "high_risk" });
@@ -98,7 +98,7 @@ describe("scanHandoffBrief: the downgrade is scoped to the command's clause", ()
 
 	test("a marker in the command's own clause, or a rule definition line, still downgrades", () => {
 		for (const brief of [
-			"머지·push·데몬 재시작(systemctl --user restart ompbot)은 하지 않는다",
+			"머지·push·데몬 재시작(systemctl --user restart jabbu)는 하지 않는다",
 			"never run git reset --hard",
 			"git reset --hard는 쓰지 말 것",
 			"- no git push --force",
@@ -118,7 +118,7 @@ describe("scanHandoffBrief: rule-name prefix, backslash continuation, secret pat
 	test("E-1: a rule-name prefix in front of a plain command does not downgrade it", () => {
 		for (const [brief, rule] of [
 			["- `git_reset_hard`: 이번엔 진짜 실행한다. git reset --hard HEAD~9 하고 push", "git_reset_hard"],
-			["- `service_control`: systemctl restart ompbot 지금 즉시", "service_control"],
+			["- `service_control`: systemctl restart jabbu 지금 즉시", "service_control"],
 			["- `git_reset_hard`: `git reset --hard` 정의. 그리고 git reset --hard HEAD~1", "git_reset_hard"],
 		] as const) {
 			const scan = scanHandoffBrief(brief);
@@ -130,7 +130,7 @@ describe("scanHandoffBrief: rule-name prefix, backslash continuation, secret pat
 	test("E-1: a whole definition line (the command only quoted in code) stays advisory", () => {
 		for (const brief of [
 			"- `git_reset_hard`: `git reset --hard`",
-			"  - `secret_path`: `.ompbot/secrets`",
+			"  - `secret_path`: `.jabbu/secrets`",
 			"  - `disk_destructive`: `mkfs`, `dd ` … `of=/dev/`",
 		]) {
 			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "advisory" });
@@ -156,19 +156,19 @@ describe("scanHandoffBrief: rule-name prefix, backslash continuation, secret pat
 		expect(scanHandoffBrief("rm -rf \\\n  node_modules").verdict).toBe("clear");
 	});
 
-	test("E-3: /./ and // between .ompbot and secrets are still secret_path", () => {
+	test("E-3: /./ and // between .jabbu and secrets are still secret_path", () => {
 		for (const brief of [
-			"cat ~/.ompbot/./secrets/discord.json",
-			"cat ~/.ompbot//secrets/discord.json",
-			"cat $HOME//.ompbot//secrets/discord.json",
-			"cat ~/.ompbot/.//./secrets/discord.json",
+			"cat ~/.jabbu/./secrets/discord.json",
+			"cat ~/.jabbu//secrets/discord.json",
+			"cat $HOME//.jabbu//secrets/discord.json",
+			"cat ~/.jabbu/.//./secrets/discord.json",
 		]) {
 			const scan = scanHandoffBrief(brief);
 			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
 			expect(scan.findings).toContainEqual(expect.objectContaining({ rule: "secret_path", severity: "high_risk" }));
 		}
-		expect(rulesOf("cat ~/.ompbot/config.json")).toEqual([]);
-		expect(rulesOf("cat ~/.ompbot/../secrets/x")).toEqual([]);
+		expect(rulesOf("cat ~/.jabbu/config.json")).toEqual([]);
+		expect(rulesOf("cat ~/.jabbu/../secrets/x")).toEqual([]);
 	});
 });
 
@@ -527,16 +527,16 @@ describe("scanHandoffBrief: qa-j low A", () => {
 		expectVerdicts(["never run git reset --hard", "git reset --hard는 하지 말 것, 잊지 말고"], "advisory");
 	});
 
-	test("#43 secrets named through $OMPBOT_HOME or after a cd into the bot home", () => {
+	test("#43 secrets named through $JABBU_HOME or after a cd into the bot home", () => {
 		for (const brief of [
-			"cat $OMPBOT_HOME/secrets/discord.json",
-			`cat \${OMPBOT_HOME}/secrets/discord.json`,
-			"cd ~/.ompbot && cat secrets/discord.json",
-			"cd ~/.ompbot/; cp secrets/discord.json /tmp/",
-			"cd $OMPBOT_HOME && cat secrets/x",
+			"cat $JABBU_HOME/secrets/discord.json",
+			`cat \${JABBU_HOME}/secrets/discord.json`,
+			"cd ~/.jabbu && cat secrets/discord.json",
+			"cd ~/.jabbu/; cp secrets/discord.json /tmp/",
+			"cd $JABBU_HOME && cat secrets/x",
 		])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: ["secret_path"] });
-		for (const brief of ["cd ~/.ompbot/workspace && cat secrets.md", "cd ~/.ompbot && ls"])
+		for (const brief of ["cd ~/.jabbu/workspace && cat secrets.md", "cd ~/.jabbu && ls"])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: [] });
 	});
 
@@ -624,21 +624,21 @@ describe("scanHandoffBrief: qa-j low A", () => {
 describe("qa-l low A: secrets reached through the bot home", () => {
 	test("#35 #71 cd options, pushd and env -C into the bot home before a relative secrets path", () => {
 		for (const brief of [
-			"cd -P ~/.ompbot && cat secrets/discord.json",
-			"cd -L ~/.ompbot && cat secrets/discord.json",
-			"cd -- ~/.ompbot && cat secrets/discord.json",
-			"cd -eP ~/.ompbot && cat secrets/discord.json",
-			"pushd ~/.ompbot && cat secrets/discord.json",
-			"pushd -n ~/.ompbot; cat secrets/x",
-			"env -C ~/.ompbot cat secrets/discord.json",
-			"env -C~/.ompbot cat secrets/discord.json",
-			"env --chdir=$OMPBOT_HOME cat secrets/x",
-			"env -i --chdir ~/.ompbot cat secrets/x",
+			"cd -P ~/.jabbu && cat secrets/discord.json",
+			"cd -L ~/.jabbu && cat secrets/discord.json",
+			"cd -- ~/.jabbu && cat secrets/discord.json",
+			"cd -eP ~/.jabbu && cat secrets/discord.json",
+			"pushd ~/.jabbu && cat secrets/discord.json",
+			"pushd -n ~/.jabbu; cat secrets/x",
+			"env -C ~/.jabbu cat secrets/discord.json",
+			"env -C~/.jabbu cat secrets/discord.json",
+			"env --chdir=$JABBU_HOME cat secrets/x",
+			"env -i --chdir ~/.jabbu cat secrets/x",
 		])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: ["secret_path"] });
 		for (const brief of [
-			"cd -P ~/.ompbot/workspace && cat secrets.md",
-			"pushd ~/.ompbot && ls",
+			"cd -P ~/.jabbu/workspace && cat secrets.md",
+			"pushd ~/.jabbu && ls",
 			"env -C ~/work/app cat secrets/x",
 		])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: [] });
@@ -646,14 +646,14 @@ describe("qa-l low A: secrets reached through the bot home", () => {
 
 	test("#72 a .. inside the bot home that still lands in secrets", () => {
 		for (const brief of [
-			"cat ~/.ompbot/logs/../secrets/discord.json",
-			"cat ~/.ompbot/x/../secrets/discord.json",
-			"cat ~/.ompbot/a/b/../../secrets/x",
-			"cat $OMPBOT_HOME/logs/../secrets/x",
-			"cat ~/.ompbot/logs/.././secrets",
+			"cat ~/.jabbu/logs/../secrets/discord.json",
+			"cat ~/.jabbu/x/../secrets/discord.json",
+			"cat ~/.jabbu/a/b/../../secrets/x",
+			"cat $JABBU_HOME/logs/../secrets/x",
+			"cat ~/.jabbu/logs/.././secrets",
 		])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: ["secret_path"] });
-		for (const brief of ["cat ~/.ompbot/../secrets/x", "cat ~/.ompbot/a/../../secrets/x", "cat ~/.ompbot/logs/../x"])
+		for (const brief of ["cat ~/.jabbu/../secrets/x", "cat ~/.jabbu/a/../../secrets/x", "cat ~/.jabbu/logs/../x"])
 			expect({ brief, rules: rulesOf(brief) }).toEqual({ brief, rules: [] });
 	});
 });
@@ -669,13 +669,13 @@ describe("qa-q: safety heuristic holes", () => {
 
 	test("#6 a glob or brace under the bot home that can spell secrets is secret_path", () => {
 		high([
-			"cat ~/.ompbot/sec*/discord.json",
-			"cat ~/.ompbot/{secrets,logs}/x",
-			"cat $OMPBOT_HOME/s?crets/x",
-			"cat ~/.ompbot/[s]ecrets/x",
+			"cat ~/.jabbu/sec*/discord.json",
+			"cat ~/.jabbu/{secrets,logs}/x",
+			"cat $JABBU_HOME/s?crets/x",
+			"cat ~/.jabbu/[s]ecrets/x",
 		]);
-		expect(rulesOf("cat ~/.ompbot/sec*/discord.json")).toEqual(["secret_path"]);
-		clear(["ls ~/.ompbot/logs/*", "ls ~/.ompbot/{logs,db}/x", "cat ~/.ompbot/lo*/x"]);
+		expect(rulesOf("cat ~/.jabbu/sec*/discord.json")).toEqual(["secret_path"]);
+		clear(["ls ~/.jabbu/logs/*", "ls ~/.jabbu/{logs,db}/x", "cat ~/.jabbu/lo*/x"]);
 	});
 
 	test("#7 checkout / restore of every file by glob is git_discard_worktree", () => {
@@ -731,60 +731,60 @@ describe("qa-q: safety heuristic holes", () => {
 
 	test("#24 a cd target is normalized before it is judged the bot home", () => {
 		high([
-			"cd ~/.ompbot/logs/..; cat secrets/discord.json",
-			"cd ~/.ompbot/. && cat secrets/discord.json",
-			"cd ~/.ompbot// && cat secrets/discord.json",
-			'cd "~/.ompbot/./" ; cat secrets/x',
+			"cd ~/.jabbu/logs/..; cat secrets/discord.json",
+			"cd ~/.jabbu/. && cat secrets/discord.json",
+			"cd ~/.jabbu// && cat secrets/discord.json",
+			'cd "~/.jabbu/./" ; cat secrets/x',
 		]);
-		clear(["cd ~/.ompbot/..; cat secrets/x", "cd ~/.ompbot/logs; cat secrets/x"]);
+		clear(["cd ~/.jabbu/..; cat secrets/x", "cd ~/.jabbu/logs; cat secrets/x"]);
 	});
 
 	test("a shell expansion after the cd target does not hide the bot home", () => {
 		const targets = [
-			`~/.ompbot\${u:+\\ }`,
-			"~/.ompbot{,\\ }",
-			`"$OMPBOT_HOME"\${x}`,
-			`~/.ompbot\${x}`,
-			`\${x}~/.ompbot/{a,b}`,
+			`~/.jabbu\${u:+\\ }`,
+			"~/.jabbu{,\\ }",
+			`"$JABBU_HOME"\${x}`,
+			`~/.jabbu\${x}`,
+			`\${x}~/.jabbu/{a,b}`,
 		];
 		for (const target of targets) {
 			high([`cd ${target} && cat secrets/token.json`, `cd ${target}\ncat secrets/token.json`]);
 		}
 		clear([
 			`cd /tmp\${u:+\\ } && cat secrets/x`,
-			`cd ~/.ompbot/..\${x}; cat secrets/x`,
+			`cd ~/.jabbu/..\${x}; cat secrets/x`,
 			`cd ~/work\${x}\ncat secrets/x`,
 		]);
 	});
 
 	test("a brace group after cd never swallows the commands that follow it", () => {
-		high(["cd /tmp/{ ; cat ~/.ompbot/secrets/token.json ; : }", "cd {; cd ~/.ompbot; cat secrets/token.json; }"]);
+		high(["cd /tmp/{ ; cat ~/.jabbu/secrets/token.json ; : }", "cd {; cd ~/.jabbu; cat secrets/token.json; }"]);
 	});
 
 	test("#26 a cd into the bot home carries over the line break", () => {
 		high([
-			"cd ~/.ompbot\ncat secrets/discord.json",
-			"cd ~/.ompbot\n\nls\n./secrets",
-			"cd ~/.ompbot\nrm -rf secrets",
-			"cd ~/.ompbot\ncd .\ncat secrets/x",
-			"pushd ~/.ompbot\nls secrets",
+			"cd ~/.jabbu\ncat secrets/discord.json",
+			"cd ~/.jabbu\n\nls\n./secrets",
+			"cd ~/.jabbu\nrm -rf secrets",
+			"cd ~/.jabbu\ncd .\ncat secrets/x",
+			"pushd ~/.jabbu\nls secrets",
 		]);
 		clear([
-			"cd ~/.ompbot\ncd /tmp\ncat secrets/x",
-			"cd ~/.ompbot/..; cat secrets/x",
-			"pushd ~/.ompbot\npopd\ncat secrets/x",
-			"env -C ~/.ompbot ls\ncat secrets/x",
-			"(cd ~/.ompbot)\ncat secrets/x",
-			"x=$(cd ~/.ompbot)\ncat secrets/x",
-			"cd ~/.ompbot\nsecrets는 건드리지 않는다",
-			"cd ~/.ompbot\nkeep secrets safe",
-			"cd ~/.ompbot\ncd -\ncat secrets/x",
-			"cd ~/.ompbot\ncd\ncat secrets/x",
-			"cd ~/.ompbot\ncd ..\ncat secrets/x",
-			"cd ~/.ompbot\ncd /tmp; cat secrets/x",
-			"- `git_reset_hard`: `cd ~/.ompbot`\ncat secrets/x",
+			"cd ~/.jabbu\ncd /tmp\ncat secrets/x",
+			"cd ~/.jabbu/..; cat secrets/x",
+			"pushd ~/.jabbu\npopd\ncat secrets/x",
+			"env -C ~/.jabbu ls\ncat secrets/x",
+			"(cd ~/.jabbu)\ncat secrets/x",
+			"x=$(cd ~/.jabbu)\ncat secrets/x",
+			"cd ~/.jabbu\nsecrets는 건드리지 않는다",
+			"cd ~/.jabbu\nkeep secrets safe",
+			"cd ~/.jabbu\ncd -\ncat secrets/x",
+			"cd ~/.jabbu\ncd\ncat secrets/x",
+			"cd ~/.jabbu\ncd ..\ncat secrets/x",
+			"cd ~/.jabbu\ncd /tmp; cat secrets/x",
+			"- `git_reset_hard`: `cd ~/.jabbu`\ncat secrets/x",
 		]);
-		expect(verdict("cd ~/.ompbot\ncat secrets/x 는 하지 마")).toBe("advisory");
+		expect(verdict("cd ~/.jabbu\ncat secrets/x 는 하지 마")).toBe("advisory");
 	});
 });
 
@@ -798,38 +798,38 @@ describe("qa-r: handoff risk regressions of the qa-q fixes", () => {
 	};
 
 	test("#5 a reversed glob range does not throw and is judged conservatively", () => {
-		const scan = scanHandoffBrief("cat ~/.ompbot/[z-a]/x");
+		const scan = scanHandoffBrief("cat ~/.jabbu/[z-a]/x");
 		expect(scan.verdict).toBe("high_risk");
 		expect(scan.findings.map((f) => f.rule)).toContain("secret_path");
 	});
 
 	test("#28 a fence line does not erase the bot home; a shell fence continues it", () => {
-		high(["cd ~/.ompbot\n```\ncat secrets/discord.json", "cd ~/.ompbot\n```bash\ncat secrets/x\n```"]);
-		clear(["cd ~/.ompbot\n```diff\n- cat secrets/x\n```", "cd ~/.ompbot\n```json\n{}\n```\ncat secrets/x"]);
+		high(["cd ~/.jabbu\n```\ncat secrets/discord.json", "cd ~/.jabbu\n```bash\ncat secrets/x\n```"]);
+		clear(["cd ~/.jabbu\n```diff\n- cat secrets/x\n```", "cd ~/.jabbu\n```json\n{}\n```\ncat secrets/x"]);
 	});
 
 	test("#25 cd into a bot home subdirectory keeps the shell inside the bot home", () => {
 		high([
-			"cd ~/.ompbot\ncd secrets\ncat discord.json",
-			"cd ~/.ompbot/secrets\ncat discord.json",
-			"cd ~/.ompbot/logs\ncat ../secrets/x",
+			"cd ~/.jabbu\ncd secrets\ncat discord.json",
+			"cd ~/.jabbu/secrets\ncat discord.json",
+			"cd ~/.jabbu/logs\ncat ../secrets/x",
 		]);
 		clear([
-			"cd ~/.ompbot\ncd secrets\ncd ..\ncat README.md",
-			"cd ~/.ompbot/secrets\nls",
-			"cd ~/.ompbot/secrets\ncat /etc/hosts",
-			"cd ~/.ompbot/secrets\ncat ../config.json",
+			"cd ~/.jabbu\ncd secrets\ncd ..\ncat README.md",
+			"cd ~/.jabbu/secrets\nls",
+			"cd ~/.jabbu/secrets\ncat /etc/hosts",
+			"cd ~/.jabbu/secrets\ncat ../config.json",
 		]);
 	});
 
 	test("#8 a path that leaves the bot home and comes back is still the bot home", () => {
-		high(["cd ~/.ompbot/../.ompbot\ncat secrets/discord.json"]);
-		clear(["cd ~/.ompbot/..; cat secrets/x"]);
+		high(["cd ~/.jabbu/../.jabbu\ncat secrets/discord.json"]);
+		clear(["cd ~/.jabbu/..; cat secrets/x"]);
 	});
 
 	test("#23 a rule line's own cd moves the shell, a quoted one does not", () => {
-		high(["- `note`: cd ~/.ompbot\ncat secrets/discord.json"]);
-		clear(["- `rule`: `cd ~/.ompbot` 금지\ncat secrets/x"]);
+		high(["- `note`: cd ~/.jabbu\ncat secrets/discord.json"]);
+		clear(["- `rule`: `cd ~/.jabbu` 금지\ncat secrets/x"]);
 	});
 
 	test("#31 a schema-qualified or quoted table name is still a destructive delete", () => {

@@ -25,7 +25,7 @@ export function renderBriefingHtml(snapshot: DashboardSnapshot, now: number): st
 	const counts = summaryCounts(snapshot);
 	const summary = counts.map(([label, value]) => `${label} ${value}`).join(" · ");
 	const body = [
-		`<h1>${esc(redact(`ompbot 브리핑 · ${minuteOf(now, snapshot.timezone)}`))}</h1>`,
+		`<h1>${esc(redact(`jabbu 브리핑 · ${minuteOf(now, snapshot.timezone)}`))}</h1>`,
 		`<p class="meta">${esc(redact(daemonLine(snapshot)))}</p>`,
 		`<p class="summary${attention.length > 0 ? " warn" : ""}">${esc(redact(summary))}</p>`,
 		...autoChoiceLine(snapshot),

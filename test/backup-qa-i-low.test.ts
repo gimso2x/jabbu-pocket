@@ -9,7 +9,7 @@ import { runBounded } from "./helpers/bounded-child";
 let home: string;
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-backup-qa-i-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-backup-qa-i-"));
 });
 
 afterEach(() => {

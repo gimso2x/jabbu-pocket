@@ -211,7 +211,7 @@ export async function applyUndoPlan(
 		// A run that stopped on a failing file stays undoable: the next `!undo` plans the same turn again, where the
 		// files already put back read as conflicts and only the rest is offered.
 		if (!failed) for (const opRef of opRefs) store.markTurnReverted(originKey, opRef, host.deps.clock.now());
-		const refs = rows.map((row) => `${row.repo}@refs/ompbot/turns/${row.id}/after`);
+		const refs = rows.map((row) => `${row.repo}@refs/jabbu/turns/${row.id}/after`);
 		lines.push(`되돌리기 전 상태는 git ref에 남아 있습니다: ${refs.join(", ")}`);
 		log.info("undo_applied", { origin: originKey, opRef: opRefs.join(","), files: changed.length });
 	}

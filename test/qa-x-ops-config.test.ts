@@ -51,7 +51,7 @@ function loadError(): ConfigError {
 }
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-qa-x-ops-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-qa-x-ops-"));
 	chmodSync(home, 0o700);
 	mkdirSync(join(home, "secrets"), { mode: 0o700 });
 	writeSecret("secrets/discord.token", "TEST-discord-token\n");
@@ -220,7 +220,7 @@ CREATE TABLE deliveries (
 	next_at INTEGER NOT NULL, redelivered INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, last_error TEXT
 );`;
 	function seed(rows: Array<[string, string, string | null]>): void {
-		const db = new Database(join(home, "ompbot.db"), { create: true, strict: true });
+		const db = new Database(join(home, "jabbu.db"), { create: true, strict: true });
 		db.run(DDL);
 		for (const [id, origin, peer] of rows) {
 			db.run(
@@ -240,7 +240,7 @@ CREATE TABLE deliveries (
 		writeFreeze(home, { by: "test", now });
 		expect(silent()).toEqual({ name: "origin_silent", state: "closed", detail: "waiting=0" });
 
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(
 			"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('O:1', 'discord/dm/200000000000000001', 1, 't', 'pending', ?)",
 			[now - 2 * ORIGIN_SILENT_MS],

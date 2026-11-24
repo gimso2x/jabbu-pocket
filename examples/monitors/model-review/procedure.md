@@ -4,16 +4,16 @@
 
 ## 1. 수집 (한 번)
 
-주차·날짜는 다음으로 정한다(봇 시간대: `OMPBOT_TZ` → `@OMPBOT_HOME@/config.json`의 `timezone` → 시스템 시간대, ISO 주차; 출력 `<YYYY>-W<ww> <오늘> <창 시작> <창 끝>`):
+주차·날짜는 다음으로 정한다(봇 시간대: `JABBU_TZ` → `@JABBU_HOME@/config.json`의 `timezone` → 시스템 시간대, ISO 주차; 출력 `<YYYY>-W<ww> <오늘> <창 시작> <창 끝>`):
 
 ```
-python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("OMPBOT_TZ") or json.load(open("@OMPBOT_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();y,w,_=t.isocalendar();print(f"{y}-W{w:02d} {t} {t-d.timedelta(7)} {t-d.timedelta(1)}")'
+python3 -c 'import datetime as d,json,os,zoneinfo as z;n=os.environ.get("JABBU_TZ") or json.load(open("@JABBU_HOME@/config.json")).get("timezone");t=d.datetime.now(z.ZoneInfo(n) if n else None).date();y,w,_=t.isocalendar();print(f"{y}-W{w:02d} {t} {t-d.timedelta(7)} {t-d.timedelta(1)}")'
 ```
 
 그다음 수집기를 정확히 한 번 실행한다(`<날짜>`는 위 출력의 오늘):
 
 ```
-mkdir -p @OMPBOT_HOME@/workspace/model-review && python3 @OMPBOT_HOME@/scripts/model-review-collect.py --home @OMPBOT_HOME@ @COLLECT_ARGS@ > @OMPBOT_HOME@/workspace/model-review/collect-<날짜>.md
+mkdir -p @JABBU_HOME@/workspace/model-review && python3 @JABBU_HOME@/scripts/model-review-collect.py --home @JABBU_HOME@ @COLLECT_ARGS@ > @JABBU_HOME@/workspace/model-review/collect-<날짜>.md
 ```
 
 - 실패(exit≠0)면 그 stderr를 그대로 오너에게 보고하고 끝낸다.
@@ -29,7 +29,7 @@ mkdir -p @OMPBOT_HOME@/workspace/model-review && python3 @OMPBOT_HOME@/scripts/m
 
 ## 3. 보고 파일 작성
 
-`@OMPBOT_HOME@/workspace/model-review/report-<YYYY>-W<ww>.md`에 쓴다(있으면 덮어쓴다). 형식:
+`@JABBU_HOME@/workspace/model-review/report-<YYYY>-W<ww>.md`에 쓴다(있으면 덮어쓴다). 형식:
 
 ```
 # 주간 모델 점검 <YYYY>-W<ww>
@@ -52,7 +52,7 @@ mkdir -p @OMPBOT_HOME@/workspace/model-review && python3 @OMPBOT_HOME@/scripts/m
 ## 4. 형식 게이트
 
 ```
-python3 @OMPBOT_HOME@/scripts/model-review.py check <보고 파일> --collect <수집 파일>
+python3 @JABBU_HOME@/scripts/model-review.py check <보고 파일> --collect <수집 파일>
 ```
 
 - exit 0이 될 때까지 stderr의 `줄 <n>: <사유>`를 보고 고친다(고쳐서 다시 돌리기 최대 2회). 끝내 실패하면 답 첫 줄을 `⚠️ 보고 형식 검증 실패`로 쓰고 위반 목록(stderr 전문)을 붙인다.
@@ -63,7 +63,7 @@ python3 @OMPBOT_HOME@/scripts/model-review.py check <보고 파일> --collect <�
 주간 모델 점검 <YYYY>-W<ww>: <결론 한 줄>
 1. <P1 제목>
 …
-보고: @OMPBOT_HOME@/workspace/model-review/report-<YYYY>-W<ww>.md
+보고: @JABBU_HOME@/workspace/model-review/report-<YYYY>-W<ww>.md
 적용하려면 이 스레드에 "N번 적용"
 ```
 

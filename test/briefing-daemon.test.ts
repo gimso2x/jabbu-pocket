@@ -23,7 +23,7 @@ let daemon: Daemon | undefined;
 let driver: FakeOmpDriver | undefined;
 
 beforeEach(() => {
-	home = makeHome("ompbot-briefing-daemon-");
+	home = makeHome("jabbu-briefing-daemon-");
 	clock = { t: Date.parse("2026-11-11T07:00:00+09:00"), now: () => clock.t };
 	lines = [];
 	transport = new BriefingTransport();

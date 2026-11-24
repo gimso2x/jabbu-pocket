@@ -17,7 +17,7 @@ import { pruneMediaFiles } from "../src/ops/media";
 let dir: string;
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-lane-j-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-lane-j-"));
 });
 
 afterEach(() => {
@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe("log rotation (J-13)", () => {
 	test("an archive slot that is a directory does not stop rotation or drop lines", () => {
-		const path = join(dir, "ompbot.log");
+		const path = join(dir, "jabbu.log");
 		mkdirSync(`${path}.2`, { recursive: true });
 		writeFileSync(join(`${path}.2`, "x"), "x");
 		const sink = rotatingFileSink(path, { maxBytes: 20, files: 3 });

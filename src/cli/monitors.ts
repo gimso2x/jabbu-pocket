@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { oneLine } from "../channel/text";
-import { loadConfig, type OmpbotConfig } from "../config";
+import { type JabbuConfig, loadConfig } from "../config";
 import {
 	describeMonitorTrigger,
 	type MonitorLedger,
@@ -86,7 +86,7 @@ function need(ledger: MonitorLedger, idOrName: string | undefined): MonitorRow {
 
 /** The config the checks below validate against; a home without a usable config (missing, broken, wrong
  * permissions) has none and the ledger commands still work there. */
-function configOf(homeDir: string): OmpbotConfig | undefined {
+function configOf(homeDir: string): JabbuConfig | undefined {
 	try {
 		return loadConfig(homeDir);
 	} catch {
@@ -116,7 +116,7 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 		return 2;
 	}
 	const dir = resolve(values.dir);
-	const ledger = openMonitorLedger(join(homeDir, "ompbot.db"));
+	const ledger = openMonitorLedger(join(homeDir, "jabbu.db"));
 	try {
 		if (sub === "export") {
 			const result = exportMonitors(ledger, dir, ctx, { withFiles: values["with-files"] === true });
@@ -147,7 +147,7 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 	}
 }
 
-/** `ompbot monitors ...` against the ledger file directly; the running daemon picks changes up on its next sweep. */
+/** `jabbu-pocket monitors ...` against the ledger file directly; the running daemon picks changes up on its next sweep. */
 export async function monitorsCommand(args: string[], homeDir: string): Promise<number> {
 	const [sub, ...rest] = args;
 	const scriptsRoot = join(homeDir, "scripts");
@@ -173,7 +173,7 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		sub !== "remove" &&
 		sub !== "test"
 	) {
-		process.stderr.write(`usage: ompbot monitors <add|list|show|update|remove|test|export|apply>\n${MONITORS_USAGE}`);
+		process.stderr.write(`usage: jabbu-pocket monitors <subcommand>\n${MONITORS_USAGE}`);
 		return 2;
 	}
 	// The ledger file is created on open, which fails with a raw SQLite error when the directory is not there.
@@ -196,7 +196,7 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		allowPositionals: true,
 		options: { json: { type: "string" } },
 	});
-	const ledger = openMonitorLedger(join(homeDir, "ompbot.db"));
+	const ledger = openMonitorLedger(join(homeDir, "jabbu.db"));
 	try {
 		const out = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 		if (sub === "add") {

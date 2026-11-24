@@ -1,5 +1,5 @@
 [Unit]
-Description=ompbot daily database backup (consistent snapshot + quick_check + retention)
+Description=jabbu daily database backup (consistent snapshot + quick_check + retention)
 
 [Service]
 Type=oneshot

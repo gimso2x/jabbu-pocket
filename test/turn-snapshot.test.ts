@@ -51,8 +51,8 @@ function tempDir(prefix: string): string {
 const clock = { now: () => 1_000_000 };
 
 function newStore(): Store {
-	const dir = tempDir("ompbot-turn-store-");
-	const store = openStore({ timezone: "Asia/Seoul", path: join(dir, "ompbot.db"), clock, redact: (text) => text });
+	const dir = tempDir("jabbu-turn-store-");
+	const store = openStore({ timezone: "Asia/Seoul", path: join(dir, "jabbu.db"), clock, redact: (text) => text });
 	stores.push(store);
 	return store;
 }
@@ -134,7 +134,7 @@ describe("captureTree (AC-1)", () => {
 			const first = await captureTree(repo);
 			const second = await captureTree(repo);
 			expect(second.tree).toBe(first.tree);
-			expect(git(repo, "ls-tree", "-r", "--name-only", first.tree)).not.toContain("ompbot-turn-index-");
+			expect(git(repo, "ls-tree", "-r", "--name-only", first.tree)).not.toContain("jabbu-turn-index-");
 		} finally {
 			if (saved === undefined) delete process.env.TMPDIR;
 			else process.env.TMPDIR = saved;
@@ -506,8 +506,8 @@ describe("ledger retention and refs (AC-4)", () => {
 		const repo = makeRepo(repos);
 		const other = makeRepo(repos);
 		for (const dir of [repo, other]) {
-			git(dir, "update-ref", "refs/ompbot/turns/7/before", "HEAD");
-			git(dir, "update-ref", "refs/ompbot/turns/7/after", "HEAD");
+			git(dir, "update-ref", "refs/jabbu/turns/7/before", "HEAD");
+			git(dir, "update-ref", "refs/jabbu/turns/7/after", "HEAD");
 		}
 		const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
 		process.env.GIT_DIR = join(other, ".git");
@@ -521,15 +521,15 @@ describe("ledger retention and refs (AC-4)", () => {
 			if (saved.tree === undefined) delete process.env.GIT_WORK_TREE;
 			else process.env.GIT_WORK_TREE = saved.tree;
 		}
-		expect(removed).toEqual(["refs/ompbot/turns/7/before", "refs/ompbot/turns/7/after"]);
-		expect(git(repo, "for-each-ref", "refs/ompbot/")).toBe("");
-		expect(git(other, "for-each-ref", "--format=%(refname)", "refs/ompbot/").split("\n")).toEqual([
-			"refs/ompbot/turns/7/after",
-			"refs/ompbot/turns/7/before",
+		expect(removed).toEqual(["refs/jabbu/turns/7/before", "refs/jabbu/turns/7/after"]);
+		expect(git(repo, "for-each-ref", "refs/jabbu/")).toBe("");
+		expect(git(other, "for-each-ref", "--format=%(refname)", "refs/jabbu/").split("\n")).toEqual([
+			"refs/jabbu/turns/7/after",
+			"refs/jabbu/turns/7/before",
 		]);
 	});
 
-	test("recordTurn keeps the turn's before/after trees under refs/ompbot/turns/<id>, and removeTurnRefs drops them", async () => {
+	test("recordTurn keeps the turn's before/after trees under refs/jabbu/turns/<id>, and removeTurnRefs drops them", async () => {
 		const store = newStore();
 		const repo = makeRepo(repos);
 		const base = await captureTree(repo);
@@ -546,17 +546,17 @@ describe("ledger retention and refs (AC-4)", () => {
 		const rows = store.listTurnSnapshots({ originKey: "discord/dm/200000000000000001" });
 		expect(rows).toHaveLength(1);
 		const id = rows[0]?.id as number;
-		expect(git(repo, "rev-parse", `refs/ompbot/turns/${id}/before^{tree}`)).toBe(base.tree);
-		expect(git(repo, "rev-parse", `refs/ompbot/turns/${id}/after^{tree}`)).toBe(after.tree);
+		expect(git(repo, "rev-parse", `refs/jabbu/turns/${id}/before^{tree}`)).toBe(base.tree);
+		expect(git(repo, "rev-parse", `refs/jabbu/turns/${id}/after^{tree}`)).toBe(after.tree);
 
 		expect((await removeTurnRefs(rows)).length).toBe(2);
-		expect(git(repo, "for-each-ref", "refs/ompbot/turns")).toBe("");
+		expect(git(repo, "for-each-ref", "refs/jabbu/turns")).toBe("");
 	});
 
 	test("gc removes rows older than 7 days (and only those) and drops their refs", async () => {
-		const home = tempDir("ompbot-turn-gc-");
+		const home = tempDir("jabbu-turn-gc-");
 		const repo = makeRepo(repos);
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const now = 1_700_000_000_000;
 		const day = 24 * 60 * 60 * 1000;
 		const store = openStore({
@@ -592,7 +592,7 @@ describe("ledger retention and refs (AC-4)", () => {
 		// A dry run counts what a real run would release and changes nothing (J-12).
 		const dry = gcSessions({ homeDir: home, retentionDays: 30, now, dryRun: true });
 		expect(dry.turnSnapshotsRemoved).toBe(1);
-		expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/ompbot/turns").split("\n")).toHaveLength(4);
+		expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/jabbu/turns").split("\n")).toHaveLength(4);
 
 		const result = gcSessions({ homeDir: home, retentionDays: 30, now });
 		expect(result.turnSnapshotsRemoved).toBe(1);
@@ -605,8 +605,8 @@ describe("ledger retention and refs (AC-4)", () => {
 		stores.push(reopened);
 		const kept = reopened.listTurnSnapshots({ originKey: "discord/dm/200000000000000001" });
 		expect(kept.map((row) => row.id)).toEqual([freshId]);
-		expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/ompbot/turns")).toBe(
-			`refs/ompbot/turns/${freshId}/after\nrefs/ompbot/turns/${freshId}/before`,
+		expect(git(repo, "for-each-ref", "--format=%(refname)", "refs/jabbu/turns")).toBe(
+			`refs/jabbu/turns/${freshId}/after\nrefs/jabbu/turns/${freshId}/before`,
 		);
 		expect(oldId).toBeGreaterThan(0);
 	});

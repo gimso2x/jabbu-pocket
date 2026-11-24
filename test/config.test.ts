@@ -64,7 +64,7 @@ function catchError(fn: () => unknown): ConfigError {
 }
 
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-cfg-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-cfg-"));
 	chmodSync(home, 0o700);
 	mkdirSync(join(home, "secrets"), { mode: 0o700 });
 	writeSecret("secrets/discord.token", `${TOKEN}\n`);
@@ -741,10 +741,10 @@ describe("channels.discord", () => {
 describe("offsite", () => {
 	test("is optional; ssh alias / user@host and absolute or ~/ remoteDir are accepted, keep defaults off", () => {
 		expect(loadConfig(home).offsite).toBeUndefined();
-		writeConfig(baseConfig({ offsite: { ssh: "backup-box", remoteDir: "~/ompbot-backups" } }));
-		expect(loadConfig(home).offsite).toEqual({ ssh: "backup-box", remoteDir: "~/ompbot-backups" });
-		writeConfig(baseConfig({ offsite: { ssh: "ubuntu@10.0.0.5", remoteDir: "/srv/ompbot", keep: 7 } }));
-		expect(loadConfig(home).offsite).toEqual({ ssh: "ubuntu@10.0.0.5", remoteDir: "/srv/ompbot", keep: 7 });
+		writeConfig(baseConfig({ offsite: { ssh: "backup-box", remoteDir: "~/jabbu-backups" } }));
+		expect(loadConfig(home).offsite).toEqual({ ssh: "backup-box", remoteDir: "~/jabbu-backups" });
+		writeConfig(baseConfig({ offsite: { ssh: "ubuntu@10.0.0.5", remoteDir: "/srv/jabbu", keep: 7 } }));
+		expect(loadConfig(home).offsite).toEqual({ ssh: "ubuntu@10.0.0.5", remoteDir: "/srv/jabbu", keep: 7 });
 	});
 
 	test.each([
@@ -831,10 +831,10 @@ describe("herdr", () => {
 	test("recordsRepo and dispatchHosts.<h>.recordsDir load as given; absent stays absent", () => {
 		writeConfig(baseConfig({ herdr: {}, dispatchHosts: hosts }));
 		expect(loadConfig(home).recordsRepo).toBeUndefined();
-		const withRecords = { wsl: { ssh: "wsl", recordsDir: "/home/u/ompbot-records" } };
-		writeConfig(baseConfig({ herdr: {}, dispatchHosts: withRecords, recordsRepo: "/srv/kencrew-private" }));
+		const withRecords = { wsl: { ssh: "wsl", recordsDir: "/home/u/jabbu-records" } };
+		writeConfig(baseConfig({ herdr: {}, dispatchHosts: withRecords, recordsRepo: "/srv/records-private" }));
 		const cfg = loadConfig(home);
-		expect(cfg.recordsRepo).toBe("/srv/kencrew-private");
+		expect(cfg.recordsRepo).toBe("/srv/records-private");
 		expect(cfg.dispatchHosts).toEqual(withRecords);
 	});
 
@@ -890,9 +890,9 @@ describe("taskAutoLand", () => {
 	test("AC-5: is optional; repos are kept with their trailing slash dropped, maxRisk when given", () => {
 		writeConfig(baseConfig({ herdr: {} }));
 		expect(loadConfig(home).taskAutoLand).toBeUndefined();
-		writeConfig(withHerdr({ repos: ["/home/owner/work/ompbot/", "/home/owner/work/home-bot"] }));
+		writeConfig(withHerdr({ repos: ["/home/owner/work/jabbu/", "/home/owner/work/home-bot"] }));
 		expect(loadConfig(home).taskAutoLand).toEqual({
-			repos: ["/home/owner/work/ompbot", "/home/owner/work/home-bot"],
+			repos: ["/home/owner/work/jabbu", "/home/owner/work/home-bot"],
 		});
 		writeConfig(withHerdr({ repos: ["/srv/repo//"], maxRisk: "L1" }));
 		expect(loadConfig(home).taskAutoLand).toEqual({ repos: ["/srv/repo"], maxRisk: "L1" });
@@ -901,7 +901,7 @@ describe("taskAutoLand", () => {
 	test.each([
 		["empty repos", withHerdr({ repos: [] }), "(field=taskAutoLand.repos)"],
 		["repos not an array", withHerdr({ repos: "/srv/repo" }), "(field=taskAutoLand.repos)"],
-		["a relative repo", withHerdr({ repos: ["/srv/a", "work/ompbot"] }), "(field=taskAutoLand.repos.1)"],
+		["a relative repo", withHerdr({ repos: ["/srv/a", "work/jabbu"] }), "(field=taskAutoLand.repos.1)"],
 		["a non-string repo", withHerdr({ repos: [7] }), "(field=taskAutoLand.repos.0)"],
 		["maxRisk outside L0~L4", withHerdr({ repos: ["/srv/a"], maxRisk: "L5" }), "(field=taskAutoLand.maxRisk)"],
 		["a lower-case maxRisk", withHerdr({ repos: ["/srv/a"], maxRisk: "l2" }), "(field=taskAutoLand.maxRisk)"],
@@ -1051,7 +1051,7 @@ describe("taskAutoLand", () => {
 		expect(err.message).toContain(field);
 	});
 
-	test("AC-5: taskAutoLand is a live field (ompbot reload applies it without a restart)", () => {
+	test("AC-5: taskAutoLand is a live field (jabbu-pocket reload applies it without a restart)", () => {
 		expect(LIVE_FIELDS).toContain("taskAutoLand");
 	});
 });
@@ -1084,7 +1084,7 @@ describe("apply.codeRollback (apply-rollback-mode AC-1, 7c)", () => {
 		expect(err.message).toContain(field);
 	});
 
-	test("apply is CLI-only: ompbot apply reads it on every run, the daemon never", () => {
+	test("apply is CLI-only: jabbu-pocket apply reads it on every run, the daemon never", () => {
 		expect(CLI_FIELDS).toContain("apply");
 		expect(LIVE_FIELDS).not.toContain("apply" as never);
 		expect(RESTART_FIELDS).not.toContain("apply" as never);
@@ -1197,7 +1197,7 @@ describe("Discord-only: no other platform configured", () => {
 
 		const logs: string[] = [];
 		const log = createLogger({ sink: (line) => logs.push(line), clock: { now: () => Date.now() }, redact });
-		const env = { OMPBOT_TEST_HOOKS: "1", OMPBOT_TEST_DISCORD_TRANSPORT: join(home, "discord-calls.jsonl") };
+		const env = { JABBU_TEST_HOOKS: "1", JABBU_TEST_DISCORD_TRANSPORT: join(home, "discord-calls.jsonl") };
 		const channels = channelBindings(config, env, log);
 		expect(channels.map((binding) => binding.port.platform)).toEqual(["discord"]);
 
@@ -1284,10 +1284,10 @@ describe("qa50b lane I", () => {
 		expect(loadConfig(home).warnings).toBeUndefined();
 	});
 
-	test("I-5/7/11/13: an empty OMPBOT_HOME means unset", () => {
+	test("I-5/7/11/13: an empty JABBU_HOME means unset", () => {
 		const fallback = defaultHomeDir({});
-		expect(defaultHomeDir({ OMPBOT_HOME: "" })).toBe(fallback);
-		expect(defaultHomeDir({ OMPBOT_HOME: "/x/home" })).toBe("/x/home");
+		expect(defaultHomeDir({ JABBU_HOME: "" })).toBe(fallback);
+		expect(defaultHomeDir({ JABBU_HOME: "/x/home" })).toBe("/x/home");
 	});
 
 	test("I-6: a dispatchHosts name with control characters loads but is flagged", () => {

@@ -116,7 +116,7 @@ export const BOOT_CLIENT = `function boot() {
 		ui.theme = valid;
 		if (save) {
 			try {
-				localStorage.setItem("ompbot-theme", valid);
+				localStorage.setItem("jabbu-theme", valid);
 			} catch {}
 		}
 		document.documentElement.setAttribute("data-theme", resolveTheme(valid));
@@ -127,7 +127,7 @@ export const BOOT_CLIENT = `function boot() {
 		if (snapshot) drawMain(false);
 	};
 	try {
-		applyTheme(localStorage.getItem("ompbot-theme") || "system", false);
+		applyTheme(localStorage.getItem("jabbu-theme") || "system", false);
 	} catch {
 		applyTheme("system", false);
 	}

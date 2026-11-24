@@ -30,13 +30,13 @@ const ctx = () => ({ scriptsRoot, workspaceDir, webhook: { port: 1 }, defaultTim
 const log = () => createLogger({ sink: (line) => logLines.push(line), clock: { now: () => now }, redact });
 
 beforeEach(() => {
-	home = makeHome("ompbot-webhook-");
+	home = makeHome("jabbu-webhook-");
 	scriptsRoot = join(home.dir, "scripts");
 	mkdirSync(scriptsRoot);
 	workspaceDir = home.config.workspaceDir;
 	logLines = [];
 	now = NOW;
-	ledger = openMonitorLedger(join(home.dir, "ompbot.db"), { now: () => now });
+	ledger = openMonitorLedger(join(home.dir, "jabbu.db"), { now: () => now });
 });
 
 afterEach(() => {

@@ -1,5 +1,5 @@
 import type { ChannelBinding } from "../channel/adapter";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import type { DriverFactory } from "../core/mailbox";
 import type { MailboxClock } from "../core/types";
 import type { ProcessRunner } from "../dispatch/omp";
@@ -16,7 +16,7 @@ import type { CrashPoint } from "./crash";
 import type { RestartLauncherDeps } from "./restart";
 
 export interface DaemonOptions {
-	config: OmpbotConfig;
+	config: JabbuConfig;
 	/** The config.json text `loadConfig` validated for this boot (`undefined` = unreadable); only it can become last-good at ready. Absent (tests) → read at `start()`. */
 	bootConfigText?: string | undefined;
 	/** The chat platforms, one binding each: its port carries the core's posts (redacted), its adapter the inbound path and delivery pump. */
@@ -75,7 +75,7 @@ export interface DaemonOptions {
 	prLand?: { tools?: PrTools; seams?: PrLandSeams };
 	/** Test seam for the lanes' independent review (`taskAutoLand.review`); default runs the real `omp -p`. */
 	laneReviewRun?: ProcessRunner;
-	/** Test seam for whether an `ompbot lanes attach` process lives; default signal 0 on this machine. */
+	/** Test seam for whether a `jabbu-pocket lanes attach` process lives; default signal 0 on this machine. */
 	pidAlive?: (pid: number) => boolean;
 	/** Test seam for the [TASK] sweep's herdr calls (remind, agent status, board pane); default runs the real herdr. */
 	herdrRun?: ProcessRunner;

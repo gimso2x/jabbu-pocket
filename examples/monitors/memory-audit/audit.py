@@ -2,13 +2,13 @@
 """기억 교정 도구: 판정 파일 형식 게이트(check), 은행 스냅샷(snapshot), 교체 메모 id 찾기(find),
 반영 결과 검증(verify).
 
-판정 파일 경로는 ~/.ompbot/workspace/memory-audit/<YYYY-MM-DD>.md(BOT_TZ)이고 형식은 같은 디렉터리의
+판정 파일 경로는 ~/.jabbu/workspace/memory-audit/<YYYY-MM-DD>.md(BOT_TZ)이고 형식은 같은 디렉터리의
 README.md(판정 파일 형식)를 따른다. 은행(Mnemopi mnemopi.db)은 언제나 mode=ro로만 열고 쓰지 않는다.
 무효화는 모델이 memory_edit invalidate로만 한다.
 
 은행 고르기(snapshot·find·verify 공통): --bank <mnemopi.db>, 없으면 --banks-root
 (기본 ~/.omp/agent/memories/mnemopi/banks) 아래 */mnemopi.db 중 working_memory.metadata_json의 cwd가
---workspace(기본 ~/.ompbot/workspace)인 행이 가장 많은 은행.
+--workspace(기본 ~/.jabbu/workspace)인 행이 가장 많은 은행.
 
 사용:
   audit.py check <file>
@@ -46,10 +46,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 def bot_timezone() -> dt.tzinfo:
-    """봇 시간대: OMPBOT_TZ 환경 변수 → <OMPBOT_HOME 또는 ~/.ompbot>/config.json의 timezone → 시스템 시간대."""
-    name = os.environ.get("OMPBOT_TZ", "").strip()
+    """봇 시간대: JABBU_TZ 환경 변수 → <JABBU_HOME 또는 ~/.jabbu>/config.json의 timezone → 시스템 시간대."""
+    name = os.environ.get("JABBU_TZ", "").strip()
     if not name:
-        config = Path(os.environ.get("OMPBOT_HOME") or Path.home() / ".ompbot") / "config.json"
+        config = Path(os.environ.get("JABBU_HOME") or Path.home() / ".jabbu") / "config.json"
         try:
             name = str(json.loads(config.read_text(encoding="utf-8")).get("timezone") or "").strip()
         except (OSError, ValueError, AttributeError):
@@ -60,7 +60,7 @@ def bot_timezone() -> dt.tzinfo:
 BOT_TZ = bot_timezone()
 UTC = dt.timezone.utc
 DEFAULT_BANKS_ROOT = "~/.omp/agent/memories/mnemopi/banks"
-DEFAULT_WORKSPACE = "~/.ompbot/workspace"
+DEFAULT_WORKSPACE = "~/.jabbu/workspace"
 TITLE = re.compile(r"^# 기억 교정 \d{4}-\d{2}-\d{2}\s*$")
 MEMORY_ID = re.compile(r"^[0-9a-f]{16}$")
 EVIDENCE = re.compile(r"\((코드 [^)]+|설정 [^)]+|DB [^)]+|파일 [^)]+|기록 \d{4}-\d{2}-\d{2}(?: [^)]+)?|잡음)\)")

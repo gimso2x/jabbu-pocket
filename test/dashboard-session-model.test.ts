@@ -11,7 +11,7 @@ import {
 
 let dir: string;
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "ompbot-session-model-"));
+	dir = mkdtempSync(join(tmpdir(), "jabbu-session-model-"));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 

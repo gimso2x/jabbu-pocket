@@ -2,7 +2,7 @@
 //
 // `!usage`'s account-limit block: one `omp usage --json --redact --no-extensions` call covers every configured provider,
 // and its JSON is formatted into the Korean lines the chat shows. The token/cost totals stay where they are
-// (src/ops/usage.ts, read from ompbot's own session files): an unsupported or failing usage response must not take them
+// (src/ops/usage.ts, read from jabbu's own session files): an unsupported or failing usage response must not take them
 // down, so `renderLimits` returns its own "확인 실패" line instead of throwing.
 import type { ProcessRunner, RunProcessOptions } from "../dispatch/omp";
 import { redact } from "../redact";

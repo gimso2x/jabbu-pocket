@@ -27,7 +27,7 @@ export function workerAgyOf(configPath: string, value: unknown): WorkerAgyConfig
 
 /**
  * `agyMcpServers`: `[{ name, command, args?, env?: [{ name, value }] }]`. An env name with a prefix the child env
- * strips (`SLACK_`, `OMPBOT_`, `LD_`, `DYLD_`) is refused, so the MCP server cannot get what the agent may not.
+ * strips (`SLACK_`, `JABBU_`, `LD_`, `DYLD_`) is refused, so the MCP server cannot get what the agent may not.
  */
 export function agyMcpServersOf(configPath: string, value: unknown): AgyMcpServer[] | undefined {
 	if (value === undefined) return undefined;

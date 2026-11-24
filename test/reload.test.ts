@@ -27,7 +27,7 @@ let home: TestHome;
 let daemon: Daemon | undefined;
 
 beforeEach(() => {
-	home = makeHome("ompbot-reload-");
+	home = makeHome("jabbu-reload-");
 	daemon = undefined;
 });
 
@@ -117,7 +117,7 @@ describe("planReload", () => {
 	});
 });
 
-test("ompbot reload applies a live field and refreshes last-good; an invalid file keeps the running config", async () => {
+test("jabbu-pocket reload applies a live field and refreshes last-good; an invalid file keeps the running config", async () => {
 	const transport = new WaitingDiscordTransport();
 	const clock = { now: () => Date.now() };
 	const sessions = new FakeSessionStore();
@@ -339,9 +339,9 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 		return register(input);
 	};
 	// The tool is taken once, before the reload: only a per-call read of the config can see the new model.
-	const tool = running.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "ompbot_dispatch");
+	const tool = running.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
 	if (tool === undefined) throw new Error("dispatch tool missing");
-	const repo = mkdtempSync(join(tmpdir(), "ompbot-reload-tier-"));
+	const repo = mkdtempSync(join(tmpdir(), "jabbu-reload-tier-"));
 	try {
 		const register1 = () =>
 			tool.execute(

@@ -23,11 +23,11 @@ afterAll(() => {
 });
 
 function py(args: string[]): { code: number; out: string; err: string } {
-	// 기대값이 KST라 봇 시간대를 고정한다(없으면 ~/.ompbot/config.json·시스템 시간대를 따라 CI(UTC)에서 깨진다).
+	// 기대값이 KST라 봇 시간대를 고정한다(없으면 ~/.jabbu/config.json·시스템 시간대를 따라 CI(UTC)에서 깨진다).
 	const run = Bun.spawnSync(["python3", ...args], {
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...process.env, OMPBOT_TZ: "Asia/Seoul" },
+		env: { ...process.env, JABBU_TZ: "Asia/Seoul" },
 	});
 	return { code: run.exitCode, out: run.stdout.toString(), err: run.stderr.toString() };
 }
@@ -96,7 +96,7 @@ function fixtureHome(): string {
 	writeFileSync(join(reflections, "2026-10-31.md"), reflection("창밖회고"));
 	writeFileSync(join(reflections, "2026-11-08.md"), reflection("창밖오늘회고"));
 
-	const db = new Database(join(home, "ompbot.db"));
+	const db = new Database(join(home, "jabbu.db"));
 	db.run(`CREATE TABLE monitors (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE)`);
 	db.run(`CREATE TABLE monitor_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, monitor_id TEXT NOT NULL,
 		stage TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL)`);
@@ -123,7 +123,7 @@ function fixtureHome(): string {
 	const logs = join(home, "logs");
 	mkdirSync(logs);
 	writeFileSync(
-		join(logs, "ompbot.log"),
+		join(logs, "jabbu.log"),
 		[
 			"ts=2026-10-31T20:59:59.000Z level=warn event=old_out_of_window",
 			"ts=2026-10-31T21:00:00.000Z level=warn event=discord_gateway_reconnecting reason=x",
@@ -215,7 +215,7 @@ describe("weekly-improvement collect.py", () => {
 
 	test("AC-2: DB untouched (sha256, no -wal/-journal); missing DB and reflections still exit 0", () => {
 		const home = fixtureHome();
-		const dbPath = join(home, "ompbot.db");
+		const dbPath = join(home, "jabbu.db");
 		const before = sha256(dbPath);
 		const run = py([COLLECT, "--home", home, "--now", NOW]);
 		expect(run.code).toBe(0);
@@ -229,7 +229,7 @@ describe("weekly-improvement collect.py", () => {
 		for (const source of ["reflections: missing", "db: missing", "log: missing", "meetings: missing"]) {
 			expect(bare.out).toContain(source);
 		}
-		expect(existsSync(join(empty, "ompbot.db"))).toBe(false);
+		expect(existsSync(join(empty, "jabbu.db"))).toBe(false);
 	});
 
 	test("argument errors exit 2", () => {
@@ -366,15 +366,15 @@ describe("weekly-improvement meeting.py decide", () => {
 });
 
 describe("weekly-improvement monitor.json", () => {
-	test("AC-5: with @OMPBOT_HOME@ replaced by a temp home it parses; Sunday 06:00 KST cron, bot model, one procedure file", () => {
+	test("AC-5: with @JABBU_HOME@ replaced by a temp home it parses; Sunday 06:00 KST cron, bot model, one procedure file", () => {
 		const home = tempDir("weekly-improvement-install-");
 		const scriptsRoot = join(home, "scripts");
 		mkdirSync(scriptsRoot);
 		const installed = join(scriptsRoot, "weekly-improvement-procedure.md");
 		copyFileSync(join(PKG, "procedure.md"), installed);
 		const template = readFileSync(join(PKG, "monitor.json"), "utf8");
-		expect(JSON.parse(template).procedureFiles).toEqual(["@OMPBOT_HOME@/scripts/weekly-improvement-procedure.md"]);
-		const raw = JSON.parse(template.replaceAll("@OMPBOT_HOME@", home));
+		expect(JSON.parse(template).procedureFiles).toEqual(["@JABBU_HOME@/scripts/weekly-improvement-procedure.md"]);
+		const raw = JSON.parse(template.replaceAll("@JABBU_HOME@", home));
 		expect(raw.procedureFiles).toEqual([installed]);
 		const spec = parseMonitorSpec(raw, { scriptsRoot, defaultTimezone: "Asia/Seoul" });
 		expect(spec.trigger).toEqual({ kind: "cron", schedule: "0 6 * * 0", timezone: "Asia/Seoul" });
@@ -383,10 +383,10 @@ describe("weekly-improvement monitor.json", () => {
 		expect("channel" in spec).toBe(false);
 	});
 
-	test("procedure.md names installed paths only through @OMPBOT_HOME@", () => {
+	test("procedure.md names installed paths only through @JABBU_HOME@", () => {
 		const procedure = readFileSync(join(PKG, "procedure.md"), "utf8");
-		expect(procedure).toContain("python3 @OMPBOT_HOME@/scripts/weekly-improvement-collect.py");
-		expect(procedure).toContain("python3 @OMPBOT_HOME@/scripts/weekly-improvement-meeting.py check");
+		expect(procedure).toContain("python3 @JABBU_HOME@/scripts/weekly-improvement-collect.py");
+		expect(procedure).toContain("python3 @JABBU_HOME@/scripts/weekly-improvement-meeting.py check");
 		expect(procedure).not.toMatch(/\/home\//);
 	});
 

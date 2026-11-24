@@ -186,5 +186,5 @@ export function formatCacheMissNotice(
 export function formatColdCacheNotice(info: { prefixTokens: number; idleMs: number; estimatedCost?: number }): string {
 	const hours = Math.floor(info.idleMs / 3_600_000);
 	const cost = info.estimatedCost === undefined ? "" : `이번 턴에 약 $${info.estimatedCost.toFixed(2)} 재작성 — `;
-	return `ℹ️ 캐시가 식은 대화입니다(컨텍스트 ${kTokens(info.prefixTokens)}, 마지막 호출 ${hours}시간 전). ${cost}새로 시작하려면 /new-ompbot`;
+	return `ℹ️ 캐시가 식은 대화입니다(컨텍스트 ${kTokens(info.prefixTokens)}, 마지막 호출 ${hours}시간 전). ${cost}새로 시작하려면 /new-jabbu`;
 }

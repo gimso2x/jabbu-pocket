@@ -19,7 +19,7 @@ const HOUR = 60 * MINUTE;
 
 let home: string;
 beforeEach(() => {
-	home = mkdtempSync(join(tmpdir(), "ompbot-turn-board-"));
+	home = mkdtempSync(join(tmpdir(), "jabbu-turn-board-"));
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -27,7 +27,7 @@ afterEach(() => rmSync(home, { recursive: true, force: true }));
 function deps(): SnapshotDeps {
 	return {
 		homeDir: home,
-		repoDir: "/srv/ompbot",
+		repoDir: "/srv/jabbu",
 		timezone: "Asia/Seoul",
 		config: undefined,
 		now: () => NOW,
@@ -55,7 +55,7 @@ interface Row {
 
 /** Origins and their inbound rows, written through raw SQL after the schema exists. */
 function seed(rows: Row[], dir = home): void {
-	const dbPath = join(dir, "ompbot.db");
+	const dbPath = join(dir, "jabbu.db");
 	openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
 	const db = new Database(dbPath, { strict: true });
 	for (const origin of new Set(rows.map((row) => row.origin))) {
@@ -190,14 +190,14 @@ describe("turn board snapshot", () => {
 	});
 
 	test("an uncertain row keeps its thread open and in attention, shows as 전달 불확실 and counts on a lane", async () => {
-		const LANE = "ompbot/work/fix-login";
+		const LANE = "jabbu/work/fix-login";
 		const chat = "discord/ch/300000000000000001/t/100000000000000001";
 		seed([
 			{ origin: chat, text: "읽었는지 모르는 요청", state: "uncertain", createdAt: NOW - 5 * MINUTE },
 			{ origin: LANE, text: "레인 입력", state: "uncertain", createdAt: NOW - 4 * MINUTE },
 			{ origin: LANE, text: "레인 입력 2", state: "uncertain", createdAt: NOW - 3 * MINUTE },
 		]);
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(
 			`INSERT INTO lanes (name, title, thread_ref, origin_key, cwd, session_dir, status, history, meta, created_at, updated_at)
 			 VALUES ('fix-login', '로그인 고치기', '300000000000000001:100000000000000009', ?, '/srv/repo-l-1', '/srv/s', 'working', '[]', '{}', ?, ?)`,
@@ -217,9 +217,9 @@ describe("turn board snapshot", () => {
 	});
 
 	test("a lane's progress evidence shows as the row tooltip; a lane without it has none", async () => {
-		const LANE = "ompbot/work/proof";
+		const LANE = "jabbu/work/proof";
 		seed([]);
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		const insert = `INSERT INTO lanes (name, title, thread_ref, origin_key, cwd, session_dir, status, history, meta, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, '/srv/repo-l-1', '/srv/s', 'working', '[]', ?, ?, ?)`;
 		db.run(insert, [
@@ -712,7 +712,7 @@ describe("api/thread/conversation", () => {
 });
 
 describe("터미널에서 보기: watch / attach commands to paste (lane-attach 3단계)", () => {
-	const LANE_ORIGIN = "ompbot/work/fix-login";
+	const LANE_ORIGIN = "jabbu/work/fix-login";
 
 	function seedLane(): void {
 		seed([
@@ -724,7 +724,7 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 			},
 			{ origin: LANE_ORIGIN, text: "레인 작업", state: "dispatched", createdAt: NOW - 4 * MINUTE },
 		]);
-		const db = new Database(join(home, "ompbot.db"), { strict: true });
+		const db = new Database(join(home, "jabbu.db"), { strict: true });
 		db.run(
 			`INSERT INTO lanes (name, title, thread_ref, origin_key, cwd, session_dir, status, history, meta, created_at, updated_at)
 			 VALUES ('fix-login', '로그인 고치기', '300000000000000001:100000000000000009', ?, '/srv/repo-l-1', '/srv/s', 'working', '[]', '{}', ?, ?)`,
@@ -743,8 +743,8 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 				return { code: 1, stdout: "", timedOut: false };
 			},
 		});
-		expect(snapshot.ompbotCli).toEqual(["bun", "/srv/ompbot/src/main.ts"]);
-		const cli = "bun /srv/ompbot/src/main.ts";
+		expect(snapshot.jabbuCli).toEqual(["bun", "/srv/jabbu/src/main.ts"]);
+		const cli = "bun /srv/jabbu/src/main.ts";
 		const commandsIn = (html: string): string[] =>
 			[...html.matchAll(/data-copy="([^"]*)" data-copy-label="명령"/g)].map((match) => match[1] ?? "");
 
@@ -765,10 +765,10 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 		// An argument that would need quoting drops the command instead of showing one that breaks when pasted.
 		expect(
 			commandsIn(
-				renderItemDetail({ ...snapshot, ompbotCli: ["bun", "/srv/my ompbot/src/main.ts"] }, "lanes", "fix-login"),
+				renderItemDetail({ ...snapshot, jabbuCli: ["bun", "/srv/my jabbu/src/main.ts"] }, "lanes", "fix-login"),
 			),
 		).toEqual([]);
-		// The page only shows the commands: building and rendering it ran no ompbot command.
+		// The page only shows the commands: building and rendering it ran no jabbu command.
 		expect(ran.some((argv) => argv.some((word) => word === "lanes" || word.endsWith("main.ts")))).toBe(false);
 
 		// The shipped client renderer draws the same panels.
@@ -787,7 +787,7 @@ describe("turn board peer installs", () => {
 
 	test("a peer's open turn joins the board under its install; a finished one and a missing peer db do not", async () => {
 		seed([{ origin: THREAD, text: "송박 요청", state: "answered", createdAt: NOW - 10 * MINUTE }]);
-		const peer = mkdtempSync(join(tmpdir(), "ompbot-turn-board-peer-"));
+		const peer = mkdtempSync(join(tmpdir(), "jabbu-turn-board-peer-"));
 		const gone = join(peer, "missing");
 		try {
 			seed(

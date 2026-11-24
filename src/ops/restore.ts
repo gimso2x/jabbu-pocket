@@ -49,7 +49,7 @@ export interface RestoreResult {
 }
 
 const SIDECARS = ["", "-wal", "-shm"] as const;
-/** Core ledger tables every ompbot db has: a restore source without them is not an ompbot ledger. */
+/** Core ledger tables every jabbu db has: a restore source without them is not a jabbu ledger. */
 const REQUIRED_TABLES = ["origins", "inbound", "deliveries"] as const;
 
 /** `backups/pre-restore-<stamp>`, or `-2`, `-3`… when a restore in the same second already used that name. */
@@ -70,7 +70,7 @@ export function resolveRestoreSource(homeDir: string, source: string): string {
 		if (name !== basename(name) || !BACKUP_FILE_PATTERN.test(name)) {
 			throw new RestoreError(
 				"bad_source",
-				`${source} is neither an ompbot-YYYYMMDD-HHMMSS.db in backups/ nor an absolute path`,
+				`${source} is neither a jabbu-YYYYMMDD-HHMMSS.db in backups/ nor an absolute path`,
 			);
 		}
 		path = join(backupsDir, name);
@@ -100,7 +100,7 @@ export function resolveRestoreSource(homeDir: string, source: string): string {
 }
 
 /**
- * Replaces `<home>/ompbot.db` with a verified backup while no daemon runs. The copy is made next to the target,
+ * Replaces `<home>/jabbu.db` with a verified backup while no daemon runs. The copy is made next to the target,
  * checked with `PRAGMA quick_check`, the current db (+wal/shm) moves to `backups/pre-restore-<stamp>/`, and a rename
  * installs the copy. Any failure after the first move puts the previous files back. The single-instance lock is held
  * throughout so a daemon cannot start halfway.
@@ -109,7 +109,7 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 	const { homeDir } = options;
 	const rename = options.rename ?? renameSync;
 	const source = resolveRestoreSource(homeDir, options.source);
-	const target = join(homeDir, "ompbot.db");
+	const target = join(homeDir, "jabbu.db");
 	const stamp = backupStamp(options.now ?? new Date());
 	const preRestoreDir = freshPreRestoreDir(homeDir, stamp);
 
@@ -123,11 +123,11 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 	if (answered)
 		throw new RestoreError(
 			"daemon_running",
-			"a daemon answers on ompbot.sock; stop it first (systemctl --user stop ompbot)",
+			"a daemon answers on jabbu.sock; stop it first (systemctl --user stop jabbu)",
 		);
 	let lock: ReturnType<typeof acquireLock>;
 	try {
-		lock = acquireLock(join(homeDir, "ompbot.lock"));
+		lock = acquireLock(join(homeDir, "jabbu.lock"));
 	} catch (error) {
 		if (error instanceof LockHeldError) throw new RestoreError("daemon_running", error.message);
 		throw error;
@@ -150,7 +150,7 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 
 function install(plan: RestorePlan, rename: (from: string, to: string) => void): void {
 	const { source, target, preRestoreDir } = plan;
-	const tmp = join(dirname(target), `ompbot.db.restore-${crypto.randomUUID()}.tmp`);
+	const tmp = join(dirname(target), `jabbu.db.restore-${crypto.randomUUID()}.tmp`);
 	const moved: Array<{ from: string; to: string }> = [];
 	let placed = false;
 	try {
@@ -182,7 +182,7 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void):
 		if (missing.length > 0) {
 			throw new RestoreError(
 				"integrity_check_failed",
-				`not an ompbot ledger: missing table${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
+				`not a jabbu ledger: missing table${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
 			);
 		}
 		rmSync(`${tmp}-wal`, { force: true });

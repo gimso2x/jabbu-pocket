@@ -174,7 +174,7 @@ function fenced(body: string): string {
 export type TraceInputsResult = { ok: true; markdown: string } | { ok: false; message: string };
 
 const ERRORS: Record<TraceError, string> = {
-	no_database: "no ompbot.db in the home",
+	no_database: "no jabbu.db in the home",
 	unknown_turn: "no such inbound row",
 	not_dispatched: "the turn is not dispatched yet",
 	no_session: "the turn's omp session file was not found",
@@ -287,7 +287,7 @@ const usage = (message: string): number => {
 	return 2;
 };
 
-/** `ompbot trace-inputs`: writes the md (masked once more as a whole) and prints its path. */
+/** `jabbu-pocket trace-inputs`: writes the md (masked once more as a whole) and prints its path. */
 export function traceInputsCommand(
 	args: string[],
 	homeDir: string,

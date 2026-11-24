@@ -45,7 +45,7 @@ describe("herdr --env", () => {
 			"--cwd",
 			"/ws",
 			"--label",
-			"ompbot · t-1",
+			"jabbu · t-1",
 			"--no-focus",
 			"--env",
 			"OMP_WIKI_NOTE_DISABLE=1",
@@ -66,7 +66,7 @@ describe("herdr --env", () => {
 			options: { run: first.run },
 		});
 		expect(creates(first.calls)[0]).toContain("--env");
-		const second = recorder([{ label: "ompbot-owners", workspace_id: "W9" }]);
+		const second = recorder([{ label: "jabbu-owners", workspace_id: "W9" }]);
 		await herdrRemoteStart({
 			sshTarget: "h",
 			name: "t-2",

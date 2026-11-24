@@ -99,7 +99,7 @@ describe("stuck: loop detection", () => {
 		expect(run(detector, 10, () => call("wait", { ids: ["bg_1"] }, "still running"))).toEqual([]);
 		expect(run(detector, 10, () => call("read", { path: "proc://bg_1" }, "running"))).toEqual([]);
 		expect(run(detector, 10, () => call("read", { path: "agent://Scout" }, "running"))).toEqual([]);
-		expect(run(detector, 10, () => call("ompbot_request_approval", { summary: "push" }, "pending"))).toEqual([]);
+		expect(run(detector, 10, () => call("jabbu_request_approval", { summary: "push" }, "pending"))).toEqual([]);
 		expect(run(detector, 3, () => call("read", { path: "src/a.ts" }, "same")).map((hit) => hit.action)).toEqual([
 			"steer",
 		]);

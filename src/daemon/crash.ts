@@ -26,16 +26,16 @@ const CRASH_POINTS: Record<CrashPoint, true> = {
 };
 
 /**
- * Test-only crash points. `OMPBOT_TEST_CRASH_AT` is read only when `OMPBOT_TEST_HOOKS=1`, so a stray variable
+ * Test-only crash points. `JABBU_TEST_CRASH_AT` is read only when `JABBU_TEST_HOOKS=1`, so a stray variable
  * in production can never kill the daemon. Returns a function the daemon calls at each point.
  */
 export function crashHook(
 	env: Record<string, string | undefined> = process.env,
 	exit: (code: number) => never = (code) => process.exit(code),
 ): (point: CrashPoint) => void {
-	const target = env.OMPBOT_TEST_HOOKS === "1" ? env.OMPBOT_TEST_CRASH_AT : undefined;
+	const target = env.JABBU_TEST_HOOKS === "1" ? env.JABBU_TEST_CRASH_AT : undefined;
 	if (target !== undefined && !Object.hasOwn(CRASH_POINTS, target)) {
-		throw new Error(`OMPBOT_TEST_CRASH_AT: unknown crash point ${target}`);
+		throw new Error(`JABBU_TEST_CRASH_AT: unknown crash point ${target}`);
 	}
 	return (point) => {
 		if (point === target) exit(137);

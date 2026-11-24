@@ -92,9 +92,9 @@ describe("reportTargetOf (AC-3b)", () => {
 				{ origin: `discord/ch/${DISCORD_CH}`, thread: DISCORD_ROOT },
 			],
 			[DM_ORIGIN, dmRef(1), { origin: DM_ORIGIN, thread: ts(1) }],
-			["ompbot/work/fix-b", dmRef(2), { origin: `discord/ch/${OWNER_DM}`, thread: ts(2) }],
+			["jabbu/work/fix-b", dmRef(2), { origin: `discord/ch/${OWNER_DM}`, thread: ts(2) }],
 			[
-				"ompbot/work/fix-c",
+				"jabbu/work/fix-c",
 				`${DISCORD_CH}:${DISCORD_ROOT}`,
 				{ origin: `discord/ch/${DISCORD_CH}`, thread: DISCORD_ROOT },
 			],
@@ -114,8 +114,8 @@ describe("reportTargetOf (AC-3b)", () => {
 			["monitor/self-retro", `${DISCORD_CH}:-`],
 			[`discord/ch/${DISCORD_CH}/t/${DISCORD_ROOT}`, `${OWNER_DM}:${DISCORD_ROOT}`],
 			[DM_ORIGIN, `${OWNER_DM}:not-a-ts`],
-			["ompbot/work/fix-a", "t0123456789abcdef:act1"],
-			["ompbot/work/fix-a", "garbage"],
+			["jabbu/work/fix-a", "t0123456789abcdef:act1"],
+			["jabbu/work/fix-a", "garbage"],
 			["slack/dm/D1", "D1:1700.000001"],
 		] as const) {
 			expect(reportTargetOf(origin, threadRef)).toBeUndefined();
@@ -145,7 +145,7 @@ describe("RestartLauncher (AC-3, fake spawnRunner)", () => {
 		});
 
 	beforeEach(() => {
-		home = mkdtempSync(join(tmpdir(), "ompbot-restart-"));
+		home = mkdtempSync(join(tmpdir(), "jabbu-restart-"));
 		host = makeHost();
 		now = new Date(2026, 10, 14, 19, 15, 0).getTime();
 		alive = true;
@@ -173,7 +173,7 @@ describe("RestartLauncher (AC-3, fake spawnRunner)", () => {
 			DISCORD_ROOT,
 			"--report-plain",
 		];
-		const unit = /^--unit=(ompbot-apply-20261114-191500-[0-9a-f]{4})$/.exec(argv?.[3] ?? "")?.[1];
+		const unit = /^--unit=(jabbu-apply-20261114-191500-[0-9a-f]{4})$/.exec(argv?.[3] ?? "")?.[1];
 		expect(unit).toBeDefined();
 		const built = detachedApplyCommand({
 			bun: BUN,
@@ -198,7 +198,7 @@ describe("RestartLauncher (AC-3, fake spawnRunner)", () => {
 		expect(a).toStartWith("🔄 재시작을 접수했습니다");
 		expect(b).toBe("이미 재시작이 진행 중입니다(접수 중)");
 		const again = await restart.request(DM_ORIGIN, dmRef(3));
-		expect(again).toMatch(/^이미 재시작이 진행 중입니다\(ompbot-apply-20261114-191500-[0-9a-f]{4}\)$/);
+		expect(again).toMatch(/^이미 재시작이 진행 중입니다\(jabbu-apply-20261114-191500-[0-9a-f]{4}\)$/);
 		expect(spawns(host)).toHaveLength(1);
 		// Past the guard the unit list and the apply lock speak for a restart still going; none here, so it launches.
 		now += RESTART_LAUNCH_GUARD_MS;
@@ -217,13 +217,13 @@ describe("RestartLauncher (AC-3, fake spawnRunner)", () => {
 		expect(await launcher().request(DM_ORIGIN, dmRef(1))).toStartWith("🔄 재시작을 접수했습니다");
 	});
 
-	test("an active ompbot-apply-* unit answers in progress with its name", async () => {
-		host.listUnits = "ompbot-apply-20261114-190000-ab12.service loaded active running /h/.bun/bin/bun …\n";
+	test("an active jabbu-apply-* unit answers in progress with its name", async () => {
+		host.listUnits = "jabbu-apply-20261114-190000-ab12.service loaded active running /h/.bun/bin/bun …\n";
 		expect(await launcher().request(DM_ORIGIN, dmRef(1))).toBe(
-			"이미 재시작이 진행 중입니다(ompbot-apply-20261114-190000-ab12)",
+			"이미 재시작이 진행 중입니다(jabbu-apply-20261114-190000-ab12)",
 		);
 		const list = host.commands.find((cmd) => cmd[2] === "list-units");
-		expect(list?.at(-1)).toBe("ompbot-apply-*");
+		expect(list?.at(-1)).toBe("jabbu-apply-*");
 		expect(spawns(host)).toHaveLength(0);
 	});
 
@@ -239,7 +239,7 @@ describe("RestartLauncher (AC-3, fake spawnRunner)", () => {
 	});
 
 	test("an origin with no report target is refused without a spawn", async () => {
-		const answer = await launcher().request("ompbot/work/fix-a", "garbage");
+		const answer = await launcher().request("jabbu/work/fix-a", "garbage");
 		expect(answer).toStartWith("⚠️ 재시작하지 않았습니다: 결과를 알릴 곳");
 		expect(spawns(host)).toHaveLength(0);
 	});
@@ -288,7 +288,7 @@ describe("!restart through the daemon", () => {
 	}
 
 	beforeEach(() => {
-		home = makeHome("ompbot-restart-daemon-");
+		home = makeHome("jabbu-restart-daemon-");
 		host = makeHost();
 		drivers = [];
 	});
@@ -336,7 +336,7 @@ describe("!restart through the daemon", () => {
 
 	test("AC-5: IPC notify posts one delivery in the thread with no inbound row, turn or omp session; bad input is refused", async () => {
 		daemon = await boot();
-		const socket = join(home.dir, "ompbot.sock");
+		const socket = join(home.dir, "jabbu.sock");
 		expect(
 			await callDaemon(socket, {
 				op: "notify",
@@ -379,7 +379,7 @@ describe("!restart through the daemon", () => {
 		expect(accepted).toContain("기다리지 않으려면 먼저 `!stop`");
 		const thread = daemon.store.getInbound(dmRef(1))?.threadRef ?? "";
 		const root = thread.slice(thread.indexOf(":") + 1);
-		await callDaemon(join(home.dir, "ompbot.sock"), {
+		await callDaemon(join(home.dir, "jabbu.sock"), {
 			op: "notify",
 			origin: DM_ORIGIN,
 			thread: root,
@@ -398,7 +398,7 @@ describe("!restart through the daemon", () => {
 
 	test("AC-3d: a notify line in a thread with no running status is not stamped ✅ (finishUntracked)", async () => {
 		daemon = await boot();
-		await callDaemon(join(home.dir, "ompbot.sock"), {
+		await callDaemon(join(home.dir, "jabbu.sock"), {
 			op: "notify",
 			origin: DM_ORIGIN,
 			thread: ts(9),

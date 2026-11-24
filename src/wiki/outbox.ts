@@ -2,17 +2,17 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { OmpbotConfig } from "../config";
+import type { JabbuConfig } from "../config";
 import { redact } from "../redact";
 
 /**
  * The wiki client's outbox: `<agentDir>/wiki-outbox/<sourceId>.json` is what
- * `omp-wiki-session-note.py --sweep` sends to the wiki (and keeps for the next sweep when the send fails). ompbot only
+ * `omp-wiki-session-note.py --sweep` sends to the wiki (and keeps for the next sweep when the send fails). jabbu only
  * writes the file and starts one detached sweep; the server's answer is the client's business.
  */
 
 export interface WikiNote {
-	/** One per unit of work (`ompbot-task-<id>`, `ompbot-lane-<id>`, `ompbot-turns-…`): the same unit is the same file. */
+	/** One per unit of work (`jabbu-task-<id>`, `jabbu-lane-<id>`, `jabbu-turns-…`): the same unit is the same file. */
 	sourceId: string;
 	title: string;
 	summary: string;
@@ -20,7 +20,7 @@ export interface WikiNote {
 	tags: string[];
 }
 
-export type WikiNotesConfig = NonNullable<OmpbotConfig["wikiNotes"]>;
+export type WikiNotesConfig = NonNullable<JabbuConfig["wikiNotes"]>;
 
 /** Starts the client's `--sweep` without waiting for it; throws when the process cannot be started. */
 export type SweepSpawner = (argv: string[], env: Record<string, string>) => void;

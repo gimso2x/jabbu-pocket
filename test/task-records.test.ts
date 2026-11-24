@@ -54,7 +54,7 @@ function initRepo(dir: string): string {
 }
 
 beforeEach(() => {
-	root = realpathSync(mkdtempSync(join(tmpdir(), "ompbot-task-records-")));
+	root = realpathSync(mkdtempSync(join(tmpdir(), "jabbu-task-records-")));
 	repo = initRepo(join(root, "repo"));
 	recordsRepo = initRepo(join(root, "records"));
 });

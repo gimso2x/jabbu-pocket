@@ -10,7 +10,7 @@ export interface WatchdogOptions {
 	stallMs: number;
 	/** How often the main thread beats (default 1 s). */
 	beatMs?: number;
-	/** `ompbot.log`: the `watchdog_kill` line is appended here as well as written to stderr (the journal). */
+	/** `jabbu.log`: the `watchdog_kill` line is appended here as well as written to stderr (the journal). */
 	logPath?: string;
 }
 
@@ -36,8 +36,8 @@ export function startWatchdog(options: WatchdogOptions): { stop(): void } {
 	};
 }
 
-/** The stall limit for this process: the default, or `OMPBOT_WATCHDOG_STALL_MS` under `OMPBOT_TEST_HOOKS=1` only. */
+/** The stall limit for this process: the default, or `JABBU_WATCHDOG_STALL_MS` under `JABBU_TEST_HOOKS=1` only. */
 export function watchdogStallMs(env: Record<string, string | undefined>): number {
-	const override = env.OMPBOT_TEST_HOOKS === "1" ? Number(env.OMPBOT_WATCHDOG_STALL_MS) : Number.NaN;
+	const override = env.JABBU_TEST_HOOKS === "1" ? Number(env.JABBU_WATCHDOG_STALL_MS) : Number.NaN;
 	return Number.isFinite(override) && override > 0 ? override : WATCHDOG_STALL_MS;
 }

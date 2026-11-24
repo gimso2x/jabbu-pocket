@@ -77,7 +77,7 @@ export function readMonitorDetail(
 }
 
 function readDetail(homeDir: string, roots: MonitorDetailRoots, id: string): MonitorDetail {
-	const dbPath = join(homeDir, "ompbot.db");
+	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	let sql: MonitorSql | null;
