@@ -14,7 +14,7 @@ import { redact } from "../src/redact";
 import type { TaskRow } from "../src/tasks/ledger";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import { ROOMY_STATFS } from "./helpers/disk";
-import { makeRepo } from "./helpers/git-fixtures";
+import { git, makeRepo } from "./helpers/git-fixtures";
 
 /** The owner's DM origin and the thread (starter message) the [TASK] cards land in. */
 const DM = `discord/dm/${OWNER_DM}`;
@@ -158,6 +158,10 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 		daemons.push(daemon);
 		await daemon.start();
 		const repo = makeRepo(repos);
+		// The daemon's own git commits the task docs in the worktree with the host's config; a CI runner has no identity,
+		// so the repository carries one (worktrees share it).
+		git(repo, "config", "user.name", "jabbu fixture");
+		git(repo, "config", "user.email", "fixture@jabbu.invalid");
 		const rig: Rig = {
 			daemon,
 			herdrCalls,
