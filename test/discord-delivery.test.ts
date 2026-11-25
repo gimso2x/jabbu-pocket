@@ -178,6 +178,22 @@ describe("rate limits and failures", () => {
 		expect(failed).toHaveLength(0);
 	});
 
+	test("a 429 off the gate's path (a thread lookup) after a stale `post` block retries after its own Retry-After, not in the past", async () => {
+		const first = deliver(`${CH}:-`, "짧은 답", "monitor/x");
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		await adapter.pumpDeliveries();
+		expect(row(first)?.nextAt).toBe(now + 5_000);
+		// The `post` block is over, but the gate still reports its (past) end time.
+		now += 60_000;
+		const thread = "333333333333333333";
+		transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
+		transport.failNext.getChannel = [new DiscordRateLimitedError(2_000)];
+		const second = deliver(`${CH}:${thread}`, "스레드 답", `discord/ch/${CH}/t/${thread}`);
+		await adapter.pumpDeliveries();
+		expect(row(second)).toMatchObject({ state: "pending", attempts: 0, nextAt: now + 2_000 });
+		expect(failed).toHaveLength(0);
+	});
+
 	test("a 4xx before anything was posted is a definitive failure (failDelivery)", async () => {
 		const id = deliver(`${CH}:-`, "짧은 답", "monitor/x");
 		transport.createFailures.set(1, new DiscordCallError("definitive", "discord_http_403:50013", 403, 50013));
