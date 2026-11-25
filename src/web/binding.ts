@@ -7,7 +7,7 @@ export class WebBinding implements ChannelBinding {
 	readonly port: WebChannel = new WebChannel();
 
 	createAdapter(deps: AdapterDeps): ChannelAdapter {
-		this.port.attach(deps.store.web);
+		this.port.attach(deps.store.web, deps.config.homeDir);
 		return new WebAdapter({
 			channel: this.port,
 			webStore: deps.store.web,

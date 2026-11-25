@@ -92,7 +92,7 @@ export class WebAdapter implements ChannelAdapter {
 			intervalMs: STATUS_MIN_INTERVAL_MS,
 			platform: {
 				create: async (entry, text) => this.#createStatus(entry, text),
-				edit: async (entry, text) => this.#editStatus(entry, text, false),
+				edit: async (entry, text, final) => this.#editStatus(entry, text, false, final),
 				remove: async (entry) => this.#editStatus(entry, "", true),
 				removeEyes: async () => false,
 				addMark: async () => false,
@@ -315,7 +315,7 @@ export class WebAdapter implements ChannelAdapter {
 		});
 	}
 
-	async #editStatus(entry: StatusEntry, text: string, deleted: boolean): Promise<boolean> {
+	async #editStatus(entry: StatusEntry, text: string, deleted: boolean, final = false): Promise<boolean> {
 		const { statusId } = entry;
 		if (statusId === undefined) return false;
 		if (deleted) {
@@ -326,7 +326,7 @@ export class WebAdapter implements ChannelAdapter {
 			});
 		}
 		return editStatusMessage(entry, false, {
-			run: async () => this.#channel.editStatus(statusId, text, false),
+			run: async () => this.#channel.editStatus(statusId, text, false, final),
 			isRateLimited: () => false,
 			log: this.#log,
 		});

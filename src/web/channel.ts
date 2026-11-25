@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import type { ChannelPort, MessageRef, OutboundMessage, PostTarget } from "../channel/port";
 import { WEB_OWNER_USER_ID } from "../config-web";
 import type { WebMessageRole, WebMessageStore } from "../store/web-messages";
+import { adoptWebFile } from "./upload";
 
 function cardPayload(msg: OutboundMessage): string | undefined {
 	if (msg.title === undefined && msg.body === undefined && msg.fields === undefined && msg.buttonsNote === undefined) {
@@ -28,10 +29,15 @@ function roleOfMessage(msg: OutboundMessage): WebMessageRole {
 export class WebChannel implements ChannelPort {
 	readonly platform = "web" as const;
 	#store: WebMessageStore | undefined;
+	#homeDir: string | undefined;
 
-	/** Wires the opened ledger's `web_messages` store when `WebBinding.createAdapter` runs at daemon start. */
-	attach(store: WebMessageStore): void {
+	/**
+	 * Wires the opened ledger's `web_messages` store when `WebBinding.createAdapter` runs at daemon start. With the bot home,
+	 * a file the bot sends is copied under `<home>/media/inbound/web/`, the only place the file route serves from.
+	 */
+	attach(store: WebMessageStore, homeDir?: string): void {
 		this.#store = store;
+		this.#homeDir = homeDir;
 	}
 
 	#requireStore(): WebMessageStore {
@@ -85,6 +91,7 @@ export class WebChannel implements ChannelPort {
 		target: PostTarget,
 		file: { path: string; title?: string; comment?: string },
 	): Promise<{ fileId: string }> {
+		const stored = this.#homeDir === undefined ? undefined : adoptWebFile(file.path, this.#homeDir);
 		const row = this.#requireStore().insert({
 			conversation: target.conversationId,
 			thread: target.threadId,
@@ -92,7 +99,8 @@ export class WebChannel implements ChannelPort {
 			text: file.comment ?? file.title ?? basename(file.path),
 			filesJson: JSON.stringify([
 				{
-					path: file.path,
+					path: stored ?? file.path,
+					...(stored === undefined ? {} : { name: basename(file.path) }),
 					...(file.title === undefined ? {} : { title: file.title }),
 					...(file.comment === undefined ? {} : { comment: file.comment }),
 				},
@@ -128,12 +136,12 @@ export class WebChannel implements ChannelPort {
 	}
 
 	/** Status tracker helper: updates or soft-deletes a `status` row (soft delete bumps `edited_at` for SSE). */
-	editStatus(messageId: string, text: string, deleted: boolean): void {
+	editStatus(messageId: string, text: string, deleted: boolean, final = false): void {
 		const id = Number(messageId);
 		if (!Number.isInteger(id) || id <= 0) return;
 		this.#requireStore().edit(id, {
 			text,
-			cardJson: JSON.stringify({ kind: "status", deleted }),
+			cardJson: JSON.stringify({ kind: "status", deleted, ...(final ? { final: true } : {}) }),
 		});
 	}
 }

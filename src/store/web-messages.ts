@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { referencedWebFileNames } from "./web-files";
 
 /** DDL for web chat messages (`SCHEMA_VERSION` 12). */
 export const WEB_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS web_messages (
@@ -208,6 +209,11 @@ export class WebMessageStore {
 	listConversations(limit = 50): WebConversationSummary[] {
 		return listWebConversationsDb(this.#db, limit);
 	}
+
+	/** Base names of every file a message row names; the media sweep keeps the uploads among them. */
+	referencedFileNames(): Set<string> {
+		return referencedWebFileNames(this.#db);
+	}
 }
 
 function listWebMessagesDb(
@@ -241,7 +247,7 @@ function hasApprovalsTable(db: Database): boolean {
 
 function hasActiveStatus(db: Database, conversation: string, thread?: string): boolean {
 	const col = thread === undefined ? "conversation = ?" : "conversation = ? AND thread = ?";
-	const sql = `SELECT 1 FROM web_messages WHERE ${col} AND role = 'status' AND card_json LIKE '%"deleted":false%' LIMIT 1`;
+	const sql = `SELECT 1 FROM web_messages WHERE ${col} AND role = 'status' AND card_json LIKE '%"deleted":false%' AND card_json NOT LIKE '%"final":true%' LIMIT 1`;
 	return (thread === undefined ? db.query(sql).get(conversation) : db.query(sql).get(conversation, thread)) !== null;
 }
 
@@ -378,14 +384,15 @@ export function readWebChanges(
 	afterEditedAt: number,
 	conversation?: string,
 	limit = 100,
+	pageAfterId = 0,
 ): WebMessageRow[] {
 	return withReadonlyDb(homeDir, [], (db) => {
-		const pred = "(id > ? OR (edited_at IS NOT NULL AND edited_at > ?))";
+		const pred = "id > ? AND (id > ? OR (edited_at IS NOT NULL AND edited_at > ?))";
 		const sql = `SELECT * FROM web_messages WHERE ${conversation === undefined ? "" : "conversation = ? AND "}${pred} ORDER BY id ASC LIMIT ?`;
 		const res =
 			conversation === undefined
-				? db.query(sql).all(afterId, afterEditedAt, limit)
-				: db.query(sql).all(conversation, afterId, afterEditedAt, limit);
+				? db.query(sql).all(pageAfterId, afterId, afterEditedAt, limit)
+				: db.query(sql).all(conversation, pageAfterId, afterId, afterEditedAt, limit);
 		return (res as WebMessageSql[]).map(toRow);
 	});
 }
