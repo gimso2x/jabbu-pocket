@@ -8,7 +8,7 @@ import type { TaskJudgement } from "../src/tasks/checker";
 import { acceptanceItems } from "../src/tasks/docs";
 import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
 import { NO_EVIDENCE_LINE } from "../src/tasks/notify";
-import { progressWithoutUpdated, taskProgressEvidence } from "../src/tasks/progress-evidence";
+import { progressWithoutUpdated, taskChangedPaths, taskProgressEvidence } from "../src/tasks/progress-evidence";
 import { type TaskSweepDeps, TaskSweeper } from "../src/tasks/sweeper";
 import { localIso } from "../src/time";
 import { registryOf } from "./helpers/channels";
@@ -102,6 +102,21 @@ describe("taskProgressEvidence", () => {
 		const dir = join(repos[0] ?? "/nonexistent", "no-such-dir");
 		const evidence = await taskProgressEvidence({ worktree: dir, docsDir: join(dir, "docs/tasks", TASK) }, realRun);
 		expect(evidence).toMatchObject({ ok: false });
+	});
+
+	test("a capped (truncated) git output is not evidence: ok: false, never a key hashed from a prefix", async () => {
+		const dir = taskRepo(PROGRESS_TEXT("2026-11-20T10:00:00+09:00", "S1"));
+		const capped: ProcessRunner = async (cmd, opts) => {
+			const result = await realRun(cmd, opts);
+			return cmd.includes("diff") ? { ...result, truncated: true } : result;
+		};
+		const evidence = await taskProgressEvidence({ worktree: dir, docsDir: join(dir, "docs/tasks", TASK) }, capped);
+		expect(evidence).toEqual({ ok: false, reason: "diff_failed" });
+		const paths = await taskChangedPaths(dir, async (cmd, opts) => ({
+			...(await realRun(cmd, opts)),
+			truncated: cmd.includes("--name-only"),
+		}));
+		expect(paths.ok).toBe(false);
 	});
 
 	test("records mode: PROGRESS.md outside the worktree still counts by content, `updated` alone does not move the key", async () => {

@@ -10,6 +10,7 @@ export const COVERED = [
 	"src/core/mailbox-types.ts",
 	"src/core/mailbox-commands.ts",
 	"src/core/mailbox-sending.ts",
+	"src/core/mailbox-park.ts",
 	"src/store/transitions.ts",
 	"src/store/db.ts",
 	"src/daemon/recovery.ts",
