@@ -47,7 +47,7 @@ import { gateOptionsFromConfig } from "../ops/gates";
 import { HERDR_HEALTH_CHECK_MS, type HerdrHealthProbe } from "../ops/herdr-health";
 import { resolvedCeiling } from "../ops/host-resources";
 import { hostSessionsInfo } from "../ops/host-sessions";
-import { pruneMediaFiles } from "../ops/media";
+import { sweepMedia } from "../ops/media-prune";
 import { BRIEFING_TIMEOUT_MS, BRIEFING_WIDTH, renderPng } from "../ops/screenshot";
 import { redact } from "../redact";
 import { ApprovalBroker, type ApprovalOutcome } from "../safety/approval";
@@ -1047,7 +1047,7 @@ export class Daemon {
 		if (now - this.#lastMediaSweep < MEDIA_SWEEP_INTERVAL_MS) return;
 		this.#lastMediaSweep = now;
 		try {
-			const removed = pruneMediaFiles(join(this.#options.config.homeDir, "media"), now);
+			const removed = sweepMedia(join(this.#options.config.homeDir, "media"), now, this.#store?.web);
 			if (removed > 0) this.#log.info("media_pruned", { removed });
 		} catch (error) {
 			this.#log.warn("media_prune_failed", { error: String(error) });
