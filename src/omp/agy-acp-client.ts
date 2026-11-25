@@ -1,3 +1,7 @@
+import { accessSync, constants } from "node:fs";
+import { resolve } from "node:path";
+import type { AgyMcpServer } from "../config-agy";
+import type { Logger } from "../log";
 import { OmpDriverError, type OmpUsage } from "./driver";
 import { isRecord } from "./type-guards";
 
@@ -49,6 +53,37 @@ export function shownText(text: string): string {
 	return pending ? text.slice(0, lineStart) : text;
 }
 
+/** The agy CLI to spawn: a path must be executable, a name is looked up on the child's PATH. */
+export function resolveAgyExecutable(given: string, env: Record<string, string>): string {
+	if (given.includes("/")) {
+		try {
+			accessSync(given, constants.X_OK);
+			return given;
+		} catch (cause) {
+			throw new OmpDriverError("agy_executable_missing", `agy executable not found or not executable: ${given}`, {
+				cause,
+			});
+		}
+	}
+	const found = Bun.which(given, { PATH: env.PATH ?? "" });
+	if (!found) throw new OmpDriverError("agy_executable_missing", `agy executable not found on PATH: ${given}`);
+	return found;
+}
+
+/** `session/new|load` params: the cwd, the MCP servers (read now) and the system prompt agy appends to its own. */
+export function acpSessionParams(options: {
+	cwd: string;
+	systemPrompt?: string | undefined;
+	mcpServers?: (() => readonly AgyMcpServer[] | undefined) | undefined;
+}): Record<string, unknown> {
+	const system = options.systemPrompt;
+	return {
+		cwd: resolve(options.cwd),
+		mcpServers: (options.mcpServers?.() ?? []).map(({ name, command, args, env }) => ({ name, command, args, env })),
+		...(system === undefined || system === "" ? {} : { _meta: { antigravity: { systemPrompt: { append: system } } } }),
+	};
+}
+
 export interface AgyAcpHandlers {
 	/** A `session/update` (or other) notification from the child. */
 	onNotification(method: string, params: Record<string, unknown>): void;
@@ -62,6 +97,10 @@ export interface AgyAcpSpawnOptions {
 	executable: string;
 	cwd: string;
 	env: Record<string, string>;
+	/** Where the answers to permission requests are logged (`agy.acp.permission`); absent → not logged. */
+	log?: Logger | undefined;
+	/** Origin the child serves; named in those log events. */
+	originKey?: string | undefined;
 }
 
 interface Pending {
@@ -76,6 +115,7 @@ export class AgyAcpClient {
 	readonly gone: Promise<void>;
 	readonly #proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
 	readonly #handlers: AgyAcpHandlers;
+	readonly #options: AgyAcpSpawnOptions;
 	readonly #pending = new Map<number, Pending>();
 	#nextId = 0;
 	#stderrTail = "";
@@ -83,6 +123,7 @@ export class AgyAcpClient {
 
 	constructor(options: AgyAcpSpawnOptions, handlers: AgyAcpHandlers) {
 		this.#handlers = handlers;
+		this.#options = options;
 		this.#proc = Bun.spawn([options.executable, ...AGY_ACP_ARGS], {
 			cwd: options.cwd,
 			env: { ...options.env, ...AGY_ENV },
@@ -202,7 +243,16 @@ export class AgyAcpClient {
 		this.#handlers.onRequest?.(method, params);
 		try {
 			if (method === "session/request_permission") {
-				this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+				const outcome = permissionOutcome(params);
+				const toolCall = recordOf(params.toolCall);
+				const title = str(toolCall?.title)?.replace(/\s+/g, " ").trim().slice(0, 200);
+				this.#options.log?.info("agy.acp.permission", {
+					origin: this.#options.originKey,
+					toolCallId: str(toolCall?.toolCallId),
+					title,
+					outcome: outcome.outcome === "selected" ? `selected:${outcome.optionId}` : "cancelled",
+				});
+				this.#write({ jsonrpc: "2.0", id, result: { outcome } });
 				return;
 			}
 			this.#write({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });
@@ -255,6 +305,21 @@ export interface AcpConfigOption {
 const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
 const recordOf = (value: unknown): Record<string, unknown> | undefined => (isRecord(value) ? value : undefined);
+
+/**
+ * The answer to `session/request_permission`: its first `allow_once` option, else `cancelled`. The child runs with
+ * `--dangerously-skip-permissions`, so a request that still comes (a subagent's) is meant to pass; `allow_always` is
+ * never chosen, as agy would keep it as a lasting rule.
+ */
+function permissionOutcome(params: Record<string, unknown>):
+	| { outcome: "selected"; optionId: string }
+	| {
+			outcome: "cancelled";
+	  } {
+	const options = Array.isArray(params.options) ? params.options.filter(isRecord) : [];
+	const optionId = str(options.find((option) => option.kind === "allow_once")?.optionId);
+	return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
+}
 
 /** ACP prompt `usage` → omp `Usage`; agy reports no cost, so `cost` stays unset. */
 export function acpUsageOf(value: unknown): OmpUsage | undefined {

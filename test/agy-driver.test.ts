@@ -39,7 +39,13 @@ interface LogEntry {
 	dir: string;
 	argv?: string[];
 	pid?: number;
-	message?: { id?: unknown; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown> };
+	message?: {
+		id?: unknown;
+		method?: string;
+		params?: Record<string, unknown>;
+		result?: Record<string, unknown>;
+		error?: { code?: number };
+	};
 }
 
 interface MakeOptions {
@@ -51,6 +57,7 @@ interface MakeOptions {
 	toolKeepalive?: AgyToolKeepaliveOptions;
 	mcpServers?: () => AgyMcpServer[];
 	cancelTimeoutMs?: number;
+	inboundRoot?: string;
 }
 
 interface Harness {
@@ -87,6 +94,7 @@ function makeHarness(): Harness {
 				...(options.toolKeepalive === undefined ? {} : { toolKeepalive: options.toolKeepalive }),
 				...(options.mcpServers === undefined ? {} : { mcpServers: options.mcpServers }),
 				...(options.cancelTimeoutMs === undefined ? {} : { cancelTimeoutMs: options.cancelTimeoutMs }),
+				...(options.inboundRoot === undefined ? {} : { inboundRoot: options.inboundRoot }),
 				env: { FAKE_AGY_LOG: logFile, ...(options.env ?? {}) },
 				baseEnv: { HOME: root, PATH: process.env.PATH ?? "/usr/bin:/bin" },
 				startupTimeoutMs: 10_000,
@@ -309,17 +317,35 @@ test("tool calls become toolCall/toolResult entries and tool start/end events", 
 	await driver.stop();
 });
 
-test("a permission request is answered cancelled (as omp does) and logged", async () => {
+test("a permission request is answered with its allow_once option (else cancelled) and logged", async () => {
 	const harness = makeHarness();
 	const { log, lines } = captureLog();
 	const driver = harness.make({ log });
 	await driver.start();
+	const answers = (): LogEntry[] =>
+		harness.readLog().filter((entry) => entry.dir === "in" && entry.message?.id === "perm-1");
+	const permissionLines = (): string[] => lines.filter((line) => line.includes("event=agy.acp.permission"));
 	const done = nextFinal(driver);
 	await driver.prompt("@ask");
 	expect(await done).toMatchObject({ status: "completed", text: "ASKED" });
-	const answer = harness.readLog().find((entry) => entry.dir === "in" && entry.message?.id === "perm-1");
-	expect(answer?.message?.result).toEqual({ outcome: { outcome: "cancelled" } });
+	expect(answers()[0]?.message?.result).toEqual({ outcome: { outcome: "selected", optionId: "yes-once" } });
 	expect(lines.some((line) => line.includes("event=agy.acp.agent_request"))).toBe(true);
+	expect(permissionLines()).toHaveLength(1);
+	expect(permissionLines()[0]).toContain("selected:yes-once");
+	expect(permissionLines()[0]).toContain("call_perm");
+
+	// allow_always is never chosen: it would store a lasting rule.
+	const always = nextFinal(driver);
+	await driver.prompt("@askalways");
+	expect(await always).toMatchObject({ status: "completed", text: "ASKED" });
+	expect(answers()[1]?.message?.result).toEqual({ outcome: { outcome: "cancelled" } });
+	expect(permissionLines()[1]).toContain("cancelled");
+
+	const other = nextFinal(driver);
+	await driver.prompt("@askother");
+	expect(await other).toMatchObject({ status: "completed", text: "ASKED" });
+	expect(answers()[2]?.message?.error?.code).toBe(-32601);
+	expect(permissionLines()).toHaveLength(2);
 	await driver.stop();
 });
 
@@ -922,5 +948,177 @@ test("abort() during @holdtool clears keepalive timer immediately", async () => 
 	await driver.abort();
 	expect(intervals.active.size).toBe(0);
 	expect(await done).toMatchObject({ opRef, status: "aborted", text: "", error: "cancelled" });
+	await driver.stop();
+});
+
+/** A png under `<root>/media/inbound/<message>/` as the adapters save it, and its prompt note. */
+function inboundPng(harness: Harness): { inboundRoot: string; note: string; data: string } {
+	const inboundRoot = join(harness.root, "media", "inbound");
+	mkdirSync(join(inboundRoot, "m1"), { recursive: true });
+	const path = join(inboundRoot, "m1", "img_abc.png");
+	const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
+	writeFileSync(path, bytes);
+	return { inboundRoot, note: `[첨부: ${path} (image/png)]`, data: Buffer.from(bytes).toString("base64") };
+}
+
+test("an attached inbound png goes with the prompt as an image block; plain text stays one text block", async () => {
+	const harness = makeHarness();
+	const { inboundRoot, note, data } = inboundPng(harness);
+	const driver = harness.make({ inboundRoot });
+	await driver.start();
+	const text = `what is in this picture?\n${note}`;
+	const done = nextFinal(driver);
+	await driver.prompt(text);
+	expect(await done).toMatchObject({ status: "completed" });
+	const plain = nextFinal(driver);
+	await driver.prompt("plain");
+	await plain;
+	expect(sent(harness, "session/prompt").map((params) => params.prompt)).toEqual([
+		[
+			{ type: "text", text },
+			{ type: "image", mimeType: "image/png", data },
+		],
+		[{ type: "text", text: "plain" }],
+	]);
+	// The entry keeps the text only, never the image bytes.
+	const users = (await driver.entriesSince()).entries.filter((entry) => entry.message?.role === "user");
+	expect(users.map((entry) => entry.message?.content)).toEqual([text, "plain"]);
+	await driver.stop();
+});
+
+test("steered text's image goes with the follow-up prompt; a child without promptCapabilities.image gets none", async () => {
+	const harness = makeHarness();
+	const { inboundRoot, note, data } = inboundPng(harness);
+	const driver = harness.make({ inboundRoot });
+	await driver.start();
+	const started = nextEvent(driver, (event) => event.type === "tool_execution_start");
+	const done = nextFinal(driver);
+	await driver.prompt("@holdtool");
+	await started;
+	await driver.steer(note);
+	process.kill(childPid(driver), "SIGUSR1");
+	expect(await done).toMatchObject({ status: "completed" });
+	expect(sent(harness, "session/prompt").map((params) => params.prompt)).toEqual([
+		[{ type: "text", text: "@holdtool" }],
+		[
+			{ type: "text", text: note },
+			{ type: "image", mimeType: "image/png", data },
+		],
+	]);
+	await driver.stop();
+
+	const blind = makeHarness();
+	const blindImage = inboundPng(blind);
+	const textOnly = blind.make({ inboundRoot: blindImage.inboundRoot, env: { FAKE_AGY_NO_IMAGE: "1" } });
+	await textOnly.start();
+	const blindDone = nextFinal(textOnly);
+	await textOnly.prompt(blindImage.note);
+	await blindDone;
+	expect(sent(blind, "session/prompt").map((params) => params.prompt)).toEqual([
+		[{ type: "text", text: blindImage.note }],
+	]);
+	await textOnly.stop();
+});
+
+/** A logger whose `seen` resolves on the first line of `event`. */
+function captureLogUntil(event: string): { log: Logger; lines: string[]; seen: Promise<void> } {
+	const lines: string[] = [];
+	const seen = Promise.withResolvers<void>();
+	const sink = (line: string): void => {
+		lines.push(line);
+		if (line.includes(`event=${event}`)) seen.resolve();
+	};
+	return { log: createLogger({ sink, clock: { now: () => Date.now() }, redact }), lines, seen: seen.promise };
+}
+
+/** Opens and stops a first driver so the harness holds a resume pointer; returns that session id. */
+async function pinSession(harness: Harness): Promise<string> {
+	const first = harness.make();
+	await first.start();
+	const { sessionId } = await first.openSession();
+	await first.stop();
+	return sessionId;
+}
+
+const pointerOf = (harness: Harness): unknown =>
+	JSON.parse(readFileSync(join(harness.sessionDir, "agy-conversation.json"), "utf8")).conversationId;
+
+test("a resumed session whose first prompt finds no trajectory reopens a new session and sends the text once more", async () => {
+	const harness = makeHarness();
+	const old = await pinSession(harness);
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	await driver.start();
+	expect(await driver.openSession()).toEqual({ resumed: true, sessionId: old });
+	const done = nextFinal(driver);
+	await driver.prompt("@lostload hi");
+	expect(await done).toMatchObject({ status: "completed", text: "REPLY2:@lostload hi" });
+	expect(sent(harness, "session/new")).toHaveLength(2);
+	const fresh = pointerOf(harness);
+	expect(fresh).not.toBe(old);
+	expect(sent(harness, "session/prompt").map((params) => params.sessionId)).toEqual([old, fresh]);
+	expect((await driver.entriesSince()).entries.filter((entry) => entry.message?.role === "user")).toHaveLength(1);
+	expect(lines.some((line) => line.includes("event=agy.acp.trajectory_reset"))).toBe(true);
+	const next = nextFinal(driver);
+	await driver.prompt("after");
+	expect(await next).toMatchObject({ status: "completed" });
+	expect(sent(harness, "session/prompt").at(-1)?.sessionId).toBe(fresh);
+	await driver.stop();
+});
+
+test("trajectory loss is retried once, and only on a resumed session before its first answer", async () => {
+	// Both attempts fail: the turn ends error, and no turn is left open.
+	const harness = makeHarness();
+	await pinSession(harness);
+	const driver = harness.make();
+	await driver.start();
+	const done = nextFinal(driver);
+	await driver.prompt("@lost twice");
+	expect(await done).toMatchObject({ status: "error", error: expect.stringContaining("Trajectory not found") });
+	expect(sent(harness, "session/new")).toHaveLength(2);
+	expect(sent(harness, "session/prompt")).toHaveLength(2);
+	expect(await driver.state()).toMatchObject({ idle: true });
+	await driver.stop();
+
+	// A session opened by session/new is not retried.
+	const fresh = makeHarness();
+	const newDriver = fresh.make();
+	await newDriver.start();
+	const newDone = nextFinal(newDriver);
+	await newDriver.prompt("@lost");
+	expect(await newDone).toMatchObject({ status: "error" });
+	expect(sent(fresh, "session/new")).toHaveLength(1);
+	expect(sent(fresh, "session/prompt")).toHaveLength(1);
+	await newDriver.stop();
+
+	// A resumed session that already answered once is not retried either.
+	const answered = makeHarness();
+	await pinSession(answered);
+	const resumed = answered.make();
+	await resumed.start();
+	const ok = nextFinal(resumed);
+	await resumed.prompt("fine");
+	expect(await ok).toMatchObject({ status: "completed" });
+	const lost = nextFinal(resumed);
+	await resumed.prompt("@lost later");
+	expect(await lost).toMatchObject({ status: "error" });
+	expect(sent(answered, "session/new")).toHaveLength(1);
+	await resumed.stop();
+});
+
+test("abort while the lost trajectory is being reopened ends the turn aborted without a retry prompt", async () => {
+	const harness = makeHarness();
+	await pinSession(harness);
+	const { log, seen } = captureLogUntil("agy.acp.trajectory_reset");
+	const driver = harness.make({ log, env: { FAKE_AGY_HOLD_NEW: "1" } });
+	await driver.start();
+	const done = nextFinal(driver);
+	await driver.prompt("@lostload hi");
+	await seen;
+	await driver.abort();
+	expect(await done).toMatchObject({ status: "aborted" });
+	expect(sent(harness, "session/new")).toHaveLength(2);
+	expect(sent(harness, "session/prompt")).toHaveLength(1);
+	expect(await driver.state()).toMatchObject({ idle: true });
 	await driver.stop();
 });
