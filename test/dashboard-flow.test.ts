@@ -529,6 +529,7 @@ const taskOf = (n: number, done: number, current: string, extra: Partial<TaskInf
 	status: "working",
 	host: "local",
 	agent: "t-20261112-99",
+	runtime: "herdr",
 	branch: "task/T-20261112-99",
 	open: true,
 	updatedAt: at("09:00:00"),
