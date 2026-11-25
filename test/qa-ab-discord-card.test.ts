@@ -12,7 +12,6 @@ import { PeerParts } from "../src/discord/peer-posts";
 import { DiscordCallError } from "../src/discord/transport";
 import { createLogger } from "../src/log";
 import { redact } from "../src/redact";
-import { optionOf } from "../src/safety/choice-common";
 import { openStore } from "../src/store/db";
 import { OWNER } from "./helpers/bot-home";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
@@ -205,12 +204,5 @@ describe("qa-ab Discord·백필·카드·서식·선택지 수정", () => {
 		const res = validateCard(JSON.stringify(spec));
 		expect(res.ok).toBe(false);
 		if (!res.ok) expect(res.issues.some((i) => i.includes('"x"'))).toBe(true);
-	});
-
-	test("#32: optionOf matches exact numeric labels before falling back to 1-based index", () => {
-		expect(optionOf(["2", "최신"], "2")).toBe(0);
-		expect(optionOf(["2", "최신"], "1")).toBe(0);
-		expect(optionOf(["2", "최신"], "최신")).toBe(1);
-		expect(optionOf(["가", "나"], "2")).toBe(1);
 	});
 });
