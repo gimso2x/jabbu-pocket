@@ -678,4 +678,4 @@ export function deliverySources(
 		},
 		defer: (deliveryId, error, retry) => void store.deferDelivery(deliveryId, error, retry),
 	});
-				}
+}
