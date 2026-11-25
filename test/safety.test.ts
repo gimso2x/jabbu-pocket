@@ -87,9 +87,11 @@ class ButtonTransport extends WaitingDiscordTransport {
 
 class ManualTimers implements ApprovalTimers {
 	callbacks = new Map<number, () => void>();
+	delays: number[] = [];
 	#next = 1;
-	set(fn: () => void): unknown {
+	set(fn: () => void, ms: number): unknown {
 		const id = this.#next++;
+		this.delays.push(ms);
 		this.callbacks.set(id, fn);
 		return id;
 	}
@@ -517,6 +519,16 @@ describe("ApprovalBroker", () => {
 		await transport.shown.promise;
 		abort.abort();
 		expect(await result).toBe("denied");
+	});
+
+	test("a timeout past the timer's limit is cut to it, so the card does not expire at once", async () => {
+		broker = make({ timeoutMs: Number.MAX_SAFE_INTEGER });
+		const result = broker.request(CHANNEL, "git push --force");
+		await transport.shown.promise;
+		// setTimeout fires at once past 2^31-1 ms, which would settle the request as `timeout` the moment it shows.
+		expect(timers.delays).toEqual([2 ** 31 - 1]);
+		timers.fireAll();
+		expect(await result).toBe("timeout");
 	});
 
 	test("a failure to attach the buttons is denied, never approved", async () => {

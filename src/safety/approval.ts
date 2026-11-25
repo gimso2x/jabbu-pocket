@@ -491,7 +491,7 @@ export class ApprovalBroker {
 		// Before the buttons go up (no click can arrive yet); a failed lookup only leaves the dashboard without a link.
 		const cardUrl = await this.#permalink(channel, card.messageId);
 		const now = this.#clock.now();
-		const timeoutMs = this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+		const timeoutMs = Math.min(this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS, MAX_TIMER_DELAY_MS);
 		let recorded = true;
 		try {
 			store.createApproval({
