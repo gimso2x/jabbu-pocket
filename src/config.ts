@@ -50,6 +50,8 @@ export interface DiscordChannelConfig {
 	guildIds?: string[];
 	/** Channel ids where the owner's root messages are answered without a mention. */
 	mentionFreeChannels?: string[];
+	/** Server channels where the owner's root messages get a reply in the channel body (no thread) unless a thread is asked for. */
+	inlineReplyChannels?: string[];
 	/** In a server channel only a mention addresses the bot. Default false. */
 	requireMention?: boolean;
 	/** Server text channel where lanes asked for from the Discord DM open (a DM has no threads); absent: no DM lanes. */
@@ -432,6 +434,7 @@ const DISCORD_KEYS: Record<string, true> = {
 	applicationId: true,
 	guildIds: true,
 	mentionFreeChannels: true,
+	inlineReplyChannels: true,
 	requireMention: true,
 	laneChannelId: true,
 	logChannelId: true,
@@ -468,6 +471,7 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 	const applicationId = snowflake("applicationId");
 	const guildIds = snowflakes("guildIds");
 	const mentionFreeChannels = snowflakes("mentionFreeChannels");
+	const inlineReplyChannels = snowflakes("inlineReplyChannels");
 	const laneChannelId = record.laneChannelId === undefined ? undefined : snowflake("laneChannelId");
 	const logChannelId = record.logChannelId === undefined ? undefined : snowflake("logChannelId");
 	const escalationChannelId = record.escalationChannelId === undefined ? undefined : snowflake("escalationChannelId");
@@ -479,7 +483,8 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 		(logChannelId === escalationChannelId ||
 			logChannelId === alertChannelId ||
 			logChannelId === laneChannelId ||
-			mentionFreeChannels?.includes(logChannelId) === true)
+			mentionFreeChannels?.includes(logChannelId) === true ||
+			inlineReplyChannels?.includes(logChannelId) === true)
 	) {
 		invalid(configPath, "channels.discord.logChannelId");
 	}
@@ -523,6 +528,7 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 		applicationId,
 		...(guildIds === undefined ? {} : { guildIds }),
 		...(mentionFreeChannels === undefined ? {} : { mentionFreeChannels }),
+		...(inlineReplyChannels === undefined ? {} : { inlineReplyChannels }),
 		...(requireMention === undefined ? {} : { requireMention }),
 		...(laneChannelId === undefined ? {} : { laneChannelId }),
 		...(logChannelId === undefined ? {} : { logChannelId }),

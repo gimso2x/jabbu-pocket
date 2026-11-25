@@ -4,6 +4,7 @@ import type { Logger } from "../log";
 import type { MonitorLedger, MonitorRow } from "./ledger";
 
 export const WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
+export const WEBHOOK_MAX_PENDING = 100;
 /** The part of a body that reaches the monitor event (and so the prompt); the rest is cut and marked. */
 export const WEBHOOK_MAX_PAYLOAD_BYTES = 16 * 1024;
 export const WEBHOOK_PATH_PREFIX = "/hook/";
@@ -33,8 +34,7 @@ const digest = (value: string): Buffer => createHash("sha256").update(value).dig
 
 /** Constant-time comparison of the bearer token (both sides are hashed first so the length does not leak). */
 function tokenMatches(header: string | null, token: string): boolean {
-	const match = header === null ? null : /^Bearer (\S+)$/i.exec(header.trim());
-	const given = match?.[1];
+	const given = header === null ? undefined : /^Bearer (\S+)$/i.exec(header.trim())?.[1];
 	// Always compare, so a missing header costs the same as a wrong one.
 	const equal = timingSafeEqual(digest(given ?? ""), digest(token));
 	return given !== undefined && equal;
@@ -64,7 +64,7 @@ const json = (status: number, body: Record<string, unknown>, headers?: Record<st
  * Loopback-only HTTP listener for `webhook` monitor triggers: `POST /hook/<id>` with `Authorization: Bearer <token>`
  * admits one event whose payload is the (UTF-8, cut) body, through the same ledger path as every other trigger, so
  * the overlap rule applies. Answers 202 + event id, 401 bad token, 404 unknown/disabled hook, 405 non-POST, 413 body
- * over 256 KiB. Nothing but the monitor id and event id is ever logged.
+ * over 256 KiB, 429 at `WEBHOOK_MAX_PENDING` unfinished events. Nothing but the monitor id and event id is ever logged.
  */
 export class WebhookServer {
 	readonly #deps: WebhookServerDeps;
@@ -111,12 +111,10 @@ export class WebhookServer {
 	}
 
 	#find(id: string): WebhookMonitor | undefined {
-		for (const monitor of this.#deps.ledger.listMonitors()) {
-			if (monitor.enabled && monitor.trigger.kind === "webhook" && monitor.trigger.id === id) {
-				return monitor as WebhookMonitor;
-			}
-		}
-		return undefined;
+		const found = this.#deps.ledger
+			.listMonitors()
+			.find((monitor) => monitor.enabled && monitor.trigger.kind === "webhook" && monitor.trigger.id === id);
+		return found as WebhookMonitor | undefined;
 	}
 
 	async #handle(request: Request): Promise<Response> {
@@ -136,6 +134,8 @@ export class WebhookServer {
 		if (bytes.length > WEBHOOK_MAX_BODY_BYTES) return json(413, { error: "payload_too_large" });
 		const payload = webhookPayload(bytes);
 		const frozen = this.#deps.frozen?.() !== undefined;
+		if (!frozen && ledger.pendingEventCount(monitor.id) >= WEBHOOK_MAX_PENDING)
+			return json(429, { error: "backlog_full" });
 		for (let slotAt = clock.now(); ; slotAt += 1) {
 			const claim = ledger.claimSlot({
 				monitorId: monitor.id,
