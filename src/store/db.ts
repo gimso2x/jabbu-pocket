@@ -2440,7 +2440,11 @@ export class DeliveryLedger {
 	}
 
 	resolveAmbiguous(deliveryId: number, how: "ack" | "resend"): DeliveryRow {
-		return this.#db.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))();
+		// IMMEDIATE: the resolve reads the row, then writes it. A deferred transaction that reads first fails at once with
+		// SQLITE_BUSY (busy_timeout never applies) when the daemon commits in between; this one waits for the lock.
+		return this.#db
+			.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))
+			.immediate();
 	}
 
 	close(): void {
