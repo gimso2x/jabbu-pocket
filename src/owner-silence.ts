@@ -18,4 +18,4 @@ export const silenceNotice = (minutes: number, recommend: string, subject = ""):
 
 /** The line the thread gets instead when the fallback prompt did not reach the agent (it is not sent again). */
 export const silenceFailedNotice = (minutes: number, recommend: string, subject = ""): string =>
-	`⚠️ 오너 무응답 ${minutes}분 — ${subject}추천안(${recommend}) 진행 지시를 전달하지 못했습니다.`;
+	`⚠️ 오너 무응답 ${minutes}분 — ${subject}추천안(${recommend}) 진행 지시를 전달하지 못했습니다. 이 스레드에 답하면 이어서 진행합니다.`;
