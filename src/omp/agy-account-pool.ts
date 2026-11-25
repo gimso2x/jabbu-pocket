@@ -16,6 +16,8 @@ import { redact } from "../redact";
 
 export const DEFAULT_APP_DATA_PREFIX = "antigravity-cli-acct-";
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
+/** The last instant a Date holds; a block past it cannot be shown or logged. */
+const MAX_DATE_MS = 8.64e15;
 
 export interface AgyAccountEntry {
 	name: string;
@@ -273,7 +275,7 @@ export class AgyAccountPool {
 			}
 			if (typeof record.blocked === "object" && record.blocked !== null && !Array.isArray(record.blocked)) {
 				for (const [name, until] of Object.entries(record.blocked as Record<string, unknown>)) {
-					if (ACCOUNT_NAME.test(name) && typeof until === "number" && Number.isFinite(until) && until > 0) {
+					if (ACCOUNT_NAME.test(name) && typeof until === "number" && until > 0 && until <= MAX_DATE_MS) {
 						this.#blocked[name] = until;
 					}
 				}
