@@ -64,6 +64,7 @@ import type { Logger } from "../log";
 import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
+import { InlineRoots } from "./inline-root";
 import { type DiscordPart, renderDiscordMessages } from "./messages";
 import { notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
 import {
@@ -116,6 +117,8 @@ export interface DiscordAdapterOptions {
 	mentionFreeChannels?: readonly string[] | undefined;
 	/** The Discord #log ledger channel (`channels.discord.logChannelId`): inbound there or in its threads never becomes a turn. */
 	logChannel?: string | undefined;
+	/** `channels.discord.inlineReplyChannels` and a lookup of a message's recorded origin (an edit goes where its original went). */
+	inline?: ConstructorParameters<typeof InlineRoots>[0];
 	/** In a server channel only a mention addresses the bot. */
 	requireMention?: boolean | undefined;
 	/** Peer bots whose server channel messages that mention this bot are taken (`channels.discord.peerBots`). */
@@ -165,6 +168,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #log: Logger;
 	readonly #guildIds: ReadonlySet<string> | undefined;
 	#mentionFree: ReadonlySet<string>;
+	readonly #inline: InlineRoots;
 	readonly #logChannel: string | undefined;
 	#requireMention: boolean;
 	readonly #peerBots: PeerBotList;
@@ -204,6 +208,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		this.#log = options.log;
 		this.#guildIds = options.guildIds === undefined ? undefined : new Set(options.guildIds);
 		this.#mentionFree = new Set(options.mentionFreeChannels ?? []);
+		this.#inline = new InlineRoots(options.inline, this.#port);
 		this.#logChannel = options.logChannel;
 		this.#requireMention = options.requireMention === true;
 		this.#peerBots = options.peerBots ?? [];
@@ -318,7 +323,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			fatal: (error) => {
 				if (this.#startReturned) this.#onFatal?.(error);
 			},
-			channel: (info) => this.#port.remember(info),
+			channel: (info) => this.#inline.remember(info),
 			channelGone: (id) => this.#port.forget(id),
 			roles: (roles) => {
 				for (const role of roles) {
@@ -736,7 +741,8 @@ export class DiscordAdapter implements ChannelAdapter {
 		});
 		if (!gate.accept) return this.#drop(event, gate.reason);
 		// A server root that is no command opens its own thread, each root gets its own origin.
-		let inbound = gate.inbound;
+		const inlineOrigin = dm || threadId !== undefined ? undefined : this.#inline.take(conversationId, event.id, text);
+		let inbound = inlineOrigin === undefined ? gate.inbound : { ...gate.inbound, originKey: inlineOrigin };
 		const opensThread = !dm && threadId === undefined && parseChatOrigin(inbound.originKey)?.threadId !== undefined;
 		if (opensThread) {
 			// A forward has no text of its own: its thread is named after the original.
@@ -768,7 +774,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	/**
 	 * The edit as an owner input. `normalizeInbound` sees the original id and the edited text only, so the origin key
 	 * and thread ref come out as the original's; then the id gets its `#edit:` tail (a redelivery is a duplicate) and the
-	 * text its marker. A channel root's edit goes into the thread the original opened; none is opened here.
+	 * text its marker. A channel root's edit goes where the original went (the channel session or the thread it opened); none is opened here.
 	 */
 	async #recordEdit(
 		event: DiscordMessageEvent,
@@ -778,11 +784,10 @@ export class DiscordAdapter implements ChannelAdapter {
 		editedAt: string,
 	): Promise<IngestOutcome> {
 		const { conversationId, dm, botUserId } = place;
-		let threadTs = place.threadId;
-		if (!dm && threadTs === undefined) {
-			if (this.#core.knowsThread?.(threadRefOf(conversationId, event.id)) !== true)
-				return this.#drop(event, "edit_no_thread");
-			threadTs = event.id;
+		let origin: string | undefined;
+		if (!dm && place.threadId === undefined) {
+			origin = this.#inline.originOf(conversationId, event.id);
+			if (origin === undefined) return this.#drop(event, "edit_no_thread");
 		}
 		const gate = normalizeInbound({
 			userId: event.author.id,
@@ -792,13 +797,14 @@ export class DiscordAdapter implements ChannelAdapter {
 			quoted: [],
 			channel: conversationId,
 			ts: event.id,
-			threadTs,
+			threadTs: place.threadId,
 			channelType: dm ? "im" : "channel",
 			platform: "discord",
 		});
 		if (!gate.accept) return this.#drop(event, gate.reason);
 		const recorded = {
 			...gate.inbound,
+			originKey: origin ?? gate.inbound.originKey,
 			platformMessageId: `${gate.inbound.platformMessageId}#edit:${editedAt}`,
 			text: `${EDIT_MARKER}\n${gate.inbound.text}`,
 		};
