@@ -45,7 +45,7 @@ export async function taskChangedPaths(
 		const record = records[i] ?? "";
 		if (record === "") continue;
 		paths.add(record.slice(3));
-		if (record[0] === "R" || record[0] === "C") {
+		if (/^(?:[RC]|.[RC])/.test(record)) {
 			i += 1;
 			const source = records[i];
 			if (source) paths.add(source);
