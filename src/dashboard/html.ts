@@ -41,6 +41,7 @@ import {
 	unreadIds,
 	unreadReady,
 } from "./inbox";
+import { contextBar, costCardBody } from "./load-view";
 import { renderDashboardMain } from "./main-view";
 import { renderMarkdown } from "./markdown";
 import {
@@ -69,7 +70,7 @@ import {
 } from "./text";
 import { TRACE_CLIENT } from "./trace-client";
 import { flowDoing, renderFlow, renderTrace } from "./trace-view";
-import { resetIn, usageLevel } from "./usage-limits";
+import { resetIn, trendHtml, usageLevel } from "./usage-forecast";
 
 /**
  * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
@@ -114,8 +115,7 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()};
 const repoCountsText = ${repoCountsText.toString()};
-const usageLevel = ${usageLevel.toString()};
-const resetIn = ${resetIn.toString()};
+const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, trendHtml = ${trendHtml.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()};
 const renderFlowChain = ${renderFlowChain.toString()};
