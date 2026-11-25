@@ -86,7 +86,7 @@ function scan(text: string, seen: Seen): void {
  * The session file of an origin: `session_file` when it exists, else the newest `*.jsonl` directly in its current
  * `session_dir` (sub-agent directories are not looked into).
  */
-function sessionFileOf(origin: SessionModelOrigin): string | undefined {
+export function sessionFileOf(origin: Pick<SessionModelOrigin, "sessionFile" | "sessionDir">): string | undefined {
 	if (origin.sessionFile !== null && existsSync(origin.sessionFile)) return origin.sessionFile;
 	return existsSync(origin.sessionDir) ? newestSessionFile(origin.sessionDir) : undefined;
 }
