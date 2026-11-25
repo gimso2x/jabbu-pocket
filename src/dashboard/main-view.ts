@@ -648,7 +648,7 @@ export function renderDashboardMain(
 					thread,
 				)}</span><span class="card-time">${ago(msOf(thread.updatedAt))}</span><span class="card-meta">${meta
 					.map((part) => `<span>${esc(part)}</span>`)
-					.join("")}${modelChip(thread.model)}${contextBar(thread.context)}</span></div></article>`;
+					.join("")}${modelChip(thread.model)}${contextBar(thread.context, thread.column)}</span></div></article>`;
 			};
 			const lead = `${banners.join("")}${drainLine}${threads.length === 0 ? nothing : ""}`;
 			if (ui.layout === "list") {

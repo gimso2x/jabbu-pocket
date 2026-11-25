@@ -11,6 +11,7 @@ import { clearContextLoad } from "../src/dashboard/context-load";
 import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { buildSnapshot, type DashboardSnapshot, type SnapshotDeps } from "../src/dashboard/snapshot";
+import { STYLE } from "../src/dashboard/style";
 import type { OmpState } from "../src/omp/driver";
 import { openStore } from "../src/store/db";
 
@@ -50,9 +51,9 @@ function seed(state: "dispatched" | "answered", tokens: number): void {
 	db.close();
 }
 
-function finish(): void {
+function finish(state: "answered" | "failed_notified" = "answered"): void {
 	const db = new Database(join(home, "jabbu.db"), { strict: true });
-	db.run("UPDATE inbound SET state = 'answered'");
+	db.run("UPDATE inbound SET state = ?", [state]);
 	db.close();
 }
 
@@ -113,7 +114,7 @@ describe("context bar", () => {
 		}
 	});
 
-	test("an ended turn's bar comes from the last assistant usage and the window a live answer taught", async () => {
+	test("an ended attention turn's bar comes from the last assistant usage and the window a live answer taught", async () => {
 		for (const [tokens, expected] of [
 			[79_000, "none"],
 			[80_000, "is-warn"],
@@ -123,11 +124,32 @@ describe("context bar", () => {
 			rmSync(join(home, "jabbu.db"), { force: true });
 			seed("dispatched", tokens);
 			await buildSnapshot(deps(view(context(1, WINDOW, 1))));
-			finish();
+			finish("failed_notified");
 			const snapshot = await buildSnapshot(deps(undefined));
 			expect(turnsOf(snapshot)[0]?.context).toEqual({ tokens, percent: (tokens / WINDOW) * 100 });
 			expect(tone(renderDashboardMain(snapshot, undefined, NOW, { view: "turns" }))).toBe(expected);
 		}
+	});
+
+	test("done cards compute context load in the snapshot but hide the bar in SSR and client renders", async () => {
+		seed("dispatched", 90_000);
+		await buildSnapshot(deps(view(context(1, WINDOW, 1))));
+		finish("answered");
+		const snapshot = await buildSnapshot(deps(undefined));
+		expect(turnsOf(snapshot)[0]?.column).toBe("done");
+		expect(turnsOf(snapshot)[0]?.context).toEqual({ tokens: 90_000, percent: 90 });
+		const server = renderDashboardMain(snapshot, undefined, NOW, { view: "turns" });
+		expect(barOf(server)).toBe("");
+		const client = new Function("document", "setInterval", `${SCRIPT}\nreturn renderDashboardMain;`)(
+			{ getElementById: () => ({}) },
+			() => 0,
+		) as typeof renderDashboardMain;
+		expect(barOf(client(snapshot, undefined, NOW, { view: "turns" }))).toBe("");
+	});
+
+	test("card-meta overrides .limit-row's 4-column grid so the context bar stays inside the card", () => {
+		expect(STYLE).toContain(".card-meta .limit-row { display: inline-flex;");
+		expect(STYLE).toMatch(/\.card-meta \.limit-row \.meter\s*\{[^}]*width:\s*48px/);
 	});
 
 	test("no bar without a value: unknown window, tokens omp does not know yet, no live view", async () => {
