@@ -68,7 +68,7 @@ function threadHeadLines(store: Store, threadRef: string, originKey: string, cur
 	const root = store.getThreadRootInbound(threadRef, current.platformMessageId);
 	if (root !== undefined) {
 		lines.push(
-			`- 스레드 시작 메시지(${new Date(root.createdAt).toISOString()}): ${truncateUtf8(root.textRef, MAX_THREAD_ROOT_CHARS)}`,
+			`- 스레드 시작 메시지(${new Date(root.createdAt).toISOString()}): ${previewLine(root.textRef, MAX_THREAD_ROOT_CHARS)}`,
 		);
 	}
 	for (const delivery of store.listThreadForeignDeliveries(threadRef, originKey, MAX_THREAD_ANSWERS)) {
@@ -78,8 +78,8 @@ function threadHeadLines(store: Store, threadRef: string, originKey: string, cur
 }
 
 /** A quoted message as one short context line. */
-function previewLine(text: string): string {
-	return truncateUtf8(text, THREAD_ANSWER_PREVIEW_CHARS).replace(/\s+/g, " ").trim();
+function previewLine(text: string, max = THREAD_ANSWER_PREVIEW_CHARS): string {
+	return truncateUtf8(text, max).replace(/\s+/g, " ").trim();
 }
 
 /** One message of a thread as the mailbox reads it (`MailboxDeps.threadSource`). */

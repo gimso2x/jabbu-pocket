@@ -2,6 +2,7 @@ import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
 import type { AgyAccountEntry, AgyAccountPool } from "./agy-account-pool";
 import { type AgyAcpClient, resolveAgyExecutable, toolOutputOf } from "./agy-acp-client";
+import { type NoticeScanState, resetTurnText } from "./agy-notice";
 import {
 	allAccountsExhaustedError,
 	DEFAULT_QUOTA_BLOCK_MS,
@@ -52,7 +53,7 @@ export interface AgyOmpDriverOptions {
 	now?: () => number;
 }
 
-export interface PendingTurn {
+export interface PendingTurn extends NoticeScanState {
 	opRef: string;
 	originalPrompt: string;
 	abortRequested: boolean;
@@ -60,8 +61,6 @@ export interface PendingTurn {
 	quotaSwitches: number;
 	/** Token sums over the turn's prompts (one model call each), steered follow-ups included. */
 	usage: OmpTurnUsage;
-	/** Answer text of the running `session/prompt`. */
-	text: string;
 	/** Resolves when the turn ended (its final went out, or its child died). */
 	settled: PromiseWithResolvers<void>;
 	/** Resolves when the current `session/prompt` reply arrives (so `#cancel` can hand off to retry). */
@@ -87,6 +86,9 @@ export function createPendingTurn(opRef: string, originalPrompt: string): Pendin
 		quotaSwitches: 0,
 		usage: { calls: 0, input: 0, cacheRead: 0, output: 0, rotated: false },
 		text: "",
+		lastNewline: -1,
+		quotaScanFrom: 0,
+		quotaLineDead: false,
 		settled: Promise.withResolvers<void>(),
 		promptReplied: Promise.withResolvers<void>(),
 		finished: false,
@@ -338,7 +340,7 @@ export async function handleAgyQuotaSwitch(
 		return;
 	}
 	turn.quotaSwitches += 1;
-	turn.text = "";
+	resetTurnText(turn);
 	turn.rateLimit = undefined;
 	turn.rateLimitDetail = undefined;
 	turn.rateLimitResetMs = undefined;

@@ -12,6 +12,14 @@ export const INIT_USAGE = `  init [--platform discord] --owner <Discord user id>
 
 const SNOWFLAKE = /^[0-9]{17,20}$/;
 
+const lstatSafe = (path: string) => {
+	try {
+		return lstatSync(path, { throwIfNoEntry: false });
+	} catch {
+		return undefined;
+	}
+};
+
 function fail(message: string): number {
 	process.stderr.write(`init: ${message}\n${INIT_USAGE}`);
 	return 2;
@@ -19,14 +27,7 @@ function fail(message: string): number {
 
 /** `jabbu-pocket init`: every argument is checked before anything is created, so a refused run leaves no trace. */
 export function initCommand(args: string[], env: Record<string, string | undefined>): number {
-	let values: {
-		owner?: string;
-		omp?: string;
-		workspace?: string;
-		help?: boolean;
-		platform?: string;
-		"app-id"?: string;
-	};
+	let values: Partial<Record<"owner" | "omp" | "workspace" | "platform" | "app-id", string>> & { help?: boolean };
 	try {
 		({ values } = parseArgs({
 			args,
@@ -46,14 +47,11 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 		process.stdout.write(INIT_USAGE);
 		return 0;
 	}
-	const platform = values.platform ?? "discord";
-	if (platform !== "discord") return fail("--platform must be discord");
-	for (const [option, value] of [
-		["--owner", values.owner],
-		["--app-id", values["app-id"]],
-	] as const) {
-		if (value === undefined || !SNOWFLAKE.test(value)) return fail(`${option} must be a Discord id (17-20 digits)`);
-	}
+	if ((values.platform ?? "discord") !== "discord") return fail("--platform must be discord");
+	if (values.owner === undefined || !SNOWFLAKE.test(values.owner))
+		return fail("--owner must be a Discord id (17-20 digits)");
+	if (values["app-id"] === undefined || !SNOWFLAKE.test(values["app-id"]))
+		return fail("--app-id must be a Discord id (17-20 digits)");
 	// An empty value would resolve to the current directory; leave the option out to get the default instead.
 	if (values.omp === "") return fail("--omp is empty; leave it out to use omp on PATH");
 	if (values.workspace === "") return fail("--workspace is empty; leave it out to use <home>/workspace");
@@ -69,29 +67,29 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 
 	const homeDir = resolve(defaultHomeDir(env));
 	const configPath = join(homeDir, "config.json");
-	if (existsSync(configPath)) return fail(`${configPath} already exists; nothing changed`);
+	if (lstatSafe(configPath) !== undefined) return fail(`${configPath} already exists; nothing changed`);
 	const workspaceDir = resolve(values.workspace ?? join(homeDir, "workspace"));
 	const secretsDir = join(homeDir, "secrets");
 	if (workspaceOverlapsHome(homeDir, workspaceDir)) {
 		return fail(`--workspace ${workspaceDir} is the home, config.json or inside secrets/; pick another directory`);
 	}
-	// mkdir fails halfway (raw EEXIST/ENOTDIR, a bare home left behind) when a file sits where a directory goes.
+	// mkdir fails halfway (raw EEXIST/ENOTDIR, a bare home left behind) when a file or dangling link sits in the path.
 	for (const [label, dir] of [
 		["home", homeDir],
 		["home", secretsDir],
 		["--workspace", workspaceDir],
 	] as const) {
 		let existing = dir;
-		while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
-		if (!statSync(existing).isDirectory()) return fail(`${label} ${dir}: ${existing} is not a directory`);
+		while (lstatSafe(existing) === undefined && dirname(existing) !== existing) existing = dirname(existing);
+		if (statSync(existing, { throwIfNoEntry: false })?.isDirectory() !== true)
+			return fail(`${label} ${dir}: ${existing} is not a directory`);
 	}
-
-	// chmod follows links: a secrets/ that is a symlink (or not a directory) would change a path outside the home.
-	const secretsStat = lstatSync(secretsDir, { throwIfNoEntry: false });
-	if (secretsStat !== undefined && (secretsStat.isSymbolicLink() || !secretsStat.isDirectory())) {
-		return fail(`home ${secretsDir} is a symlink or not a directory; nothing changed`);
+	// chmod follows links: a home or secrets/ that is a symlink (or not a directory) would change a path outside.
+	for (const dir of [homeDir, secretsDir]) {
+		const st = lstatSafe(dir);
+		if (st !== undefined && (st.isSymbolicLink() || !st.isDirectory()))
+			return fail(`home ${dir} is a symlink or not a directory; nothing changed`);
 	}
-
 	mkdirSync(homeDir, { recursive: true, mode: HOME_MODE });
 	chmodSync(homeDir, HOME_MODE);
 	mkdirSync(secretsDir, { recursive: true, mode: HOME_MODE });
