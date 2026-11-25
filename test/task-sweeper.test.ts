@@ -300,6 +300,17 @@ describe("TaskSweeper", () => {
 		expect(posts(r)).toHaveLength(2);
 	});
 
+	test("Outcome reached with the notice already recorded but no review transition (an earlier attempt died between the two writes): the flow still runs", async () => {
+		const r = rig();
+		r.next.value = { ok: true, judgement: reachedJudgement() };
+		// The crashed attempt recorded the notice and died before the transition: no history entry, still working.
+		r.ledger.recordNotice(r.row.taskId, "reached:k1");
+		await r.sweeper.sweep();
+		expect(r.ledger.require(r.row.taskId).status).toBe("review");
+		expect(posts(r)).toHaveLength(1);
+		expect(textOf(posts(r)[0]).split("\n")[0]).toStartWith("🔍 Outcome 도달");
+	});
+
 	test("Outcome card post: header 🔍 머지 대기 · <title>, criteria and branch fields, one primary 머지 button with the task id", async () => {
 		const r = rig({ boardLink: async () => "https://board.test/c/1" });
 		r.next.value = { ok: true, judgement: reachedJudgement() };
