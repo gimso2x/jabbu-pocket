@@ -21,7 +21,7 @@ import {
 	isColdCache,
 } from "../ops/cache-monitor";
 import { COST_CAP_STOP_PREFIX, messageCost } from "../ops/cost-cap";
-import { captureHeads, captureTrees, recordTurn } from "../ops/turn-snapshot";
+import { captureHeads } from "../ops/turn-heads";
 import { byteLength, redact } from "../redact";
 import { injectionWarning, scanForInjection } from "../safety/injection";
 import { peerTouchedTurnNotice } from "../safety/prompt";
@@ -78,7 +78,6 @@ import {
 	sessionToResume,
 	todoProgress,
 } from "./mailbox-types";
-import { startUndo } from "./mailbox-undo";
 import { parseThreadRef, TOP_LEVEL_TS } from "./normalize";
 import { parseChatOrigin } from "./origin-key";
 import { buildRecallBlock } from "./recall";
@@ -116,7 +115,6 @@ export type {
 	TurnFailureEscalation,
 	TurnProgress,
 	TurnSettledInfo,
-	TurnUndoDeps,
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
 
@@ -137,13 +135,6 @@ export class OriginMailbox {
 	#turn: ActiveTurn | undefined;
 	/** `#startTurn` calls in flight: the child spawn and ready wait come before `#turn` is set. */
 	#starting = 0;
-	/** Incremented when a turn starts: `!undo` compares it to refuse a restore after a new turn began. */
-	#turnGeneration = 0;
-	/**
-	 * The repositories the origin's most recent settled turn could not snapshot (`turn.opRef` + reasons), kept in memory
-	 * only: a later turn overwrites it. `!undo` uses it to refuse reverting an older turn of such a repository.
-	 */
-	#lastUndoFailures: { opRef: string; failed: ReadonlyMap<string, string> } | undefined;
 	#lastActivityAt: number;
 	#lastEventAt = 0;
 	/** When the running turn's last event was written to the ledger (throttled by EVENT_PERSIST_MS). */
@@ -184,9 +175,6 @@ export class OriginMailbox {
 			deps,
 			turn: () => this.#turn,
 			driver: () => this.#driver,
-			turnGeneration: () => this.#turnGeneration,
-			lastUndoFailures: () => this.#lastUndoFailures,
-			serial: (task) => this.#serial(task),
 			background: (event, task) => this.#background(event, task),
 			onFinal: (driver, final, stopFirst) => this.#onFinal(driver, final, stopFirst),
 			ensureDriver: (threadRef) => this.#ensureDriver(threadRef),
@@ -1087,93 +1075,36 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * The work trees as they are before this turn's prompt. Only conversation origins of a chat platform and only the
-	 * configured repositories: a monitor turn or a lane turn (its own worktree and branch) has nothing to undo here, and
-	 * without `turnUndo` (or with no repository configured) no git is ever started.
-	 */
-	async #captureUndoBefore(originKey: string): Promise<ActiveTurn["undoBefore"]> {
-		const turnUndo = this.#deps.turnUndo;
-		if (turnUndo === undefined || parseChatOrigin(originKey) === undefined) return undefined;
-		const repos = turnUndo.repos();
-		if (repos.length === 0) return undefined;
-		// Stamped before the capture starts: a turn that ends while the capture runs still overlaps.
-		const startedAt = this.#deps.clock.now();
-		const captured = await captureTrees(repos, { run: turnUndo.run, log: this.#deps.log });
-		// Every repository failing still matters: `!undo` must say so instead of walking back to an older turn.
-		if (captured.trees.size === 0 && captured.failed.size === 0) return undefined;
-		return { startedAt, before: captured.trees, failed: captured.failed };
-	}
-
-	/**
-	 * Without snapshots (`turnUndo.repos()` empty): the HEADs of `turnUndo.headRepos()` before this conversation turn, so
-	 * a commit still reaches the wiki turn notes. Same origins as the snapshots; no list = no git.
+	 * The HEADs of `turnHeads.headRepos()` before this conversation turn, so a commit reaches the wiki turn notes. Only
+	 * conversation origins of a chat platform: a monitor turn or a lane turn (its own worktree and branch) is left out,
+	 * and with no repository listed no git is ever started.
 	 */
 	async #captureHeadsBefore(originKey: string): Promise<ActiveTurn["headsBefore"]> {
-		const turnUndo = this.#deps.turnUndo;
-		if (turnUndo === undefined || parseChatOrigin(originKey) === undefined || turnUndo.repos().length > 0)
-			return undefined;
-		const repos = turnUndo.headRepos?.() ?? [];
+		const turnHeads = this.#deps.turnHeads;
+		if (turnHeads === undefined || parseChatOrigin(originKey) === undefined) return undefined;
+		const repos = turnHeads.headRepos();
 		if (repos.length === 0) return undefined;
-		const heads = await captureHeads(repos, { run: turnUndo.run, log: this.#deps.log });
+		const heads = await captureHeads(repos, { run: turnHeads.run, log: this.#deps.log });
 		return heads.size === 0 ? undefined : heads;
 	}
 
 	/** The heads after a turn captured by `#captureHeadsBefore`: the repositories it committed in go to `onCommitted`. */
 	async #recordHeadsAfter(turn: ActiveTurn): Promise<void> {
 		const before = turn.headsBefore;
-		const turnUndo = this.#deps.turnUndo;
-		if (before === undefined || turnUndo?.onCommitted === undefined) return;
+		const turnHeads = this.#deps.turnHeads;
+		if (before === undefined || turnHeads?.onCommitted === undefined) return;
 		const { originKey, log } = this.#deps;
 		try {
-			const after = await captureHeads([...before.keys()], { run: turnUndo.run, log });
+			const after = await captureHeads([...before.keys()], { run: turnHeads.run, log });
 			const endedAt = this.#deps.clock.now();
 			const rows = [...before].flatMap(([repo, headBefore]) => {
 				const headAfter = after.get(repo);
 				return headAfter === undefined || headAfter === headBefore ? [] : [{ repo, headBefore, headAfter, endedAt }];
 			});
 			if (rows.length > 0)
-				await turnUndo.onCommitted({ originKey, opRef: turn.opRef, threadRef: turn.threadRef, rows });
+				await turnHeads.onCommitted({ originKey, opRef: turn.opRef, threadRef: turn.threadRef, rows });
 		} catch (error) {
 			log.warn("turn_head_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
-		}
-	}
-
-	/**
-	 * The after-state of a settled turn, recorded as one ledger row per changed repository so `!undo` can put exactly
-	 * those files back. Runs after the answer is stored: a slow or failing git never costs the owner the answer. A
-	 * repository that could not be captured is remembered for `!undo`, which must not mistake an older turn for it.
-	 */
-	async #recordUndoAfter(turn: ActiveTurn): Promise<void> {
-		const captured = turn.undoBefore;
-		const turnUndo = this.#deps.turnUndo;
-		if (captured === undefined || turnUndo === undefined) return;
-		const { store, originKey, log } = this.#deps;
-		try {
-			// Only the repositories captured before are compared: a reload in between must not invent a before-state.
-			const live = turnUndo.repos().filter((repo) => captured.before.has(repo));
-			const failed = new Map(captured.failed);
-			if (live.length === 0) {
-				this.#lastUndoFailures = { opRef: turn.opRef, failed };
-				return;
-			}
-			const after = await captureTrees(live, { run: turnUndo.run, log });
-			for (const [repo, reason] of after.failed) failed.set(repo, reason);
-			this.#lastUndoFailures = { opRef: turn.opRef, failed };
-			const capture = {
-				startedAt: captured.startedAt,
-				endedAt: this.#deps.clock.now(),
-				before: captured.before,
-				after: after.trees,
-			};
-			const written = await recordTurn({ store, originKey, opRef: turn.opRef, capture, run: turnUndo.run, log });
-			if (written > 0) log.info("turn_snapshot", { origin: originKey, opRef: turn.opRef, repos: written });
-			const committed = written === 0 ? [] : store.listTurnSnapshots({ originKey, opRef: turn.opRef });
-			const heads = committed.filter((row) => row.headBefore !== row.headAfter);
-			if (heads.length > 0) {
-				await turnUndo.onCommitted?.({ originKey, opRef: turn.opRef, threadRef: turn.threadRef, rows: heads });
-			}
-		} catch (error) {
-			log.warn("turn_snapshot_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
 		}
 	}
 
@@ -1203,8 +1134,7 @@ export class OriginMailbox {
 		if (this.#freshSession) await this.#plantTodos(driver);
 		// Read the cursor right before the prompt: extensions append entries after open.
 		const entryCursor = await driver.leafId();
-		// Before the prompt, not after: the first tool call would otherwise race the capture and land in no turn's diff.
-		const undoBefore = await this.#captureUndoBefore(originKey);
+		// Before the prompt, not after: the first tool call would otherwise race the capture and land in no turn's note.
 		const headsBefore = await this.#captureHeadsBefore(originKey);
 		const board = this.#deps.boardNotice?.();
 		const prompt = await this.#firstTurnPrompt(row, text, peerNotice, board?.block);
@@ -1225,8 +1155,7 @@ export class OriginMailbox {
 			if (!recorded) await this.#stopDriver().catch(() => undefined);
 		}
 		if (!recorded) return true;
-		this.#turnGeneration += 1;
-		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, undoBefore, headsBefore });
+		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, headsBefore });
 		this.#lastEventAt = this.#deps.clock.now();
 		this.#eventPersistedAt = this.#lastEventAt;
 		this.#stalled = false;
@@ -1671,8 +1600,7 @@ export class OriginMailbox {
 		});
 		if (stopFirst) await this.#stopDriver();
 		// After the answer is stored and before the next row starts: the drain below may open the next turn, and its
-		// before-state must already include this turn's files.
-		await this.#recordUndoAfter(turn);
+		// before-heads must already include this turn's commits.
 		await this.#recordHeadsAfter(turn);
 		await this.#drain();
 		if (this.#stopAfterTurn && !this.#turn) {
@@ -1766,13 +1694,8 @@ export class OriginMailbox {
 			askBtw(this.#deps, this.#driver.btw(command.arg), row.platformMessageId, opRef, threadRef);
 			return;
 		}
-		if (command.kind === "undo") {
-			// The card waits minutes: it must not hold the serial chain, or the next inbound could not start a turn.
-			startUndo(this.#host, opRef, threadRef);
-			return;
-		}
 		if (command.kind === "brief") {
-			// Two chromium runs (up to 2x20s): like `!undo`, it must not hold the serial chain, so a message that comes
+			// Two chromium runs (up to 2x20s): it must not hold the serial chain, so a message that comes
 			// while the picture is drawn still starts its turn.
 			startBrief(this.#deps, row.platformMessageId, opRef, threadRef);
 			return;

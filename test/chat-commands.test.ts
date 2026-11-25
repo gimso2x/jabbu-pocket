@@ -123,12 +123,9 @@ describe("command parsing", () => {
 		expect(promptTextOf("그냥 메시지")).toBe("그냥 메시지");
 	});
 
-	test("!undo and /undo-jabbu parse as the undo command and take no argument", () => {
-		expect(parseCommand("!undo")).toEqual({ kind: "undo", arg: "" });
-		expect(parseCommand("/undo-jabbu")).toEqual({ kind: "undo", arg: "" });
-		expect(parseCommand("  !undo  ")).toEqual({ kind: "undo", arg: "" });
-		expect(parseCommand("/undo-jabbu now")).toBeUndefined();
-		expect(parseCommand("undo 해줘")).toBeUndefined();
+	test("!undo and /undo-jabbu are no longer commands", () => {
+		expect(parseCommand("!undo")).toBeUndefined();
+		expect(parseCommand("/undo-jabbu")).toBeUndefined();
 	});
 
 	test("!stop and /stop-jabbu parse as the stop command and take no argument", () => {

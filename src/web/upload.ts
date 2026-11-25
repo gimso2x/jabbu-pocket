@@ -3,28 +3,13 @@ import { lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync }
 import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { MAX_INBOUND_FILES, MAX_INBOUND_IMAGE_BYTES, sniffImageMime } from "../channel/attachments";
+import { protectedDirs, realOrSelf } from "../safety/forbidden-paths";
 import { isInside } from "../safety/inside";
 
 /** Maximum uploaded file size on web chat (25 MiB per file, matching `MAX_INBOUND_IMAGE_BYTES`). */
 export const WEB_UPLOAD_MAX_BYTES = MAX_INBOUND_IMAGE_BYTES;
 const MULTIPART_OVERHEAD_BYTES = 512 * 1024;
 const CONTROL_CHARS = /\p{Cc}/u;
-
-const PROTECTED_HOME_DIRS = [
-	".jabbu/secrets",
-	".ssh",
-	".gnupg",
-	".aws",
-	".omp/agent",
-	".gajaeway-hub",
-	".git-credentials",
-	".netrc",
-	".config/gh",
-	".config/gcloud",
-	".npmrc",
-	".kube",
-	".docker",
-];
 
 const FORBIDDEN_PATH_TOKENS =
 	/(?:^|[/\\])(?:\.\.|secrets|\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.git-credentials|\.netrc|\.npmrc)(?:$|[/\\])/i;
@@ -43,18 +28,6 @@ export type WebUploadOutcome =
 /** Directory holding inbound attachments uploaded via `/api/web/upload`. */
 export function webUploadRoot(homeDir: string): string {
 	return join(homeDir, "media", "inbound", "web");
-}
-
-function realOrSelf(path: string): string {
-	try {
-		return realpathSync(path);
-	} catch {
-		return path;
-	}
-}
-
-function protectedDirs(homeDir: string, userHome = homedir()): string[] {
-	return [join(homeDir, "secrets"), ...PROTECTED_HOME_DIRS.map((rel) => join(userHome, rel))].map(realOrSelf);
 }
 
 /** True when `realPath` resolves inside `<homeDir>/secrets` or any user credential store. */

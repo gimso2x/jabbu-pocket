@@ -51,16 +51,12 @@ import {
 	type OriginSettings,
 	type OriginSql,
 	type RecallCandidate,
-	type TurnSnapshotInput,
-	type TurnSnapshotRow,
-	type TurnSnapshotSql,
 	toDelivery,
 	toInbound,
 	toLane,
 	toLaneBoardPost,
 	toLaneReservation,
 	toOrigin,
-	toTurnSnapshot,
 	toWikiTurn,
 	type WikiTurnInput,
 	type WikiTurnRow,
@@ -213,9 +209,6 @@ interface OwnerHome {
 	platform: ChatPlatform;
 	conversationId: string;
 }
-
-/** Rows kept per origin: an old turn's `!undo` target stops being reachable long before `gc` runs. */
-const TURN_SNAPSHOT_ROWS_KEPT = 20;
 
 /** Rows kept per agent. */
 const HERDR_PROMPT_ROWS_KEPT = 20;
@@ -1463,84 +1456,6 @@ export class Store {
 				.run(input.agent, input.agent, HERDR_PROMPT_ROWS_KEPT);
 			this.db.query("DELETE FROM herdr_prompts WHERE at < ?").run(now - HERDR_PROMPT_KEEP_MS);
 		})();
-	}
-
-	// ---- turn snapshots (`!undo`) ----
-
-	/**
-	 * Appends one turn snapshot and keeps only the newest `TURN_SNAPSHOT_ROWS_KEPT` rows of that origin. The rows dropped
-	 * by that bound come back as `pruned` so the caller can delete their refs.
-	 */
-	recordTurnSnapshot(input: TurnSnapshotInput): { id: number; pruned: TurnSnapshotRow[] } {
-		// One transaction: a failure while pruning must not leave the new row behind, or the caller (which deletes the
-		// refs of `pruned` only on success) would keep a ledger that no longer matches its refs.
-		return this.db.transaction(() => {
-			const inserted = this.db
-				.query(
-					`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run(
-					input.originKey,
-					input.opRef,
-					input.repo,
-					input.headBefore,
-					input.treeBefore,
-					input.headAfter,
-					input.treeAfter,
-					input.startedAt,
-					input.endedAt,
-				);
-			const id = Number(inserted.lastInsertRowid);
-			const overflow = this.db
-				.query(
-					`SELECT * FROM turn_snapshots WHERE origin_key = ?
-				 ORDER BY id DESC LIMIT -1 OFFSET ?`,
-				)
-				.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
-			const pruned = overflow.map(toTurnSnapshot);
-			const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
-			for (const row of pruned) drop.run(row.id);
-			return { id, pruned };
-		})();
-	}
-
-	/** Rows newest first; every filter is optional and compared literally. */
-	listTurnSnapshots(
-		filter: { originKey?: string; repo?: string; opRef?: string; undoable?: boolean } = {},
-	): TurnSnapshotRow[] {
-		const rows = this.db
-			.query(
-				`SELECT * FROM turn_snapshots
-				 WHERE (?1 IS NULL OR origin_key = ?1) AND (?2 IS NULL OR repo = ?2) AND (?3 IS NULL OR op_ref = ?3)
-				   AND (?4 = 0 OR reverted_at IS NULL)
-				 ORDER BY id DESC`,
-			)
-			.all(
-				filter.originKey ?? null,
-				filter.repo ?? null,
-				filter.opRef ?? null,
-				filter.undoable === true ? 1 : 0,
-			) as TurnSnapshotSql[];
-		return rows.map(toTurnSnapshot);
-	}
-
-	/**
-	 * The origin's most recent turn that can still be undone: its newest `op_ref` among rows with no `reverted_at`.
-	 * Returns every repository row of that turn (oldest first), or `[]` when nothing changed or all was undone.
-	 */
-	latestUndoableTurn(originKey: string): TurnSnapshotRow[] {
-		const newest = this.listTurnSnapshots({ originKey, undoable: true })[0];
-		if (newest === undefined) return [];
-		const rows = this.listTurnSnapshots({ originKey, opRef: newest.opRef, undoable: true });
-		return rows.reverse();
-	}
-
-	/** Marks a turn's rows as undone at `at`; returns how many rows changed. */
-	markTurnReverted(originKey: string, opRef: string, at: number): number {
-		return this.db
-			.query("UPDATE turn_snapshots SET reverted_at = ? WHERE origin_key = ? AND op_ref = ? AND reverted_at IS NULL")
-			.run(at, originKey, opRef).changes;
 	}
 
 	// ---- wiki result notes ----

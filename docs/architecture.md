@@ -34,11 +34,11 @@ Discord ──▶ channel adapter ──▶ CoreSink(daemon-sink) ──▶ stor
 | `src/channel/` | 플랫폼과 무관한 어댑터 계약과 공용 전달 펌프 | `adapter.ts`(`ChannelAdapter`), `port.ts`(`ChannelPort`), `types.ts`(`CoreSink`), `pump.ts` |
 | `src/discord/` | Discord 어댑터(게이트웨이·REST·카드·백필) | `adapter.ts` |
 | `src/store/` | 장부: 스키마, 상태 전이, 행 읽기·쓰기 | `db.ts`, `transitions.ts`, `schema-version.ts` |
-| `src/safety/` | 승인·질문 카드, 호스트 도구, 비밀 색인, 인젝션 경고, 안전 바닥글 | `approval.ts`, `host-tools.ts`, `prompt.ts` |
+| `src/safety/` | 승인·질문 카드, 호스트 도구, 비밀 색인, 인젝션 경고, 안전 바닥글, 업로드 금지 경로 | `approval.ts`, `host-tools.ts`, `forbidden-paths.ts`(호스트 도구·웹 업로드 공용), `prompt.ts` |
 | `src/redact.ts` | 비밀 마스킹(로그·DB·전송 전부) | — |
 | `src/tasks/`, `src/lanes/`, `src/dispatch/`, `src/flow/` | 작업 위임: `[TASK]` 상태 문서·스윕·착지, 작업 레인(worktree·PR 착지), `jabbu_dispatch` | `tasks/sweeper.ts`, `lanes/manager.ts`, `dispatch/tool.ts` |
-| `src/monitors/` | cron·at·script·watcher·webhook 트리거 모니터 | `scheduler.ts`, `spec.ts` |
-| `src/ops/` | apply·백업·복구·gc·건강 게이트·동결·비용 상한 | `apply.ts`, `gates.ts`, `freeze.ts` |
+| `src/monitors/` | cron·at·script 트리거 모니터 | `scheduler.ts`, `spec.ts` |
+| `src/ops/` | apply·백업·복구·gc·건강 게이트·동결·비용 상한 | `apply.ts`, `gates.ts`, `freeze.ts`, `turn-heads.ts`(턴 전후 HEAD 읽기, 위키 턴 노트용) |
 | `src/dashboard/` | 루프백 전용 **읽기 전용** 현황판 | `server.ts`, `snapshot.ts` |
 | `src/review/`, `src/wiki/` | 스킬 리뷰·개선 후보, 위키 노트 outbox | — |
 | `src/release/` | 공개로 나가는 변경의 누출 검사(denylist·gitleaks·죽은 링크·외부 코드 표지) | `leak-check.ts` |
@@ -60,7 +60,7 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 | I7 | omp를 포크·패치·import하지 않는다. 공개 stdio RPC로만 말한다 | `omp/rpc-client.ts` | CI `e2e-omp-mock`(`test/omp-mock.e2e.test.ts`, 진짜 omp + 가짜 모델). `test/omp-rpc.contract.test.ts`는 `JABBU_E2E_OMP=1`(`bun run smoke-omp`, 모델 비용)일 때만 돌고 CI에서는 skip |
 | I8 | 사람은 오너 한 명만 받는다. 오너가 아닌 사용자의 메시지·버튼·파일은 무시하거나 거절한다. 예외는 설정한 피어 봇(`channels.discord.peerBots`)의 서버 채널 멘션뿐이고, 피어 봇이 쓴 대화의 자식은 줄어든 호스트 도구만 받는다 | `discord/adapter.ts`(오너·`peerBots` 판정), `daemon/daemon-host-tools.ts` `peerTouched`·`hostToolsFor` | 테스트 |
 | I9 | 비밀값은 로그·DB·채팅 전송 어디에도 원문으로 나가지 않는다. 마스킹은 끄는 스위치가 없다. 공개로 나가는 diff는 누출 검사(denylist·gitleaks·죽은 링크)를 거친다 | `redact.ts`, `safety/secret-index.ts`, `safety/host-tools.ts` `checkUploadable`, `release/leak-check.ts`(PR 착지의 머지 직전 검사) | 테스트(CI는 gitleaks를 누출 검사기 *시험용*으로만 설치하고 PR diff 자체를 gitleaks로 훑지는 않는다) |
-| I10 | 루프백 밖으로 여는 HTTP는 없다. 현황판(읽기 전용)과 webhook 모니터 리스너 둘뿐이고 `bind`는 `127.0.0.1`·`::1`만 허용한다. 데몬 IPC는 `0600` 유닉스 소켓, 데몬은 홈마다 하나(잠금) | `dashboard/server.ts`·`host-guard.ts`, `monitors/webhook.ts`, `config.ts`(`bind` 검증), `daemon/ipc.ts`, `daemon/lock.ts` | 테스트 |
+| I10 | 루프백 밖으로 여는 HTTP는 없다. 현황판(읽기 전용) 하나뿐이고 `bind`는 `127.0.0.1`·`::1`만 허용한다. 데몬 IPC는 `0600` 유닉스 소켓, 데몬은 홈마다 하나(잠금) | `dashboard/server.ts`·`host-guard.ts`, `config.ts`(`bind` 검증), `daemon/ipc.ts`, `daemon/lock.ts` | 테스트 |
 | I11 | 되돌릴 수 없거나 밖으로 나가는 일은 승인 카드를 거친다. 승인 장부는 영속이다 | `safety/approval.ts`, `safety/answer-ledger.ts` | 테스트 |
 | I12 | 새 설정 키는 `LIVE_FIELDS`·`RESTART_FIELDS`·`CLI_FIELDS` 중 하나에 넣는다. 지운 키는 조용히 무시하지 않고 거부한다 | `daemon/reload-fields.ts`, `config-removed-keys.ts` | 컴파일 타임 가드(`daemon/reload.ts` `UnclassifiedField`) |
 | I13 | 모듈 사이 import 순환 0건, `src` 파일 줄 수는 기준선 이하(새 파일 400줄), 쓰이지 않는 export 없음(`@public` 제외) | `biome.json`, `src/dev/check-loc.ts`, `knip.json` | `bun run check`, `bun run knip` |
@@ -75,7 +75,7 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 | `scripts/tla-covered.ts`의 `COVERED` 목록(`core/mailbox.ts`·`mailbox-active-turn.ts`·`mailbox-types.ts`·`mailbox-commands.ts`·`mailbox-sending.ts`·`mailbox-park.ts`, `store/transitions.ts`·`db.ts`, `daemon/recovery.ts`, `channel/pump.ts`) | `Mailbox.tla`가 바뀐 동작을 여전히 모델링하는지 보고, `bun scripts/tla-check.ts --strict`가 통과한 뒤에만 `bun scripts/tla-covered.ts --record`. 모델이 실패하면 기록하지 않는다. 모델이 다루는 소스 파일을 새로 만들거나 쪼개면 `COVERED`에도 넣는다 |
 | 스키마를 정의하는 파일(`CREATE TABLE`이 있는 곳): `store/db-schema.ts`·`legacy-ddl.ts`·`card-answers.ts`, `tasks/ledger-schema.ts`, `monitors/ledger.ts`, 그리고 `store/db-sending.ts`·`rename-migration.ts` | I6의 버전 올림과 이전 시험 |
 | `release/leak-check.ts` | 누출 검사를 느슨하게 하는 변경(패턴 삭제·건너뛰기 조건 추가)은 그 이유와 대체 검사를 PR 본문에 적는다 |
-| `dashboard/server.ts`·`host-guard.ts`, `monitors/webhook.ts`, `daemon/ipc.ts`, `daemon/lock.ts` | I10. 바인드 주소·권한·Host 검사·잠금을 느슨하게 하지 않는다. 바꾸면 거부되는 경우의 시험을 같이 넣는다 |
+| `dashboard/server.ts`·`host-guard.ts`, `daemon/ipc.ts`, `daemon/lock.ts` | I10. 바인드 주소·권한·Host 검사·잠금을 느슨하게 하지 않는다. 바꾸면 거부되는 경우의 시험을 같이 넣는다 |
 | `omp/rpc-client.ts`, `omp/rpc-driver.ts`, `omp/driver.ts` | `bun run test:omp-mock`(토큰 비용 없음)으로 실제 omp RPC 계약 확인 |
 | `redact.ts`, `safety/*` | 비밀이 새는 경로·승인을 우회하는 경로가 생기지 않는지 적대 시험 추가 |
 | `channel/adapter.ts`, `channel/port.ts`, `channel/types.ts` | 어댑터 계약이므로 Discord 어댑터와 테스트 전송(`discord/test-transport.ts`)을 같은 PR에서 맞춘다 |
@@ -86,7 +86,7 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 
 - **채널 어댑터:** `ChannelAdapter`(`channel/adapter.ts`)와 `ChannelPort`(`channel/port.ts`)를 구현하고, 전달은 공용 펌프(`channel/pump.ts`)에 플랫폼별 `DeliverySender`만 넘긴다. 범위 밖 어댑터(Telegram 등)는 [AGENTS.md](../AGENTS.md)를 따른다.
 - **호스트 도구(omp가 부르는 jabbu 도구):** `safety/host-tools.ts`의 `HostToolDef`로 정의하고 `daemon/daemon-host-tools.ts`에서 대화별로 고른다.
-- **모니터 트리거:** `monitors/spec.ts`의 트리거 합집합(`cron`·`at`·`script`·`watcher`·`webhook`)에 추가하고 `monitors/scheduler.ts`에서 돈다.
+- **모니터 트리거:** `monitors/spec.ts`의 트리거 합집합(`cron`·`at`·`script`)에 추가하고 `monitors/scheduler.ts`에서 돈다.
 - **채팅 명령:** `core/types.ts` `parseCommand`와 `core/mailbox-commands.ts`.
 - **설정 키:** `config.ts` 타입 → `config-validate.ts` 검증 → `daemon/reload-fields.ts` 분류(I12) → [사용 설명서](guide.md) 설정 표.
 - **건강 게이트:** `ops/gates.ts`, 문턱은 `ops/gate-thresholds.ts`.

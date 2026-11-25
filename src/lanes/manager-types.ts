@@ -17,7 +17,7 @@ import type { Store } from "../store/db";
 import type { AutoLandPolicy } from "../tasks/auto-land-policy";
 import type { TaskHostOps } from "../tasks/host";
 import type { WikiNotes } from "../wiki/notes";
-import type { IntegrityInput, IntegrityRefusal, LaneCommitIdentity, LaneDiffRange } from "./integrity";
+import type { IntegrityInput, IntegrityRefusal, LaneDiffRange } from "./integrity";
 import type { CoreRebaseResult, LandLane } from "./land";
 import type { LaneDiff } from "./lane-diff";
 import type { PrTools } from "./pr";
@@ -80,8 +80,6 @@ export interface LaneManagerDeps {
 	collectDiff?: (laneCwd: string, range: LaneDiffRange, sha: string) => Promise<LaneDiff>;
 	/** Test seam; default judges the claim's summary + diff (hermes completion_integrity). */
 	integrity?: (input: IntegrityInput) => IntegrityRefusal[];
-	/** Test seam; default reads the lane commits' author/committer emails (`collectLaneCommitIdentities`). */
-	collectIdentities?: (laneCwd: string, range: LaneDiffRange, sha: string) => Promise<LaneCommitIdentity[]>;
 	/** Worktree creation and `[check: …]` runs on this machine (test seam; default `createTaskHostOps()`). */
 	hostOps?: TaskHostOps;
 	/** The approval card of an external PR publish (`ApprovalBroker.ask`, lane thread as `origin`). Absent: `PR 게시` is refused. */

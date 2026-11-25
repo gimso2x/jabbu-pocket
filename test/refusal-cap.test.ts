@@ -7,7 +7,6 @@ const RANKED: IntegrityRefusal["category"][] = [
 	"lane_diff_unavailable",
 	"guard_deletion_without_adversarial_regression",
 	"undeclared_feature_removal",
-	"commit_identity_mismatch",
 	"stub_implementation",
 	"skipped_test",
 	"unproven_claim_word",
@@ -27,12 +26,16 @@ describe("capRefusals", () => {
 		expect(capRefusals(list)).not.toBe(list);
 	});
 
-	test("16 refusals of 8 categories, two each: one per category in rank order", () => {
+	test("14 refusals of 7 categories, two each: every category keeps its first, the spare slot goes to the heaviest", () => {
 		const list = RANKED.toReversed().flatMap((c) => [make(c, 0), make(c, 1)]);
-		expect(list).toHaveLength(16);
+		expect(list).toHaveLength(14);
 		const out = capRefusals(list);
-		expect(out.map((r) => r.category)).toEqual(RANKED);
-		expect(out.every((r) => r.excerpt.endsWith("#0"))).toBe(true);
+		expect(out).toHaveLength(MAX_REFUSALS);
+		expect(out.map((r) => r.excerpt)).toEqual([
+			"lane_diff_unavailable #0",
+			"lane_diff_unavailable #1",
+			...RANKED.slice(1).map((c) => `${c} #0`),
+		]);
 	});
 
 	test("the spare slots go by rank, in original order within a category", () => {

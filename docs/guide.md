@@ -5,7 +5,7 @@
 설치부터 운영까지 jabbu-pocket의 모든 동작을 정리한 레퍼런스입니다. 예전 이름에서 옮겨 오는 방법은 [CHANGELOG](../CHANGELOG.md)에 있습니다.
 
 - **시작하기:** [요구 사항](#요구-사항) · [코어와 설치본](#코어와-설치본) · [설치](#설치) · [설정 파일](#5-설정-파일-jabbuconfigjson) · [서비스 등록](#7-서비스-등록) · [AI 에이전트에게 설치 맡기기](#ai-에이전트에게-설치-맡기기)
-- **쓰기:** [대화](#대화) · [명령](#명령) · [턴 되돌리기](#턴-되돌리기undo) · [승인](#승인) · [질문 카드](#질문-카드) · [페르소나와 답변 형식](#페르소나와-답변-형식) · [agy 에이전트](#agy-에이전트) · [Discord](#discord선택)
+- **쓰기:** [대화](#대화) · [명령](#명령) · [승인](#승인) · [질문 카드](#질문-카드) · [페르소나와 답변 형식](#페르소나와-답변-형식) · [agy 에이전트](#agy-에이전트) · [Discord](#discord선택)
 - **맡기기:** [작업 위임](#작업-위임) · [`[TASK]` 상태 문서](#task-상태-문서) · [`[TASK]` 자동 머지](#task-자동-머지) · [작업 레인](#작업-레인) · [모니터](#모니터)
 - **운영:** [CLI](#운영) · [현황판](#현황판) · [동결(킬스위치)](#동결킬스위치) · [재시작과 drain](#재시작과-drain) · [설정 반영](#재시작-없이-설정-반영) · [놓친 메시지 백필](#놓친-메시지-백필) · [건강 게이트](#건강-게이트와-자가-보고) · [캐시 감시·파일 겹침](#프롬프트-캐시-감시와-task-파일-겹침-알림) · [백업](#백업) · [스킬 리뷰](#스킬-리뷰)
 - **그 밖:** [보안 메모](#보안-메모) · [개발](#개발)
@@ -17,7 +17,7 @@
 | 대화 | DM·채널·채널 스레드별 독립 대화, 일하는 중 끼워 넣기(steer)·`!followup`, 끝맺은 답의 턴 중간 전달, 첨부 받기·파일 올리기, `card` 펜스 카드(embed), 진행 상태 메시지, 같은 도구 반복 감지, 같은 대화 공간의 지난 대화 자동 회상, 전달·첨부 자료의 인젝션 경고 | [대화](#대화) |
 | Discord(선택) | 오너 한 명의 Discord DM·서버 채널 대화(멘션하면 스레드), `!` 명령·진행 표시·승인·질문·TASK 카드 버튼·카드(embed)·파일·놓친 메시지 백필·`doctor` 점검, DM 모니터, 서버 채널 스레드의 작업 레인 | [Discord](#discord선택) |
 | 대화 에이전트 | omp(기본) 대신 Antigravity CLI(`"agent": "agy"`)로 대화를 구동 | [agy 에이전트](#agy-에이전트) |
-| 채팅 명령 | 모델·thinking 전환, 컨텍스트 압축, 옛 세션 이어가기, 대기열 보기·취소, 새 대화, 토큰·비용 사용량, 오늘 비용과 상한(`!budget`), 턴 되돌리기(`!undo`), 턴만 멈추기(`!stop`), 모델 없는 재시작(`!restart`) | [명령](#명령) · [턴 되돌리기](#턴-되돌리기undo) |
+| 채팅 명령 | 모델·thinking 전환, 컨텍스트 압축, 옛 세션 이어가기, 대기열 보기·취소, 새 대화, 토큰·비용 사용량, 오늘 비용과 상한(`!budget`), 턴만 멈추기(`!stop`), 모델 없는 재시작(`!restart`) | [명령](#명령) |
 | 비용 상한 | 턴 상한(스레드 경고, 3배에서 중단)·하루 상한(`cost_cap` 게이트 알림만, 모니터는 계속 돎) | [설정](#5-설정-파일-jabbuconfigjson) `costCap` |
 | 승인 | 되돌릴 수 없거나 밖으로 나가는 작업 전 승인 버튼(구조화된 카드, 외부 공개 `🌐` 카드, 영속 장부, escalation 채널과 요청 스레드 사본, 다시 요청 버튼, 카드 스레드 답장) | [승인](#승인) |
 | 질문 카드 | omp의 질문 창(select·confirm·input·editor·`ask`)을 대화 스레드의 버튼·답장 카드로, 마감 시 omp와 같은 기본값 | [질문 카드](#질문-카드) |
@@ -25,7 +25,7 @@
 | 완료 사본 | `✅ 완료`로 시작하는 답을 #log 채널에 사본으로 남김 | [설정](#5-설정-파일-jabbuconfigjson) `channels.discord.logChannelId` |
 | 작업 위임 | `jabbu_dispatch` — 단발(`omp -p`)·장기(데몬 Mailbox 워커)·원격 호스트(herdr), `[TASK]` 상태 문서와 1분 스윕, 머지·추천대로 버튼, 개인 저장소 자동 머지(`taskAutoLand`), 같은 저장소 TASK 파일 겹침 알림 | [작업 위임](#작업-위임) |
 | 작업 레인 | `작업: <제목> @<경로>`로 레인 스레드, 레인마다 전용 worktree·브랜치, 커밋과 `[check: …]` 재실행으로 검증되는 완료, Outcome 카드의 `머지`·`폐기` 버튼, 코어가 하는 ff 머지·push·정리, 개인 저장소 자동 머지(`taskAutoLand`) | [작업 레인](#작업-레인) |
-| 모니터 | cron·한 번·스크립트 조건·파일 변경(watcher)·webhook 트리거, 채널 게시·사본, 모델 고정, 절차 파일, 턴 없이 그대로 전달(verbatim), 실패 재시도·인시던트, 설치본 저장소로 내보내기·적용 | [모니터](#모니터) |
+| 모니터 | cron·한 번·스크립트 조건 트리거, 채널 게시·사본, 모델 고정, 절차 파일, 턴 없이 그대로 전달(verbatim), 실패 재시도·인시던트, 설치본 저장소로 내보내기·적용 | [모니터](#모니터) |
 | 현황판 | 루프백 전용 읽기 전용 웹 현황판: 인박스·턴 보드(대화·생성 중 글·트레이스)·TASK 흐름 고리·모니터·승인 대기·알림·시스템 | [현황판](#현황판) |
 | 신뢰성 | 재시작 뒤 대화 유지·답 복구, 놓친 메시지 백필, 멈춘 대기 메시지 재시도, 건강 게이트와 자가 보고, drain 재시작과 재시작 알림, 재시작 없는 설정 반영, 프롬프트 캐시 미스·식은 캐시 알림 | [운영](#운영) |
 | 백업 | 매일 DB 사본 + 세션·설정 번들, 성공 도장, 보존 | [백업](#백업) |
@@ -141,15 +141,13 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | `workerOmpArgs` | 아니요 | 로컬 `[TASK]` 워커 omp에 덧붙이는 인자(문자열 배열, 원소는 빈 문자열이면 안 됨). 예: `["--prewalk"]`이면 워커가 기본 모델로 계획을 세우고 첫 edit/write부터 smol 모델로 넘어갑니다. `jabbu_dispatch` taskSpec 신규 시작과 재개 때 죽은 에이전트 재기동에 붙고, `omp -p` 단순 위임·원격 호스트(`dispatchHosts.<h>.ompArgs`를 씀)·대화 세션에는 붙지 않습니다. 배열이 아니거나 빈 문자열이 있으면 `config_invalid field=workerOmpArgs` |
 | `workerAgy` | 아니요 | `{"model": "<agy 모델 id>"}`. `taskSpec.worker: "agy"`인 로컬 L0·L1 `[TASK]`를 herdr `--kind agy`(Antigravity CLI)로 띄웁니다(동시 1개, 품질 미검증). `model`은 영숫자로 시작하는 한 단어(`-` 시작 불가). 없거나 `herdr`가 꺼져 있으면 `worker: "agy"`도 omp 등급 워커로 뜨고 답에 이유 한 줄이 붙습니다. `reload`로 바로 반영 |
 | `herdrBoard` | 아니요 | herdr 필요(`herdr` 없이 넣으면 `config_invalid field=herdr`). herdr-web-ui 작업 보드. 예: `{"url": "https://herdr.example.com/task/", "api": "http://127.0.0.1:7317"}`(`api` 기본값이 이 값). 넣으면 위임 접수 카드·결정 요청·Outcome 알림에 `진행 보기`/`작업 보드` 카드 링크가 붙습니다. 카드 키는 `api`의 `/api/machines`로 정합니다: 로컬 에이전트는 pane id, `dispatchHosts`의 호스트는 같은 이름 머신의 `<machine id>:<pane id>`. 못 찾으면 보드 첫 화면으로 링크합니다 |
-| `taskAutoLand` | 아니요 | `herdr` 없이도 넣을 수 있습니다(작업 레인과 로컬 `[TASK]`가 씀). 조건을 채운 개인 저장소 `[TASK]`를 Outcome 도달 때, 작업 레인을 닫힐 때 봇이 스스로 머지. `{"repos": ["/절대경로/저장소", …], "maxRisk": "L2"}`(`repos`는 1개 이상의 절대경로, `maxRisk` 기본 `L2`, 선택 `review`는 자동 머지 전 [독립 리뷰](#레인-자동-머지-전-독립-리뷰-review), 선택 `qa`는 그 뒤 실행 QA, 선택 `commitEmails`는 저장소 절대경로별 허용 커밋 이메일 목록). [`[TASK]` 자동 머지](#task-자동-머지)·[작업 레인](#작업-레인) 참고 |
+| `taskAutoLand` | 아니요 | `herdr` 없이도 넣을 수 있습니다(작업 레인과 로컬 `[TASK]`가 씀). 조건을 채운 개인 저장소 `[TASK]`를 Outcome 도달 때, 작업 레인을 닫힐 때 봇이 스스로 머지. `{"repos": ["/절대경로/저장소", …], "maxRisk": "L2"}`(`repos`는 1개 이상의 절대경로, `maxRisk` 기본 `L2`, 선택 `review`는 자동 머지 전 [독립 리뷰](#레인-자동-머지-전-독립-리뷰-review), 선택 `qa`는 그 뒤 실행 QA). [`[TASK]` 자동 머지](#task-자동-머지)·[작업 레인](#작업-레인) 참고 |
 | `lanes` | 아니요 | 작업 레인 설정. 예전 `completionNudges`(자동 재촉)는 없어졌습니다: 남아 있어도 로드는 되고 시작 때 `config_warning`(`reason=config_key_ignored`) 한 줄만 남습니다. `models`(`{"high"?, "middle"?, "low"?}`, 값은 `provider/model`, 끝에 `:<thinking>`(예 `anthropic/claude-sonnet-5-5:medium`)을 붙이면 thinking 수준으로 분리됩니다): 워커·레인 모델 등급별 모델(생략한 등급은 봇 기본 모델). `reload`로 바로 반영. [작업 레인](#작업-레인) 참고 |
 | `restartNotice` | 아니요 | `false`면 drain 재시작 알림을 보내지 않습니다(기본 `true`). [재시작과 drain](#재시작과-drain) 참고 |
 | `recallEnabled` | 아니요 | `false`면 새 턴 프롬프트에 지난 대화 회상을 붙이지 않습니다(기본 `true`). [대화](#대화)의 "지난 대화 회상" 참고 |
 | `costCap` | 아니요 | 비용 상한(omp 정가 환산, 실제 청구액 아님). `{"turnUsd": 20, "dailyUsd": 300}`처럼 양수만 받고 키가 없으면 그 상한은 꺼집니다. `turnUsd`에 닿으면 그 턴의 스레드에 경고를 한 번 올리고(턴은 계속 돎, 모니터 턴은 로그만), 3배를 넘으면 턴을 멈춥니다(창 안 하위 에이전트 비용 포함). `dailyUsd`는 봇 시간대(`timezone`) 하루 합계(하위 에이전트 포함, omp가 턴 도중 죽은 턴도 한 번 포함)로, 넘으면 `cost_cap` 게이트가 열려 오너에게 알립니다(아무것도 멈추지 않음, 자정에 닫힘). `reload`로 바로 반영 |
-| `turnSnapshot` | 아니요 | `{"repos": ["/절대경로/저장소", …]}`. 대화 턴마다 그 작업 트리를 턴 앞뒤로 스냅샷해 `!undo`로 되돌릴 수 있게 합니다. 항목마다 지금 git 작업 트리여야 하고(아니면 `config_invalid field=turnSnapshot.repos`), `reload`로 바로 반영. [턴 되돌리기](#턴-되돌리기undo) 참고 |
-| `wikiNotes` | 아니요 | 위키 세션 노트 통합 `{"client": "<위키 클라이언트 루트>", "agentDir": "<omp agent dir>", "repos": ["/절대경로/저장소", …]}`. `client`는 `integrations/omp/omp-wiki-session-note.py`를 담은 위키 클라이언트 루트이고, `agentDir`(생략하면 `~/.omp/agent`)의 `wiki-outbox/`에서 세션 노트를 가져가며, `repos`가 있으면 그 저장소(같은 git 공통 디렉터리라 워크트리도 포함) 작업의 노트만 쓰고, 없거나 비어 있으면 모든 저장소의 노트를 씁니다. 노트는 세 가지입니다: [TASK]가 `done`이 될 때, 작업 레인이 착지할 때, 그리고 대화 턴 노트 — 대화 턴(레인·[TASK] 스레드 제외)이 만든 커밋을 모아 채널 스레드는 하루치를 그날이 지난 뒤 한 장으로, DM이나 스레드 없는 턴은 턴마다 다음 정리(약 1분 간격) 때 한 장으로 씁니다. 대화 턴의 커밋은 `turnSnapshot`이 있으면 그 스냅샷으로 알고, 없으면 턴 앞뒤로 `repos`(비어 있으면 `taskAutoLand.repos`) 저장소의 HEAD만 읽어 압니다(그 밖의 저장소에서 만든 대화 커밋은 노트에 들어가지 않음). `"turns": false`면 대화 턴 노트만 끄고(새 행을 모으지 않고 모아 둔 행도 쓰지 않음) [TASK]·레인 노트는 그대로 씁니다. `reload`로 바로 반영 |
-| `watcherRoots` | 아니요 | 절대경로 배열. `watcher` 모니터 트리거가 감시할 수 있는 디렉터리의 상한입니다. 트리거의 `root`는 심볼릭 링크를 풀고 난 실제 경로가 이 중 하나 안에 있어야 하고, 비어 있으면 watcher 트리거를 만들 수 없습니다. 예: `["/home/<user>/work"]` ([모니터](#모니터) 참고) |
-| `webhook` | 아니요 | `{"port": 8123, "bind": "127.0.0.1"}`. `webhook` 모니터 트리거를 받는 loopback HTTP 리스너입니다. `bind`는 `127.0.0.1`(기본)·`::1`만 허용하고 그 밖의 값이나 범위(1~65535) 밖 포트는 설정 오류입니다. 없으면 서버를 띄우지 않고 webhook 트리거를 만들 수 없습니다. 데몬 시작 때만 읽습니다([모니터](#모니터) 참고) |
+| `wikiNotes` | 아니요 | 위키 세션 노트 통합 `{"client": "<위키 클라이언트 루트>", "agentDir": "<omp agent dir>", "repos": ["/절대경로/저장소", …]}`. `client`는 `integrations/omp/omp-wiki-session-note.py`를 담은 위키 클라이언트 루트이고, `agentDir`(생략하면 `~/.omp/agent`)의 `wiki-outbox/`에서 세션 노트를 가져가며, `repos`가 있으면 그 저장소(같은 git 공통 디렉터리라 워크트리도 포함) 작업의 노트만 쓰고, 없거나 비어 있으면 모든 저장소의 노트를 씁니다. 노트는 세 가지입니다: [TASK]가 `done`이 될 때, 작업 레인이 착지할 때, 그리고 대화 턴 노트 — 대화 턴(레인·[TASK] 스레드 제외)이 만든 커밋을 모아 채널 스레드는 하루치를 그날이 지난 뒤 한 장으로, DM이나 스레드 없는 턴은 턴마다 다음 정리(약 1분 간격) 때 한 장으로 씁니다. 대화 턴의 커밋은 턴 앞뒤로 `repos`(비어 있으면 `taskAutoLand.repos`) 저장소의 HEAD만 읽어 압니다(그 밖의 저장소에서 만든 대화 커밋은 노트에 들어가지 않음). `"turns": false`면 대화 턴 노트만 끄고(새 행을 모으지 않고 모아 둔 행도 쓰지 않음) [TASK]·레인 노트는 그대로 씁니다. `reload`로 바로 반영 |
+| `hostTools` | 아니요 | `{"extraForbiddenPaths": ["~/my-private", "/srv/keys"]}`. `discord_send_file`·웹 업로드가 기본 금지 목록에 더해 올리지 않을 경로(`~/…` 또는 절대경로, 문자열 배열). `reload`로 바로 반영. [보안 메모](#보안-메모) 참고 |
 | `dashboard` | 아니요 | `{"port": 7331, "bind": "127.0.0.1", "herdrWebUrl": "https://herdr.example.com/"}`. `jabbu-pocket dashboard` 현황판의 포트·주소입니다(플래그 `--port`·`--bind`가 우선하며 포트의 기본값은 없음 — `--port`·`dashboard.port` 어느 쪽도 없으면 dashboard가 실행을 거부합니다. [현황판](#현황판) 참고). `bind`는 `127.0.0.1`(기본)·`::1`만 허용하고 그 밖의 값이나 범위(1~65535) 밖 포트는 `config_invalid field=dashboard.…`입니다. `allowedHosts`(선택, 호스트 이름 문자열 배열, 포트·스킴 없이 예: `["jabbu.example.com"]`)는 `localhost`·`127.0.0.1`·`::1` 말고 현황판이 `Host` 헤더로 받아 줄 이름입니다. 터널이 공개 이름을 그대로 넘기면 여기 넣어야 하고, 목록 밖 `Host`는 421입니다(시작 때만 읽음). `usageLimits`(선택, `{omp?: [[argv…]…], agy?: [argv…], agyAccount?: [argv…]}`)는 모델 한도 칩의 명령입니다(없으면 칩도 명령 실행도 없음, [현황판](#현황판) 참고). `peerHomes`(선택, `[{"name": "<한 단어, ':'·공백·20자 초과·중복 불가>", "home": "/절대경로"}]`)는 같은 호스트의 다른 설치본이며 현황판이 그 모니터를 읽기 전용으로 함께 보입니다. `herdrWebUrl`(선택, http(s) 주소)은 에이전트 보드 카드의 "herdr에서 답하기" 링크가 여는 herdr-web-ui 주소이며, 없으면 링크를 그리지 않습니다. `opsStatus`(선택, `{"command": ["ops-status", "--json"], "url": "https://hub.example.com/"}`)는 시스템 화면 "호스트 점검" 카드와 `!brief` 한 줄의 원천입니다. `command`는 빈 문자열 없는 문자열 배열(1개 이상), `url`(선택)은 http(s) 주소이고, 어긋나거나 모르는 키는 `config_invalid field=dashboard.opsStatus.<키>`입니다. 없으면 카드도 명령 실행도 없습니다. [현황판](#현황판)의 호스트 점검 참고 |
 | `maxBundleBytes` | 아니요 | `jabbu-pocket backup` 번들 소스 합계 상한(번들에 담는 `sessions/`·`config.json`·`workspace/`·`scripts/`의 바이트 합이며 압축한 tar.gz 크기가 아닙니다. 기본 512MB). 1 이상의 정수여야 합니다. 잘못된 값은 기본값으로 돌아가지 않고 config 검증(`config_invalid field=maxBundleBytes`)에서 실패하므로 backup뿐 아니라 다음 데몬 기동·`gc`도 실패합니다. `--max-bundle-bytes`를 주면 그 값이 우선하고 config의 값은 읽지 않습니다 |
 | `offsite` | 아니요 | 오프사이트 백업 대상 `{ "ssh": "별칭 또는 user@host", "remoteDir": "/절대경로 또는 ~/경로", "keep": 14 }`. `ssh`는 ssh 별칭이나 `user@host`(공백·`-` 시작 불가), `remoteDir`는 `/` 또는 `~/`로 시작하는 평범한 문자(영숫자와 `._+=@%:/-`, `..` 불가)의 경로, `keep`은 원격에 남길 종류별 날짜 수(1 이상, 기본 14; 이번에 올린 날짜는 그날 파일 전부, 다른 날짜는 그날 가장 늦은 파일 1개)입니다. 없으면 오프사이트 복제와 `offsite_age` 게이트가 모두 꺼집니다. 잘못된 값은 `config_invalid field=offsite.…`로 실패합니다 |
@@ -157,7 +155,7 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | `briefing` | 아니요 | `{"chromium": "<PATH의 이름 또는 절대경로>"}`. `!brief`가 그림을 그릴 chromium(기본 `chromium`). 기동 때 존재를 확인하지 않고, 없으면 브리핑 실패 줄로 알립니다. `!brief`는 그림을 `<홈>/media/briefing/`에 남기며, 브라우저가 끝난 뒤 새 정규 파일이 없으면 실패하고 브라우저가 남긴 마지막 오류 줄을 이유로 붙입니다. `reload`로 바로 반영 |
 | `candidates` | 아니요 | 개선 후보 장부 설정 `{"enabled": true, "mode": "log", "minDays": 3, "windowDays": 14, "maxOpenCards": 1, "snoozeDays": 7}`. 모두 생략할 수 있고 정수 칸은 1 이상이며, 자세한 동작은 "개선 후보 장부" 절을 보세요. `reload`로 바로 반영 |
 
-config.json의 모르는 최상위 키, 제어문자가 든 `dispatchHosts` 이름, 슬래시만 남는 `offsite.remoteDir`(예 `//`)은 거부하지 않고 데몬 기동 때 `config_warning field=<키 이름> reason=unknown_key|unsafe_name|unusable` 경고를 남깁니다(값은 기록하지 않음). `offsite.remoteDir`의 연속 슬래시는 하나로 접어 씁니다. config.json을 읽을 수 없으면(디렉터리·권한 등) `config_unreadable: <경로> (<errno>)`이고, 파일이 없을 때만 `config_missing`입니다. 파일 앞의 UTF-8 BOM은 무시합니다. `JABBU_HOME=`(빈 값)은 설정하지 않은 것과 같아 `~/.jabbu`를 씁니다.
+config.json의 모르는 최상위 키, 제어문자가 든 `dispatchHosts` 이름, 슬래시만 남는 `offsite.remoteDir`(예 `//`)은 거부하지 않고 데몬 기동 때 `config_warning field=<키 이름> reason=unknown_key|unsafe_name|unusable` 경고를 남깁니다(값은 기록하지 않음). 없어진 옛 키(webhook 리스너·watcher·턴 스냅샷·커밋 이메일 설정)가 남은 config.json도 `unknown_key`·`config_key_ignored` 경고만 남기고 그대로 뜹니다. `offsite.remoteDir`의 연속 슬래시는 하나로 접어 씁니다. config.json을 읽을 수 없으면(디렉터리·권한 등) `config_unreadable: <경로> (<errno>)`이고, 파일이 없을 때만 `config_missing`입니다. 파일 앞의 UTF-8 BOM은 무시합니다. `JABBU_HOME=`(빈 값)은 설정하지 않은 것과 같아 `~/.jabbu`를 씁니다.
 
 ### 6. 점검
 
@@ -266,7 +264,6 @@ Install this repository (jabbu-pocket) into the systemd user session on this Lin
 | `!queue close <번호>` · `!queue retry <번호>` | 진행 중인 턴에 끼워 넣다가 전달됐는지 알 수 없게 된 메시지는 `!queue`의 `⚠ 전달 불확실` 구역에 남고 자동으로 다시 보내지 않습니다. `close`는 다시 보내지 않고 닫고, `retry`는 한 번 다시 보냅니다(이미 처리됐다면 답이 두 번 나올 수 있습니다) |
 | `!usage` | 턴을 쓰지 않고 이 대화와 전체(보관 중인 omp 세션 파일)의 모델 호출 수·입력·출력·캐시 읽기 비율·비용을 답합니다. gc로 지운 옛 세션은 빠지고, `agent`가 `"agy"`면 집계하지 않습니다 |
 | `!budget` | 오늘(봇 시간대) 비용(omp 정가 환산)·상위 오리진·턴/하루 상한([`costCap`](#5-설정-파일-jabbuconfigjson))을 봅니다 |
-| `!undo` | 이 대화의 가장 최근 변경 턴을 승인 카드 뒤에 되돌립니다([턴 되돌리기](#턴-되돌리기undo)). `turnSnapshot`이 없으면 안내만 합니다 |
 | `!distill` | 어느 대화(DM·채널·스레드)에서든 그 대화의 최근 세션 내용으로 [스킬 리뷰](#스킬-리뷰)를 지금 한 번 돌립니다. 제안이 있으면 같은 승인 카드가 오고, 이미 리뷰가 돌고 있으면 "이미 리뷰 중", 동결 중이면 "동결 중이라 하지 않았습니다"라고 답합니다. 세션 내용이 없는 대화방(예: 채널 최상위 — 채널 대화는 스레드마다 따로 세션)에서는 리뷰를 돌리지 않고 스레드 안에서 보내라고 답합니다. 피어 봇 글에 든 `!distill`은 명령이 아닙니다 |
 | `!followup <메시지>` | 같은 대화방의 진행 중인 작업에 끼워 넣지 않고, 끝난 뒤 별도 작업으로 보냅니다(답도 그 메시지 스레드에 옵니다). 스레드 안에서 치면 그 스레드 대화방 작업 뒤에 줄을 섭니다 |
 | `!btw <질문>` | 곁질문. 같은 대화방의 진행 중인 작업에 끼워 넣지 않고 그 질문에만 바로 답합니다. 답은 지금까지의 대화 맥락으로 한 번 만들어 `💬 곁질문:`으로 시작하는 별도 글로 그 메시지 스레드에 오고, 진행 중인 작업과 대화 기록은 바뀌지 않습니다. 곁질문은 한 번에 하나만 돌고(도는 중에 또 보내면 실패 알림), 120초 안에 답이 없으면 취소하고 실패 알림을 남깁니다. 작업 중이 아니면 `!btw`를 뗀 질문이 일반 메시지로 처리되고, `agent: "agy"`처럼 곁질문을 지원하지 않는 에이전트면 안내만 합니다. |
@@ -279,21 +276,6 @@ Install this repository (jabbu-pocket) into the systemd user session on this Lin
 | `!prwatch off <레인>` | 게시된 외부 PR의 추적을 끕니다([외부 PR 레인](#작업-레인)). 머지·닫힘으로 이미 끝난 추적에도 답합니다 |
 
 모델·thinking 선택은 대화방마다 저장되어 프로세스를 내렸다 다시 띄워도, 데몬을 재시작해도, `!new` 뒤에도 유지됩니다. 세션 모델이 provider에서 사라졌으면 대화방에서 고른 모델, 그것도 없으면 config `model`로 바꿉니다(config `model`이 비어 있거나 없는 모델이면 바꾸지 못하고 `model_stale_no_fallback`만 남깁니다). 고른 값은 지우지 않으므로 모델이 돌아오면 다시 적용됩니다. omp 설정 파일(`~/.omp/agent`)은 바꾸지 않습니다.
-
-### 턴 되돌리기(`!undo`)
-
-`turnSnapshot.repos`에 저장소 절대경로를 넣으면 대화 턴마다 그 작업 트리 상태를 턴 앞뒤로 git 객체에 남기고, `!undo`(`!undo`)로 이 대화의 가장 최근 변경 턴을 되돌립니다.
-
-```json
-"turnSnapshot": { "repos": ["/home/<user>/work/<repo>"] }
-```
-
-- 되돌릴 파일 목록을 담은 승인 카드가 먼저 오고, 승인해야 되돌립니다(거부·시간 초과면 그대로 둠). 승인 사이에 새 턴이 시작되면 되돌리지 않습니다. 턴이 도는 중에 보낸 `!undo`는 턴이 끝난 뒤 다시 보내라고 답합니다.
-- 대상은 그 턴이 바꾼 파일뿐입니다. 턴 뒤에 다른 손이 고친 파일은 충돌, 동시에 돈 다른 대화의 턴도 바꾼 파일은 겹침으로 남겨 건드리지 않습니다. 턴이 커밋했다면 파일은 그대로 두고 `git revert` 안내만 합니다.
-- 중첩 git 저장소(서브모듈·내장 체크아웃, gitlink)가 바뀐 경로는 되돌리지 않고 충돌로 보여 주고, 턴이 만든 파일 자리에 디렉터리가 있으면 지우지 않고 충돌로 알립니다. 되돌리다 한 파일에서 실패하면 그때까지 되돌린 수와 멈춘 파일·사유를 답하고, 그 턴은 되돌림 완료로 표시하지 않아 다시 `!undo`할 수 있습니다.
-- 스냅샷은 저장소 밖 임시 인덱스로 찍어 실제 인덱스·작업 트리를 건드리지 않고, 5초를 넘기거나 실패한 저장소는 그 턴에서 빠질 뿐 턴을 막지 않습니다. 직전 턴에서 스냅샷이 빠진 저장소는 `스냅샷 없음: <저장소>`로 알리고 그보다 오래된 턴을 대신 되돌리지 않으며, 겹침 확인 자체가 실패한 저장소는 파일을 모두 겹침으로 남깁니다(`겹침 확인 실패`). 오리진마다 최근 20행만 남고 7일이 지난 행은 `jabbu-pocket gc`가 지웁니다.
-- `jabbu-pocket reload`로 바로 켜고 끕니다.
-- 운영 제약: 같은 체크아웃을 jabbu-pocket 대화 턴 밖(herdr 워커·사람)에서 고치면 그 변경은 그 턴의 몫으로 구분되지 않습니다. 워커는 자기 worktree를 쓰므로 섞이지 않습니다.
 
 ### 승인
 
@@ -554,7 +536,6 @@ git -C <repo> branch -d task/T-…
 - **레인 넘겨받기**: `jabbu-pocket lanes attach <레인 ID> [--wait] [--keep-paused]`가 레인 세션을 이 터미널로 넘겨받습니다. 데몬이 그 레인의 턴(`--wait`: 끝날 때까지 기다림)과 omp 자식을 멈추고, `omp --resume`이 레인 worktree에서 같은 세션 파일을 엽니다. omp를 끝내면 레인을 돌려주고 이어 가며(`--keep-paused`: 멈춘 채로 둠), 그동안 스레드 메시지는 기다립니다. 데몬이 돌고 있어야 하고, 이 프로세스가 죽으면 데몬이 1분 안에 레인을 되찾습니다.
 - 닫힌 레인은 머지를 기다립니다(아래 "머지"). worktree와 브랜치는 머지나 폐기가 끝날 때 지워집니다.
 - git을 통과해도 완료 보고에 TODO/FIXME·건너뛴 테스트·스텁·가드 삭제(대응 부정 테스트 없음)·밝히지 않은 export 삭제·기능 끄기(`undeclared_feature_removal`)·명령 없는 "통과" 주장이 있으면 무결성 거부되고, 오너 승인 버튼으로만 예외 처리합니다.
-- config `taskAutoLand.commitEmails`에 레인 저장소(절대경로)를 넣으면 레인이 만든 커밋의 작성자·커미터 이메일도 봅니다. 허용 목록(대소문자 무시)에 없는 이메일이 있으면 `commit_identity_mismatch` 거부로 그 커밋의 짧은 sha와 이메일을 보이고(`git commit --amend --reset-author` 또는 rebase로 고친 뒤 다시 완료 주장), 커미터가 `noreply@github.com`인 커밋은 허용합니다. 목록에 없는 저장소는 검사하지 않습니다.
 - 검증을 통과하면 레인이 닫히고 루트가 `🔍 제목`(머지 대기)으로 바뀝니다. ✅는 머지가 끝났을 때입니다(push가 거부되면 `⚠️`, 폐기하면 `🗑`). 레인 등록은 장부에 있어 재시작해도 스레드가 이어집니다.
 - 닫힌 레인의 스레드에 오너가 쓴 메시지(`!followup <메시지>`의 메시지 포함)는 질문으로 처리합니다: 레인 세션이 답하지만 레인은 그대로 닫혀 있고 history에 `owner_question`만 남습니다(머지·폐기가 끝나 worktree가 없는 레인의 세션은 원래 저장소에서 답합니다). `!model`·`!new`·`!queue` 같은 채팅 명령은 원래대로 동작하고 history에 남지 않습니다. 세션에는 답만 하고 수정·커밋·완료 주장은 하지 말라는 안내가 함께 가고, 닫힌 레인에서 `jabbu_claim_done`·`jabbu_lane_progress`는 아무것도 바꾸지 않고 `!reopen` 안내를 돌려줍니다. 안내는 프롬프트 문구라 세션이 어기면 파일 수정 자체는 막지 못합니다(도구로 거부하는 것은 이 두 레인 도구뿐입니다).
 - 수정을 다시 시키려면 레인 스레드에 `!reopen` 또는 `!reopen <지시>`를 씁니다. 같은 세션으로 다시 열리고(🔄) 닫힐 때의 커밋이 새 기준이 되어, 그 뒤 새 커밋과 `jabbu_claim_done` 검증을 다시 거쳐야 닫힙니다. 머지됐거나 폐기된 레인은 worktree가 없어 다시 열 수 없고(안내만 답함), 새 작업은 `작업: …`이나 `[TASK]`로 엽니다.
@@ -589,7 +570,7 @@ bun src/main.ts monitors add --json '{"name":"아침","trigger":{"kind":"cron","
 bun src/main.ts monitors add --json '{"name":"한번","trigger":{"kind":"at","at":"2026-12-01T09:00:00"},"instruction":"…"}'
 bun src/main.ts monitors add --json '{"name":"디스크","trigger":{"kind":"script","command":["/home/me/.jabbu/scripts/disk.sh"],"intervalMs":300000},"instruction":"…","overlap":"skip"}'
 bun src/main.ts monitors list [--json]
-bun src/main.ts monitors show <id|이름>   # 모니터 1개 JSON, webhook이면 URL·토큰도 출력
+bun src/main.ts monitors show <id|이름>   # 모니터 1개 JSON
 bun src/main.ts monitors update <id|이름> --json '{"enabled":false}'
 bun src/main.ts monitors test <id|이름>   # 지금 한 번 발사(script는 검사부터 실행)
 bun src/main.ts monitors remove <id|이름>
@@ -616,8 +597,6 @@ bun src/main.ts monitors apply --dir <디렉터리> [--prune] [--dry-run]  # 내
   - `once: true`: 첫 발사 뒤 모니터가 꺼집니다(일회성 "…되면 알려줘"용).
   - `suppressUnchanged: true`: 성립한 실행의 stdout이 직전과 sha256까지 같으면 에이전트를 깨우지 않고 `no_change:<해시8>` 스킵으로 기록합니다. 해시는 에이전트 호출 전에 저장되므로 omp가 실패해도 같은 변경을 무한히 다시 알리지 않습니다. 다만 재무장 뒤(미성립 뒤 다시 성립)의 반복은 같은 stdout이어도 다시 발사합니다.
   - **wake gate**: stdout 마지막 줄이 정확히 `{"wakeAgent": false}`면 에이전트 실행과 전달을 모두 건너뜁니다(`wake_gate` 스킵).
-- `watcher`: `{"kind":"watcher","root":"/절대/경로","debounceMs":1000}`. `root`는 존재하는 디렉터리이고 실제 경로가 config의 `watcherRoots` 안에 있어야 합니다(없으면 거부). 하위 디렉터리까지 재귀로 지켜보다가 마지막 변경 뒤 `debounceMs`(정수 100~60000, 기본 1000) 동안 조용하면 한 번 발사합니다. payload는 바뀐 상대경로 목록(줄마다 하나, 50개까지, 나머지는 `… and N more`)이고 `.git/` 안의 변경은 무시합니다. 감시는 데몬 점검 주기마다 장부와 맞춰 시작·중지되므로 CLI로 추가·수정·삭제해도 곧 반영되고, 감시 오류(루트 삭제, 파일 핸들 부족 등)는 `monitor_watch_error`로 남기고 다음 점검에서 다시 시도합니다. 변경 목록은 메모리에만 있어 재시작 때 잃고, drain 중에는 발사가 점검과 함께 미뤄집니다. `once`·`deliver:"verbatim"`은 쓸 수 없습니다.
-- `webhook`: `{"kind":"webhook"}`. 모니터를 만들 때 128비트 무작위 id와 256비트 토큰이 생기고(수정해도 유지) `POST http://127.0.0.1:<port>/hook/<id>` + `Authorization: Bearer <토큰>`으로 발사합니다. `config.webhook`이 있어야 만들 수 있습니다. 토큰은 `monitors add` 출력, `monitors show`, 도구 `jabbu_monitor_add`의 응답에서만 확인하며 로그, `monitors list`(텍스트·`--json`), `monitors update` 출력, `jabbu_monitor_list`에는 나오지 않습니다(`list --json`·`update`는 `"***"`). 응답: `202 {"eventId","stage"}`(`overlap: skip`으로 건너뛴 발사도 202에 `stage:"skipped"`), 토큰 틀림 `401`, 모르는 경로·꺼진 모니터 `404`, POST 아님 `405`, 본문 256KiB 초과 `413`. 본문은 UTF-8 텍스트로 16KiB까지만(잘리면 표시) 이벤트 payload가 되어 프롬프트의 `[수신 본문]` 블록으로 들어가며, 외부 입력이라 지시가 아닌 읽을 자료로 표시됩니다. 리스너는 loopback 전용이고 포트를 못 열면 `webhook_bind_failed`를 로그에 남길 뿐 봇은 계속 돌며, `jabbu-pocket doctor`의 `webhook` 줄이 실패로 표시됩니다. 외부에서 받으려면 리버스 프록시·터널을 따로 두세요(HMAC 서명은 지원하지 않습니다). `jabbu_monitor_add` 도구 결과에 토큰이 나가므로 그 토큰은 omp 세션 기록에 남습니다.
 
 ### 옵션
 
@@ -649,7 +628,7 @@ bun src/main.ts monitors apply --dir <디렉터리> [--prune] [--dry-run]  # 내
 bun src/main.ts status [--json]   # 데몬이 꺼져 있으면 DB를 직접 읽습니다
 bun src/main.ts doctor            # home·secrets·omp·bun·Discord 점검·백업 번들 점검, herdr 켜짐이면 herdr --version과 herdr omp 통합, 이어서 dispatchHosts마다 ssh 도달과 herdr omp 통합(`ok`/`fail <사유>`, 통합·호스트 줄은 실패해도 종료 코드는 그대로)
 bun src/main.ts gates [--json] [--strict] [--ko]   # 읽기 전용 건강 판정 — 게이트 하나라도 열리면 exit 1, --strict는 판정불가(unknown)도 exit 1, --ko는 마지막 줄을 한국어로
-bun src/main.ts gc [--dry-run]    # 보존 기간이 지난 이전 대화 세션, 오래 쉰 채널 스레드 세션, 삭제된 모니터의 세션, 7일 지난 `!undo` 턴 스냅샷 정리
+bun src/main.ts gc [--dry-run]    # 보존 기간이 지난 이전 대화 세션, 오래 쉰 채널 스레드 세션, 삭제된 모니터의 세션 정리
 bun src/main.ts backup [--keep N] [--max-bundle-bytes N]
 bun src/main.ts drain [--wait] [--timeout <분>] # 재시작 전 대기(--wait 없으면 걸기만 하고 바로 끝남)
 bun src/main.ts drain --cancel
@@ -849,8 +828,8 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 `bun src/main.ts reload`나 `kill -HUP <데몬 pid>`를 보내면 실행 중인 데몬이 `config.json`을 다시 읽습니다. 결과는 `config_reloaded changed=… restart_required=… cli=…` 한 줄로 CLI 출력과 로그에 남습니다.
 
-- **바로 반영(`changed`)**: `skillReviewTurns`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `turnSnapshot`, `wikiNotes`, `costCap`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
-- **재시작 필요(`restart_required`)**: `channels`, `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `watcherRoots`, `webhook`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
+- **바로 반영(`changed`)**: `skillReviewTurns`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `hostTools`, `wikiNotes`, `costCap`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
+- **재시작 필요(`restart_required`)**: `channels`, `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
 - **CLI 전용(`cli`)**: `sessionRetentionDays`, `maxBundleBytes`는 `gc`·`backup`이 실행할 때마다 직접 읽습니다. 데몬은 `maxBundleBytes`를 첫 기동 백업(`boot_backup`)에서만 기동 시점의 값으로 쓰므로, 바꾼 값은 다음 `backup` 실행부터 적용되고 데몬의 첫 기동 백업에는 재시작 뒤에야 반영됩니다. `apply`는 `jabbu-pocket apply`가 실행할 때마다 읽습니다.
 - 파일이 없거나 JSON·검증 오류가 있으면 아무것도 바꾸지 않고 `config_reload_failed`를 남기며, `reload`는 1로 끝납니다.
 
@@ -975,7 +954,7 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 - 오너가 아닌 사용자의 메시지, 버튼 클릭, 파일은 모두 무시하거나 "권한 없음"으로 답합니다.
 - 마스킹은 두 겹입니다. (1) 토큰 모양 형식 패턴(`xox?-`(`xoxb-`·`xoxp-`·`xoxc-`·`xoxd-` 등), `xapp-`, `sk-*`, `gh*_`, `github_pat_`)은 항상 적용됩니다. (2) 데몬 기동 때 실제 비밀 값(봇 토큰 파일, 비밀 이름의 환경 변수, `JABBU_SECRET_GUARD_FILES`의 콜론 구분 파일 — JSON은 비밀 이름 필드만)을 메모리에 색인해, 값의 16자 조각과 역순·hex·base64 변형까지 `[REDACTED]`로 바꿉니다. 로그·DB 저장·채팅 전송 경로 전부(나가는 메시지의 버튼 라벨·값 포함)에 적용되고 끄는 스위치는 없습니다. 색인은 기동 때만 다시 읽습니다.
-- `discord_send_file`은 `~/.jabbu/secrets`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.omp/agent`, `~/.gajaeway-hub`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/gcloud`, `~/.npmrc`, `~/.kube`, `~/.docker` 아래 파일(링크는 실제 경로로 판정, 하드링크는 링크 수가 2 이상일 때 이 디렉터리들의 파일과 inode를 대조)과, 토큰 모양 내용·개인키(`-----BEGIN … PRIVATE KEY-----`)·알려진 비밀 값이 든 파일을 올리지 않습니다. 내용 검사는 크기와 관계없이 50MB 상한까지 파일 전체를 1MB 조각(경계 4096자 겹침)으로 읽어 합니다.
+- `discord_send_file`은 `~/.jabbu/secrets`, `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.omp/agent`, `~/.git-credentials`, `~/.netrc`, `~/.config/gh`, `~/.config/gcloud`, `~/.npmrc`, `~/.kube`, `~/.docker` 아래 파일(링크는 실제 경로로 판정, 하드링크는 링크 수가 2 이상일 때 이 디렉터리들의 파일과 inode를 대조)과, 토큰 모양 내용·개인키(`-----BEGIN … PRIVATE KEY-----`)·알려진 비밀 값이 든 파일을 올리지 않습니다. 설정 `"hostTools": { "extraForbiddenPaths": ["~/my-private", "/srv/keys"] }`로 금지 경로를 더할 수 있고(`~/…` 또는 절대경로, 실제 경로·하드링크를 같은 방식으로 판정), `jabbu-pocket reload`로 재시작 없이 반영됩니다. 내용 검사는 크기와 관계없이 50MB 상한까지 파일 전체를 1MB 조각(경계 4096자 겹침)으로 읽어 합니다.
 - omp 자식 프로세스와 `omp`·`agy` `--version` 확인(데몬 시작·`doctor`·`status`·현황판)은 환경 변수에서 `JABBU_*`를 지운 상태로 시작합니다. 시스템 프롬프트에는 위험 명령 금지 규칙과 `~/.jabbu/secrets` 읽기 금지가 붙습니다.
 - 다만 omp는 jabbu-pocket와 같은 유닉스 사용자로 실행되므로, 토큰 파일 접근을 OS 권한으로 막지는 못합니다. 더 강하게 격리하려면 omp를 별도 사용자로 실행해야 합니다.
 - omp 확장 `wiki-session-note`가 설치돼 있으면, 봇 세션에서는 `OMP_WIKI_NOTE_DISABLE=1`로 끕니다.

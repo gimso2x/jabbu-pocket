@@ -1,16 +1,21 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { JabbuConfig } from "../src/config";
 import { openBotStore } from "../src/core/origin";
+import { Daemon } from "../src/daemon/daemon";
+import { createLogger } from "../src/log";
+import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
 import type { Store } from "../src/store/db";
 import { acceptanceItems } from "../src/tasks/docs";
 import { turnNoteRepos } from "../src/wiki/notes";
-import { makeHome, type TestHome } from "./helpers/bot-home";
+import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type WikiFixture, wikiFixture } from "./helpers/wiki-fixture";
 
 // Notes of committing conversation turns: one per channel thread and day, one
-// per DM turn, kept in their own ledger because `turn_snapshots` forgets rows long before the day is over.
+// per DM turn, kept in their own ledger until the day is over.
 
 /** 2027-01-15 12:00 KST. */
 const NOON = 1_800_000_000_000;
@@ -49,29 +54,13 @@ function commitTurn(
 }
 
 describe("conversation turn notes", () => {
-	test("AC-3: two committing turns of one channel thread and day become one note after the day, although turn_snapshots dropped them", async () => {
+	test("AC-3: two committing turns of one channel thread and day become one note after the day", async () => {
 		const repo = makeRepo(repos);
 		const first = commitTurn(repo, "feat: 첫 번째");
 		await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op1", threadRef: THREAD_REF, rows: [first] });
 		now += 60_000;
 		const second = commitTurn(repo, "feat: 두 번째");
 		await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op2", threadRef: THREAD_REF, rows: [second] });
-		// `turn_snapshots` keeps 20 rows per origin: 25 more turns push the two above out.
-		for (let index = 0; index < 25; index++) {
-			store.recordTurnSnapshot({
-				originKey: THREAD_ORIGIN,
-				opRef: `later${index}`,
-				repo,
-				headBefore: "a",
-				treeBefore: "a",
-				headAfter: "b",
-				treeAfter: "b",
-				startedAt: now,
-				endedAt: now,
-			});
-		}
-		expect(store.listTurnSnapshots({ originKey: THREAD_ORIGIN, opRef: "op1" })).toEqual([]);
-
 		// Same day: nothing yet.
 		await wiki.notes.flushTurns();
 		expect(wiki.outbox()).toEqual([]);
@@ -153,22 +142,15 @@ describe("conversation turn notes", () => {
 	});
 });
 
-describe("turnNoteRepos (heads read without turnSnapshot)", () => {
+describe("turnNoteRepos", () => {
 	const client = "/x/wiki-client";
-	test("wikiNotes.repos first, then taskAutoLand.repos; nothing without wikiNotes or with turnSnapshot", () => {
+	test("wikiNotes.repos first, then taskAutoLand.repos; nothing without wikiNotes", () => {
 		expect(turnNoteRepos({ wikiNotes: { client, repos: ["/r/a"] }, taskAutoLand: { repos: ["/r/b"] } })).toEqual([
 			"/r/a",
 		]);
 		expect(turnNoteRepos({ wikiNotes: { client, repos: [] }, taskAutoLand: { repos: ["/r/b"] } })).toEqual(["/r/b"]);
 		expect(turnNoteRepos({ wikiNotes: { client } })).toEqual([]);
 		expect(turnNoteRepos({ taskAutoLand: { repos: ["/r/b"] } })).toEqual([]);
-		expect(
-			turnNoteRepos({ wikiNotes: { client }, taskAutoLand: { repos: ["/r/b"] }, turnSnapshot: { repos: ["/r/c"] } }),
-		).toEqual([]);
-		// An empty snapshot list is "off": heads are still read for the turn notes.
-		expect(
-			turnNoteRepos({ wikiNotes: { client }, taskAutoLand: { repos: ["/r/b"] }, turnSnapshot: { repos: [] } }),
-		).toEqual(["/r/b"]);
 		expect(turnNoteRepos({ wikiNotes: { client, turns: false }, taskAutoLand: { repos: ["/r/b"] } })).toEqual([]);
 	});
 });
@@ -194,5 +176,114 @@ describe("wikiNotes.turns false", () => {
 		now += DAY_MS;
 		await wiki.notes.flushTurns();
 		expect(wiki.outbox()).toEqual([]);
+	});
+});
+
+describe("wiki turn notes from turn HEADs (daemon wiring)", () => {
+	const ORIGIN = `discord/dm/${OWNER_DM}`;
+	let transport: WaitingDiscordTransport;
+	let daemon: Daemon | undefined;
+
+	beforeEach(() => {
+		transport = new WaitingDiscordTransport();
+		daemon = undefined;
+	});
+	afterEach(async () => {
+		await daemon?.stop();
+	});
+
+	async function boot(config: JabbuConfig, driver: FakeOmpDriverOptions = {}): Promise<Daemon> {
+		const instance = new FakeOmpDriver({ ...driver, sessionDir: join(home.dir, "s"), store: new FakeSessionStore() });
+		const d = new Daemon({
+			...daemonTestOptions(),
+			config,
+			channels: [discordBinding(transport)],
+			clock: { now: () => Date.now() },
+			log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact: (text) => text }),
+			ompVersion: "omp-test 0",
+			bootId: "boot",
+			sweepMs: 3_600_000,
+			gateSweepMs: 0,
+			taskSweepMs: 0,
+			driverFactory: () => instance,
+		});
+		daemon = d;
+		await d.start();
+		return d;
+	}
+
+	/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+	async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+		for (let hop = 0; hop < hops; hop += 1) {
+			if (ready()) return;
+			const { promise, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, 0);
+			await promise;
+		}
+		throw new Error(`never happened: ${what}`);
+	}
+
+	/** The fake driver's reply step commits in `repo`, between the before and after heads. */
+	const committing = (repo: string): FakeOmpDriverOptions => ({
+		respond: () => {
+			writeFileSync(join(repo, "committed.txt"), "by the turn\n");
+			git(repo, "add", "--", "committed.txt");
+			git(repo, "commit", "-q", "-m", "feat: 대화 커밋");
+			return "커밋했습니다";
+		},
+	});
+	const wikiClient = () => join(home.dir, "wiki-client");
+
+	test("wikiNotes.repos set: a committing chat turn becomes a wiki turn row", async () => {
+		const repo = makeRepo(repos);
+		const d = await boot({ ...home.config, wikiNotes: { client: wikiClient(), repos: [repo] } }, committing(repo));
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+		await transport.waitForPosts((text) => text.startsWith("커밋했습니다"));
+		await until(() => d.store.listUnsentWikiTurns().length > 0, "the turn's wiki row");
+		const [row] = d.store.listUnsentWikiTurns();
+		expect(row?.repo).toBe(repo);
+		expect(row?.inbound).toBe("커밋해줘");
+		expect(row?.commits.map((commit) => commit.subject)).toEqual(["feat: 대화 커밋"]);
+	});
+
+	test("wikiNotes without repos falls back to taskAutoLand.repos", async () => {
+		const repo = makeRepo(repos);
+		const d = await boot(
+			{ ...home.config, wikiNotes: { client: wikiClient() }, taskAutoLand: { repos: [repo] } },
+			committing(repo),
+		);
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+		await transport.waitForPosts((text) => text.startsWith("커밋했습니다"));
+		await until(() => d.store.listUnsentWikiTurns().length > 0, "the turn's wiki row");
+		expect(d.store.listUnsentWikiTurns().map((row) => row.repo)).toEqual([repo]);
+	});
+
+	test("no wikiNotes: a committing chat turn starts no git and leaves no wiki row", async () => {
+		const repo = makeRepo(repos);
+		let turn = 0;
+		const d = await boot(
+			{ ...home.config, taskAutoLand: { repos: [repo] } },
+			{
+				respond: () => {
+					turn += 1;
+					writeFileSync(join(repo, `turn-${turn}.txt`), "by the turn\n");
+					git(repo, "add", "--", `turn-${turn}.txt`);
+					git(repo, "commit", "-q", "-m", `feat: 턴 ${turn}`);
+					return `답 ${turn}`;
+				},
+			},
+		);
+		const spawn = spyOn(Bun, "spawn");
+		try {
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "커밋해줘" });
+			// The second answer comes after the first turn's after-heads step ran: nothing of the first turn is still pending.
+			await d.inject({ origin: ORIGIN, asOwner: true, text: "또 커밋해줘" });
+			await transport.waitForPosts((text) => text.startsWith("답 2"));
+			const gitRuns = spawn.mock.calls.filter(([cmd]) => Array.isArray(cmd) && cmd[0] === "git");
+			expect(gitRuns).toEqual([]);
+		} finally {
+			spawn.mockRestore();
+		}
+		expect(d.store.listUnsentWikiTurns()).toEqual([]);
 	});
 });
