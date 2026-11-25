@@ -62,7 +62,7 @@ describe("CLI argument errors are usage errors (exit 2, one line)", () => {
 			expect(run.stderr).not.toMatch(/briefing|offsite \[|tasks flow/);
 		}
 		expect(flow.code).toBe(2);
-		expect(flow.stderr.startsWith("usage: jabbu-pocket tasks <list|show|check|close|pause|resume>")).toBe(true);
+		expect(flow.stderr.startsWith("usage: jabbu-pocket tasks <list|show|check|land|close|pause|resume>")).toBe(true);
 	});
 
 	test("drain --timeout '' is refused instead of meaning 0 minutes", async () => {

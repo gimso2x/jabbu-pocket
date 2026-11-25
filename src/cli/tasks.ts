@@ -3,16 +3,17 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { type JabbuConfig, loadConfig, timezoneOfHome } from "../config";
 import { escapeControl } from "../daemon/doctor";
-import { callDaemon, IpcNoResponse } from "../daemon/ipc";
-import { summarizeJudgement, taskChecksOf } from "../tasks/checker";
+import { summarizeJudgement } from "../tasks/checker";
 import { evaluateTask } from "../tasks/evaluate";
 import { openTaskLedger, type TaskLedger, type TaskRow, TaskTransitionError } from "../tasks/ledger";
 import { taskHostOf } from "../tasks/records";
-import { CHECK_TIMEOUT_MS } from "../tasks/signals";
+import { askDaemon, checkIpcTimeoutMs } from "./tasks-ipc";
+import { tasksLand } from "./tasks-land";
 
 export const TASKS_USAGE = `  tasks list [--json]            [TASK] registry
   tasks show <id>                registry row, transition history and the current Outcome judgement
   tasks check <id>               judge now; the running daemon posts/reacts like its sweep does
+  tasks land <id>                retry the landing of a task in review (same as the 머지 button; the daemon must run)
   tasks close <id> --as done|cancelled   human-only completion (the bot can never do this); worktree and branch stay
   tasks pause <id>               owner pause: the sweep holds prompts, stale notice and auto-merge; the worker gets an Esc
   tasks resume <id>              lifts the pause (sweep hold only; the worker is not prompted)
@@ -34,38 +35,14 @@ function taskConfigOf(homeDir: string): Pick<JabbuConfig, "dispatchHosts" | "rec
 	}
 }
 
-/** The IPC wait of every request but `check`. */
-const IPC_TIMEOUT_MS = 60_000;
-
-/**
- * How long `tasks check` waits for the daemon: its check runs every `[check: …]` signal of the task one after another,
- * each bounded by `CHECK_TIMEOUT_MS`, plus the plain wait for the reads and posts around them.
- */
-export function checkIpcTimeoutMs(row: TaskRow): number {
-	return taskChecksOf(row.acceptance).length * CHECK_TIMEOUT_MS + IPC_TIMEOUT_MS;
-}
+const TASK_SUBS = ["list", "show", "check", "land", "close", "pause", "resume"];
 
 /** Test seam of `tasksCommand`. */
 export interface TasksCommandOptions {
 	/** Overrides `checkIpcTimeoutMs` for `check`. */
 	checkTimeoutMs?: number;
-}
-
-/**
- * Asks the running daemon to act on a task (post, react). `unreachable`: nothing listens, so nothing was done;
- * `no_response`: the request went out but no answer came in `timeoutMs`, so the daemon may still be acting on it.
- */
-async function askDaemon(
-	homeDir: string,
-	request: Record<string, unknown>,
-	timeoutMs = IPC_TIMEOUT_MS,
-): Promise<Record<string, unknown> | "unreachable" | "no_response"> {
-	try {
-		const response = await callDaemon(join(homeDir, "jabbu.sock"), request, timeoutMs);
-		return typeof response === "object" && response !== null ? (response as Record<string, unknown>) : "no_response";
-	} catch (error) {
-		return error instanceof IpcNoResponse ? "no_response" : "unreachable";
-	}
+	/** Overrides the wait of `land`. */
+	landTimeoutMs?: number;
 }
 
 /** `jabbu-pocket tasks ...` against the ledger file directly; chat side effects go through the running daemon. */
@@ -75,8 +52,8 @@ export async function tasksCommand(
 	options: TasksCommandOptions = {},
 ): Promise<number> {
 	const [sub, ...rest] = args;
-	if (sub !== "list" && sub !== "show" && sub !== "check" && sub !== "close" && sub !== "pause" && sub !== "resume") {
-		process.stderr.write(`usage: jabbu-pocket tasks <list|show|check|close|pause|resume>\n${TASKS_USAGE}`);
+	if (!TASK_SUBS.includes(sub ?? "")) {
+		process.stderr.write(`usage: jabbu-pocket tasks <${TASK_SUBS.join("|")}>\n${TASKS_USAGE}`);
 		return 2;
 	}
 	const { values, positionals } = parseArgs({
@@ -99,7 +76,7 @@ export async function tasksCommand(
 	let ledger: TaskLedger;
 	try {
 		ledger = openTaskLedger(dbPath, timezoneOfHome(homeDir), undefined, {
-			readonly: sub === "list" || sub === "show",
+			readonly: sub === "list" || sub === "show" || sub === "land",
 		});
 	} catch (error) {
 		process.stderr.write(
@@ -121,6 +98,9 @@ export async function tasksCommand(
 		if (row === undefined) {
 			process.stderr.write(`tasks ${sub}: task not found: ${taskId ?? "(id required)"}\n`);
 			return 1;
+		}
+		if (sub === "land") {
+			return tasksLand(row, homeDir, options.landTimeoutMs);
 		}
 		if (sub === "close") {
 			if (values.as !== "done" && values.as !== "cancelled") {
