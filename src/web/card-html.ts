@@ -9,6 +9,7 @@ type ChartChild = Extract<CardChild, { type: "chart" }>;
 
 const CHART_COLORS = ["#58A6FF", "#2EB67D", "#ECB22E", "#F87171", "#A78BFA", "#2DD4BF", "#F97316", "#E879F9"];
 const SAFE_HTTP_URL = /^https?:\/\/[^\s]+$/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
 function safeHref(url: string): string | undefined {
 	return SAFE_HTTP_URL.test(url.trim()) ? url.trim() : undefined;
@@ -287,7 +288,10 @@ function renderStructuredCardJson(text: string, cardJson: string): string | unde
 }
 
 /** Renders a `web_messages` row's body, expanding valid ```` ```card ```` specs (including charts/tables) and ```` ```copy ```` fences. */
-export function renderWebMessageHtml(row: Pick<WebMessageRow, "role" | "text" | "cardJson" | "filesJson">): string {
+export function renderWebMessageHtml(
+	row: Pick<WebMessageRow, "role" | "text" | "cardJson" | "filesJson"> & { id?: number | undefined },
+	opts?: { botId?: string | undefined },
+): string {
 	const parts: string[] = [];
 	if (row.cardJson !== null) {
 		const structured = renderStructuredCardJson(row.text, row.cardJson);
@@ -312,11 +316,20 @@ export function renderWebMessageHtml(row: Pick<WebMessageRow, "role" | "text" | 
 		try {
 			const files = JSON.parse(row.filesJson) as Array<{ path?: string; title?: string; name?: string }>;
 			if (Array.isArray(files) && files.length > 0) {
+				const botQ = opts?.botId ? `bot=${encodeURIComponent(opts.botId)}&` : "";
 				const chips = files
-					.map(
-						(f) =>
-							`<span class="wc-file-chip">📎 ${esc(f.title ?? f.name ?? (f.path ? basename(f.path) : "file"))}</span>`,
-					)
+					.map((f, idx) => {
+						const label = f.title ?? f.name ?? (f.path ? basename(f.path) : "file");
+						if (row.id !== undefined && typeof f.path === "string") {
+							const href = `api/web/file?${botQ}msg=${row.id}&i=${idx}`;
+							const isImg = IMAGE_EXT_RE.test(f.path) || (f.name !== undefined && IMAGE_EXT_RE.test(f.name));
+							if (isImg) {
+								return `<button type="button" class="wc-img-btn" data-img-src="${esc(href)}" data-img-name="${esc(label)}"><img class="wc-img-thumb" src="${esc(href)}" alt="${esc(label)}" loading="lazy"><span class="wc-img-cap">${esc(label)}</span></button>`;
+							}
+							return `<a class="wc-file-chip" href="${esc(href)}" download="${esc(label)}">📎 ${esc(label)}</a>`;
+						}
+						return `<span class="wc-file-chip">📎 ${esc(label)}</span>`;
+					})
 					.join("");
 				parts.push(`<div class="wc-files">${chips}</div>`);
 			}
