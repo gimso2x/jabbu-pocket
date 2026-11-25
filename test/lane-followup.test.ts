@@ -16,6 +16,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -55,6 +56,7 @@ async function closedLane(): Promise<{ daemon: Daemon; rootId: string }> {
 	const sessions = new FakeSessionStore();
 	const clock = { now: () => Date.now() };
 	const daemon = new Daemon({
+		...daemonTestOptions(),
 		config: {
 			...home.config,
 			channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },

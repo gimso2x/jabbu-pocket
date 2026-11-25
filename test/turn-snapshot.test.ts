@@ -1,6 +1,7 @@
 // Turn snapshots and `!undo` plans: the work tree of a configured repository is captured
 // into git trees without touching the real index, a turn's plan puts exactly its own files back, and the ledger keeps
 // the newest rows per origin.
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
@@ -500,6 +501,37 @@ describe("ledger retention and refs (AC-4)", () => {
 			endedAt: 2,
 		});
 		expect(store.listTurnSnapshots({ originKey: "discord/dm/200000000000000002" })).toHaveLength(1);
+	});
+
+	test("a failure while pruning leaves no new row behind (one transaction)", () => {
+		const dir = tempDir("jabbu-turn-store-");
+		const path = join(dir, "jabbu.db");
+		const store = openStore({ timezone: "Asia/Seoul", path, clock, redact: (text) => text });
+		stores.push(store);
+		const originKey = "discord/dm/200000000000000001";
+		const record = (i: number) =>
+			store.recordTurnSnapshot({
+				originKey,
+				opRef: `op_${i}`,
+				repo: "/repo",
+				headBefore: "h0",
+				treeBefore: "t0",
+				headAfter: "h1",
+				treeAfter: "t1",
+				startedAt: i,
+				endedAt: i + 1,
+			});
+		for (let i = 0; i < 20; i++) record(i);
+		// A second connection makes the prune's DELETE fail, as a locked or full database would.
+		const other = new Database(path);
+		other.run(
+			"CREATE TRIGGER no_prune BEFORE DELETE ON turn_snapshots BEGIN SELECT RAISE(ABORT, 'prune blocked'); END",
+		);
+		other.close();
+		expect(() => record(20)).toThrow("prune blocked");
+		const kept = store.listTurnSnapshots({ originKey });
+		expect(kept).toHaveLength(20);
+		expect(kept.map((row) => row.opRef)).not.toContain("op_20");
 	});
 
 	test("removeTurnRefsSync ignores an inherited GIT_DIR/GIT_WORK_TREE: only the named repository loses its refs (qa-l #18)", () => {

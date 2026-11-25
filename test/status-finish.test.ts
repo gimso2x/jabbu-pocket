@@ -7,8 +7,10 @@ import { renderStatusText } from "../src/daemon/status-render";
 import type { CreateMessageArgs, EditMessageArgs, MessageTarget, ReactionArgs } from "../src/discord/transport";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions, ROOMY_STATFS } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 /** Discord appends a `_✅ hh:mm_` footer line to answers; the tests compare the text above it. */
@@ -133,6 +135,7 @@ async function boot(
 ): Promise<Daemon> {
 	const { sweepMs, ...driverExtra } = extra;
 	const d = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		log: createLogger({ sink: () => undefined, clock, redact }),
@@ -332,7 +335,9 @@ describe("jabbu-pocket status: uncertain inbound", () => {
 			const dbPath = join(home.dir, "jabbu.db");
 			const store = openBotStore(dbPath, clock, "Asia/Seoul");
 			try {
-				expect(renderStatusText(readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul"))).toContain("uncertain=0");
+				expect(
+					renderStatusText(readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS)),
+				).toContain("uncertain=0");
 				store.ensureOrigin(ORIGIN, "/s/o1");
 				store.recordInbound({ originKey: ORIGIN, platformMessageId: "u1", textRef: "x" });
 				store.recordInbound({ originKey: ORIGIN, platformMessageId: "u2", textRef: "y" });
@@ -341,7 +346,7 @@ describe("jabbu-pocket status: uncertain inbound", () => {
 			} finally {
 				store.close();
 			}
-			const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul");
+			const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS);
 			expect(report.inbound.uncertain).toBe(2);
 			expect(renderStatusText(report)).toContain("pending=0 dispatched=0 answered=0 failed=0 discarded=0 uncertain=2");
 		} finally {

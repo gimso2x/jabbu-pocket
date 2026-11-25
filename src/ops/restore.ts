@@ -86,13 +86,13 @@ export function resolveRestoreSource(homeDir: string, source: string): string {
 	if (stat.nlink > 1) {
 		throw new RestoreError("bad_source", `${path} is a hard link (${stat.nlink} names): copy the backup file first`);
 	}
-	// A -wal next to the source means the file is a live or crashed ledger, not a self-contained backup: copying only
-	// the main file would silently drop its newest pages. A symlink is checked at its real path too.
-	for (const candidate of new Set([path, realpathSync(path)])) {
-		if (existsSync(`${candidate}-wal`)) {
+	// A -wal or -journal next to the source means a live or crashed ledger, not a self-contained backup: copying only
+	// the main file would silently drop (or half-apply) its newest pages. A symlink is checked at its real path too.
+	for (const sidecar of new Set([path, realpathSync(path)].flatMap((p) => [`${p}-wal`, `${p}-journal`]))) {
+		if (existsSync(sidecar)) {
 			throw new RestoreError(
 				"bad_source",
-				`${candidate}-wal exists: the source is not a self-contained backup (checkpoint it or use a backup file)`,
+				`${sidecar} exists: the source is not a self-contained backup (checkpoint it or use a backup file)`,
 			);
 		}
 	}

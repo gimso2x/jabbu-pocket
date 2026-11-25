@@ -76,10 +76,11 @@ import {
 } from "./daemon-context";
 import { answerDialogsFor, cwdFor, floorsSurfaceFor, hostToolsFor, peerTouched } from "./daemon-host-tools";
 import { handleIpc } from "./daemon-ipc";
+import { escalateTurnFailures, notifyProviderLimit } from "./daemon-owner-post";
 import { DaemonSkillReview } from "./daemon-review";
 import { DaemonInbound, deliverySources } from "./daemon-sink";
 import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
-import { escalateTurnFailures, GateSweep, notifyProviderLimit, PendingDispatchSweep } from "./daemon-sweeps";
+import { GateSweep, PendingDispatchSweep } from "./daemon-sweeps";
 import { DaemonTaskLanding, ingestOwnerText } from "./daemon-task-land";
 import { type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
@@ -1031,7 +1032,7 @@ export class Daemon {
 
 	/** Hourly, not per-sweep: inbound attachments are context for one turn, kept 24h, then deleted. */
 	#sweepMedia(): void {
-		const now = Date.now();
+		const now = this.#clock.now();
 		if (now - this.#lastMediaSweep < MEDIA_SWEEP_INTERVAL_MS) return;
 		this.#lastMediaSweep = now;
 		try {

@@ -7,6 +7,7 @@ import { DIFF_FILE_MAX, DIFF_TOTAL_MAX, readDiff } from "../src/dashboard/diff";
 import { renderDashboardPage } from "../src/dashboard/html";
 import { startDashboardServer } from "../src/dashboard/server";
 import type { DashboardSnapshot } from "../src/dashboard/snapshot";
+import { gitRunner } from "../src/lanes/verify";
 import { openStore } from "../src/store/db";
 import { TASK_SCHEMA } from "../src/tasks/ledger-schema";
 import { makeHome, type TestHome } from "./helpers/bot-home";
@@ -101,6 +102,14 @@ describe("readDiff", () => {
 		]);
 		expect(answer.files.find((f) => f.path === "README.md")?.hunks).toContain("+world");
 		expect(JSON.stringify(answer)).not.toContain(repo);
+	});
+
+	test("a diff past the raw cap answers diff_too_large instead of throwing", async () => {
+		const { repo, base, tip } = fixture();
+		addLane("fix", { repo, baseBranch: base, sha: tip });
+		// A 128-byte runner cap: the merge-base answer (41 bytes) still fits, the diff itself does not.
+		const answer = await readDiff(home.dir, { lane: "fix" }, gitRunner(10_000, 128));
+		expect(answer).toEqual({ ok: false, error: "diff_too_large" });
 	});
 
 	test("a task diff is the tip's change without docs/tasks", async () => {

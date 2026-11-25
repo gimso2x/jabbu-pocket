@@ -120,7 +120,7 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | --- | --- | --- |
 | `schemaVersion` | 예 | 항상 `1` |
 | `channels.slack`, 최상위 `slack`·`mentionFreeChannels`·`peerBots`·`requireMention`·`escalationChannel`·`logChannel` | 거부됨 | Slack 채널은 제거됐습니다(Discord만). 이 키가 설정에 남아 있으면 `config_invalid`로 기동하지 않습니다. 같은 이름의 Discord 키는 `channels.discord.*`에 있습니다(`mentionFreeChannels`·`peerBots`·`requireMention`, 승인·완료 사본 채널은 `escalationChannelId`·`logChannelId`) |
-| `channels.discord` | 아니요 | Discord 켜기 `{"ownerUserId", "botTokenFile", "applicationId", "guildIds"?, "mentionFreeChannels"?, "peerBots"?, "requireMention"?, "laneChannelId"?, "logChannelId"?, "escalationChannelId"?, "alertChannelId"?, "displayName"?}`. 없으면 Discord 꺼짐. 키 설명은 [Discord](#discord선택), 봇 만들기는 [Discord 봇 만들기](discord.md) |
+| `channels.discord` | 아니요 | Discord 켜기 `{"ownerUserId", "botTokenFile", "applicationId", "guildIds"?, "mentionFreeChannels"?, "inlineReplyChannels"?, "peerBots"?, "requireMention"?, "laneChannelId"?, "logChannelId"?, "escalationChannelId"?, "alertChannelId"?, "displayName"?}`. 없으면 Discord 꺼짐. 키 설명은 [Discord](#discord선택), 봇 만들기는 [Discord 봇 만들기](discord.md) |
 | `ompExecutable` | 예 | 절대경로(`command -v omp`, 전역 omp). omp를 올린 뒤에는 `jabbu-pocket omp trial`로 이 경로를 시험합니다([봇 전용 omp](#봇-전용-omp-프로필과-업데이트-시험) 참고) |
 | `ompProfile` | 아니요 | 봇 omp 자식(대화·레인·모니터 턴, 레인 리뷰, `jabbu_dispatch` 단순 위임, `doctor`의 모델 점검)에 줄 `OMP_PROFILE` 이름. 에이전트 폴더가 `~/.omp/profiles/<이름>/agent`로 바뀌고, 물려받은 `PI_CODING_AGENT_DIR`는 뺍니다. omp 규칙 `^[a-z0-9][a-z0-9._-]{0,63}$`을 어기면 `config_invalid field=ompProfile`. 비우면 지금처럼 사람 omp와 같은 `~/.omp/agent`를 씁니다. 재시작해야 반영됩니다 |
 | `ompConfigOverlay` | 아니요 | 이 설치본의 omp 자식(대화·레인·모니터 턴, `jabbu_dispatch` 단순 위임)에 `--config`로 붙일 omp 설정 파일(홈 기준 상대경로 또는 절대경로). 파일이 없으면 `config_invalid field=ompConfigOverlay`. omp `task` 하위 에이전트도 같은 값을 봅니다. 파일 내용은 새 omp 자식부터 반영되고, 키 자체를 바꾸면 재시작해야 합니다. 비우면 `--config`를 붙이지 않습니다. 홈에 둔 `<이름>.omp.yml`은 이 키로 연결하지 않으면 아무 효과가 없습니다 |
@@ -394,6 +394,7 @@ Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다 (`init 
   | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버) |
   | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택) |
   | `peerBots` | 피어 봇 목록(선택): `[{"userId": "<snowflake>", "name": "<1~32자>"}]`. 이 봇을 멘션한 그 봇의 서버 채널 글을 요청으로 받습니다(오너 id는 안 됨, 재시작 필요). [피어 봇](#피어-봇)과 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket) 참고 |
+  | `inlineReplyChannels` | 스레드 없이 채널 본문에 답장으로 답할 서버 채널 ID 목록(선택). `이건 따로 빼줘` 같은 요청이면 스레드를 엽니다. `logChannelId`와 같으면 `config_invalid`. 자세한 동작은 [Discord](discord.md) |
   | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다 |
   | `laneChannelId` | Discord DM에서 요청한 작업 레인을 열 서버 텍스트 채널 ID(선택). 없으면 DM에서는 레인을 열지 않고 그 이유를 답합니다(서버 채널·스레드에서 요청한 레인은 그 채널에 열림) |
   | `logChannelId` | Discord #log 장부로 쓸 서버 텍스트 채널 ID(선택). Discord 대화·레인의 `✅ 완료` 답 사본이 올라가고, 이 채널과 그 스레드의 글은 턴이 되지 않습니다. `escalationChannelId`·`laneChannelId`·`mentionFreeChannels`와 같으면 `config_invalid` |

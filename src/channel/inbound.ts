@@ -115,7 +115,7 @@ export async function recordPeerInbound(
 	inbound: PeerInboundMessage,
 	limit: { turns: number; windowMinutes: number },
 	drop: (reason: string) => IngestOutcome,
-	notice: () => Promise<void>,
+	notice: () => Promise<unknown>,
 ): Promise<IngestOutcome | "held" | undefined> {
 	const outcome = core.onPeerInbound?.(inbound, { turns: limit.turns, windowMs: limit.windowMinutes * 60_000 });
 	if (outcome === undefined) return drop("peer_unsupported");

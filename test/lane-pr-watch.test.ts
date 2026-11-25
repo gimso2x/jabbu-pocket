@@ -28,6 +28,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { LANE_START, type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -648,6 +649,43 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 		expect(lines(s).at(-1)?.content).toContain("댓글 by maintainer");
 	});
 
+	test("소식 게시가 실패하면 커서를 두고 다음 패스가 다시 올리며, 이미 올린 줄은 반복하지 않고, 그 사이 새 소식도 함께 온다", async () => {
+		const s = await publishedLane();
+		await tick(s, PR_WATCH_INTERVAL_MS);
+		const sent = (needle: string): number =>
+			s.h.transport.calls.filter((c) => c.method === "createMessage" && JSON.stringify(c).includes(needle)).length;
+		const okSent = (needle: string): number => sent(needle) - failed.filter((n) => n === needle).length;
+		const failed: string[] = [];
+		const cursor = () => JSON.stringify(s.h.store.getLane(s.lane)?.meta.pr?.watch);
+		const saved = cursor();
+		s.pr.comments.push(row(21, "maintainer", "FIRST-NEWS"), row(22, "maintainer", "SECOND-NEWS"));
+		// The first line posts; the second one fails (the fake transport counts a failed call too).
+		const transport = s.h.transport;
+		const original = transport.createMessage.bind(transport);
+		transport.createMessage = async (args) => {
+			if (JSON.stringify(args).includes("SECOND-NEWS") && failed.length < 1) {
+				failed.push("SECOND-NEWS");
+				transport.calls.push({ method: "createMessage", ...args, id: "failed" });
+				throw new Error("discord down");
+			}
+			return original(args);
+		};
+		await tick(s, PR_WATCH_INTERVAL_MS);
+		expect(okSent("FIRST-NEWS")).toBe(1);
+		expect(okSent("SECOND-NEWS")).toBe(0);
+		expect(cursor()).toBe(saved);
+		// A new event arrives while the news is still held back: the next pass posts what is missing and the new line.
+		s.pr.comments.push(row(23, "maintainer", "THIRD-NEWS"));
+		await tick(s, PR_WATCH_INTERVAL_MS);
+		expect(okSent("FIRST-NEWS")).toBe(1);
+		expect(okSent("SECOND-NEWS")).toBe(1);
+		expect(okSent("THIRD-NEWS")).toBe(1);
+		expect(cursor()).not.toBe(saved);
+		await tick(s, PR_WATCH_INTERVAL_MS);
+		expect(okSent("SECOND-NEWS")).toBe(1);
+		expect(okSent("THIRD-NEWS")).toBe(1);
+	});
+
 	test("`!prwatch off <레인>`은 추적을 끄고, 그 뒤 tick은 gh를 부르지 않는다", async () => {
 		const s = await publishedLane();
 		await tick(s, PR_WATCH_INTERVAL_MS);
@@ -680,6 +718,7 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 			channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
 		};
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),

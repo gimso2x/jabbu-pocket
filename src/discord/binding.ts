@@ -1,5 +1,4 @@
-// Discord's plug into the daemon: its port, its adapter (with the missed-message recovery behind `recover()`) and its
-// thread reader for turn context, built from `channels.discord`.
+// Discord's plug into the daemon: port, adapter (with `recover()`) and thread reader, built from `channels.discord`.
 import { join } from "node:path";
 import type { AdapterDeps, ChannelAdapter, ChannelBinding } from "../channel/adapter";
 import type { ThreadMessage } from "../core/mailbox-thread-context";
@@ -48,6 +47,7 @@ export class DiscordBinding implements ChannelBinding {
 			log: deps.log,
 			guildIds: discord.guildIds,
 			mentionFreeChannels: discord.mentionFreeChannels,
+			inline: { channels: discord.inlineReplyChannels, originOf: (id) => store.getInbound(id)?.originKey },
 			logChannel: discord.logChannelId,
 			requireMention: discord.requireMention,
 			peerBots: discord.peerBots,

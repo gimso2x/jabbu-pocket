@@ -17,6 +17,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ESCALATION = "300000000000000002";
 const DM = OWNER_DM;
@@ -57,6 +58,7 @@ async function boot(overrides: { escalationChannelId?: string } = {}): Promise<v
 	transport.setChannel({ id: ESCALATION, type: 0, guildId: GUILD });
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: discordConfig(overrides),
 		channels: [discordBinding(transport)],
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),

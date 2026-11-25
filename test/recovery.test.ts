@@ -218,6 +218,29 @@ describe("recovery rule (2): dispatched rows of a dead process", () => {
 		expect([store.getInbound("m1")?.state, store.getInbound("m2")?.state]).toEqual(["answered", "answered"]);
 	});
 
+	test("a recovered turn whose final changed an interim's wording (success to failure) still sends the final", async () => {
+		const early = "배포가 성공했습니다. 단계 12개 모두 확인했고 오류는 없습니다.";
+		const changed = "배포가 실패했습니다. 단계 12개 모두 확인했고 오류는 없습니다.";
+		const turn = await dispatchedTurn("m3", "deploy", {
+			finish: true,
+			script: () => [{ role: "assistant", text: changed, stopReason: "stop" }] satisfies FakeTurnMessage[],
+		});
+		store.recordInterim({
+			originKey: ORIGIN,
+			opRef: turn.opRef,
+			threadRef: "200000000000000001:m3",
+			index: 0,
+			body: early,
+		});
+		const result = await recoverDispatched({ store, driverFactory: factory(), log: log() });
+		expect(result).toEqual({ answered: 1, interrupted: 0, continued: 0 });
+		const turnEnd = store
+			.listDeliveries({ originKey: ORIGIN })
+			.filter((d) => !d.opRef.includes(":interim:"))
+			.map((d) => [d.opRef, d.body]);
+		expect(turnEnd).toEqual([[turn.opRef, changed]]);
+	});
+
 	test("a followup row in a resumed (pinned) session is answered from that session file", async () => {
 		const pinned = "sess/e1/old-session.jsonl";
 		store.newEpoch(ORIGIN, "sess/e1", undefined, pinned);

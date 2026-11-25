@@ -1471,33 +1471,37 @@ export class Store {
 	 * by that bound come back as `pruned` so the caller can delete their refs.
 	 */
 	recordTurnSnapshot(input: TurnSnapshotInput): { id: number; pruned: TurnSnapshotRow[] } {
-		const inserted = this.db
-			.query(
-				`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
+		// One transaction: a failure while pruning must not leave the new row behind, or the caller (which deletes the
+		// refs of `pruned` only on success) would keep a ledger that no longer matches its refs.
+		return this.db.transaction(() => {
+			const inserted = this.db
+				.query(
+					`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				input.originKey,
-				input.opRef,
-				input.repo,
-				input.headBefore,
-				input.treeBefore,
-				input.headAfter,
-				input.treeAfter,
-				input.startedAt,
-				input.endedAt,
-			);
-		const id = Number(inserted.lastInsertRowid);
-		const overflow = this.db
-			.query(
-				`SELECT * FROM turn_snapshots WHERE origin_key = ?
+				)
+				.run(
+					input.originKey,
+					input.opRef,
+					input.repo,
+					input.headBefore,
+					input.treeBefore,
+					input.headAfter,
+					input.treeAfter,
+					input.startedAt,
+					input.endedAt,
+				);
+			const id = Number(inserted.lastInsertRowid);
+			const overflow = this.db
+				.query(
+					`SELECT * FROM turn_snapshots WHERE origin_key = ?
 				 ORDER BY id DESC LIMIT -1 OFFSET ?`,
-			)
-			.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
-		const pruned = overflow.map(toTurnSnapshot);
-		const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
-		for (const row of pruned) drop.run(row.id);
-		return { id, pruned };
+				)
+				.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
+			const pruned = overflow.map(toTurnSnapshot);
+			const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
+			for (const row of pruned) drop.run(row.id);
+			return { id, pruned };
+		})();
 	}
 
 	/** Rows newest first; every filter is optional and compared literally. */
@@ -1832,7 +1836,7 @@ export class Store {
 	}
 
 	/**
-	 * A confirmed Discord thread post (not a channel root, DM, #log or board post, log copy or peer failure notice)
+	 * A confirmed Discord thread post (not a channel root, DM, channel-body answer, #log or board post, log copy or peer failure notice)
 	 * that mentions a policy peer (`<@id>`, `<@!id>` or the core's mention token) is one pending call per peer.
 	 */
 	private recordPeerCalls(row: DeliveryRow, now: number): void {
@@ -1841,7 +1845,8 @@ export class Store {
 		const thread = parseThreadRef(row.threadRef);
 		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) return;
 		if (platformOfThreadRef(row.threadRef) !== "discord" || policy.skipConversations.includes(thread.channel)) return;
-		if (parseChatOrigin(row.originKey)?.kind === "dm") return;
+		const origin = parseChatOrigin(row.originKey);
+		if (origin !== undefined && origin.threadId === undefined) return;
 		const insert = this.db.query(
 			"INSERT INTO peer_calls (thread_ref, peer_user_id, delivery_id, called_at) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id, peer_user_id) DO NOTHING",
 		);
@@ -2440,7 +2445,11 @@ export class DeliveryLedger {
 	}
 
 	resolveAmbiguous(deliveryId: number, how: "ack" | "resend"): DeliveryRow {
-		return this.#db.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))();
+		// IMMEDIATE: the resolve reads the row, then writes it. A deferred transaction that reads first fails at once with
+		// SQLITE_BUSY (busy_timeout never applies) when the daemon commits in between; this one waits for the lock.
+		return this.#db
+			.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))
+			.immediate();
 	}
 
 	close(): void {

@@ -146,7 +146,7 @@ describe("the system view's 7일 비용 card", () => {
 			'<span class="gate-word">대화</span><span class="gate-label">배포 점검</span><code class="gate-detail">$5.00</code>',
 		);
 		expect(card).toContain('<span class="gate-word">레인</span><span class="gate-label">ui-fix</span>');
-		expect(card).toContain("7일 합계 $8.00 · 캐시 쓰기 38%");
+		expect(card).toContain("7일 합계 $8.00 · 캐시 쓰기 38% · 이 기기 세션만 집계 (원격 호스트 제외)");
 		const client = new Function("document", "setInterval", `${SCRIPT}\nreturn renderDashboardMain;`)(
 			{ getElementById: () => ({}) },
 			() => 0,

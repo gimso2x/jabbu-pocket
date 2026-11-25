@@ -11,6 +11,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { INJECTION_WARNING_HEAD } from "../src/safety/injection";
 import { discordBinding, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const BOT = "500000000000000000";
 const GUILD = "300000000000000001";
@@ -38,6 +39,7 @@ async function boot(threadContextTimeoutMs?: number): Promise<void> {
 	const sessions = new FakeSessionStore();
 	const clock = { now: () => Date.now() };
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: { ...home.config, channels: { ...home.config.channels, discord: { ...configured, peerBots } } },
 		channels: [discordBinding(discord, { peerBots })],
 		clock,

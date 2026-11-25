@@ -22,6 +22,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -416,6 +417,7 @@ describe("daemon thread '닫아' routing (AC-3)", () => {
 		const clock = { now: () => Date.now() };
 		const logs: string[] = [];
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },

@@ -18,6 +18,7 @@ import { redact } from "../src/redact";
 import { floorsSystemPrompt } from "../src/safety/prompt";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -68,6 +69,7 @@ async function boot(discord: WaitingDiscordTransport, laneChannelId?: string): P
 	const discordConfig = config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 	const sessions = new FakeSessionStore();
 	const daemon = new Daemon({
+		...daemonTestOptions(),
 		config: {
 			...config,
 			channels: {
@@ -393,6 +395,23 @@ describe("lanes asked for from a Discord DM", () => {
 		expect(reply?.content).toContain("작업 레인을 시작하지 못했습니다");
 		expect(daemon.store.getLane("no-lane")).toBeUndefined();
 		expect(creates(discord, (call) => call.content === "🔄 no-lane")).toHaveLength(0);
+	});
+
+	test("작업: with ~ or a relative path replies with the format hint and starts no lane", async () => {
+		const discord = discordTransport();
+		const daemon = await boot(discord, LANE_CH);
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: "작업: 정리 @~/x",
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("형식은 `작업: <제목> @<절대경로>`"));
+		const reply = creates(discord, (call) => (call.content ?? "").includes("형식은"))[0];
+		expect(reply?.channelId).toBe(DM);
+		expect(reply?.content).not.toContain("공백이 든 경로");
+		expect(daemon.store.listLanes()).toHaveLength(0);
 	});
 });
 

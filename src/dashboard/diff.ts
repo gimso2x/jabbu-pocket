@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { type GitRunner, gitRunner } from "../lanes/verify";
+import { GitOutputCapError, type GitResult, type GitRunner, gitRunner } from "../lanes/verify";
 import { redact } from "../redact";
 import { taskTip } from "../tasks/gate";
 
@@ -33,7 +33,8 @@ type Miss = {
 };
 export type DiffAnswer =
 	| { ok: true; subject: string; base: string; sha: string; files: DiffFile[]; truncated: boolean }
-	| Miss;
+	| Miss
+	| { ok: false; error: "diff_too_large" };
 
 interface Range {
 	repo: string;
@@ -47,21 +48,17 @@ interface Range {
 
 /** Cuts at a line start under `max` characters. */
 function cut(text: string, max: number): string {
-	if (text.length <= max) return text;
-	const at = text.lastIndexOf("\n", max);
-	return text.slice(0, at > 0 ? at : max);
+	return text.length <= max ? text : text.slice(0, Math.max(text.lastIndexOf("\n", max), 0) || max);
 }
 
 /** The path of a `diff --git a/P b/P` header remainder (renames are off, so both sides name the same path). */
 function headerPath(rest: string): string {
-	if (rest.startsWith('"')) {
-		try {
-			return (JSON.parse(rest.slice(0, rest.indexOf('"', 1) + 1)) as string).replace(/^a\//, "");
-		} catch {
-			return rest.slice(3);
-		}
+	if (!rest.startsWith('"')) return rest.slice(2, (rest.length - 5) / 2 + 2);
+	try {
+		return (JSON.parse(rest.slice(0, rest.indexOf('"', 1) + 1)) as string).replace(/^a\//, "");
+	} catch {
+		return rest.slice(3);
 	}
-	return rest.slice(2, (rest.length - 5) / 2 + 2);
 }
 
 /** Splits `git diff` output into files; counts come from the whole text, the hunks are masked and capped. */
@@ -83,10 +80,8 @@ export function parseDiff(text: string): { files: DiffFile[]; truncated: boolean
 		}
 		let hunks = redact(body.join("\n").trimEnd());
 		const room = Math.min(DIFF_FILE_MAX, Math.max(budget, 0));
-		if (hunks.length > room) {
-			hunks = cut(hunks, room);
-			truncated = true;
-		}
+		if (hunks.length > room) truncated = true;
+		hunks = cut(hunks, room);
 		budget -= hunks.length;
 		files.push({ path: headerPath(first), added, deleted, binary, hunks });
 	}
@@ -97,9 +92,8 @@ function resolveLane(db: Database, name: string): Range | Miss {
 	const row = db.query<{ meta: string }, [string]>("SELECT meta FROM lanes WHERE name = ?").get(name);
 	if (row === null) return { ok: false, error: "unknown_lane" };
 	const meta = JSON.parse(row.meta) as { repo?: string; baseBranch?: string; sha?: string };
-	if (meta.sha === undefined || meta.repo === undefined || meta.baseBranch === undefined) {
+	if (meta.sha === undefined || meta.repo === undefined || meta.baseBranch === undefined)
 		return { ok: false, error: "no_claim" };
-	}
 	return {
 		repo: meta.repo,
 		baseRef: `refs/heads/${meta.baseBranch}`,
@@ -122,11 +116,11 @@ async function resolveTask(db: Database, id: string, git: GitRunner): Promise<Ra
 	return { repo: row.repo, baseRef: `refs/heads/${tip.baseBranch}`, sha: tip.sha, label: `task:${id}`, exclude: true };
 }
 
-/** Throws when git fails (the server answers 500 `diff_failed`). */
+/** Throws when git fails (the server answers 500 `diff_failed`); a diff past the raw cap answers `diff_too_large`. */
 export async function readDiff(
 	homeDir: string,
 	subject: DiffSubject,
-	git: GitRunner = gitRunner(GIT_TIMEOUT_MS),
+	git: GitRunner = gitRunner(GIT_TIMEOUT_MS, DIFF_TOTAL_MAX * 4),
 ): Promise<DiffAnswer> {
 	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
@@ -141,7 +135,7 @@ export async function readDiff(
 	const merge = await git(["-C", range.repo, "merge-base", range.baseRef, range.sha]);
 	const base = merge.stdout.trim();
 	if (merge.code !== 0 || base === "") throw new Error("merge-base failed");
-	const full = await git([
+	const full: GitResult | undefined = await git([
 		"-C",
 		range.repo,
 		"-c",
@@ -154,7 +148,11 @@ export async function readDiff(
 		"--unified=3",
 		`${base}..${range.sha}`,
 		...(range.exclude ? ["--", ".", ":!docs/tasks"] : []),
-	]);
+	]).catch((error: unknown) => {
+		if (error instanceof GitOutputCapError) return undefined;
+		throw error;
+	});
+	if (full === undefined) return { ok: false, error: "diff_too_large" };
 	if (full.code !== 0) throw new Error("git diff failed");
 	return { ok: true, subject: range.label, base, sha: range.sha, ...parseDiff(full.stdout) };
 }
