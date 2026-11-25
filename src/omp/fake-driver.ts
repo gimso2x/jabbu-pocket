@@ -15,13 +15,13 @@ import {
 } from "./driver";
 
 const FAKE_COMMANDS: readonly OmpCommand[] = [
-	"ulw",
-	"mass-ulw",
-	"ulw-plan",
-	"ulw-loop",
-	"ulw-execute",
-	"ulw-research",
-].map((name) => ({ name, source: "extension", description: `Run the OMP-adapted ${name} workflow` }));
+	"super",
+	"super-graph",
+	"super-plan",
+	"super-loop",
+	"super-run",
+	"super-research",
+].map((name) => ({ name, source: "extension", description: `Run the ${name} workflow` }));
 
 /** A fresh real omp session already holds entries (model_change, thinking_level_change, ...), so its leafId is never null. */
 function seedEntries(): OmpEntry[] {
@@ -67,7 +67,7 @@ export interface FakeOmpDriverOptions {
 	setTodosError?: OmpDriverError;
 	/** Models `availableModels` reports and `setModel` accepts; the first is active at start. */
 	models?: readonly string[];
-	/** Commands `availableCommands` reports; absent = the six ULW workflows an omp with omp-ulw offers. */
+	/** Commands `availableCommands` reports; absent = the six SUPER workflows an omp with omp-superkit offers. */
 	commands?: readonly OmpCommand[];
 	/** Active model at start, overriding `models[0]` — may be absent from `models`, like a session restored with a model the provider removed. */
 	restoredModel?: string;

@@ -8,6 +8,7 @@ import {
 	renderMentions,
 } from "../channel/port";
 import type { ChannelRegistry } from "../channel/registry";
+import { cutCodePointSafe } from "../channel/text";
 import { parseThreadRef } from "../core/normalize";
 import { confidentBand, type ReceiptNow, receiptBlockers, receiptNowOf } from "../lanes/land";
 import { formatConfidence } from "../lanes/review";
@@ -86,7 +87,7 @@ export function cardMessage(card: TaskCard | string, port: Pick<ChannelPort, "me
 	return {
 		text: renderMentions(card.text, port),
 		title: card.title,
-		body: body.length > CARD_BODY_MAX ? `${body.slice(0, CARD_BODY_MAX - 1)}…` : body,
+		body: body.length > CARD_BODY_MAX ? `${cutCodePointSafe(body, CARD_BODY_MAX - 1)}…` : body,
 		...(card.fields === undefined ? {} : { fields: card.fields }),
 		...(card.buttons === undefined ? {} : { buttons: card.buttons }),
 		...(card.note === undefined ? {} : { buttonsNote: card.note }),
@@ -188,7 +189,7 @@ const mergeButton = (row: TaskRow, prMode = false): ActionButton => ({
 const recommendButton = (row: TaskRow, recommend: string): ActionButton => ({
 	actionId: taskRecommendActionId(row.taskId),
 	label: "추천대로",
-	value: redact(recommend).slice(0, RECOMMEND_VALUE_MAX),
+	value: cutCodePointSafe(redact(recommend), RECOMMEND_VALUE_MAX),
 	style: "primary",
 });
 
@@ -243,7 +244,7 @@ export function buildAcceptedCard(
 	};
 }
 
-const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const clip = (text: string, max: number): string => (text.length > max ? `${cutCodePointSafe(text, max - 1)}…` : text);
 
 const MAX_SUMMARY_LINES = 3;
 

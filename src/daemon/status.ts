@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { dirname } from "node:path";
 import { type MonitorRow, type MonitorSql, nextFireOf, toMonitor } from "../monitors/ledger";
+import type { AgyAccountsStatus } from "../omp/agy-account-pool";
 import { type FreezeState, readFreeze } from "../ops/freeze";
 import { assertRegularLedger, type ConfigGateOptions, collectGates } from "../ops/gates";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
@@ -19,9 +20,8 @@ export interface OriginStatus {
 
 export interface StatusReport {
 	ompVersion: string;
-	/** The bot's zone (`config.timezone`): the text output shows the next monitor fire in it. */
+	/** The bot's zone (`config.timezone`) and whether the report came from the running daemon. */
 	timezone: string;
-	/** True when the report came from the running daemon; false when read from the database file only. */
 	daemonRunning: boolean;
 	origins: OriginStatus[];
 	ledger: { pending: number; inflight: number; confirmed: number; ambiguous: number; expired: number };
@@ -33,8 +33,10 @@ export interface StatusReport {
 	frozen?: FreezeState;
 	/** Present while `jabbu-pocket drain` holds new work back for a restart: what is still unfinished. */
 	drain?: DrainCounts;
-	/** Running omp RPC sessions on this host and the ceiling a lane/[TASK] start is judged against (0 = off). */
+	/** Running omp RPC sessions on this host and ceiling (0 = off). */
 	hostSessions?: HostSessionsInfo;
+	/** Active and blocked aliases of the `agy` account pool, when enabled. */
+	agyAccounts?: AgyAccountsStatus;
 }
 
 /** Unfinished work a restart drain waits for; the drain completes when all three are 0. */
@@ -160,8 +162,7 @@ export function readStatusFromDb(
 		db = new Database(dbPath, { readonly: true, strict: true });
 		counts = readCoreCounts(db);
 	} catch (error) {
-		// A 0-byte, corrupt or table-less ledger: the report still comes out (as JSON with --json), naming the gate the
-		// `gates` command opens for the same file, instead of a raw SQLiteError and an empty stdout.
+		// A 0-byte, corrupt or table-less ledger still emits a report naming the open `ledger_unreadable` gate.
 		const reason = error instanceof Error ? error.message : String(error);
 		const gates = openGates();
 		return {
@@ -221,8 +222,7 @@ function readCoreCounts(db: Database): Pick<StatusReport, "inbound" | "ledger" |
 function readMonitorsStatus(db: Database): MonitorsStatus {
 	try {
 		const rows = db.query("SELECT * FROM monitors ORDER BY created_at, id").all() as MonitorSql[];
-		// A row that does not parse still counts as a monitor but has no next fire: `gates` skips such a row the same
-		// way, so one bad row must not blank every count of the report nor open a gate `gates` does not.
+		// A bad row still counts as a monitor without next fire, matching `gates`.
 		const readable: MonitorRow[] = [];
 		for (const raw of rows) {
 			try {

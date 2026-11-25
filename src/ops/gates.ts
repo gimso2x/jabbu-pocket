@@ -527,7 +527,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 		// `updated_at` moves on every 15-minute status-message redraw, so it never ages while the daemon runs; the
 		// newest history entry (created, progress, owner_reply, claim, not_done, reopened…) is the lane's real activity.
 		const laneActivity = columnExists(db, "lanes", "history")
-			? "CASE WHEN json_type(history, '$[#-1].at') = 'integer' THEN json_extract(history, '$[#-1].at') ELSE updated_at END"
+			? "CASE WHEN json_valid(history) THEN CASE WHEN json_type(history, '$[#-1].at') = 'integer' THEN json_extract(history, '$[#-1].at') ELSE updated_at END ELSE updated_at END"
 			: "updated_at";
 		// A quiet working lane is not stuck while a turn dispatched inside the same 24h window still runs on its origin,
 		// or while it waits on the owner (a live approval card for that origin); only the rest are orphans. A turn

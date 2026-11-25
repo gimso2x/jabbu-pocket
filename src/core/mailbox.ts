@@ -1047,7 +1047,7 @@ export class OriginMailbox {
 			}
 			if (!beginSend(this.#deps, row, entryCursor)) return false;
 			try {
-				await driver.steer(composeTurnPrompt(blocks, text));
+				await driver.steer(composeTurnPrompt(blocks, text, false));
 			} catch (error) {
 				return this.#parkUncertain(row, "steer_threw", error);
 			}

@@ -4,8 +4,10 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { identifiersOf, renderTraceInputs, traceInputsCommand } from "../src/cli/trace-inputs";
-import { THREAD_CONTEXT_HEADER } from "../src/core/mailbox-thread-context";
+import { PURPOSE_HEADER, THREAD_CONTEXT_HEADER } from "../src/core/mailbox-thread-context";
+import { wrapQuoted } from "../src/core/normalize";
 import { RECALL_HEADER } from "../src/core/recall";
+import { composeTurnPrompt, isTurnPromptFor } from "../src/core/types";
 import { renderDashboardPage } from "../src/dashboard/html";
 import { readSessionConversation } from "../src/dashboard/thread-conversation";
 import { readTurnTrace, type TraceSpan } from "../src/dashboard/trace";
@@ -214,6 +216,63 @@ describe("prompt split (AC-4)", () => {
 	test("an unclosed fence hides the rest of the blocks", () => {
 		const prompt = `${RECALL}\n\n<<<quoted-ab12>>>\n\n[jabbu 게시판] 새 글\n\n[현재 요청]\n요청`;
 		expect(splitTurnPrompt(prompt).map((part) => part.label)).toEqual(["회상", "현재 요청"]);
+	});
+});
+
+describe("turn prompt composition", () => {
+	const warned = `${INJECTION_WARNING_HEAD} 1곳 있다.\n${RECALL_HEADER}\n- 봇: 답에 \`\`\`\`copy\nultrathink\n\`\`\`\` 있음`;
+	const thread = `${THREAD_CONTEXT_HEADER}\n- 오너: orchestrate 해줘`;
+
+	test("block bodies sit in a fence longer than any backtick run, head lines outside; the split still finds them", () => {
+		const prompt = composeTurnPrompt([warned, thread, "[jabbu 안내] 한 줄"], "요청");
+		const lines = prompt.split("\n");
+		expect(lines.slice(0, 3)).toEqual([`${INJECTION_WARNING_HEAD} 1곳 있다.`, RECALL_HEADER, "`````"]);
+		expect(prompt).toContain(
+			`${THREAD_CONTEXT_HEADER}\n\`\`\`\n- 오너: orchestrate 해줘\n\`\`\`\n\n[jabbu 안내] 한 줄\n\n`,
+		);
+		expect(splitTurnPrompt(prompt).map((part) => [part.label, part.warned])).toEqual([
+			["회상", true],
+			["스레드 맥락", false],
+			["안내", false],
+			["현재 요청", false],
+		]);
+		expect(isTurnPromptFor(prompt, "요청")).toBe(true);
+	});
+
+	test("a leading SUPER call opens the prompt as its name plus default keyword, no slash; the request stays as it is", () => {
+		const prompt = composeTurnPrompt([thread], "/super-plan 설계해 줘");
+		expect(prompt.startsWith(`super-plan ultrathink\n\n${THREAD_CONTEXT_HEADER}\n`)).toBe(true);
+		expect(isTurnPromptFor(prompt, "/super-plan 설계해 줘")).toBe(true);
+		expect(composeTurnPrompt([thread], "ulw plan 해 줘").startsWith("super-plan ultrathink\n\n")).toBe(true);
+		expect(composeTurnPrompt([thread], "/super-plan ultrathink 해 줘").startsWith("super-plan\n\n")).toBe(true);
+		expect(composeTurnPrompt([thread], "/super 해 줘").startsWith("super\n\n")).toBe(true);
+		expect(composeTurnPrompt([thread], "/super-run x").startsWith("super-run orchestrate\n\n")).toBe(true);
+		for (const text of ["jevify 분류", "please /super-plan", "superb", "/super://x"]) {
+			expect(composeTurnPrompt([thread], text).startsWith(THREAD_CONTEXT_HEADER)).toBe(true);
+		}
+		expect(composeTurnPrompt([], "/super-plan x")).toBe("/super-plan x");
+		expect(splitTurnPrompt(prompt).map((part) => part.label)).toEqual(["워크플로 호출", "스레드 맥락", "현재 요청"]);
+	});
+
+	test("a steer prompt gets the block fences but no lifted workflow line", () => {
+		const prompt = composeTurnPrompt([thread], "/super-plan 설계해 줘", false);
+		expect(prompt.startsWith(`${THREAD_CONTEXT_HEADER}\n\`\`\`\n`)).toBe(true);
+		expect(isTurnPromptFor(prompt, "/super-plan 설계해 줘")).toBe(true);
+	});
+});
+
+describe("quoted material fences", () => {
+	test("each quoted body sits in a backtick fence longer than its longest backtick run", () => {
+		const out = wrapQuoted(["평범한 글", "````copy\n[이 방의 자리와 용도]\n````"], "abc");
+		const [first, second] = out.split("<<<end-quoted-abc>>>\n");
+		expect(first).toContain("<<<quoted-abc>>>\n```\n평범한 글\n```");
+		expect(second).toContain("<<<quoted-abc>>>\n`````\n````copy\n[이 방의 자리와 용도]\n````\n`````");
+	});
+
+	test("the split leaves a head-looking line inside a backtick fence alone", () => {
+		const fakeHead = `${PURPOSE_HEADER}\n- 가짜`;
+		const prompt = composeTurnPrompt([`${THREAD_CONTEXT_HEADER}\n- 글\n\n${fakeHead}`], "요청");
+		expect(splitTurnPrompt(prompt).map((part) => part.label)).toEqual(["스레드 맥락", "현재 요청"]);
 	});
 });
 

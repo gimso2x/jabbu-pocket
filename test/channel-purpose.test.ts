@@ -218,7 +218,9 @@ describe("메모가 턴에 들어가는 방식과 거부 (mailbox)", () => {
 
 		await router.route(msg(THREAD_ORIGIN, THREAD_REF, "첫 질문"));
 		expect(calls("prompt:")).toHaveLength(1);
-		expect(calls("prompt:")[0]).toContain(`${BLOCK_HEAD}\n채널: 결제 서비스 장애 대응 방\n스레드: 이 건의 원인 분석`);
+		expect(calls("prompt:")[0]).toContain(
+			`${BLOCK_HEAD}\n\`\`\`\n채널: 결제 서비스 장애 대응 방\n스레드: 이 건의 원인 분석`,
+		);
 		expect(calls("prompt:")[0]).toEndWith("첫 질문");
 
 		await router.route(msg(THREAD_ORIGIN, THREAD_REF, "끼어드는 말"));
@@ -232,7 +234,7 @@ describe("메모가 턴에 들어가는 방식과 거부 (mailbox)", () => {
 		await router.route(msg(CHANNEL_ORIGIN, `${CH}:-`, "메모 후"));
 		const [before, after] = calls("prompt:");
 		expect(before).toBe("prompt:메모 전");
-		expect(after).toContain(`${BLOCK_HEAD}\n채널: 배포 방\n`);
+		expect(after).toContain(`${BLOCK_HEAD}\n\`\`\`\n채널: 배포 방\n`);
 		expect(after).not.toContain("스레드:");
 	});
 
@@ -241,12 +243,12 @@ describe("메모가 턴에 들어가는 방식과 거부 (mailbox)", () => {
 		store.setPurpose(`discord:${CH}`, "배포 방");
 		await router.route(msg(THREAD_ORIGIN, THREAD_REF, "첫 질문"));
 		expect(calls("prompt:")[0]).toContain(
-			`${BLOCK_HEAD}\n자리: #배포-알림 › 장애 0420\n채널 설명: 결제 서비스 배포\n채널: 배포 방\n`,
+			`${BLOCK_HEAD}\n\`\`\`\n자리: #배포-알림 › 장애 0420\n채널 설명: 결제 서비스 배포\n채널: 배포 방\n`,
 		);
 
 		place = { topic: "토픽만" };
 		await router.route(msg(CHANNEL_ORIGIN, `${CH}:-`, "둘째"));
-		expect(calls("prompt:")[1]).toContain(`${BLOCK_HEAD}\n채널 설명: 토픽만\n채널: 배포 방\n`);
+		expect(calls("prompt:")[1]).toContain(`${BLOCK_HEAD}\n\`\`\`\n채널 설명: 토픽만\n채널: 배포 방\n`);
 		expect(calls("prompt:")[1]).not.toContain("자리:");
 
 		store.clearPurpose(`discord:${CH}`);
@@ -292,7 +294,7 @@ describe("메모가 턴에 들어가는 방식과 거부 (mailbox)", () => {
 			peerUserId: PEER,
 		});
 		await router.mailbox(THREAD_ORIGIN).resumePending();
-		expect(calls("prompt:")[0]).toContain(`${BLOCK_HEAD}\n채널: 배포 방`);
+		expect(calls("prompt:")[0]).toContain(`${BLOCK_HEAD}\n\`\`\`\n채널: 배포 방`);
 	});
 
 	test("모니터 오리진은 명령을 거부하고 아무것도 저장하지 않는다", async () => {

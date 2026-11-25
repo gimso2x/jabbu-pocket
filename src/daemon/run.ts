@@ -8,18 +8,16 @@ import { DiscordSocketTransport } from "../discord/socket-transport";
 import { FileFakeDiscordTransport } from "../discord/test-transport";
 import type { DiscordTransport } from "../discord/transport";
 import { bootRuntime } from "../lanes/runtime";
-import { isTaskOrigin } from "../lanes/status";
 import { createLogger, type Logger } from "../log";
-import { AgyOmpDriver } from "../omp/agy-driver";
+import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
-import { RpcOmpDriver } from "../omp/rpc-driver";
 import { testHostLoad } from "../ops/host-resources";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
 import { redact } from "../redact";
-import { spawnSystemPrompt } from "../safety/prompt";
 import { indexRuntimeSecrets } from "../safety/secret-index";
 import { NewerSchemaError, SCHEMA_VERSION } from "../store/schema-version";
+import { createBotDriverFactory } from "./bot-driver";
 import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
 import { acquireLock, type Lock, LockHeldError } from "./lock";
@@ -232,6 +230,15 @@ export async function runDaemon(
 	// What every review, QA and check receipt of this run is recorded on: omp, the source checkout commit, OS and arch.
 	const runtime = await bootRuntime({ omp: ompVersion, sourceDir: join(import.meta.dir, "..", ".."), log });
 	log.info("runtime_booted", { omp: runtime.omp, source: runtime.source });
+	const agyPool =
+		config.agent === "agy"
+			? new AgyAccountPool({
+					config: () => daemonOptions.config.agyAccounts,
+					statePath: join(config.homeDir, "agy-quota-state.json"),
+					now: () => clock.now(),
+					log,
+				})
+			: undefined;
 	const daemonOptions: ConstructorParameters<typeof Daemon>[0] = {
 		config,
 		bootConfigText,
@@ -243,54 +250,26 @@ export async function runDaemon(
 		crash: crashHook(env),
 		...(hostLoad === undefined ? {} : { hostLoad }),
 		sweepMs: env.JABBU_TEST_HOOKS === "1" && env.JABBU_SWEEP_MS ? Number(env.JABBU_SWEEP_MS) : undefined,
-		driverFactory: (origin, sessionDir) => {
-			if (isTaskOrigin(origin)) return daemon.taskDriver(origin, sessionDir, botRpcEnv(config.ompProfile)); // never agy
-			// Only the omp driver answers dialogs and narrows host tools for a peer-touched conversation.
-			const omp = config.agent !== "agy";
-			const answerDialog = omp ? daemon.answerDialogsFor(origin) : undefined;
-			const systemPrompt = spawnSystemPrompt({
-				secretsDir,
-				originKey: origin,
-				sessionDir,
-				files: personaFiles,
-				onPersonaError,
-				herdr: config.herdr !== undefined,
-				// `ask` is allowed only where the owner can answer it: the same answerer the omp driver gets below.
-				ownerDialogs: answerDialog !== undefined,
-				peerTouched: omp && daemon.peerTouched(origin),
-				surface: daemon.floorsSurfaceFor(origin),
-				// agy children get no jabbu host tools, so their floors name none.
-				hostTools: omp,
-				now: clock.now(),
-				log,
-			});
-			return config.agent === "agy"
-				? new AgyOmpDriver({
-						agyExecutable: config.agyExecutable ?? "agy",
-						cwd: daemon.cwdFor(origin),
-						sessionDir,
-						...(agyModel === undefined ? {} : { model: agyModel }),
-						...(config.thinking === undefined ? {} : { thinking: config.thinking }),
-						systemPrompt,
-						mcpServers: () => daemonOptions.config.agyMcpServers,
-						log,
-						originKey: origin,
-						inboundRoot: join(config.homeDir, "media", "inbound"),
-					})
-				: new RpcOmpDriver({
-						ompExecutable: config.ompExecutable,
-						cwd: daemon.cwdFor(origin),
-						sessionDir,
-						...model,
-						...(config.thinking === undefined ? {} : { thinking: config.thinking }),
-						...botRpcEnv(config.ompProfile),
-						...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
-						extraArgs: ["--append-system-prompt", systemPrompt],
-						hostTools: daemon.hostToolsFor(origin),
-						answerDialog,
-						log,
-					});
-		},
+		...(agyPool === undefined ? {} : { agyStatus: () => agyPool.status(clock.now()) }),
+		driverFactory: createBotDriverFactory({
+			getConfig: () => daemonOptions.config,
+			secretsDir,
+			personaFiles,
+			onPersonaError,
+			clock,
+			log,
+			agyModel,
+			ompModel: model,
+			agyPool,
+			cwdFor: (origin) => daemon.cwdFor(origin),
+			peerTouched: (origin) => daemon.peerTouched(origin),
+			floorsSurfaceFor: (origin) => daemon.floorsSurfaceFor(origin),
+			hostToolsFor: (origin) => daemon.hostToolsFor(origin),
+			answerDialogsFor: (origin) => daemon.answerDialogsFor(origin),
+			rotationContextFor: (origin) => daemon.rotationContextFor(origin),
+			botRpcEnv,
+			taskDriver: (origin, sessionDir, rpcEnv) => daemon.taskDriver(origin, sessionDir, rpcEnv),
+		}),
 	};
 	const daemon = new Daemon(daemonOptions);
 	// The daemon stops its children and settles the ledger before it exits. SIGHUP (and `jabbu-pocket reload`) re-reads config.json.

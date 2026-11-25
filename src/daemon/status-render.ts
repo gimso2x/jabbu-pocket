@@ -71,6 +71,18 @@ export function renderStatusText(report: StatusReport): string {
 			`재시작 대기(drain) 중 · 진행 턴 ${turns} · 호스트 도구 ${hostTools} · 승인 대기 ${approvals} · 새 메시지는 pending`,
 		);
 	}
+	if (report.agyAccounts !== undefined) {
+		const { current, total, blocked, error } = report.agyAccounts;
+		if (error !== undefined) {
+			lines.push(`agy 계정: 오류 (${error}) — 기본 계정으로 동작 중`);
+		} else {
+			const blockedText =
+				blocked.length === 0
+					? "막힘 없음"
+					: `막힘: ${blocked.map((entry) => `${entry.name} ${formatLocal(entry.until, report.timezone)}`).join(", ")}`;
+			lines.push(`agy 계정: ${current ?? "-"} (총 ${total}개 · ${blockedText})`);
+		}
+	}
 	if (report.openGates.length === 0) lines.push("자가진단 게이트 이상 없음");
 	else {
 		lines.push(`자가진단 게이트 ${report.openGates.length}개 열림`);

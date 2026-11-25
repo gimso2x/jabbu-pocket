@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 /**
@@ -15,6 +15,7 @@ import { createInterface } from "node:readline";
  * - "@tool": a run_command tool call (in_progress, then completed with output) before the answer; with "@nooutput"
  *   the completion has no output, with "@failtool" it ends `failed`.
  * - "@hold": the prompt stays open until `session/cancel` (replies `cancelled`) or SIGUSR1 (answers HELD-DONE).
+ * - "@holdmsg": emits a text chunk before waiting on SIGUSR1 / `session/cancel` (no tool call).
  * - "@holdtool": a tool call in_progress until SIGUSR1 (completes it, answers HELD-TOOL-DONE) or `session/cancel`.
  * - "@deaf": starts a grandchild that connects to the unix socket FAKE_AGY_GRAND_SOCK and stays, reports a tool call
  *   in_progress, and ignores cancel.
@@ -29,6 +30,30 @@ import { createInterface } from "node:readline";
  */
 
 const LOG = process.env.FAKE_AGY_LOG;
+const appDataFlag = process.argv.indexOf("--app-data-dir");
+const APP_DATA_DIR = appDataFlag !== -1 ? process.argv[appDataFlag + 1] : undefined;
+const QUOTA_DIRS = new Set(
+	(process.env.FAKE_AGY_QUOTA_DIRS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s !== ""),
+);
+const QUOTA_FILE = process.env.FAKE_AGY_QUOTA_FILE;
+const isQuotaDir = (): boolean => {
+	if (APP_DATA_DIR === undefined) return false;
+	if (QUOTA_DIRS.has(APP_DATA_DIR)) return true;
+	if (QUOTA_FILE === undefined) return false;
+	try {
+		return readFileSync(QUOTA_FILE, "utf8")
+			.split(/[\s,]+/)
+			.includes(APP_DATA_DIR);
+	} catch {
+		return false;
+	}
+};
+const ECHO_DIR = process.env.FAKE_AGY_ECHO_DIR === "1";
+const HOLD_INIT_DIR = process.env.FAKE_AGY_HOLD_INIT_DIR;
+const HOLD_INIT_SOCK = process.env.FAKE_AGY_HOLD_INIT_SOCK;
 const log = (entry: Record<string, unknown>): void => {
 	if (LOG !== undefined) appendFileSync(LOG, `${JSON.stringify(entry)}\n`);
 };
@@ -92,13 +117,27 @@ function prompt(id: unknown, text: string): void {
 		};
 		return;
 	}
-	if (text.includes("@quota")) {
+	if (text.includes("@tool-quota")) {
+		update({ sessionUpdate: "tool_call", ...tool, status: "in_progress", rawInput, args: rawInput });
+		update({ sessionUpdate: "tool_call_update", ...tool, status: "completed", rawOutput: { output: "hi\n" } });
+		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
+		update({
+			sessionUpdate: "agent_message_chunk",
+			content: {
+				type: "text",
+				text: "Working\n⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1h15m",
+			},
+		});
+		return;
+	}
+	if (text.includes("@quota") || isQuotaDir()) {
 		// agy's own quota retry, split across chunks; it only stops on `session/cancel`.
 		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
 		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Working\n⚠ API error (att" } });
+		const detail = isQuotaDir() ? "Individual quota reached. Resets in 2h30m" : "out";
 		update({
 			sessionUpdate: "agent_message_chunk",
-			content: { type: "text", text: "empt 1): RESOURCE_EXHAUSTED (code 429): out" },
+			content: { type: "text", text: `empt 1): RESOURCE_EXHAUSTED (code 429): ${detail}` },
 		});
 		return;
 	}
@@ -116,6 +155,11 @@ function prompt(id: unknown, text: string): void {
 		const toolCall = { toolCallId: "call_perm", title: "run\nrm -rf build" };
 		const method = text.includes("@askother") ? "fs/read_text_file" : "session/request_permission";
 		send({ id: "perm-1", method, params: { sessionId, toolCall, options } });
+		return;
+	}
+	if (text.includes("@holdmsg")) {
+		held = { id, onSignal: () => finish("HELD-DONE"), onCancel: () => reply(id, "cancelled") };
+		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "WAIT\n" } });
 		return;
 	}
 	if (text.includes("@hold")) {
@@ -150,7 +194,8 @@ function prompt(id: unknown, text: string): void {
 		update({ sessionUpdate: "tool_call_update", ...tool, status, rawInput, ...output });
 	}
 	const last = text.split("\n").at(-1) ?? "";
-	update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `REPLY${prompts}:` } });
+	const tag = ECHO_DIR ? `[${APP_DATA_DIR ?? "default"}] ` : "";
+	update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `REPLY${prompts}:${tag}` } });
 	finish(last);
 }
 
@@ -172,17 +217,43 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 		return current?.onSignal();
 	}
 	switch (message.method) {
-		case "initialize":
-			return send({
-				id: message.id,
-				result: {
-					protocolVersion: 1,
-					agentCapabilities: {
-						loadSession: true,
-						...(process.env.FAKE_AGY_NO_IMAGE === "1" ? {} : { promptCapabilities: { image: true } }),
+		case "initialize": {
+			const replyInit = () =>
+				send({
+					id: message.id,
+					result: {
+						protocolVersion: 1,
+						agentCapabilities: {
+							loadSession: true,
+							...(process.env.FAKE_AGY_NO_IMAGE === "1" ? {} : { promptCapabilities: { image: true } }),
+						},
 					},
-				},
-			});
+				});
+			if (HOLD_INIT_DIR !== undefined && HOLD_INIT_SOCK !== undefined && APP_DATA_DIR === HOLD_INIT_DIR) {
+				let released = false;
+				const release = () => {
+					if (released) return;
+					released = true;
+					replyInit();
+				};
+				void Bun.connect({
+					unix: HOLD_INIT_SOCK,
+					socket: {
+						data() {
+							release();
+						},
+						close() {
+							release();
+						},
+						error() {
+							release();
+						},
+					},
+				}).catch(() => release());
+				return;
+			}
+			return replyInit();
+		}
 		case "session/new": {
 			const open = (): void => {
 				sessionId = `fake-${randomUUID()}`;

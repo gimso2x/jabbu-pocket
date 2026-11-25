@@ -42,6 +42,11 @@ export function quotaRetryNotice(text: string): string | undefined {
 	return detail && QUOTA_EXHAUSTED.test(detail) ? detail : undefined;
 }
 
+/** True when an agy error/text directly indicates a 429 / RESOURCE_EXHAUSTED quota failure. */
+export function isQuotaErrorText(text: string): boolean {
+	return QUOTA_EXHAUSTED.test(text);
+}
+
 /** `text` minus an unfinished last line that may still turn into a retry notice (omp withholds it the same way). */
 export function shownText(text: string): string {
 	const lineStart = text.lastIndexOf("\n") + 1;
@@ -97,6 +102,8 @@ export interface AgyAcpSpawnOptions {
 	executable: string;
 	cwd: string;
 	env: Record<string, string>;
+	/** Subdir under `~/.gemini/` passed as `--app-data-dir` to isolate OAuth tokens/logs per account. */
+	appDataDir?: string;
 	/** Where the answers to permission requests are logged (`agy.acp.permission`); absent → not logged. */
 	log?: Logger | undefined;
 	/** Origin the child serves; named in those log events. */
@@ -124,7 +131,8 @@ export class AgyAcpClient {
 	constructor(options: AgyAcpSpawnOptions, handlers: AgyAcpHandlers) {
 		this.#handlers = handlers;
 		this.#options = options;
-		this.#proc = Bun.spawn([options.executable, ...AGY_ACP_ARGS], {
+		const args = [...AGY_ACP_ARGS, ...(options.appDataDir === undefined ? [] : ["--app-data-dir", options.appDataDir])];
+		this.#proc = Bun.spawn([options.executable, ...args], {
 			cwd: options.cwd,
 			env: { ...options.env, ...AGY_ENV },
 			stdin: "pipe",
