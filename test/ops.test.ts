@@ -1919,6 +1919,35 @@ describe("jabbu-pocket gc", () => {
 		}
 	});
 
+	test("gc prunes monitor_slots past the ledger retention window and keeps fresh ones", () => {
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const monitor = store.monitors.addMonitor({
+			name: "slots",
+			trigger: { kind: "cron", schedule: "* * * * *", timezone: "UTC" },
+			instruction: "check",
+			overlap: "queue",
+			enabled: true,
+		});
+		store.close();
+		const now = Date.now();
+		const db = new Database(join(home.dir, "jabbu.db"));
+		const insert = db.query(
+			"INSERT INTO monitor_slots (monitor_id, slot_at, state, created_at) VALUES (?, ?, 'claimed', ?)",
+		);
+		insert.run(monitor.id, now - 100 * DAY_MS, now - 100 * DAY_MS);
+		insert.run(monitor.id, now - 91 * DAY_MS, now - 91 * DAY_MS);
+		insert.run(monitor.id, now - DAY_MS, now - DAY_MS);
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now });
+		expect(result.ledgerRemoved.monitorSlots).toBe(2);
+		const after = new Database(join(home.dir, "jabbu.db"), { readonly: true });
+		try {
+			expect(after.query("SELECT COUNT(*) AS n FROM monitor_slots").get()).toEqual({ n: 1 });
+		} finally {
+			after.close();
+		}
+	});
+
 	test("a resumed older epoch stays live when the home is reached through a symlink", () => {
 		const link = join(home.dir, "..", `${basename(home.dir)}-link`);
 		symlinkSync(home.dir, link);
@@ -2478,7 +2507,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 
 	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
 	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
-	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0 };
+	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0, monitorSlots: 0 };
 
 	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
@@ -2496,6 +2525,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveries: 0,
 			deliveryPosts: 0,
 			monitorEvents: 0,
+			monitorSlots: 0,
 		});
 	});
 
@@ -2512,7 +2542,13 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		db.exec("DROP TABLE delivery_posts; DROP TABLE approvals");
 		db.close();
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
-		expect(result.ledgerRemoved).toEqual({ inbound: 5, deliveries: 3, deliveryPosts: 0, monitorEvents: 0 });
+		expect(result.ledgerRemoved).toEqual({
+			inbound: 5,
+			deliveries: 3,
+			deliveryPosts: 0,
+			monitorEvents: 0,
+			monitorSlots: 0,
+		});
 		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
 	});
@@ -2520,7 +2556,9 @@ describe("jabbu-pocket gc: ledger retention", () => {
 	test("`jabbu-pocket gc --dry-run` prints the ledger counts in gc_done", async () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
-		expect(dry.stdout).toMatch(/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+\n/);
+		expect(dry.stdout).toMatch(
+			/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+ monitor_slots=\d+\n/,
+		);
 		expect(names("inbound")).toHaveLength(8);
 	});
 });

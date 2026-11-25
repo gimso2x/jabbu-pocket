@@ -109,7 +109,7 @@ function gcCommand(args: string[], homeDir: string): number {
 	}
 	for (const path of result.laneArtifactsRemoved) process.stdout.write(`gc lane_artifacts_${verb} path=${path}\n`);
 	process.stdout.write(
-		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} deliveries=${result.ledgerRemoved.deliveries} delivery_posts=${result.ledgerRemoved.deliveryPosts} monitor_events=${result.ledgerRemoved.monitorEvents}\n`,
+		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} deliveries=${result.ledgerRemoved.deliveries} delivery_posts=${result.ledgerRemoved.deliveryPosts} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots}\n`,
 	);
 	return 0;
 }
