@@ -606,10 +606,9 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			const reason = record.error === undefined ? record.status : `${record.status}: ${record.error}`;
 			done.reject(new OmpDriverError("rpc_error", `btw ${reason}`));
 		};
-		const off = client.onBtwRecord((record) => {
-			if (id === undefined) early.push(record);
-			else settle(record);
-		});
+		const off = client.onBtwRecord((record) => (id === undefined ? early.push(record) : settle(record)));
+		// Once the response is in, no pending request would reject this wait when the child dies: the exit does.
+		const offExit = this.onExit(() => done.reject(new OmpDriverError("rpc_error", "btw: omp exited")));
 		const timer = setTimeout(() => {
 			done.reject(new OmpDriverError("rpc_error", "btw timeout"));
 			// Best effort: the caller already gets the timeout, and a cancel that fails leaves nothing to undo here.
@@ -633,6 +632,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		} finally {
 			clearTimeout(timer);
 			off();
+			offExit();
 		}
 	}
 

@@ -1492,6 +1492,26 @@ describe("inline reply channels (channels.discord.inlineReplyChannels)", () => {
 		expect(inbound.slice(keep).map((m) => m.originKey)).toEqual(Array(6).fill(`discord/ch/${CH}`));
 	});
 
+	test("AC-3b: the task after the colon of a split request is not read as a negation, question or quote", async () => {
+		await adapter(inlineOptions());
+		const tasks = [
+			"깨지지 않는 테스트 작성",
+			"로그인 없이 접근되는 버그 확인",
+			"왜 느린지 조사?",
+			'README의 "설치" 고쳐줘',
+		];
+		for (const task of tasks) await transport.emitMessage(message(`<@${BOT}> 이건 따로 빼줘: ${task}`));
+		expect(calls("startThread")).toHaveLength(tasks.length);
+		expect(inbound.map((m) => m.originKey)).toEqual(
+			tasks.map((_, i) => `discord/ch/${CH}/t/${calls("startThread")[i]?.messageId}`),
+		);
+		// A negation in the request itself still keeps the body reply, with or without a task.
+		const before = calls("startThread").length;
+		for (const text of ["따로 빼지 말고: 로그 분석", "새 스레드 말고 본문에서: 로그 분석", "이건 따로 빼줘 말고: 로그"])
+			await transport.emitMessage(message(`<@${BOT}> ${text}`));
+		expect(calls("startThread")).toHaveLength(before);
+	});
+
 	test("AC-4: a channel that is not an inline channel still opens a thread for every root", async () => {
 		transport.setChannel({ id: OTHER, type: 0, guildId: GUILD });
 		await adapter(inlineOptions());

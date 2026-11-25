@@ -7,10 +7,10 @@
 import { Database } from "bun:sqlite";
 import { existsSync, type Stats, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { newestSessionFile } from "../omp/session-heal";
 import { isRecord } from "../omp/type-guards";
 import { iterJsonlRecords } from "./jsonl";
 import type { PeerInstall } from "./peers";
+import { sessionFileOf } from "./session-model";
 import { rows } from "./turn-board";
 
 export const FILE_WINDOW_MS = 15 * 60_000;
@@ -191,12 +191,7 @@ function originSessions(
 			agy.push(id);
 			continue;
 		}
-		const file =
-			origin.session_file !== null && existsSync(origin.session_file)
-				? origin.session_file
-				: existsSync(origin.session_dir)
-					? newestSessionFile(origin.session_dir)
-					: undefined;
+		const file = sessionFileOf({ sessionDir: origin.session_dir, sessionFile: origin.session_file });
 		const lane = install === undefined ? lanes.get(origin.origin_key) : undefined;
 		if (file === undefined) continue;
 		const kind = install !== undefined ? "peer" : lane !== undefined ? "lane" : "turn";
