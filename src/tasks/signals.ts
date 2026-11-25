@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { redact, redactThenClip } from "../redact";
+import { CHECK_OPEN, closingBracket, skipString, trailingCheckOpen, unescapedQuotes } from "./signal-scan";
 
 export const CHECK_TIMEOUT_MS = 900_000;
 
@@ -36,41 +37,8 @@ export class SignalSyntaxError extends Error {
 
 const GRAMMAR =
 	'신호는 command ["argv",...] [stdout~"regex"] 또는 file <워크트리 상대경로> [sha256=<hex>] [json:.a.b=<json>]입니다';
-const CHECK_OPEN = "[check:";
 /** Worktree-relative file path: the host interpolates it into a path check, so only these characters pass. */
 const RELATIVE_PATH = /^[A-Za-z0-9_./-]+$/;
-
-/** Index just past the closing quote of the JSON string opening at `i`; `-1` when it is never closed. */
-function skipString(s: string, i: number): number {
-	let end = i + 1;
-	while (end < s.length && s[end] !== '"') end += s[end] === "\\" ? 2 : 1;
-	return end < s.length ? end + 1 : -1;
-}
-
-/** Double quotes of `s` that a backslash does not escape (a backslash pair, then a quote, still counts). */
-function unescapedQuotes(s: string): number {
-	let count = 0;
-	for (let i = 0; i < s.length; i++) {
-		if (s[i] === "\\") i += 1;
-		else if (s[i] === '"') count += 1;
-	}
-	return count;
-}
-
-/** Index of the bracket closing the one at `open` (quotes and nesting respected); `-1` when it never closes. */
-function closingBracket(s: string, open: number): number {
-	let depth = 0;
-	for (let i = open; i < s.length; i++) {
-		const c = s[i];
-		if (c === '"') {
-			const past = skipString(s, i);
-			if (past === -1) return -1;
-			i = past - 1;
-		} else if (c === "[" || c === "{") depth += 1;
-		else if ((c === "]" || c === "}") && --depth === 0) return i;
-	}
-	return -1;
-}
 
 /**
  * The signals of the `[check: …]` that ends `text`; `[]` when the text does not end in one (a `[check:` quoted in the
@@ -81,22 +49,22 @@ export function checkSignalsOf(text: string): string[] {
 	const t = text.trim();
 	const last = t.lastIndexOf(CHECK_OPEN);
 	if (last === -1) return [];
-	let open = last;
-	while (open !== -1 && closingBracket(t, open) !== t.length - 1)
-		open = open === 0 ? -1 : t.lastIndexOf(CHECK_OPEN, open - 1);
+	const cache = new Map<number, number>();
+	const open = trailingCheckOpen(t, cache);
 	if (open === -1) {
-		if (closingBracket(t, last) === -1)
+		if (closingBracket(t, last, cache) === -1)
 			throw new SignalSyntaxError(`[check: …]가 닫히지 않았습니다: ${redactThenClip(t.slice(last), 60)}`);
 		return [];
 	}
 	const body = t.slice(open + CHECK_OPEN.length, t.length - 1);
 	const parts: string[] = [];
+	const bodyCache = new Map<number, number>();
 	let start = 0;
 	for (let i = 0; i < body.length; i++) {
 		const c = body[i];
 		// An unpaired quote is a character, not a string that swallows the rest.
 		if (c === '"') i = Math.max(skipString(body, i) - 1, i);
-		else if (c === "[" || c === "{") i = Math.max(closingBracket(body, i), i);
+		else if (c === "[" || c === "{") i = Math.max(closingBracket(body, i, bodyCache), i);
 		else if (c === ";") {
 			parts.push(body.slice(start, i));
 			start = i + 1;
@@ -111,9 +79,7 @@ export function checkSignalsOf(text: string): string[] {
 /** `text` without the `[check: …]` that ends it (the criterion's own words); trimmed `text` when none ends it. */
 export function withoutCheckTail(text: string): string {
 	const t = text.trim();
-	let open = t.lastIndexOf(CHECK_OPEN);
-	while (open !== -1 && closingBracket(t, open) !== t.length - 1)
-		open = open === 0 ? -1 : t.lastIndexOf(CHECK_OPEN, open - 1);
+	const open = trailingCheckOpen(t, new Map());
 	return open === -1 ? t : t.slice(0, open).trim();
 }
 

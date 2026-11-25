@@ -504,6 +504,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				const summary = await taskSummaryLine(taskDeps, name, null);
 				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
+			if (row.status === "done" || row.status === "cancelled")
+				throw new Error(`${row.taskId}는 이미 ${row.status}로 닫힌 작업입니다`);
 			const gate = await gateWork(task, signal);
 			const existing = await runtime.exists(row);
 			if (!existing.ok) return `전달 실패: ${existing.error}`;
