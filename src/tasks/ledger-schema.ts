@@ -113,3 +113,12 @@ function migrateTransitionActors(db: Database): void {
 		db.run("DROP TABLE task_transitions_old");
 	})();
 }
+
+/**
+ * One write transaction, begun with BEGIN IMMEDIATE. A deferred BEGIN that reads, then writes, fails at once with
+ * SQLITE_BUSY(_SNAPSHOT) when another process (the owner's CLI) committed in between: busy_timeout does not wait for
+ * that upgrade. IMMEDIATE takes the write lock first, so it waits up to busy_timeout instead.
+ */
+export function writeTx<T>(db: Database, fn: () => T): T {
+	return db.transaction(fn).immediate();
+}
