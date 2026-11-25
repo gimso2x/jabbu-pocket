@@ -241,7 +241,7 @@ function hasApprovalsTable(db: Database): boolean {
 
 function hasActiveStatus(db: Database, conversation: string, thread?: string): boolean {
 	const col = thread === undefined ? "conversation = ?" : "conversation = ? AND thread = ?";
-	const sql = `SELECT 1 FROM web_messages WHERE ${col} AND role = 'status' AND card_json LIKE '%"deleted":false%' LIMIT 1`;
+	const sql = `SELECT 1 FROM web_messages WHERE ${col} AND role = 'status' AND card_json LIKE '%"deleted":false%' AND card_json NOT LIKE '%"final":true%' LIMIT 1`;
 	return (thread === undefined ? db.query(sql).get(conversation) : db.query(sql).get(conversation, thread)) !== null;
 }
 
