@@ -1,0 +1,63 @@
+name: workflow-lint
+
+# 워크플로·복합 액션·dependabot 변경 시 문법(actionlint)·탭·보안(zizmor) 감사를 실행한다.
+# test/ci-workflow.test.ts가 아래 권한·고정·설정 계약을 검증한다.
+on:
+  pull_request:
+    paths:
+      - .github/**
+      - scripts/ci-install-actionlint.sh
+  push:
+    branches: [main]
+    paths:
+      - .github/**
+      - scripts/ci-install-actionlint.sh
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+concurrency:
+  group: workflow-lint-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  zizmor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@1b4550e929643b8b26a62303c6bd64814271a4f1 # v0.9.2
+        with:
+          inputs: .github
+          advanced-security: false
+          annotations: true
+          min-confidence: high
+          min-severity: high
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint 1.7.12
+        run: bash scripts/ci-install-actionlint.sh "$RUNNER_TEMP/bin"
+      - name: Fail on tabs in .github YAML files
+        run: |
+          awk 'BEGIN{bad=0} /\t/{print FILENAME ":" FNR; bad=1} END{exit bad}' \
+            .github/workflows/*.yml \
+            .github/actions/*/action.yml \
+            .github/dependabot.yml
+      - name: Run actionlint
+        run: |
+          "$RUNNER_TEMP/bin/actionlint" -color
