@@ -127,6 +127,8 @@ export class PrWatchRunner {
 		this.#warned.delete(name);
 		const done = this.#posted.get(name) ?? new Set<string>();
 		for (const event of pass.events) {
+			// The owner may have turned the watch off while this pass was reading: stop posting at once.
+			if (store.getLane(name)?.meta.pr?.watchOff === true) return;
 			const line = prWatchLine(event);
 			if (done.has(line)) continue;
 			if (!(await this.#post(lane, line))) {

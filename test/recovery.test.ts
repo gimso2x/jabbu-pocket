@@ -144,6 +144,25 @@ describe("recovery rule (2): dispatched rows of a dead process", () => {
 		expect(store.listDeliveries({ originKey: ORIGIN }).map((d) => d.body)).toEqual(["ECHO 이어서"]);
 	});
 
+	test("one origin's settle failure does not abort the boot: its rows stay dispatched, the other origin recovers", async () => {
+		const POISON = "discord/dm/200000000000000009";
+		store.ensureOrigin(POISON, "sess/e9");
+		store.recordInbound({ originKey: POISON, platformMessageId: "p1", textRef: "독", threadRef: "t-p1" });
+		store.markDispatched("p1", { opRef: "op-p1", entryCursor: null });
+		store.recordInbound({ originKey: ORIGIN, platformMessageId: "ok1", textRef: "정상", threadRef: "t-ok1" });
+		store.markDispatched("ok1", { opRef: "op-ok1", entryCursor: null });
+		const original = store.recordTurnFailure.bind(store);
+		store.recordTurnFailure = (input) => {
+			if (input.originKey === POISON) throw new Error("poisoned settle");
+			return original(input);
+		};
+		const result = await recoverDispatched({ store, driverFactory: factory(), log: log() });
+		expect(result).toEqual({ answered: 0, interrupted: 1, continued: 0 });
+		expect(logLines.filter((line) => line.includes("event=recovery_origin_failed"))).toHaveLength(1);
+		expect(store.getInbound("p1")?.state).toBe("dispatched");
+		expect(store.getInbound("ok1")?.state).not.toBe("dispatched");
+	});
+
 	test("an uncertain row is left alone by recovery and by a reopened ledger's pending replay list", async () => {
 		store.recordInbound({ originKey: ORIGIN, platformMessageId: "u1", textRef: "불확실", threadRef: "t-u1" });
 		store.markUncertain("u1", "steer_threw");

@@ -17,6 +17,7 @@ import { realProcessRunner } from "../dispatch/omp";
 import { redact } from "../redact";
 import { indexEnvSecrets } from "../safety/secret-index";
 import { hostTimezone } from "../time";
+import { webDashboardOptionsFor } from "../web/routes";
 import { sourceAgentDir } from "./omp";
 
 export const DASHBOARD_USAGE = `  dashboard [--port <n>] [--bind 127.0.0.1|::1]
@@ -42,11 +43,7 @@ function usage(message: string): number {
 	return 2;
 }
 
-/**
- * `jabbu-pocket dashboard`: a process of its own beside the daemon (it still answers "daemon down"). Reads config.json
- * without touching the token files, seeds the redaction value index from the environment and guard files, opens the
- * database read-only per snapshot, and serves until SIGTERM/SIGINT.
- */
+/** `jabbu-pocket dashboard`: separate status server (and web chat API when configured). */
 export async function dashboardCommand(args: string[], homeDir: string): Promise<number> {
 	let values: { port?: string; bind?: string };
 	try {
@@ -85,11 +82,13 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 	});
 
 	let server: Server<undefined>;
+	const web = webDashboardOptionsFor(homeDir, config?.channels.web, callDaemon, config);
 	try {
 		server = startDashboardServer({
 			port,
 			hostname,
 			...(config?.dashboard?.allowedHosts === undefined ? {} : { allowedHosts: config.dashboard.allowedHosts }),
+			...(web === undefined ? {} : { web }),
 			snapshot,
 			trace: (inboundId) => readTurnTrace(homeDir, inboundId, now(), sessionWhere()),
 			cardTrace: (card) => readCardTrace(card, { ...sessionWhere(), now: now() }),

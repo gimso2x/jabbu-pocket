@@ -706,6 +706,41 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 		expect((await s.h.manager.stopPrWatch(s.lane)).text).toContain("게시된 PR이 없는 레인입니다");
 	});
 
+	test("진행 중인 패스에서 `!prwatch off`를 하면 남은 소식을 올리지 않는다", async () => {
+		const s = await publishedLane();
+		await tick(s, PR_WATCH_INTERVAL_MS);
+		const sent = (needle: string): number =>
+			s.h.transport.calls.filter((c) => c.method === "createMessage" && JSON.stringify(c).includes(needle)).length;
+		s.pr.comments.push(row(21, "maintainer", "FIRST-NEWS"), row(22, "maintainer", "SECOND-NEWS"));
+		// Hold the first post open: the pass sits between posts when the owner turns the watch off.
+		let release = (): void => {};
+		let entered = (): void => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inside = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const transport = s.h.transport;
+		const original = transport.createMessage.bind(transport);
+		let held = false;
+		transport.createMessage = async (args) => {
+			if (!held && JSON.stringify(args).includes("FIRST-NEWS")) {
+				held = true;
+				entered();
+				await gate;
+			}
+			return original(args);
+		};
+		const ticking = tick(s, PR_WATCH_INTERVAL_MS);
+		await inside;
+		await s.h.manager.stopPrWatch(s.lane);
+		release();
+		await ticking;
+		expect(sent("FIRST-NEWS")).toBe(1);
+		expect(sent("SECOND-NEWS")).toBe(0);
+	});
+
 	test("레인 스레드의 `!prwatch off <레인>`은 데몬이 직접 답하고 레인 세션에는 가지 않는다", async () => {
 		const repo = makeRepo(repos);
 		const transport = new WaitingDiscordTransport();

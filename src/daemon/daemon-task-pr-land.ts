@@ -2,7 +2,7 @@ import { defaultPrTools, type PrTools } from "../lanes/pr";
 import { BOUNCES_MAX, isPollStep, openPrLanding, reworkedPrLand, runPrLanding } from "../lanes/pr-land";
 import { prLandDeps } from "../lanes/pr-land-deps";
 import type { RemoteLandMode } from "../lanes/pr-land-remote";
-import { type LaneLandMode, PR_LAND_POLL_MS, type PrLandDeps, type PrLandInput } from "../lanes/pr-land-steps";
+import { type LaneLandMode, PR_LAND_POLL_MS, type PrLandDeps } from "../lanes/pr-land-steps";
 import type { LanePrLand, PrLandOutcome } from "../lanes/pr-land-types";
 import { defaultGit, type GitRunner } from "../lanes/verify";
 import { readAutoLandHold } from "../ops/apply";
@@ -21,7 +21,7 @@ import type { TaskRow } from "../tasks/ledger";
 import type { TaskLandRecord } from "../tasks/ledger-schema";
 import { taskLandNote } from "../tasks/notify";
 import { postPrLandStop, prLandNoticeKey } from "../tasks/pr-land-retry";
-import { openPrAtTip, prepareLocal, reworkPrompt, summaryOf } from "../tasks/pr-land-task";
+import { openPrAtTip, prepareLocal, prLandInputOf, reworkPrompt } from "../tasks/pr-land-task";
 import { type DaemonContext, postThreadNotices } from "./daemon-context";
 import { taskResumeDeps } from "./daemon-task-resume";
 
@@ -155,21 +155,9 @@ export class DaemonTaskPrLand {
 			if (mode === "button" && saved !== undefined && isPollStep(saved))
 				saved = { ...saved, pushedAt: this.#ctx.clock.now() };
 			latest = saved;
+			const frozenNow = this.#ctx.frozen() !== undefined;
 			const outcome = await openPrLanding(
-				{
-					repo: prepared.repo,
-					worktree: row.worktree,
-					branch: row.branch,
-					baseBranch,
-					sha,
-					checksHead: sha,
-					title: row.title,
-					summary: summaryOf(row),
-					config: landMode.config,
-					denylistFile: landMode.denylistFile,
-					frozen: this.#ctx.frozen() !== undefined,
-					prLand: saved,
-				},
+				prLandInputOf(row, landMode, { repo: prepared.repo, baseBranch, sha, frozen: frozenNow, prLand: saved }),
 				this.#depsOf(
 					row,
 					(prLand) => {
@@ -310,20 +298,14 @@ export class DaemonTaskPrLand {
 			hold: record.requestedBy === "auto" ? readAutoLandHold(options.config.homeDir) : undefined,
 		});
 		let latest = record.prLand;
-		const input: PrLandInput = {
-			repo: localRepoOf(row, landMode),
-			worktree: row.worktree,
-			branch: row.branch,
+		const repo = localRepoOf(row, landMode);
+		const input = prLandInputOf(row, landMode, {
+			repo,
 			baseBranch,
 			sha,
-			checksHead: sha,
-			title: row.title,
-			summary: summaryOf(row),
-			config: landMode.config,
-			denylistFile: landMode.denylistFile,
 			frozen: hold !== undefined,
 			prLand: record.prLand,
-		};
+		});
 		const remote = isRemoteMode(landMode) ? { mode: landMode, sha, baseBranch, slug: record.prLand.slug } : undefined;
 		const outcome = await runPrLanding(
 			input,

@@ -237,6 +237,21 @@ describe("tasks CLI reads (qa-l low B)", () => {
 		expect(json.tasks.map((task) => task.paused)).toEqual([true]);
 	});
 
+	test("tasks and monitors reject extra positional arguments instead of silently dropping them", async () => {
+		const id = registerTask("one-target");
+		expect((await runCliCapture(home.dir, ["tasks", "show", id, "extra"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "list", "extra"])).code).toBe(2);
+		// The mutating case: two ids on close must close nothing, not just the first.
+		const closed = await runCliCapture(home.dir, ["tasks", "close", id, id, "--as", "done"]);
+		expect(closed.code, closed.stderr).toBe(2);
+		const ledger = openTaskLedger(dbPath(), "Asia/Seoul");
+		expect(ledger.require(id).status).not.toBe("done");
+		ledger.close();
+		const monitorShown = await runCliCapture(home.dir, ["monitors", "show", "nosuch", "extra"]);
+		expect(monitorShown.code, monitorShown.stderr).toBe(2);
+		expect(monitorShown.stderr).toContain("too many arguments");
+	});
+
 	// qa-l #44: a ledger from before task_transitions existed shows its task with an empty history.
 	test("tasks show on a ledger without task_transitions is not a raw SQLiteError", async () => {
 		const id = registerTask("old ledger");

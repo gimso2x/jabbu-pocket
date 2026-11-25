@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
-import type { JabbuConfig } from "../config";
+import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
@@ -21,7 +21,7 @@ import {
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
-import { laneTriggerRefusal } from "../lanes/trigger-format";
+import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseApprovalRetryActionId } from "../safety/approval";
@@ -42,7 +42,7 @@ import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { isSideOpRef } from "./restart";
-import { laneChannelOf } from "./thread-target";
+import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
 /** What the core sink needs beyond the daemon context: the boot's ledger and the state other daemon parts share. */
 export interface CoreSinkDeps {
@@ -55,10 +55,7 @@ export interface CoreSinkDeps {
 	statusText: (originKey: string) => Promise<string>;
 }
 
-/**
- * The inbound side of the daemon: the core sink every chat adapter feeds, and the lane and [TASK] commands, controls
- * and buttons the core settles itself instead of sending them to an omp session.
- */
+/** Inbound side of the daemon: core sink and lane/[TASK] commands settled without an omp session. */
 export class DaemonInbound {
 	readonly #ctx: DaemonContext;
 
@@ -279,10 +276,11 @@ export class DaemonInbound {
 		await this.#settleOwn("lane", "lane_start", row, async () => {
 			const channel = laneChannelOf(this.#ctx, row.originKey, parseThreadRef(row.threadRef)?.channel);
 			try {
-				if (channel === undefined && parseChatOrigin(row.originKey)?.platform === "discord") {
-					throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
-				}
+				const platform = parseChatOrigin(row.originKey)?.platform;
+				if (platform === "web") throw new LaneInputError(WEB_LANE_REFUSED);
+				if (channel === undefined && platform === "discord") throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
 				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
+				assertNoSpacedPath(trigger.cwd, trigger.brief);
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
 				const lane = await this.#lanes.start({
@@ -671,7 +669,7 @@ export function deliverySources(
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
 				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
 				// One owner notice per held delivery, into the thread the answer was headed for (Cataly noticeHeld).
-				store.noticeAmbiguous(deliveryId, config.channels.discord?.ownerUserId);
+				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
 				return true;
 			}
 			return store.failDelivery(deliveryId, error).state === "expired";
