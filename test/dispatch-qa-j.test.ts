@@ -41,6 +41,18 @@ describe("dispatch tool (qa-j)", () => {
 		expect(huge.stdout.startsWith("spawn failed:")).toBe(true);
 	});
 
+	test("the real runner flags output past the cap as truncated, and only that output", async () => {
+		const big = await realProcessRunner(["sh", "-c", "head -c 200000 /dev/zero | tr '\\0' 'x'"], {
+			cwd: "/tmp",
+			stdoutCap: 1_000,
+		});
+		expect(big.code).toBe(0);
+		expect(big.truncated).toBe(true);
+		const small = await realProcessRunner(["/bin/echo", "ok"], { cwd: "/tmp", stdoutCap: 1_000 });
+		expect(small.code).toBe(0);
+		expect(small.truncated).toBeUndefined();
+	});
+
 	// qa-j n49/n109: a herdr failure string is masked like a success.
 	test("a herdr failure message is redacted", async () => {
 		const read = await herdrReadAgent("w", {
