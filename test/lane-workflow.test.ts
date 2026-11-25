@@ -3,14 +3,8 @@ import { existsSync } from "node:fs";
 import { LaneInputError } from "../src/lanes/manager-constants";
 import { buildWorkStartTool } from "../src/lanes/tools";
 import { buildLanePrompt } from "../src/lanes/trigger";
-import {
-	advertisedWorkflow,
-	leadingWorkflow,
-	triggerWorkflow,
-	WORKFLOW_NAMES,
-	type WorkflowName,
-	workflowChoice,
-} from "../src/lanes/workflow";
+import { advertisedWorkflow, triggerWorkflow, workflowChoice } from "../src/lanes/workflow";
+import { leadingWorkflow, WORKFLOW_NAMES, type WorkflowName } from "../src/lanes/workflow-names";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { CHANNEL, makeHome, type TestHome } from "./helpers/bot-home";
 import { git, makeRepo } from "./helpers/git-fixtures";
@@ -57,18 +51,18 @@ describe("lane prompt first line", () => {
 	test("no workflow chosen: no keyword line, the prompt starts with the task", () => {
 		const prompt = promptOf(undefined);
 		expect(prompt.startsWith("작업: Demo\n")).toBe(true);
-		expect(prompt).not.toMatch(/\bulw\b|ultrathink|orchestrate|workflowz|jevify/i);
+		expect(prompt).not.toMatch(/\bulw\b|\bsuper\b|ultrathink|orchestrate|workflowz|jevify/i);
 	});
 
 	test("each of the seven workflows opens the prompt with its name and omp's default keyword", () => {
 		const expected: Record<WorkflowName, string> = {
 			jevify: "jevify",
-			ulw: "ulw",
-			"ulw-plan": "ulw-plan ultrathink",
-			"ulw-execute": "ulw-execute orchestrate",
-			"ulw-loop": "ulw-loop orchestrate",
-			"mass-ulw": "mass-ulw workflowz",
-			"ulw-research": "ulw-research workflowz",
+			super: "super",
+			"super-plan": "super-plan ultrathink",
+			"super-run": "super-run orchestrate",
+			"super-loop": "super-loop orchestrate",
+			"super-graph": "super-graph workflowz",
+			"super-research": "super-research workflowz",
 		};
 		expect(Object.keys(expected).sort()).toEqual([...WORKFLOW_NAMES].sort());
 		for (const name of WORKFLOW_NAMES) {
@@ -77,33 +71,48 @@ describe("lane prompt first line", () => {
 	});
 
 	test("a native keyword already in the brief keeps the default keyword off the first line", () => {
-		expect(promptOf("ulw-plan", "think with ultrathink please").split("\n")[0]).toBe("ulw-plan");
+		expect(promptOf("super-plan", "think with ultrathink please").split("\n")[0]).toBe("super-plan");
 	});
 });
 
 describe("workflow choice", () => {
 	test("needs a known name and a non-empty reason, nothing else", () => {
 		expect(workflowChoice(undefined)).toBeUndefined();
-		expect(workflowChoice({ name: "ulw", reason: "wide change" })).toEqual({ name: "ulw", reason: "wide change" });
+		expect(workflowChoice({ name: "super", reason: "wide change" })).toEqual({ name: "super", reason: "wide change" });
 		for (const bad of [
 			null,
-			"ulw",
-			{ name: "ulw" },
-			{ name: "ulw", reason: "  " },
+			"super",
+			{ name: "super" },
+			{ name: "super", reason: "  " },
 			{ name: "debugging", reason: "x" },
-			{ name: "ulw", reason: "x", extra: 1 },
+			{ name: "ultrawork", reason: "x" },
+			{ name: "super", reason: "x", extra: 1 },
 		]) {
 			expect(() => workflowChoice(bad)).toThrow(LaneInputError);
 		}
 	});
 
-	test("advertised only as an extension command of that exact name, old or SUPER-alias description", () => {
-		const command = { name: "ulw-plan", source: "extension", description: "Run the OMP-adapted ulw-plan workflow" };
-		expect(advertisedWorkflow([command], "ulw-plan")).toBe(true);
-		expect(advertisedWorkflow([{ ...command, description: "Legacy alias for /super-plan" }], "ulw-plan")).toBe(true);
-		expect(advertisedWorkflow([{ ...command, source: "skill" }], "ulw-plan")).toBe(false);
-		expect(advertisedWorkflow([{ ...command, name: "super-plan" }], "ulw-plan")).toBe(false);
-		expect(advertisedWorkflow([command], "ulw")).toBe(false);
+	test("a legacy ULW name (a reservation frozen before the rename) reads as its SUPER workflow", () => {
+		const legacy: Record<string, WorkflowName> = {
+			ulw: "super",
+			"mass-ulw": "super-graph",
+			"ulw-plan": "super-plan",
+			"ulw-loop": "super-loop",
+			"ulw-execute": "super-run",
+			"ulw-research": "super-research",
+		};
+		for (const [old, name] of Object.entries(legacy)) {
+			expect(workflowChoice({ name: old, reason: "frozen" })).toEqual({ name, reason: "frozen" });
+		}
+	});
+
+	test("advertised only as an extension command of that exact name, whatever its description", () => {
+		const command = { name: "super-plan", source: "extension", description: "Run the super-plan workflow" };
+		expect(advertisedWorkflow([command], "super-plan")).toBe(true);
+		expect(advertisedWorkflow([{ ...command, description: "anything" }], "super-plan")).toBe(true);
+		expect(advertisedWorkflow([{ ...command, source: "skill" }], "super-plan")).toBe(false);
+		expect(advertisedWorkflow([{ ...command, name: "ulw-plan" }], "super-plan")).toBe(false);
+		expect(advertisedWorkflow([command], "super")).toBe(false);
 	});
 
 	test("the tool schema offers the seven names", () => {
@@ -117,10 +126,16 @@ describe("workflow choice", () => {
 describe("`작업:` trigger brief", () => {
 	test("only a call at the very start of the brief is a choice, and it is cut from the brief", () => {
 		expect(triggerWorkflow("ulw fix the bug")).toEqual({
-			choice: { name: "ulw", reason: "오너 직접 호출" },
+			choice: { name: "super", reason: "오너 직접 호출" },
 			brief: "fix the bug",
 		});
-		expect(triggerWorkflow("/ulw-execute  run spec")?.choice.name).toBe("ulw-execute");
+		expect(triggerWorkflow("/ulw-execute  run spec")?.choice.name).toBe("super-run");
+		expect(triggerWorkflow("/super-run  run spec")).toEqual({
+			choice: { name: "super-run", reason: "오너 직접 호출" },
+			brief: "run spec",
+		});
+		expect(triggerWorkflow("super-graph: fan out")?.choice.name).toBe("super-graph");
+		expect(triggerWorkflow("/super plan it")?.choice.name).toBe("super");
 		expect(triggerWorkflow("jevify\nthe plan")).toEqual({
 			choice: { name: "jevify", reason: "오너 직접 호출" },
 			brief: "the plan",
@@ -130,6 +145,7 @@ describe("`작업:` trigger brief", () => {
 
 	test("the call's own default keyword is cut too; another keyword stays in the brief", () => {
 		expect(triggerWorkflow("ulw-plan ultrathink write it")?.brief).toBe("write it");
+		expect(triggerWorkflow("super-plan ultrathink write it")?.brief).toBe("write it");
 		expect(triggerWorkflow("ulw-plan orchestrate write it")?.brief).toBe("orchestrate write it");
 	});
 
@@ -140,11 +156,14 @@ describe("`작업:` trigger brief", () => {
 			"ulw/path/to/file.ts is the file",
 			"ulwx is a name",
 			"please run ulw-plan later",
+			"superb work",
+			"super-planner is a name",
+			"/super://host/path",
 			"",
 		]) {
 			expect(triggerWorkflow(brief)).toBeUndefined();
 		}
-		expect(leadingWorkflow("ulw-loop go")?.name).toBe("ulw-loop");
+		expect(leadingWorkflow("ulw-loop go")?.name).toBe("super-loop");
 	});
 });
 
@@ -156,13 +175,13 @@ describe("lane start with a workflow", () => {
 			title: "chosen",
 			cwd: repo,
 			channel: CHANNEL,
-			workflow: { name: "ulw-execute", reason: "spec lane" },
+			workflow: { name: "super-run", reason: "spec lane" },
 		});
 		const plain = await h.manager.start({ title: "plain", cwd: repo, channel: CHANNEL });
 		await h.settle();
-		expect(chosen.meta.workflow).toEqual({ name: "ulw-execute", reason: "spec lane" });
+		expect(chosen.meta.workflow).toEqual({ name: "super-run", reason: "spec lane" });
 		expect(plain.meta.workflow).toBeUndefined();
-		expect(h.prompts(chosen.originKey)[0]?.startsWith("prompt:ulw-execute orchestrate\n\n작업: chosen\n")).toBe(true);
+		expect(h.prompts(chosen.originKey)[0]?.startsWith("prompt:super-run orchestrate\n\n작업: chosen\n")).toBe(true);
 		expect(h.prompts(plain.originKey)[0]?.startsWith("prompt:작업: plain\n")).toBe(true);
 		h.close();
 	});
@@ -171,7 +190,7 @@ describe("lane start with a workflow", () => {
 		const repo = makeRepo(repos);
 		const h = laneHarness(home.dir);
 		await expect(
-			h.manager.start({ title: "bad", cwd: repo, channel: CHANNEL, workflow: { name: "ulw", reason: "" } }),
+			h.manager.start({ title: "bad", cwd: repo, channel: CHANNEL, workflow: { name: "super", reason: "" } }),
 		).rejects.toBeInstanceOf(LaneInputError);
 		expect(h.store.listLanes()).toEqual([]);
 		h.close();
@@ -192,12 +211,12 @@ describe("lane start with a workflow", () => {
 			title: "no command",
 			cwd: repo,
 			channel: CHANNEL,
-			workflow: { name: "ulw-plan", reason: "plan only" },
+			workflow: { name: "super-plan", reason: "plan only" },
 		});
 		await h.settle();
 		const row = h.store.getLane(lane.name);
 		expect(row?.status).toBe("closed");
-		expect(row?.meta.launchFailed).toContain("ulw-plan");
+		expect(row?.meta.launchFailed).toContain("super-plan");
 		expect(drivers.flatMap((driver) => driver.calls.filter((call) => call.startsWith("prompt:")))).toEqual([]);
 		expect(existsSync(lane.meta.worktree ?? "")).toBe(false);
 		expect(git(repo, "branch", "--list", lane.meta.branch ?? "")).toBe("");

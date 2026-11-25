@@ -24,15 +24,14 @@ function threadMessage(message: DiscordMessageEvent): ThreadMessage {
 	};
 }
 
+type BindingOptions = { backfillMaxPages?: number; startWaitMs?: number; peerPartWaitMs?: number };
 export class DiscordBinding implements ChannelBinding {
 	readonly port: DiscordChannel;
-	readonly #backfillMaxPages: number | undefined;
-	readonly #startWaitMs: number | undefined;
+	readonly #options: BindingOptions;
 
-	constructor(port: DiscordChannel, options: { backfillMaxPages?: number; startWaitMs?: number } = {}) {
+	constructor(port: DiscordChannel, options: BindingOptions = {}) {
 		this.port = port;
-		this.#backfillMaxPages = options.backfillMaxPages;
-		this.#startWaitMs = options.startWaitMs;
+		this.#options = options;
 	}
 
 	createAdapter(deps: AdapterDeps): ChannelAdapter {
@@ -55,12 +54,13 @@ export class DiscordBinding implements ChannelBinding {
 			peerHopLimit: deps.config.peerHopLimit,
 			isTaskRoot: (threadRef) => store.tasks.isTaskRoot(threadRef),
 			onInboundFailure: () => adapter.recover(),
-			startWaitMs: this.#startWaitMs,
+			startWaitMs: this.#options.startWaitMs,
+			peerPartWaitMs: this.#options.peerPartWaitMs,
 			onFatal: deps.detach,
 			mediaRoot: join(deps.config.homeDir, "media"),
 			recovery: {
 				cursors: store,
-				maxPages: this.#backfillMaxPages,
+				maxPages: this.#options.backfillMaxPages,
 				targets: () => discordBackfillTargets(store),
 			},
 		});

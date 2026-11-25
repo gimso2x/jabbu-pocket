@@ -26,6 +26,7 @@ const SNAPSHOT_KEYS = [
 	"heavyRun",
 	"jabbuCli",
 	"discordGuild",
+	"costLedger", // the dashboard CLI only: `usageLimits` also turns the 7일 비용 card on
 ];
 
 let home: TestHome;

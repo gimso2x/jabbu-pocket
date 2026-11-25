@@ -5,7 +5,7 @@ import type { LaneManager } from "./manager";
 import { LaneInputError } from "./manager-constants";
 import { RESERVATION_AFTER_MAX } from "./reservations";
 import { SILENCE_PROPERTIES, silenceParams, stringParam } from "./tool-params";
-import { WORKFLOW_NAMES } from "./workflow";
+import { WORKFLOW_NAMES } from "./workflow-names";
 
 /** Offered to chat sessions: starts a work lane in `channel` (like the `작업: <제목> @<경로>` message); on Discord a thread. */
 export function buildWorkStartTool(manager: LaneManager, channel: string, originKey: string): HostToolDef {
@@ -81,7 +81,7 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 							type: "string",
 							enum: [...WORKFLOW_NAMES],
 							description:
-								"ulw-execute for a lane that carries out a written spec, ulw-plan for a lane that only plans; ulw, ulw-loop, mass-ulw, ulw-research or jevify otherwise",
+								"super-run for a lane that carries out a written spec, super-plan for a lane that only plans; super, super-loop, super-graph, super-research or jevify otherwise",
 						},
 						reason: { type: "string", description: "Why this workflow (one line, required)" },
 					},

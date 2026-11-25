@@ -204,7 +204,7 @@ export async function resolveExternalPr(
 			repo,
 			base: input.base ?? lane.baseBranch,
 			bodyFile: input.bodyFile ?? DEFAULT_PR_BODY_FILE,
-			title: input.title ?? lane.title.slice(0, TITLE_MAX),
+			title: input.title ?? lane.title.slice(0, TITLE_MAX).replace(/[\ud800-\udbff]$/u, ""),
 			...(input.pushRemote === undefined ? {} : { pushRemote: input.pushRemote }),
 			branch: input.branch ?? `pr/${lane.laneId}`,
 			...(input.prNumber === undefined ? {} : { prNumber: input.prNumber }),

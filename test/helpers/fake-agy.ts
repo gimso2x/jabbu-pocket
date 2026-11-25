@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 /**
@@ -15,16 +15,45 @@ import { createInterface } from "node:readline";
  * - "@tool": a run_command tool call (in_progress, then completed with output) before the answer; with "@nooutput"
  *   the completion has no output, with "@failtool" it ends `failed`.
  * - "@hold": the prompt stays open until `session/cancel` (replies `cancelled`) or SIGUSR1 (answers HELD-DONE).
+ * - "@holdmsg": emits a text chunk before waiting on SIGUSR1 / `session/cancel` (no tool call).
  * - "@holdtool": a tool call in_progress until SIGUSR1 (completes it, answers HELD-TOOL-DONE) or `session/cancel`.
  * - "@deaf": starts a grandchild that connects to the unix socket FAKE_AGY_GRAND_SOCK and stays, reports a tool call
  *   in_progress, and ignores cancel.
- * - "@ask": sends `session/request_permission` (reject_once, allow_once) and answers ASKED once the client replied.
+ * - "@ask": sends `session/request_permission` (reject_once, allow_always, allow_once) and answers ASKED once the
+ *   client replied; "@askalways" offers only allow_always and reject_once; "@askother" asks `fs/read_text_file`.
+ * - initialize offers `promptCapabilities.image` unless FAKE_AGY_NO_IMAGE=1.
+ * - "@lost": the prompt fails like agy's lost trajectory; "@lostload" only on a session opened by `session/load`.
+ * - FAKE_AGY_HOLD_NEW=1: `session/new` answers only on `session/cancel` or SIGUSR1.
  * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@full" / "@half": `usage_update` used
  *   800 / 500 of size 1000 before the reply (otherwise 100).
  * - anything else: answers `REPLY<n>:<last line of the prompt>` in two chunks (n = prompts of this process).
  */
 
 const LOG = process.env.FAKE_AGY_LOG;
+const appDataFlag = process.argv.indexOf("--app-data-dir");
+const APP_DATA_DIR = appDataFlag !== -1 ? process.argv[appDataFlag + 1] : undefined;
+const QUOTA_DIRS = new Set(
+	(process.env.FAKE_AGY_QUOTA_DIRS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s !== ""),
+);
+const QUOTA_FILE = process.env.FAKE_AGY_QUOTA_FILE;
+const isQuotaDir = (): boolean => {
+	if (APP_DATA_DIR === undefined) return false;
+	if (QUOTA_DIRS.has(APP_DATA_DIR)) return true;
+	if (QUOTA_FILE === undefined) return false;
+	try {
+		return readFileSync(QUOTA_FILE, "utf8")
+			.split(/[\s,]+/)
+			.includes(APP_DATA_DIR);
+	} catch {
+		return false;
+	}
+};
+const ECHO_DIR = process.env.FAKE_AGY_ECHO_DIR === "1";
+const HOLD_INIT_DIR = process.env.FAKE_AGY_HOLD_INIT_DIR;
+const HOLD_INIT_SOCK = process.env.FAKE_AGY_HOLD_INIT_SOCK;
 const log = (entry: Record<string, unknown>): void => {
 	if (LOG !== undefined) appendFileSync(LOG, `${JSON.stringify(entry)}\n`);
 };
@@ -39,6 +68,8 @@ const LEVELS = ["low", "medium", "high", "xhigh"];
 let model = "gemini-4-neon";
 let level = "high";
 let sessionId = "";
+/** Whether the current session was opened by `session/load` (what "@lostload" fails on). */
+let loaded = false;
 let prompts = 0;
 let held: { id: unknown; onSignal: () => void; onCancel?: () => void } | undefined;
 
@@ -86,29 +117,49 @@ function prompt(id: unknown, text: string): void {
 		};
 		return;
 	}
-	if (text.includes("@quota")) {
+	if (text.includes("@tool-quota")) {
+		update({ sessionUpdate: "tool_call", ...tool, status: "in_progress", rawInput, args: rawInput });
+		update({ sessionUpdate: "tool_call_update", ...tool, status: "completed", rawOutput: { output: "hi\n" } });
+		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
+		update({
+			sessionUpdate: "agent_message_chunk",
+			content: {
+				type: "text",
+				text: "Working\n⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1h15m",
+			},
+		});
+		return;
+	}
+	if (text.includes("@quota") || isQuotaDir()) {
 		// agy's own quota retry, split across chunks; it only stops on `session/cancel`.
 		held = { id, onSignal: () => finish("never"), onCancel: () => reply(id, "cancelled") };
 		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Working\n⚠ API error (att" } });
+		const detail = isQuotaDir() ? "Individual quota reached. Resets in 2h30m" : "out";
 		update({
 			sessionUpdate: "agent_message_chunk",
-			content: { type: "text", text: "empt 1): RESOURCE_EXHAUSTED (code 429): out" },
+			content: { type: "text", text: `empt 1): RESOURCE_EXHAUSTED (code 429): ${detail}` },
 		});
+		return;
+	}
+	if (text.includes("@lost") && (loaded || !text.includes("@lostload"))) {
+		send({ id, error: { code: -32603, message: `Trajectory not found: ${sessionId}` } });
 		return;
 	}
 	if (text.includes("@ask")) {
 		held = { id, onSignal: () => finish("ASKED") };
-		send({
-			id: "perm-1",
-			method: "session/request_permission",
-			params: {
-				sessionId,
-				options: [
-					{ optionId: "no", kind: "reject_once" },
-					{ optionId: "yes-once", kind: "allow_once" },
-				],
-			},
-		});
+		const always = { optionId: "yes-always", kind: "allow_always" };
+		const reject = { optionId: "no", kind: "reject_once" };
+		const options = text.includes("@askalways")
+			? [always, reject]
+			: [reject, always, { optionId: "yes-once", kind: "allow_once" }];
+		const toolCall = { toolCallId: "call_perm", title: "run\nrm -rf build" };
+		const method = text.includes("@askother") ? "fs/read_text_file" : "session/request_permission";
+		send({ id: "perm-1", method, params: { sessionId, toolCall, options } });
+		return;
+	}
+	if (text.includes("@holdmsg")) {
+		held = { id, onSignal: () => finish("HELD-DONE"), onCancel: () => reply(id, "cancelled") };
+		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "WAIT\n" } });
 		return;
 	}
 	if (text.includes("@hold")) {
@@ -143,7 +194,8 @@ function prompt(id: unknown, text: string): void {
 		update({ sessionUpdate: "tool_call_update", ...tool, status, rawInput, ...output });
 	}
 	const last = text.split("\n").at(-1) ?? "";
-	update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `REPLY${prompts}:` } });
+	const tag = ECHO_DIR ? `[${APP_DATA_DIR ?? "default"}] ` : "";
+	update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `REPLY${prompts}:${tag}` } });
 	finish(last);
 }
 
@@ -165,17 +217,60 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 		return current?.onSignal();
 	}
 	switch (message.method) {
-		case "initialize":
-			return send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
-		case "session/new":
-			sessionId = `fake-${randomUUID()}`;
-			return send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+		case "initialize": {
+			const replyInit = () =>
+				send({
+					id: message.id,
+					result: {
+						protocolVersion: 1,
+						agentCapabilities: {
+							loadSession: true,
+							...(process.env.FAKE_AGY_NO_IMAGE === "1" ? {} : { promptCapabilities: { image: true } }),
+						},
+					},
+				});
+			if (HOLD_INIT_DIR !== undefined && HOLD_INIT_SOCK !== undefined && APP_DATA_DIR === HOLD_INIT_DIR) {
+				let released = false;
+				const release = () => {
+					if (released) return;
+					released = true;
+					replyInit();
+				};
+				void Bun.connect({
+					unix: HOLD_INIT_SOCK,
+					socket: {
+						data() {
+							release();
+						},
+						close() {
+							release();
+						},
+						error() {
+							release();
+						},
+					},
+				}).catch(() => release());
+				return;
+			}
+			return replyInit();
+		}
+		case "session/new": {
+			const open = (): void => {
+				sessionId = `fake-${randomUUID()}`;
+				loaded = false;
+				send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+			};
+			if (process.env.FAKE_AGY_HOLD_NEW !== "1") return open();
+			held = { id: message.id, onSignal: open, onCancel: open };
+			return;
+		}
 		case "session/load": {
 			const wanted = String(params.sessionId);
 			if (!wanted.startsWith("fake-") || process.env.FAKE_AGY_UNKNOWN_SESSION === "1") {
 				return send({ id: message.id, error: { code: -32602, message: `Session not found: ${wanted}` } });
 			}
 			sessionId = wanted;
+			loaded = true;
 			// Like agy, load replays the conversation as updates before it answers.
 			update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "old question" } });
 			update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAYED" } });

@@ -256,11 +256,11 @@ export function maskPersonal(text: string): string {
 	return text.replace(PERSONAL_PATTERN, PERSONAL_MASK);
 }
 
-/**
- * The first `max` characters of `text`, masked whole first: a cut made before masking leaves a token's head too short
- * for its shape (`sk-…`, a JWT), so it would pass `redact` in the clipped string.
- */
-export const redactThenClip = (text: string, max: number): string => redact(text).slice(0, max);
+/** The first `max` characters of `text`, masked whole first (a pre-mask cut leaves a token head too short for its shape); never ends on a lone high surrogate (channel/text.ts cuts the same way). */
+export const redactThenClip = (text: string, max: number): string => {
+	const clipped = redact(text).slice(0, max);
+	return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped;
+};
 
 const encoder = new TextEncoder();
 

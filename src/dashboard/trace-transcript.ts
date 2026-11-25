@@ -10,6 +10,7 @@ import { byteLength, maskPersonal, redact } from "../redact";
 import { INJECTION_WARNING_HEAD } from "../safety/injection";
 import { PEER_NOTICE_HEAD } from "../safety/prompt";
 import { iterJsonlRecords, readJsonlRecords } from "./jsonl";
+import { fencedRanges, isLiftedCall } from "./prompt-fences";
 import type { TraceInput, TraceSpan } from "./trace";
 
 export { iterJsonlRecords, readJsonlRecords };
@@ -73,7 +74,6 @@ const BLOCK_HEADS: Array<[string, string]> = [
 	[headOf(BOARD_NOTICE_HEAD), "게시판"],
 	[headOf(QUOTED_HEADER), "인용"],
 ];
-const FENCED = /<<<quoted-([^>\n]*)>>>[\s\S]*?<<<end-quoted-\1>>>/g;
 
 /** The label of a block that starts with an optional injection warning line and then a known head; else undefined. */
 function blockHead(text: string, at: number): { label: string; warned: boolean } | undefined {
@@ -90,8 +90,9 @@ function blockHead(text: string, at: number): { label: string; warned: boolean }
 /**
  * A turn's first user message as the blocks `composeTurnPrompt` put before the request (label, bytes, whether the
  * block carries an injection warning) and the request itself. The request is cut off at the last request marker; in the
- * blocks only a head after a blank line outside quote fences starts a block, so a head-looking line in a pasted quote
- * or in the request is no block. Text before the first known head is one `기타` block.
+ * blocks only a head after a blank line outside quote and code fences starts a block, so a head-looking line in a
+ * pasted quote or in the request is no block. A lifted first line is the `워크플로 호출`; other text before the first
+ * known head is one `기타` block.
  */
 export function splitTurnPrompt(prompt: string): TraceInput[] {
 	const marker = `\n\n${CURRENT_REQUEST_MARKER}\n`;
@@ -99,11 +100,7 @@ export function splitTurnPrompt(prompt: string): TraceInput[] {
 	const request = (body: string): TraceInput => ({ label: "현재 요청", bytes: byteLength(body), warned: false });
 	if (cutAt < 0) return [request(prompt)];
 	const blocks = prompt.slice(0, cutAt);
-	const fenced: Array<[number, number]> = [];
-	for (const match of blocks.matchAll(FENCED)) fenced.push([match.index, match.index + match[0].length]);
-	const lastClosed = fenced.at(-1)?.[1] ?? 0;
-	const open = blocks.slice(lastClosed).search(/<<<quoted-[^>\n]*>>>/);
-	if (open >= 0) fenced.push([lastClosed + open, blocks.length]);
+	const fenced = fencedRanges(blocks);
 	const starts = [0];
 	for (let at = blocks.indexOf("\n\n"); at >= 0; at = blocks.indexOf("\n\n", at + 1)) {
 		if (fenced.some(([from, to]) => at >= from && at < to)) continue;
@@ -112,7 +109,11 @@ export function splitTurnPrompt(prompt: string): TraceInput[] {
 	const inputs = starts.map((start, i): TraceInput => {
 		const piece = blocks.slice(start, i + 1 < starts.length ? (starts[i + 1] as number) - 2 : blocks.length);
 		const head = blockHead(blocks, start);
-		return { label: head?.label ?? "기타", bytes: byteLength(piece), warned: head?.warned ?? false };
+		return {
+			label: head?.label ?? (i === 0 && isLiftedCall(piece) ? "워크플로 호출" : "기타"),
+			bytes: byteLength(piece),
+			warned: head?.warned ?? false,
+		};
 	});
 	return [...inputs, request(prompt.slice(cutAt + marker.length))];
 }

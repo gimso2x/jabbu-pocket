@@ -193,9 +193,7 @@ export async function applyCommand(
 /**
  * What the apply of every other install on the checkout runs with. The checkout is shared: only this (first) home's
  * apply reverts code, clears the journal and reports. After a code rollback every peer restarts onto the reverted
- * code, even one that started after --merged-at. `--allow-detached` goes along: the peers load the same detached HEAD
- * and would SKIP without it.
- */
+ * code, even one that started after --merged-at. `--allow-detached` goes along (peers would SKIP the detached HEAD). */
 export function peerApplyOptions(options: ApplyOptions, afterCodeRollback: boolean): ApplyOptions {
 	return {
 		timeoutMin: options.timeoutMin,
@@ -205,6 +203,7 @@ export function peerApplyOptions(options: ApplyOptions, afterCodeRollback: boole
 		...(options.allowDetached === true ? { allowDetached: true } : {}),
 		...(options.codeRollback === undefined ? {} : { codeRollback: options.codeRollback }),
 		codeRollbackOff: "peer install (the first home's apply owns the code rollback)",
+		peerOf: options.stamp ?? "the first home's apply",
 	};
 }
 

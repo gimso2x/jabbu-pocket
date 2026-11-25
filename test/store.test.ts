@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { wrapQuoted } from "../src/core/normalize";
 import { openStore, type Store, StoreError } from "../src/store/db";
 import { readSchemaVersion, SCHEMA_VERSION } from "../src/store/schema-version";
 import {
@@ -123,6 +124,25 @@ describe("inbound", () => {
 			textRef: url("ex=11&is=22&hm=33&size=10"),
 		});
 		expect(otherQuery.conflict).toBe(true);
+	});
+
+	test("a forwarded message wrapped again with a fresh fence id is not a conflict; other quoted text is", () => {
+		const store = open();
+		store.ensureOrigin("o1", "/s/o1");
+		const forwarded = (fenceId: string, quoted = "🔴 [OCI] 경보") => `멈췄네\n${wrapQuoted([quoted], fenceId)}`;
+		store.recordInbound({ originKey: "o1", platformMessageId: "m1", textRef: forwarded("75c8e62ab2ea5e7b") });
+		const rewrapped = store.recordInbound({
+			originKey: "o1",
+			platformMessageId: "m1",
+			textRef: forwarded("9203de2649e0d603"),
+		});
+		expect(rewrapped).toMatchObject({ inserted: false, conflict: false });
+		const otherQuote = store.recordInbound({
+			originKey: "o1",
+			platformMessageId: "m1",
+			textRef: forwarded("9203de2649e0d603", "🔴 [OCI] 다른 경보"),
+		});
+		expect(otherQuote.conflict).toBe(true);
 	});
 
 	test("unknown origin is rejected", () => {

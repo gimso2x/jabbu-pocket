@@ -53,13 +53,17 @@ import { type ReadTask, readTaskSql, type TaskRow, type TaskSql, type TaskStatus
 import { headlessStatusFromLedger } from "../tasks/runtime";
 import { formatLocal, localIso } from "../time";
 import { type BoardPromptRef, type BoardState, type BoardSummary, type BoardTaskRef, summarizeBoard } from "./board";
+import { withContextLoad } from "./context-load";
+import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
 import { discordThreadHref } from "./detail";
+import { type OverlapView, readEditOverlaps } from "./edit-overlap";
 import { type HostChecksInfo, readHostChecks } from "./host-checks";
 import type { PeerInstall } from "./peers";
 import { previewLine } from "./preview-line";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
-import { buildTurnsSection, type PeerTurnError, type ThreadInfo, type TurnInfo } from "./turn-board";
+import { type TaskTurnFields, taskTurnFields } from "./turn";
+import { buildTurnsSection, type PeerTurnError, rows, type ThreadInfo, type TurnInfo } from "./turn-board";
 import { readUsageLimits, type UsageLimitsInfo } from "./usage-limits";
 
 /** A snapshot is reused this long: IPC, herdr, ssh and git are not asked again inside it. */
@@ -116,7 +120,7 @@ export type { PeerTurnError, ThreadInfo, TurnInfo, TurnKind, TurnWaitReason } fr
 
 type HerdrState = { ok: true; status: HerdrAgentStatus } | { ok: false; error: string };
 
-export interface TaskInfo {
+export interface TaskInfo extends TaskTurnFields {
 	taskId: string;
 	title: string;
 	risk: TaskRisk;
@@ -140,6 +144,7 @@ export interface TaskInfo {
 	herdr?: HerdrState;
 	/** herdr board card of the task's pane (the board root when the card cannot be resolved). */
 	link?: string;
+	overlap?: string; // the first 겹침 hint ({@link OverlapView}) of the TASK worker's session
 	error?: string; // why the task documents could not be judged, and/or which JSON column of the row is damaged (`… 손상`)
 	/** Registration to first review of past TASKs ({@link taskDurationSamples}); `working` TASKs with enough samples only. */
 	typical?: TypicalDuration;
@@ -661,8 +666,11 @@ export interface DashboardSnapshot {
 	hostChecks?: Section<HostChecksInfo>;
 	/** Config `dashboard.opsStatus.url`: the card head links it. */
 	hostChecksUrl?: string;
-	/** The "모델 한도" card: only with `SnapshotDeps.usageLimits` and config `dashboard.usageLimits` (absent otherwise). */
+	/** "모델 한도" (also needs config `dashboard.usageLimits`) and "7일 비용" cards: only with `SnapshotDeps.usageLimits`. */
 	usageLimits?: Section<UsageLimitsInfo>;
+	costLedger?: Section<CostLedgerInfo>;
+	/** 겹침 marks ({@link OverlapView}); absent when nothing overlaps and no agy session exists. */
+	overlaps?: OverlapView;
 }
 
 export type DashboardConfig = Partial<
@@ -723,7 +731,7 @@ export interface SnapshotDeps {
 	isAlive?: (pid: number) => boolean;
 	/** User home for allowed job roots (`$HOME/work`, `$HOME/.jabbu-*`); defaults to `process.env.HOME ?? homedir()`. */
 	userHome?: string;
-	/** Read the model limit commands (default false): the dashboard server only; the daemon's `!brief` never runs them. */
+	/** Dashboard server only (default false), never the daemon's `!brief`: the model limit commands, the cost ledger, live context. */
 	usageLimits?: boolean;
 }
 
@@ -823,16 +831,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 	const { promise: timeout, reject } = Promise.withResolvers<never>();
 	const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-/** Rows of a read-only query; a database that predates the table simply has none. */
-function rows<T>(db: Database, sql: string, ...params: Array<string | number>): T[] {
-	try {
-		return db.query(sql).all(...params) as T[];
-	} catch (error) {
-		if (error instanceof Error && /no such table/.test(error.message)) return [];
-		throw error;
-	}
 }
 
 const APPROVAL_TITLE_CHARS = 80;
@@ -1467,7 +1465,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const opsStatus = config?.dashboard?.opsStatus;
 		const hostChecks = opsStatus === undefined ? undefined : readHostChecks(opsStatus.command, deps.run, deps.now);
 		const usageConfig = deps.usageLimits === true ? config?.dashboard?.usageLimits : undefined;
-		const usageLimits = usageConfig === undefined ? undefined : readUsageLimits(usageConfig, deps.run, deps.now);
+		const samples = { home: deps.homeDir, timezone: deps.timezone };
+		const usageLimits = usageConfig && readUsageLimits(usageConfig, deps.run, deps.now, samples);
 
 		const targets = herdrTargets(config);
 		// Run on first use only: with a live board and no open TASK on a host, that host's `herdr agent list` is not needed.
@@ -1475,14 +1474,10 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const listingOf = (host: string): Promise<HerdrListing> | undefined => {
 			const target = targets.find((candidate) => candidate.host === host);
 			if (target === undefined) return undefined;
-			let listing = listings.get(host);
-			if (listing === undefined) {
-				listing = listHerdrAgents(target, run).catch((error: unknown) => ({
-					ok: false as const,
-					error: message(error),
-				}));
-				listings.set(host, listing);
-			}
+			const listing =
+				listings.get(host) ??
+				listHerdrAgents(target, run).catch((error: unknown) => ({ ok: false as const, error: message(error) }));
+			listings.set(host, listing);
 			return listing;
 		};
 
@@ -1546,7 +1541,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			// A failed daemon section leaves drain and freeze unknown: the other wait reasons still apply.
 			const status = await daemon;
 			const jobSection = await jobs;
-			return buildTurnsSection(handle, {
+			const built = buildTurnsSection(handle, {
 				now,
 				iso,
 				draining: status.ok && (status.drain !== undefined || status.heartbeat?.draining === true),
@@ -1565,7 +1560,11 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				...(deps.peers === undefined ? {} : { peers: deps.peers }),
 				sessionModel: sharedSessionModel,
 			});
+			return withContextLoad(built, handle, deps);
 		});
+		const editOverlaps = turns.then((t) =>
+			readEditOverlaps({ db, now, peers: deps.peers ?? [], threads: t.ok ? t.threads : [], listing: listingOf }),
+		);
 
 		const herdrStateOf = async (row: TaskRow): Promise<HerdrState> => {
 			if (row.runtime === "headless") return { ok: true, status: headlessStatusFromLedger(needDb(), row) };
@@ -1623,13 +1622,11 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				};
 				info.acceptance = j.acceptance.map((item) => ({ ...item, text: redact(item.text) }));
 				info.steps = j.steps.map((step) => ({ ...step, text: redact(step.text) }));
-			} else {
-				const failure = message(evaluation.error);
-				info.error = info.error === undefined ? failure : `${info.error} · ${failure}`;
-			}
+			} else info.error = [info.error ?? [], message(evaluation.error)].flat().join(" · ");
 			info.herdr = herdr.ok ? herdr : { ok: false, error: message(herdr.error) };
 			if (link !== undefined) info.link = link;
-			return info;
+			info.overlap = (await editOverlaps).overlaps?.hints[`task:${row.taskId}`];
+			return Object.assign(info, taskTurnFields(row, evaluation.ok ? evaluation.judgement : undefined));
 		};
 
 		const tasks = section(async () => {
@@ -2030,6 +2027,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			...(hostChecks === undefined ? {} : { hostChecks: await hostChecks }),
 			...(opsStatus?.url === undefined ? {} : { hostChecksUrl: opsStatus.url }),
 			...(usageLimits === undefined ? {} : { usageLimits: await usageLimits }),
+			...(deps.usageLimits === true ? { costLedger: await readCostLedger(deps.homeDir, deps.now, timezone) } : {}),
+			...(await editOverlaps),
 		};
 	} finally {
 		db?.close();

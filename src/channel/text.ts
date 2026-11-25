@@ -233,10 +233,7 @@ export function errorText(err: unknown): string {
 
 /** Collapses control characters, line separators and bidi overrides so untrusted text cannot start a new prompt line. */
 export function oneLine(text: string, max: number): string {
-	return text
-		.replace(/[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]+/gu, " ")
-		.trim()
-		.slice(0, max);
+	return cutCodePointSafe(text.replace(/[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]+/gu, " ").trim(), max);
 }
 
 /** Cuts to at most `limit` UTF-16 units without leaving a lone high surrogate at the end; "" for `limit <= 0`. */
