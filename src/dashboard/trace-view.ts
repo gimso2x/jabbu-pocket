@@ -367,7 +367,7 @@ export function renderFlow(answer: TurnTrace, state: TraceViewState): string {
 		"",
 		"root",
 		`is-root is-${root.status}`,
-		`<span class="fl-kicker">송박</span><span class="fl-title">${esc(root.model ?? "모델 미상")}</span><span class="fl-meta">${chip(
+		`<span class="fl-kicker">봇</span><span class="fl-title">${esc(root.model ?? "모델 미상")}</span><span class="fl-meta">${chip(
 			root.status,
 		)}${rootCost === "" ? "" : `<span class="fl-cost">${esc(rootCost)}</span>`}</span><span class="fl-doing">${esc(flowDoing(root))}</span>`,
 	);
