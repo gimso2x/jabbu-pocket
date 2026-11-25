@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { INBOUND_DDL, INBOUND_INDEX_NAMES, INBOUND_INDEXES_DDL, INBOUND_THREAD_INDEX_DDL } from "./db-schema";
 
-function columnsOf(db: Database, table: string): string[] {
+export function columnsOf(db: Database, table: string): string[] {
 	return (db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name);
 }
 
