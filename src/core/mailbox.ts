@@ -257,12 +257,7 @@ export class OriginMailbox {
 					log.warn("pause_abort_failed", { origin: originKey, opRef: turn?.opRef, error: String(error) });
 				}
 				if (turn !== undefined && this.#turn === turn && this.#driver === driver) {
-					await this.#onFinal(driver, {
-						opRef: turn.opRef,
-						status: "aborted",
-						text: "",
-						error: "lane_paused",
-					});
+					await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: "lane_paused" });
 				}
 			}
 			const settled = this.#driver === undefined || (await this.#driver.state()).settled !== false;
@@ -467,8 +462,9 @@ export class OriginMailbox {
 		}
 		log.info("stuck_loop_steer", { origin: originKey, opRef: turn.opRef, tool: hit.toolName, count: hit.count });
 		this.#background("stuck_steer_failed", async () => {
-			// Real omp starts a run when steered while idle: only steer the turn that is still running.
-			if (this.#turn !== turn || !this.#driver) return;
+			// Real omp starts a run when steered while idle: only steer the turn that is still running. A turn
+			// whose final already arrived is idle too — the final's own settlement may still be queued behind us.
+			if (this.#turn !== turn || !this.#driver || turn.finalArrived) return;
 			await this.#driver.steer(stuckSteerText(hit.toolName, hit.count));
 		});
 	}

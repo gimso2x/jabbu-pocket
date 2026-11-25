@@ -1,7 +1,6 @@
-// The one place that reads chat origin keys. Keys are built with `chatOriginKey` and otherwise treated as opaque
-// strings; anything that needs the platform, conversation or thread of a key asks `parseChatOrigin`.
+// Single definition of chat origin keys (`chatOriginKey` / `parseChatOrigin`).
 
-export type ChatPlatform = "discord";
+export type ChatPlatform = "discord" | "web";
 
 /**
  * Key namespaces of the removed Slack and Teams channels. Old ledger rows keep them (gc and the dashboard still read
@@ -19,9 +18,10 @@ export interface ChatOriginRef {
 	threadId?: string;
 }
 
-/** Exact id grammar per platform, the only definition of it. Discord ids are snowflakes (digits only). */
+/** Exact id grammar per platform: Discord snowflakes (digits), web `w_` + 8-32 alnum. */
 export const GRAMMAR: Readonly<Record<ChatPlatform, { readonly conversation: RegExp; readonly thread: RegExp }>> = {
 	discord: { conversation: /^[0-9]{1,20}$/, thread: /^[0-9]+$/ },
+	web: { conversation: /^w_[a-z0-9]{8,32}$/, thread: /^w_[a-z0-9]{8,32}$/ },
 };
 
 const isChatPlatform = (value: string | undefined): value is ChatPlatform =>
