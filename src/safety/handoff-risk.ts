@@ -258,7 +258,7 @@ function ruleMatches(text: string, { global, sticky, verb }: CompiledRule): Arra
 }
 
 const KOREAN_CONNECTORS =
-	"하고|하되|하며|한\\s+뒤|한\\s+다음|한\\s*후|해서|하여|그리고|다음에|후에|뒤에|지만|으나|는데|으면서";
+	"하고|하되|하며|한\\s+뒤|한\\s+다음|한\\s*후|해서|하여|그리고|다음에|후에|뒤에|지만|으나|는데|으면서|하니까|하므로|한다면|했으므로";
 /**
  * Where one clause of a line ends and the next begins: `; , ， 、`, `. 。 ! ?` before whitespace, an English connector
  * or a lone `후` between spaces, a Korean connector with whitespace on one side. A forbidding `말고` (`<용언>지 말고`,
@@ -275,7 +275,7 @@ const CLAUSE_BOUNDARY_PARTS = [
 	"&&|\\|\\||(?<![<>])&(?!>)|[;,，、]",
 	"(?<=\\s)#(?!\\d)",
 	"[.。!?](?=\\s)",
-	"(?<=\\s)(?:and|then|but|after|before|후)(?=\\s)",
+	"(?<=\\s)(?:and|then|but|after|before|so|because|while|if|since|when|although|unless|yet|후)(?=\\s)",
 	`(?<=\\s)(?:${KOREAN_CONNECTORS})`,
 	`(?:${KOREAN_CONNECTORS})(?=\\s)`,
 ];
@@ -504,7 +504,7 @@ function globsIntoSecrets(line: string): Hit[] {
 const COMMAND_START = "(?:^\\s*(?:[-*]\\s+|\\$\\s+)?|[;&|(`{!]\\s*|\\$\\(\\s*|\\b(?:then|do|if|while|until)\\s+)";
 /** Wrappers a command may hide behind: `sudo`, `doas`, `nohup`, `exec`, `time`, `nice`, `command`, `xargs`, `env VAR=x`, `timeout N`. */
 const COMMAND_WRAPPERS =
-	"(?:(?:(?:sudo|doas)(?:\\s+-(?:[ugChprtUT]|-user|-group)\\s+\\S+|\\s+-(?!(?:[ugChprtUT]|-user|-group)(?:\\s|$))\\S+)*|nohup|exec|time|nice(?:\\s+-\\S+(?:\\s+\\d+)?)*|command|xargs(?:\\s+-\\S+)*|env(?:\\s+-(?:[uCS]|-unset|-chdir|-split-string)\\s+\\S+|\\s+-(?!(?:[uCS]|-unset|-chdir|-split-string)(?:\\s|$))\\S+|\\s+[A-Za-z_]\\w*=\\S*)*|timeout(?:\\s+-\\S+)*\\s+\\d\\S*)\\s+)*";
+	"(?:(?:(?:sudo|doas)(?:\\s+-(?:[ugChprtUT]|-user|-group)\\s+\\S+|\\s+-(?!(?:[ugChprtUT]|-user|-group)(?:\\s|$))\\S+)*|nohup|exec(?:\\s+-a\\s+\\S+|\\s+-(?!a(?:\\s|$))\\S+)*|time|nice(?:\\s+-\\S+(?:\\s+\\d+)?)*|command|xargs(?:\\s+-\\S+)*|env(?:\\s+-(?:[uCS]|-unset|-chdir|-split-string)\\s+\\S+|\\s+-(?!(?:[uCS]|-unset|-chdir|-split-string)(?:\\s|$))\\S+|\\s+[A-Za-z_]\\w*=\\S*)*|timeout(?:\\s+-(?:[ks]|-kill-after|-signal)\\s+\\S+|\\s+-(?!(?:[ks]|-kill-after|-signal)(?:\\s|$))\\S+)*\\s+\\d\\S*|[A-Za-z_]\\w*=\\S*)\\s+)*";
 /** After a power word: the line or command ends, or an option, `now`, `+N` or `HH:MM` follows — not more prose. */
 const POWER_ARGS = "(?=\\s*$|\\s*[;&|)`]|\\s+(?:-{1,2}\\w|now\\b|\\+\\d|\\d{1,2}:\\d{2}))";
 const POWER_COMMAND = new RegExp(
