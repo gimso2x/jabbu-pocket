@@ -180,6 +180,9 @@ describe("lane owner silence fallback", () => {
 			false,
 		);
 		expect(h.transport.posts().some((post) => JSON.stringify(post).includes("전달하지 못했습니다"))).toBe(true);
+		expect(
+			h.transport.posts().some((post) => JSON.stringify(post).includes("이 스레드에 답하면 이어서 진행합니다")),
+		).toBe(true);
 		h.close();
 	});
 
