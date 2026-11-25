@@ -53,6 +53,7 @@ export interface LedgerRemoved {
 	deliveryPosts: number;
 	monitorEvents: number;
 	monitorSlots: number;
+	inboundConflicts: number;
 }
 
 /** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
@@ -85,7 +86,14 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
 		turnSnapshotsRemoved: 0,
-		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0, monitorSlots: 0 },
+		ledgerRemoved: {
+			inbound: 0,
+			deliveries: 0,
+			deliveryPosts: 0,
+			monitorEvents: 0,
+			monitorSlots: 0,
+			inboundConflicts: 0,
+		},
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -205,7 +213,7 @@ export function gcSessions(options: GcOptions): GcResult {
  * - deliveries: `confirmed`/`failed_ambiguous`/`expired`; its `delivery_posts` rows (written by older versions) go
  *   first. The gc connection never turns `foreign_keys` on (origins expire at 30 days, inbound at 90, so the origin
  *   delete would be refused), which is why the posts→deliveries order is kept here by hand.
- * - monitor_events: the final stages only, aged by `updated_at`; monitor_slots: every slot aged by `created_at`.
+ * - monitor_events: the final stages only, aged by `updated_at`; monitor_slots and inbound_conflicts: every row aged by `created_at`.
  * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing from an old
  * home makes its rule empty instead of failing.
  */
@@ -224,6 +232,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 	const posts = hasDeliveries && hasTable(db, "delivery_posts");
 	const events = hasTable(db, "monitor_events");
 	const slots = hasTable(db, "monitor_slots");
+	const conflicts = hasTable(db, "inbound_conflicts");
 	const postsWhere = `delivery_id IN (SELECT d.delivery_id FROM deliveries d WHERE ${deliveriesWhere})`;
 	const eventsWhere = "stage IN ('delivered','failed_no_retry','skipped','no_report') AND updated_at < ?";
 	const count = (sql: string) => (db.query(`SELECT COUNT(*) AS n FROM ${sql}`).get(cutoff) as { n: number }).n;
@@ -233,6 +242,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		deliveryPosts: posts ? count(`delivery_posts WHERE ${postsWhere}`) : 0,
 		monitorEvents: events ? count(`monitor_events WHERE ${eventsWhere}`) : 0,
 		monitorSlots: slots ? count("monitor_slots WHERE created_at < ?") : 0,
+		inboundConflicts: conflicts ? count("inbound_conflicts WHERE created_at < ?") : 0,
 	};
 	if (options.dryRun === true) return removed;
 	db.transaction(() => {
@@ -241,6 +251,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		db.query(`DELETE FROM inbound AS i WHERE ${inboundWhere}`).run(cutoff);
 		if (events) db.query(`DELETE FROM monitor_events WHERE ${eventsWhere}`).run(cutoff);
 		if (slots) db.query("DELETE FROM monitor_slots WHERE created_at < ?").run(cutoff);
+		if (conflicts) db.query("DELETE FROM inbound_conflicts WHERE created_at < ?").run(cutoff);
 	})();
 	return removed;
 }
