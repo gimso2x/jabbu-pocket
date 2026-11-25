@@ -73,6 +73,16 @@ function parseButtons(raw: string | null): Array<{ actionId: string; label: stri
 	}
 }
 
+/** A status row that ended with a result (`🚫 취소됨`, `⚠️ 실패`): still shown, but no longer running. */
+function isFinalStatus(row: WebMessageRow): boolean {
+	if (row.role !== "status" || row.cardJson === null) return false;
+	try {
+		return Boolean((JSON.parse(row.cardJson) as { final?: unknown }).final);
+	} catch {
+		return false;
+	}
+}
+
 function isDeletedStatus(row: WebMessageRow): boolean {
 	if (row.role !== "status" || row.cardJson === null) return false;
 	try {
@@ -99,7 +109,7 @@ function renderSsrTimeline(
 				return row.text ? `<div class="wc-msg-system" data-msg-id="${row.id}">${esc(row.text)}</div>` : "";
 			}
 			if (row.role === "status") {
-				const cls = isDeletedStatus(row) ? " is-deleted" : "";
+				const cls = (isDeletedStatus(row) ? " is-deleted" : "") + (isFinalStatus(row) ? " is-final" : "");
 				return `<div class="wc-msg-status${cls}" data-msg-id="${row.id}"><span class="wc-spin"></span><span>${esc(row.text)}</span></div>`;
 			}
 			const isSpecial = row.role === "approval" || row.role === "choice";
