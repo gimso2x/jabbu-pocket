@@ -1397,4 +1397,4 @@ export class Daemon {
 			this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 		}
 	}
-			}
+}
