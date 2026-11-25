@@ -13,10 +13,11 @@ import { dirname, join } from "node:path";
 import type { AgyAccountsConfig } from "../config-agy";
 import type { Logger } from "../log";
 import { redact } from "../redact";
+import { DEFAULT_QUOTA_BLOCK_MS, QUOTA_RESET_BUFFER_MS } from "./agy-quota";
 
 export const DEFAULT_APP_DATA_PREFIX = "antigravity-cli-acct-";
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
-/** The last instant a Date holds; a block past it cannot be shown or logged. */
+/** The last instant a Date holds; a block past it cannot be logged or shown. */
 const MAX_DATE_MS = 8.64e15;
 
 export interface AgyAccountEntry {
@@ -118,7 +119,12 @@ export class AgyAccountPool {
 
 	markExhausted(name: string, untilMs: number, detail?: string): void {
 		const now = this.#now();
-		const nextUntil = Math.max(this.#blocked[name] ?? 0, untilMs);
+		// A reset past the Date range (agy's text is outside input) is no reset to wait for: the default block applies.
+		const valid = Number.isFinite(untilMs) && untilMs <= MAX_DATE_MS;
+		const nextUntil = Math.max(
+			this.#blocked[name] ?? 0,
+			valid ? untilMs : now + DEFAULT_QUOTA_BLOCK_MS + QUOTA_RESET_BUFFER_MS,
+		);
 		this.#blocked[name] = nextUntil;
 		this.#saveState(now);
 		this.#log?.warn("agy.account.exhausted", {
