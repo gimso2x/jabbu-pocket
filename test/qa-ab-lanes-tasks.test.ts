@@ -66,6 +66,9 @@ describe("qa-ab dispatch·ops·lanes·tasks 수정", () => {
 		rmSync(join(repo, ".git"), { recursive: true, force: true });
 		const missingGitPlan = await planUndo({ row });
 		expect(missingGitPlan).toEqual({ repo, source: before.tree, missing: true, files: [] });
+
+		const timeoutGit: GitRunner = async () => ({ code: 124, stdout: "", stderr: "git diff timed out after 10000ms" });
+		await expect(planUndo({ row, run: timeoutGit })).rejects.toThrow("timed out");
 	});
 
 	test("#36: jabbu_dispatch worker follow-up rejects done and cancelled tasks", async () => {

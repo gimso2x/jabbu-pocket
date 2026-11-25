@@ -447,6 +447,7 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+const MISSING_GIT = /not a git repository|bad object|not a valid object|invalid object name/i;
 /** What `!undo` would do to one row's repository. Never writes: the card and the re-check both read this. */
 export async function planUndo(options: {
 	row: TurnSnapshotRow;
@@ -476,7 +477,7 @@ export async function planUndo(options: {
 		treeEntries(run, row.repo, row.treeAfter),
 		overlapPaths(run, row, options.others ?? []),
 		run(row.repo, ["config", "--bool", "core.fileMode"]),
-	]).catch(() => undefined);
+	]).catch((e: unknown) => (!existsSync(row.repo) || MISSING_GIT.test(String(e)) ? undefined : Promise.reject(e)));
 	if (read === undefined) return { repo: row.repo, source: row.treeBefore, missing: true, files: [] };
 	const [paths, before, after, overlap, fileMode] = read;
 	// Only an explicit false relaxes the check; unset or unreadable keeps comparing the executable bit.
