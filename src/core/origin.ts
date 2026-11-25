@@ -74,8 +74,8 @@ export interface OriginRouterDeps {
 	onTurnCostCap?: MailboxDeps["onTurnCostCap"];
 	/** Owner dialogs a plain message may answer; see `MailboxDeps.dialogs`. */
 	dialogs?: MailboxDeps["dialogs"];
-	/** Turn snapshots and `!undo`; passed to every mailbox (`MailboxDeps.turnUndo`). */
-	turnUndo?: MailboxDeps["turnUndo"];
+	/** Turn HEADs for the wiki turn notes; passed to every mailbox (`MailboxDeps.turnHeads`). */
+	turnHeads?: MailboxDeps["turnHeads"];
 	/** `!brief` renderer; passed to every mailbox (`MailboxDeps.briefingProvider`). */
 	briefingProvider?: MailboxDeps["briefingProvider"];
 	/** `!restart` launcher; passed to every mailbox (`MailboxDeps.restartProvider`). */

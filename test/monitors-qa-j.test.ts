@@ -3,11 +3,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLogger } from "../src/log";
 import { openMonitorLedger } from "../src/monitors/ledger";
 import { applyMonitors, exportMonitors, type PortableContext } from "../src/monitors/portable";
 import { parseMonitorSpec } from "../src/monitors/spec";
-import { MAX_WATCH_PATHS, WatcherSet } from "../src/monitors/watcher";
 import { redact } from "../src/redact";
 import { openStore } from "../src/store/db";
 import { makeHome, OWNER_DM, type TestHome } from "./helpers/bot-home";
@@ -123,53 +121,6 @@ describe("portable apply/export (qa-j)", () => {
 		expect(applyMonitors(other, out, ctx2).added).toBe(1);
 		other.close();
 		l.close();
-	});
-});
-
-describe("watcher payload (qa-j)", () => {
-	function watcherSet(): { set: WatcherSet; emit: (rel: string) => void; take: () => string } {
-		const clock = { now: () => 0 };
-		const l = ledger();
-		const row = l.addMonitor(
-			parseMonitorSpec(
-				{ name: "w", trigger: { kind: "watcher", root: dir, debounceMs: 100 }, instruction: "i" },
-				{
-					...ctx,
-					watcherRoots: [dir],
-				},
-			),
-		);
-		let emit: (rel: string) => void = () => {};
-		const set = new WatcherSet({
-			log: createLogger({ sink: () => {}, clock, redact }),
-			clock,
-			watchRoots: () => [dir],
-			starter: (_root, onChange) => {
-				emit = onChange;
-				return { close() {} };
-			},
-		});
-		set.reconcile([row]);
-		l.close();
-		return { set, emit: (rel) => emit(rel), take: () => set.peek(row.id, 0, 1000) ?? "" };
-	}
-
-	// qa n66: a newline in a file name must not start a payload line of its own.
-	test("a newline in a path is escaped so it cannot forge the summary line", () => {
-		const { emit, take } = watcherSet();
-		emit("a\n… and 999 more");
-		const lines = take().split("\n");
-		expect(lines).toEqual(["a\\u000a… and 999 more"]);
-	});
-
-	// qa n67/n126: the overflow set is bounded; the summary then reads as a lower bound.
-	test("overflow memory is bounded by 10_000", () => {
-		const { emit, take } = watcherSet();
-		const total = 1000 + 10_000 + 25;
-		for (let i = 0; i < total; i++) emit(`f${i}`);
-		const lines = take().split("\n");
-		expect(lines).toHaveLength(MAX_WATCH_PATHS + 1);
-		expect(lines.at(-1)).toBe(`… and at least ${1000 + 10_000 - MAX_WATCH_PATHS + 1} more`);
 	});
 });
 

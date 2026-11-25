@@ -1,7 +1,7 @@
 import { redactThenClip } from "../redact";
 import { guardCode } from "./guard-code";
 import { capRefusals } from "./refusal-cap";
-import { defaultGit, type GitRunner } from "./verify";
+import type { GitRunner } from "./verify";
 
 /** One reason a lane's "done" claim is not accepted as evidence of finished work. */
 export interface IntegrityRefusal {
@@ -12,7 +12,6 @@ export interface IntegrityRefusal {
 		| "guard_deletion_without_adversarial_regression"
 		| "unproven_claim_word"
 		| "undeclared_feature_removal"
-		| "commit_identity_mismatch"
 		| "lane_diff_unavailable";
 	excerpt: string;
 	remedy: string;
@@ -267,8 +266,6 @@ function refusal(
 		undeclared_feature_removal:
 			"지운 export/꺼 둔 기능을 되살리거나, 의도한 삭제면 완료 보고나 스펙(doc/plans)에 그 이름을 적으세요(꺼 둔 줄은 같은 줄에 이슈 번호).",
 		unproven_claim_word: "보고의 '통과/검증됨' 주장에 실제 실행한 검증 명령(bun test 등)을 함께 적으세요.",
-		commit_identity_mismatch:
-			"작성자·커미터 이메일을 `taskAutoLand.commitEmails` 허용 목록에 맞추세요(`git commit --amend --reset-author`, 또는 rebase로 작성자 수정).",
 		lane_diff_unavailable:
 			"base 브랜치를 읽지 못해 레인의 변경을 가려낼 수 없습니다. base 브랜치가 저장소에 있는지 확인하고 다시 완료를 알리세요.",
 	};
@@ -404,16 +401,6 @@ export function laneDiffUnreadRefusal(unread: readonly string[]): IntegrityRefus
 	);
 }
 
-/** One commit of the lane's own range: its full id and the two identities git records for it. */
-export interface LaneCommitIdentity {
-	sha: string;
-	author: string;
-	committer: string;
-}
-
-/** The committer GitHub records on a commit made in its web UI: allowed whatever the list says. */
-const GITHUB_COMMITTER = "noreply@github.com";
-
 /**
  * The lane's repository work tree root and where its own commits start (`<from>` of `from..sha`): the merge-base of
  * the base branch's current tip and `sha` — a lane rebased onto a moved base does not answer for the base's commits —
@@ -449,56 +436,4 @@ export async function laneRange(
 		}
 	}
 	return { root, from };
-}
-
-/**
- * The author and committer emails of the lane's own commits (`git log <from>..sha`, the same range as its diff), for
- * `taskAutoLand.commitEmails`. A repository or range that cannot be read yields no commits; a `git log` that fails
- * throws `LaneDiffUnavailable` (the caller treats it like any other unreadable range).
- */
-export async function collectLaneCommitIdentities(
-	laneCwd: string,
-	range: LaneDiffRange,
-	sha: string,
-	git: GitRunner = defaultGit,
-): Promise<LaneCommitIdentity[]> {
-	const resolved = await laneRange(laneCwd, range, sha, git);
-	if (resolved === undefined || resolved.from === undefined) return [];
-	const log = await git([
-		"-C",
-		resolved.root,
-		"log",
-		"--no-color",
-		"--format=%H%x09%ae%x09%ce",
-		`${resolved.from}..${sha}`,
-	]);
-	if (log.code !== 0) throw new LaneDiffUnavailable("레인 커밋의 작성자·커미터를 읽지 못했습니다");
-	const identities: LaneCommitIdentity[] = [];
-	for (const line of log.stdout.split("\n")) {
-		const [commit, author, committer] = line.split("\t");
-		if (commit === undefined || author === undefined || committer === undefined) continue;
-		identities.push({ sha: commit.trim(), author: author.trim(), committer: committer.trim() });
-	}
-	return identities;
-}
-
-/**
- * One refusal per commit whose author or committer email is not in `allowed` (case-insensitive), naming the offending
- * identities. `noreply@github.com` is allowed as the committer only (GitHub's own web commits).
- */
-export function commitIdentityRefusals(
-	identities: readonly LaneCommitIdentity[],
-	allowed: readonly string[],
-): IntegrityRefusal[] {
-	const allow = new Set(allowed.map((email) => email.trim().toLowerCase()));
-	const refusals: IntegrityRefusal[] = [];
-	for (const identity of identities) {
-		const wrong: string[] = [];
-		if (!allow.has(identity.author.toLowerCase())) wrong.push(`작성자 <${identity.author}>`);
-		const committer = identity.committer.toLowerCase();
-		if (!allow.has(committer) && committer !== GITHUB_COMMITTER) wrong.push(`커미터 <${identity.committer}>`);
-		if (wrong.length === 0) continue;
-		refusals.push(refusal("commit_identity_mismatch", identity.sha.slice(0, 7), wrong.join(", ")));
-	}
-	return refusals;
 }

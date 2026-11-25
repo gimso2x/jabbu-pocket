@@ -12,6 +12,7 @@ import {
 	type MonitorTrigger,
 	parseAt,
 } from "./spec";
+import { parseStoredTrigger, type UnsupportedTrigger } from "./stored-trigger";
 
 export const NO_REPORT = "NO_REPORT";
 /** Entire-response / first-line / last-line answer that skips the chat delivery (hermes monitor mode). */
@@ -63,7 +64,7 @@ export type ScriptState = "met" | "unmet";
 export interface MonitorRow {
 	id: string;
 	name: string;
-	trigger: MonitorTrigger;
+	trigger: MonitorTrigger | UnsupportedTrigger;
 	instruction: string;
 	overlap: MonitorOverlap;
 	enabled: boolean;
@@ -85,7 +86,7 @@ export interface MonitorRow {
 	lastScriptState: ScriptState | null;
 	/** Script monitors: sha256 of the last met check's stdout — `suppressUnchanged` compares against it. */
 	lastOutputHash: string | null;
-	/** Script and watcher monitors: the last check (or watch) error, cleared by the next good one. */
+	/** Script monitors: the last check error, cleared by the next good one. */
 	lastCheckError: string | null;
 	lastCheckErrorAt: number | null;
 	/** Check errors in a row; the owner is told once when it reaches `CHECK_ERROR_ALERT_STREAK`. */
@@ -268,7 +269,7 @@ interface EventSql {
 export const toMonitor = (r: MonitorSql): MonitorRow => ({
 	id: r.id,
 	name: r.name,
-	trigger: JSON.parse(r.trigger_json) as MonitorTrigger,
+	trigger: parseStoredTrigger(r.trigger_json),
 	instruction: r.instruction,
 	overlap: r.overlap,
 	enabled: r.enabled === 1,
@@ -318,7 +319,7 @@ export function nextFireOf(row: MonitorRow): number | null {
 	if (trigger.kind === "cron") return nextFire(parseCron(trigger.schedule), trigger.timezone, row.cursorAt) ?? null;
 	// A stored `at` is always a UTC ISO string (`…Z`), so the fallback zone is never consulted.
 	if (trigger.kind === "at") return parseAt(trigger.at, "UTC");
-	if (trigger.kind === "watcher" || trigger.kind === "webhook") return null;
+	if (trigger.kind === "unsupported") return null;
 	const next = row.cursorAt + trigger.intervalMs;
 	// A row stored before `intervalMs` had an upper bound may point past what a `Date` can hold.
 	return Number.isFinite(new Date(next).getTime()) ? next : null;
@@ -339,8 +340,7 @@ export function describeMonitorTrigger(row: MonitorRow, formatAt: (at: string) =
 		return `cron "${trigger.schedule}" ${trigger.timezone}${command}`;
 	}
 	if (trigger.kind === "at") return `at ${formatAt(trigger.at)}`;
-	if (trigger.kind === "watcher") return `watcher ${trigger.root} debounce=${trigger.debounceMs}ms`;
-	if (trigger.kind === "webhook") return `webhook /hook/${trigger.id}`;
+	if (trigger.kind === "unsupported") return `지원 안 함 (${trigger.was})`;
 	const { fire = "edge", once = false } = trigger;
 	return `script ${trigger.command.join(" ")} every ${trigger.intervalMs / 1000}s fire=${fire}${once ? " once" : ""}${fire === "every" ? "" : ` state=${row.lastScriptState ?? "-"}`}`;
 }

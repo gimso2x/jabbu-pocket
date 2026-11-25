@@ -35,7 +35,7 @@ import {
 import { type FlowTransition, type TaskStage, taskFlowStatus, taskStage } from "../flow/task-flow";
 import { heavyRunPaths, readHeavyRunStates } from "../heavy-run";
 import { type MonitorRow, type MonitorSql, monitorOrigin, nextFireOf, toMonitor } from "../monitors/ledger";
-import type { MonitorDeliver, MonitorOverlap, MonitorTrigger } from "../monitors/spec";
+import type { MonitorDeliver, MonitorOverlap } from "../monitors/spec";
 import { type AssistantTail, pendingToolCall, readLastAssistant, sessionPathOf } from "../omp/session-tail";
 import { isRecord } from "../omp/type-guards";
 import { parseSystemctlShow, parseUnixTimestamp, readLockStartedAt } from "../ops/apply";
@@ -484,7 +484,7 @@ function cronWords(schedule: string, timezone: string, botTimezone: string): str
 	return timezone === botTimezone ? label : `${label} (${timezone})`;
 }
 
-function monitorSchedule(trigger: MonitorTrigger, timezone: string): string {
+function monitorSchedule(trigger: MonitorRow["trigger"], timezone: string): string {
 	switch (trigger.kind) {
 		case "cron":
 			return cronWords(trigger.schedule, trigger.timezone, timezone);
@@ -494,10 +494,8 @@ function monitorSchedule(trigger: MonitorTrigger, timezone: string): string {
 			const every = trigger.intervalMs;
 			return `조건 감시 · ${every % 60_000 === 0 ? `${every / 60_000}분` : `${every / 1000}초`}마다`;
 		}
-		case "webhook":
-			return "외부 호출 때";
-		case "watcher":
-			return "파일 바뀔 때";
+		case "unsupported":
+			return `지원 안 함 (${trigger.was})`;
 	}
 }
 

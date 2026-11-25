@@ -159,7 +159,7 @@ function rowHtml(html: string, id: string): string {
 const textOf = (html: string): string => html.replace(/<[^>]*>/g, "");
 
 describe("dashboard monitors snapshot", () => {
-	test("AC-1: cron in words in its time zone; at, script and webhook lines", async () => {
+	test("AC-1: cron in words in its time zone; at and script lines, and a stored webhook row as unsupported", async () => {
 		addMonitors([
 			{ id: "c1", name: "매일", trigger: cron("30 7 * * *") },
 			{ id: "c2", name: "평일", trigger: cron("0 9 * * 1-5") },
@@ -187,7 +187,7 @@ describe("dashboard monitors snapshot", () => {
 			UTC: "매일 22:30 (UTC)",
 			한번: "한 번 · 11-07 09:30",
 			조건: "조건 감시 · 5분마다",
-			훅: "외부 호출 때",
+			훅: "지원 안 함 (webhook)",
 		});
 		expect(byName(items, "매일").cron).toBe("30 7 * * * (Asia/Seoul)");
 		expect(byName(items, "UTC").cron).toBe("30 22 * * * (UTC)");

@@ -22,6 +22,7 @@ import { OriginRouter, sessionDirFor } from "../src/core/origin";
 import type { InboundRecord } from "../src/core/types";
 import { createLogger } from "../src/log";
 import {
+	describeMonitorTrigger,
 	type EventStage,
 	MONITOR_INCIDENT_REPEAT_MS,
 	type MonitorEventRow,
@@ -1762,7 +1763,7 @@ describe("monitors: script edge triggering", () => {
 		await interval();
 		expect(events()).toBe(1);
 		store.monitors.updateMonitor(monitor.id, {
-			...monitor,
+			...specOfRow(monitor),
 			channel: undefined,
 			copyChannel: undefined,
 			model: undefined,
@@ -1983,6 +1984,47 @@ describe("monitors: spec validation", () => {
 			ctx(),
 		);
 		expect(spec.trigger).toEqual({ kind: "at", at: "2026-06-01T00:00:00.000Z" });
+	});
+});
+
+describe("monitors: rows of a removed trigger kind", () => {
+	test("a stored webhook or watcher row is unsupported: no next fire, no event on any tick, described as 지원 안 함", async () => {
+		const kinds = ["webhook", "watcher"] as const;
+		const ids = kinds.map((kind) => {
+			const row = cronMonitor("* * * * *", { name: kind });
+			const db = new Database(join(dir, "jabbu.db"));
+			db.run("UPDATE monitors SET trigger_json = ? WHERE id = ?", [
+				JSON.stringify(
+					kind === "webhook" ? { kind, id: "old-id", token: "old-token" } : { kind, root: dir, debounceMs: 100 },
+				),
+				row.id,
+			]);
+			db.close();
+			return row.id;
+		});
+		for (const [index, was] of kinds.entries()) {
+			const row = store.monitors.getMonitor(ids[index] as string);
+			if (row === undefined) throw new Error("monitor gone");
+			expect(row.trigger).toEqual({ kind: "unsupported", was });
+			expect(nextFireOf(row)).toBeNull();
+			expect(describeMonitorTrigger(row, (at) => at)).toBe(`지원 안 함 (${was})`);
+		}
+		for (let i = 0; i < 3; i++) {
+			clock.advance(HOUR);
+			const summary = await run();
+			expect(summary).toMatchObject({ claimed: 0, skippedOverlap: 0, skippedCatchUp: 0, skippedFrozen: 0 });
+		}
+		expect(store.monitors.listEvents()).toHaveLength(0);
+		expect(prompts()).toHaveLength(0);
+	});
+
+	test("a spec naming the removed kinds is rejected", () => {
+		const ctx = { scriptsRoot: scriptsRoot(), defaultTimezone: "Asia/Seoul" };
+		for (const kind of ["webhook", "watcher"]) {
+			expect(() => parseMonitorSpec({ name: "n", trigger: { kind }, instruction: "x" }, ctx)).toThrow(
+				'trigger.kind must be "cron", "at" or "script"',
+			);
+		}
 	});
 });
 
