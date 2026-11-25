@@ -99,16 +99,16 @@ export function createTaskSweep(
 				const found = readLastAssistant(sessionPath);
 				return found === undefined ? undefined : lastAnswerOf(found);
 			}
-			const entry = ctx.options.config.dispatchHosts?.[row.host];
+			const hosts = ctx.options.config.dispatchHosts;
+			const entry = hosts !== undefined && Object.hasOwn(hosts, row.host) ? hosts[row.host] : undefined;
 			if (entry === undefined) throw new Error(`dispatchHosts has no ${row.host}`);
 			const found = await readRemoteLastAssistant(entry.ssh, sessionPath, herdrRun ?? realProcessRunner);
 			return found === undefined ? undefined : lastAnswerOf(found);
 		},
 		boardLink: async (row) => {
-			const board = ctx.options.config.herdrBoard;
-			if (board === undefined || row.runtime === "headless") return undefined;
+			if (ctx.options.config.herdrBoard === undefined || row.runtime === "headless") return undefined;
 			const pane = await herdrAgentPane(row.agent, herdrOptionsOf(ctx, row));
-			return boardCardLink(board, row.host, pane, {
+			return boardCardLink(ctx.options.config.herdrBoard, row.host, pane, {
 				onError: (error) => log.warn("task_board_link_failed", { task: row.taskId, error }),
 			});
 		},

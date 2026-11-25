@@ -130,7 +130,10 @@ export function ledgerOf(ledger: TaskLedger, keep: (row: TaskRow) => boolean): T
 
 /** The herdr call options of a task's host: a dispatch host's ssh target and herdr binary, the local ones otherwise. */
 export function herdrOptionsOf(ctx: DaemonContext, row: TaskRow): HerdrRunnerOptions {
-	const entry = row.host === null ? undefined : ctx.options.config.dispatchHosts?.[row.host];
+	const entry =
+		row.host !== null && Object.hasOwn(ctx.options.config.dispatchHosts ?? {}, row.host)
+			? ctx.options.config.dispatchHosts?.[row.host]
+			: undefined;
 	const run = ctx.options.herdrRun;
 	return {
 		cwd: ctx.options.config.workspaceDir,

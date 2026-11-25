@@ -48,7 +48,7 @@ export interface RestoreResult {
 	plan: RestorePlan;
 }
 
-const SIDECARS = ["", "-wal", "-shm"] as const;
+const SIDECARS = ["", "-wal", "-shm", "-journal"] as const;
 /** Core ledger tables every jabbu db has: a restore source without them is not a jabbu ledger. */
 const REQUIRED_TABLES = ["origins", "inbound", "deliveries"] as const;
 
@@ -185,8 +185,7 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void):
 				`not a jabbu ledger: missing table${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
 			);
 		}
-		rmSync(`${tmp}-wal`, { force: true });
-		rmSync(`${tmp}-shm`, { force: true });
+		for (const ext of SIDECARS.slice(1)) rmSync(`${tmp}${ext}`, { force: true });
 		fsyncPath(tmp);
 
 		if (plan.moves.length > 0) mkdirSync(preRestoreDir, { recursive: true, mode: 0o700 });

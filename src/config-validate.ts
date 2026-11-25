@@ -75,16 +75,17 @@ export function optionalString(
 	return value;
 }
 
-/** An optional integer no smaller than `min`. */
+/** An optional safe integer in `[min, max]`. */
 export function optionalInt(
 	configPath: string,
 	obj: Record<string, unknown>,
 	key: string,
 	min: number,
+	max = Number.MAX_SAFE_INTEGER,
 ): number | undefined {
 	const value = obj[key];
 	if (value === undefined) return undefined;
-	if (typeof value !== "number" || !Number.isInteger(value) || value < min) invalid(configPath, key);
+	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) invalid(configPath, key);
 	return value;
 }
 
@@ -218,6 +219,8 @@ const isHostPath = (value: unknown): boolean => typeof value === "string" && /^[
 export const isRecordsPath = (value: unknown): boolean =>
 	typeof value === "string" && TASK_PATH_PATTERN.test(value) && !value.includes("..");
 
+const FORBIDDEN_HOST_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
 /** `dispatchHosts`: each entry's ssh target, paths and arguments judged; `undefined` when the key is absent. */
 export function dispatchHostsOf(
 	configPath: string,
@@ -228,6 +231,7 @@ export function dispatchHostsOf(
 	const hosts = asRecord(value);
 	if (hosts === undefined) invalid(configPath, "dispatchHosts");
 	for (const [name, entry] of Object.entries(hosts)) {
+		if (name.trim() === "" || FORBIDDEN_HOST_NAMES.has(name)) invalid(configPath, `dispatchHosts.${name}`);
 		const record = asRecord(entry);
 		if (record === undefined || typeof record.ssh !== "string" || !DISPATCH_SSH.test(record.ssh)) {
 			invalid(configPath, `dispatchHosts.${name}.ssh`);

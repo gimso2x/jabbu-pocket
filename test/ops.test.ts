@@ -2582,7 +2582,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
 		expect(dry.stdout).toMatch(
-			/gc_done .* inbound=\d+ inbound_orphans=\d+ deliveries=\d+ monitor_events=\d+ monitor_slots=\d+ inbound_conflicts=\d+\n/,
+			/gc_done .* inbound=\d+ inbound_orphans=\d+ deliveries=\d+ monitor_events=\d+ monitor_slots=\d+ inbound_conflicts=\d+ web_messages=\d+\n/,
 		);
 		expect(names("inbound")).toHaveLength(13);
 	});

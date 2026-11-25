@@ -7,9 +7,9 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { checkSchemaVersion } from "../store/schema-version";
 import { assertRegularLedger } from "./gates";
 import { gcLaneArtifacts, newestMtimeMs } from "./gc-lanes";
-import { emptyLedgerRemoved, gcLedger, hasTable, LEDGER_RETENTION_DAYS, type LedgerRemoved } from "./gc-ledger";
+import * as ledgerGc from "./gc-ledger";
 
-export { LEDGER_RETENTION_DAYS, type LedgerRemoved };
+export { LEDGER_RETENTION_DAYS } from "./gc-ledger";
 
 /** Thread-session origins of the removed Slack and Teams channels. */
 const REMOVED_PLATFORM_THREAD = /^(slack|teams)\/ch\/[^/]+\/t\/[^/]+$/;
@@ -43,7 +43,7 @@ export interface GcResult {
 	/** Kept file evidence of closed lanes (`<home>/lanes/<lane>`) removed whole past retention. */
 	laneArtifactsRemoved: string[];
 	/** Finished conversation rows past `LEDGER_RETENTION_DAYS` deleted (counted only on a dry run). */
-	ledgerRemoved: LedgerRemoved;
+	ledgerRemoved: ledgerGc.LedgerRemoved;
 }
 
 /** The real path of an existing path; a path that is not there is only resolved. */
@@ -72,7 +72,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		threadOriginsRemoved: [],
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
-		ledgerRemoved: emptyLedgerRemoved(),
+		ledgerRemoved: ledgerGc.emptyLedgerRemoved(),
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -98,7 +98,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		);
 		// Before anything is deleted: a ledger from a newer build must stop gc while every directory is still there.
 		if (!options.dryRun) checkSchemaVersion(db);
-		if (hasTable(db, "monitors")) {
+		if (ledgerGc.hasTable(db, "monitors")) {
 			monitorIds = new Set((db.query("SELECT id FROM monitors").all() as Array<{ id: string }>).map((row) => row.id));
 		}
 	} finally {
@@ -167,16 +167,16 @@ export function gcSessions(options: GcOptions): GcResult {
 				continue;
 			}
 			if (present !== undefined && !present.isDirectory()) continue;
-			if (removeRow !== undefined) {
-				if (removeRow.run(origin.origin_key, origin.origin_key).changes === 0) {
-					result.retained.push(originDir);
-					continue;
-				}
-				if (present !== undefined) rmSync(originDir, { recursive: true, force: true });
+			if (
+				removeRow !== undefined &&
+				!ledgerGc.removeOriginWithDir(write, removeRow, origin.origin_key, originDir, present !== undefined)
+			) {
+				result.retained.push(originDir);
+				continue;
 			}
 			(orphanMonitor ? result.monitorOriginsRemoved : result.threadOriginsRemoved).push(origin.origin_key);
 		}
-		result.ledgerRemoved = gcLedger(write, options);
+		result.ledgerRemoved = ledgerGc.gcLedger(write, options);
 	} finally {
 		write.close();
 	}
