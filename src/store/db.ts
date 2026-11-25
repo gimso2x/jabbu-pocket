@@ -74,7 +74,7 @@ import {
 	PEER_CALL_KEEP_MS,
 	SCHEMA,
 } from "./db-schema";
-import { migrateInbound } from "./db-sending";
+import { columnsOf, migrateInbound } from "./db-sending";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
@@ -2265,7 +2265,8 @@ export class Store {
 
 	/**
 	 * The `replied` status widens a CHECK constraint, which SQLite cannot ALTER: an approvals table without it is
-	 * rebuilt (rename, create, copy, drop) in one transaction. Old rows keep their data; the new columns are NULL.
+	 * rebuilt (rename, create, copy, drop) in one transaction. Every column both tables have is copied as is;
+	 * columns the old table lacks stay NULL.
 	 */
 	private migrateApprovals(): void {
 		const current = this.db
@@ -2277,9 +2278,11 @@ export class Store {
 		this.db.transaction(() => {
 			this.db.run("ALTER TABLE approvals RENAME TO approvals_old");
 			this.db.run(APPROVALS_DDL);
-			this.db.run(
-				"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at) SELECT approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at FROM approvals_old",
-			);
+			const fresh = new Set(columnsOf(this.db, "approvals"));
+			const kept = columnsOf(this.db, "approvals_old")
+				.filter((name) => fresh.has(name))
+				.join(", ");
+			this.db.run(`INSERT INTO approvals (${kept}) SELECT ${kept} FROM approvals_old`);
 			this.db.run("DROP TABLE approvals_old");
 		})();
 	}
