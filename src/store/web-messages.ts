@@ -384,14 +384,15 @@ export function readWebChanges(
 	afterEditedAt: number,
 	conversation?: string,
 	limit = 100,
+	pageAfterId = 0,
 ): WebMessageRow[] {
 	return withReadonlyDb(homeDir, [], (db) => {
-		const pred = "(id > ? OR (edited_at IS NOT NULL AND edited_at > ?))";
+		const pred = "id > ? AND (id > ? OR (edited_at IS NOT NULL AND edited_at > ?))";
 		const sql = `SELECT * FROM web_messages WHERE ${conversation === undefined ? "" : "conversation = ? AND "}${pred} ORDER BY id ASC LIMIT ?`;
 		const res =
 			conversation === undefined
-				? db.query(sql).all(afterId, afterEditedAt, limit)
-				: db.query(sql).all(conversation, afterId, afterEditedAt, limit);
+				? db.query(sql).all(pageAfterId, afterId, afterEditedAt, limit)
+				: db.query(sql).all(conversation, pageAfterId, afterId, afterEditedAt, limit);
 		return (res as WebMessageSql[]).map(toRow);
 	});
 }
