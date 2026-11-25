@@ -75,7 +75,7 @@ export async function restartCommand(host: MailboxHost, threadRef: string): Prom
 	const { originKey, restartProvider } = host.deps;
 	if (host.deps.isDraining?.()) return RESTART_DRAINING_TEXT;
 	const platform = platformOfThreadRef(threadRef);
-	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform !== "discord") return RESTART_REFUSED_TEXT;
+	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform === undefined) return RESTART_REFUSED_TEXT;
 	if (restartProvider === undefined) return "재시작이 연결되지 않았습니다";
 	return await restartProvider(originKey, threadRef);
 }
@@ -363,15 +363,20 @@ export function startBrief(deps: MailboxDeps, platformMessageId: string, opRef: 
 		return;
 	}
 	const startedAt = Date.now();
+	// Like `askBtw`: a `!new` during the render discards this row — nothing of the old epoch is delivered,
+	// and discarding an already-discarded row would throw only to be logged as a settle failure.
+	const discarded = (): boolean => store.getInbound(platformMessageId)?.state === "discarded";
 	provider(originKey, threadRef)
 		.then(
 			() => {
+				if (discarded()) return;
 				store.discard(platformMessageId, opRef);
 				log.info("briefing_rendered", { origin: originKey, ms: Date.now() - startedAt });
 			},
 			(error: unknown) => {
 				const reason = briefingReason(error);
 				log.warn("briefing_failed", { origin: originKey, error: reason });
+				if (discarded()) return;
 				store.recordAnswer({
 					originKey,
 					opRef,

@@ -29,30 +29,31 @@ function listening(host: string, port: number): Promise<boolean> {
 	});
 }
 
+/** What a short `omp` probe printed, or why it could not be read (spawn error, time limit, unreadable stdout). */
+type OmpProbe = { out: string; code: number } | { failure: string };
+
 /**
- * How many chat models `omp models --json` lists, run with the env the RPC driver gives omp. Zero means no provider
- * login and no API key: every turn would fail with "No default model selected", so doctor says so before the first DM.
- * A string is the reason the count could not be read (timeout, exit code, unparsable output).
+ * Runs `omp <args>` with the env the RPC driver gives omp, under a time limit. The child gets its own process group:
+ * a launcher's grandchild holding stdout open would keep the read waiting past the limit, so the whole group is killed.
  */
-export async function countOmpModels(
+async function probeOmp(
 	ompExecutable: string,
-	timeoutMs = 30_000,
-	/** Config `ompProfile`: the bot profile's models and login (`withOmpProfile`). */
-	ompProfile?: string,
-	base: Record<string, string | undefined> = process.env,
-): Promise<number | string> {
+	args: string[],
+	timeoutMs: number,
+	ompProfile: string | undefined,
+	base: Record<string, string | undefined>,
+): Promise<OmpProbe> {
 	let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
 	try {
-		proc = Bun.spawn([ompExecutable, "models", "--json"], {
+		proc = Bun.spawn([ompExecutable, ...args], {
 			stdout: "pipe",
 			stderr: "ignore",
 			stdin: "ignore",
-			// Own process group: a launcher's grandchild holding stdout open would keep the read waiting past the limit.
 			detached: true,
 			env: withOmpProfile(buildChildEnv({}, base), ompProfile),
 		});
 	} catch (error) {
-		return `cannot run ${ompExecutable} (${(error as NodeJS.ErrnoException).code ?? String(error)})`;
+		return { failure: `cannot run ${ompExecutable} (${(error as NodeJS.ErrnoException).code ?? String(error)})` };
 	}
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -67,16 +68,36 @@ export async function countOmpModels(
 				// ESRCH: the group is already gone
 			}
 			await proc.exited;
-			return `timeout after ${timeoutMs / 1000}s`;
+			return { failure: `timeout after ${timeoutMs / 1000}s` };
 		}
-		const [out, code] = result;
-		if (code !== 0) return `omp models exited ${code}`;
-		const parsed = JSON.parse(out) as { models?: unknown };
+		return { out: result[0], code: result[1] };
+	} catch {
+		return { failure: "unparsable output" };
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * How many chat models `omp models --json` lists, run with the env the RPC driver gives omp. Zero means no provider
+ * login and no API key: every turn would fail with "No default model selected", so doctor says so before the first DM.
+ * A string is the reason the count could not be read (timeout, exit code, unparsable output).
+ */
+export async function countOmpModels(
+	ompExecutable: string,
+	timeoutMs = 30_000,
+	/** Config `ompProfile`: the bot profile's models and login (`withOmpProfile`). */
+	ompProfile?: string,
+	base: Record<string, string | undefined> = process.env,
+): Promise<number | string> {
+	const probe = await probeOmp(ompExecutable, ["models", "--json"], timeoutMs, ompProfile, base);
+	if ("failure" in probe) return probe.failure;
+	if (probe.code !== 0) return `omp models exited ${probe.code}`;
+	try {
+		const parsed = JSON.parse(probe.out) as { models?: unknown };
 		return Array.isArray(parsed.models) ? parsed.models.length : "unparsable output";
 	} catch {
 		return "unparsable output";
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -99,56 +120,25 @@ export async function readJudgeRole(
 	base: Record<string, string | undefined> = process.env,
 ): Promise<JudgeRole> {
 	if (overlayConfig === undefined) return { unreadable: "no ompConfigOverlay for this install" };
-	let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
+	const args = ["--config", overlayConfig, "config", "list", "--json"];
+	const probe = await probeOmp(ompExecutable, args, timeoutMs, ompProfile, base);
+	if ("failure" in probe) return { unreadable: probe.failure };
+	if (probe.code !== 0) return { unreadable: `omp config list exited ${probe.code}` };
+	let parsed: unknown;
 	try {
-		proc = Bun.spawn([ompExecutable, "--config", overlayConfig, "config", "list", "--json"], {
-			stdout: "pipe",
-			stderr: "ignore",
-			stdin: "ignore",
-			// Own process group, as countOmpModels: a launcher's grandchild must not hold the read past the limit.
-			detached: true,
-			env: withOmpProfile(buildChildEnv({}, base), ompProfile),
-		});
-	} catch (error) {
-		return { unreadable: `cannot run ${ompExecutable} (${(error as NodeJS.ErrnoException).code ?? String(error)})` };
-	}
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		const timedOut = new Promise<"timeout">((resolve) => {
-			timer = setTimeout(() => resolve("timeout"), timeoutMs);
-		});
-		const result = await Promise.race([Promise.all([new Response(proc.stdout).text(), proc.exited]), timedOut]);
-		if (result === "timeout") {
-			try {
-				process.kill(-proc.pid, "SIGKILL");
-			} catch {
-				// ESRCH: the group is already gone
-			}
-			await proc.exited;
-			return { unreadable: `timeout after ${timeoutMs / 1000}s` };
-		}
-		const [out, code] = result;
-		if (code !== 0) return { unreadable: `omp config list exited ${code}` };
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(out);
-		} catch {
-			return { unreadable: "unparsable output" };
-		}
-		if (typeof parsed !== "object" || parsed === null) return { unreadable: "unparsable output" };
-		const roles = (parsed as { modelRoles?: { value?: unknown } }).modelRoles?.value;
-		// No role storage at all reads as an unset role: omp keeps roles inside `modelRoles`, and an overlay that sets
-		// none leaves the global ones in place — so what is read here is the effective value.
-		const judge = typeof roles === "object" && roles !== null ? (roles as Record<string, unknown>).judge : undefined;
-		if (typeof judge === "string" && judge.trim() !== "") return { model: judge };
-		// qa-z #9: the probe does not always merge the overlay — the file itself is checked as the effective role.
-		const fromOverlay = overlayJudgeRole(overlayConfig);
-		return fromOverlay === undefined ? { missing: true } : { model: fromOverlay };
+		parsed = JSON.parse(probe.out);
 	} catch {
 		return { unreadable: "unparsable output" };
-	} finally {
-		clearTimeout(timer);
 	}
+	if (typeof parsed !== "object" || parsed === null) return { unreadable: "unparsable output" };
+	const roles = (parsed as { modelRoles?: { value?: unknown } }).modelRoles?.value;
+	// No role storage at all reads as an unset role: omp keeps roles inside `modelRoles`, and an overlay that sets
+	// none leaves the global ones in place — so what is read here is the effective value.
+	const judge = typeof roles === "object" && roles !== null ? (roles as Record<string, unknown>).judge : undefined;
+	if (typeof judge === "string" && judge.trim() !== "") return { model: judge };
+	// qa-z #9: the probe does not always merge the overlay — the file itself is checked as the effective role.
+	const fromOverlay = overlayJudgeRole(overlayConfig);
+	return fromOverlay === undefined ? { missing: true } : { model: fromOverlay };
 }
 
 /** A YAML value as a mapping, or undefined for anything else (a list, a scalar, null). */

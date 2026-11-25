@@ -74,7 +74,7 @@ import {
 	PEER_CALL_KEEP_MS,
 	SCHEMA,
 } from "./db-schema";
-import { migrateInbound } from "./db-sending";
+import { columnsOf, migrateInbound } from "./db-sending";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
@@ -89,6 +89,7 @@ import {
 	transitionDelivery,
 	type UncertainReason,
 } from "./transitions";
+import { WebMessageStore } from "./web-messages";
 
 /** Words a placeholder answer uses when omp returned no text (mailbox writes it); a monitor treats it as a failure. */
 const EMPTY_ANSWER = "(응답 없음)";
@@ -108,9 +109,7 @@ const RECALL_WINDOW_MS = 90 * 24 * 60 * 60_000;
 /** Expired rows kept for `takeExpired` at most (a platform without an adapter never takes its rows). */
 const EXPIRED_HANDOFF_MAX = 200;
 /** Origin-key prefixes of every chat platform (`chatPlatformOf`): the turns typical durations are read from. */
-const CHAT_ORIGIN_PREFIXES = Object.keys({
-	discord: true,
-} satisfies Record<ChatPlatform, true>).map((platform) => `${platform}/%`);
+const CHAT_ORIGIN_PREFIXES = Object.keys({ discord: 1, web: 1 } satisfies Record<ChatPlatform, 1>).map((p) => `${p}/%`);
 /** First line of a chat answer that closes a task: only these are copied to the log channel. */
 const COMPLETION_MARKER = /^(?:✅|:white_check_mark:) 완료/;
 
@@ -239,6 +238,7 @@ export class Store {
 	readonly monitors: MonitorLedger;
 	/** [TASK] registry; shares this connection. */
 	readonly tasks: TaskLedger;
+	readonly web: WebMessageStore;
 	private logChannels: LogChannels = {};
 	private alertChannels: LogChannels = {};
 	/** Rows `sweepExpired` expired that no adapter took yet (`takeExpired`); memory only, like the statuses they end. */
@@ -298,6 +298,7 @@ export class Store {
 			canAlert: (monitorId) => this.ownerHome() !== undefined || this.noteUnroutableCheckError(monitorId),
 		});
 		this.tasks = new TaskLedger(this.db, { clock: options.clock, timezone: options.timezone });
+		this.web = new WebMessageStore(this.db, options.clock, options.redact);
 		stampSchemaVersion(this.db);
 		this.recoveredInflight = this.db
 			.query("UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'inflight'")
@@ -1176,7 +1177,7 @@ export class Store {
 		// Owner rows only (a peer bot's request carries its user id); monitor and lane origins are not conversations.
 		const spoken = this.db
 			.query(
-				`SELECT origin_key FROM inbound WHERE peer_user_id IS NULL AND origin_key LIKE 'discord/%'
+				`SELECT origin_key FROM inbound WHERE peer_user_id IS NULL AND (origin_key LIKE 'discord/%' OR origin_key LIKE 'web/%')
 				 ORDER BY inbound_id DESC LIMIT 50`,
 			)
 			.all() as Array<{ origin_key: string }>;
@@ -2265,7 +2266,7 @@ export class Store {
 
 	/**
 	 * The `replied` status widens a CHECK constraint, which SQLite cannot ALTER: an approvals table without it is
-	 * rebuilt (rename, create, copy, drop) in one transaction. Old rows keep their data; the new columns are NULL.
+	 * rebuilt (rename, create, copy, drop) in one transaction, copying every shared column and leaving new ones NULL.
 	 */
 	private migrateApprovals(): void {
 		const current = this.db
@@ -2277,9 +2278,9 @@ export class Store {
 		this.db.transaction(() => {
 			this.db.run("ALTER TABLE approvals RENAME TO approvals_old");
 			this.db.run(APPROVALS_DDL);
-			this.db.run(
-				"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at) SELECT approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at FROM approvals_old",
-			);
+			const fresh = new Set(columnsOf(this.db, "approvals"));
+			const kept = columnsOf(this.db, "approvals_old").filter((name) => fresh.has(name));
+			this.db.run(`INSERT INTO approvals (${kept}) SELECT ${kept} FROM approvals_old`);
 			this.db.run("DROP TABLE approvals_old");
 		})();
 	}
