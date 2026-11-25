@@ -1194,7 +1194,10 @@ export class DiscordAdapter implements ChannelAdapter {
 			kind: "deferred",
 			error: err,
 			retry: {
-				at: this.#gate.untilOf("post") ?? this.#clock.now() + err.retryAfterMs,
+				// `untilOf` also returns a block that already passed (one parked by an unrelated call): a 429 raised
+				// off the gate's path (a channel lookup inside `destination()`) must not schedule the retry in the
+				// past — the row would be claimable again at once and spin without ever counting a failure.
+				at: Math.max(this.#gate.untilOf("post") ?? 0, this.#clock.now() + err.retryAfterMs),
 				sentParts: sent,
 				...(topLevel && replyTo !== undefined ? { replyTs: replyTo } : {}),
 			},
