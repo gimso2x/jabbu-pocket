@@ -2279,9 +2279,7 @@ export class Store {
 			this.db.run("ALTER TABLE approvals RENAME TO approvals_old");
 			this.db.run(APPROVALS_DDL);
 			const fresh = new Set(columnsOf(this.db, "approvals"));
-			const kept = columnsOf(this.db, "approvals_old")
-				.filter((name) => fresh.has(name))
-				.join(", ");
+			const kept = columnsOf(this.db, "approvals_old").filter((name) => fresh.has(name));
 			this.db.run(`INSERT INTO approvals (${kept}) SELECT ${kept} FROM approvals_old`);
 			this.db.run("DROP TABLE approvals_old");
 		})();
