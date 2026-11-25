@@ -32,13 +32,17 @@ export function resetTurnText(state: NoticeScanState): void {
 	state.quotaLineDead = false;
 }
 
+const INLINE_SPACE = /[^\S\n]/;
+const isInlineSpace = (ch: string | undefined): boolean =>
+	ch !== undefined && (ch === " " || ch === "\t" || (ch !== "\n" && INLINE_SPACE.test(ch)));
+
 function skipNoticePrefix(text: string, start: number): number {
 	let i = start;
-	while (i < text.length && (text[i] === " " || text[i] === "\t")) i += 1;
+	while (isInlineSpace(text[i])) i += 1;
 	if (text[i] === "⚠") {
 		i += 1;
 		if (text[i] === "\uFE0F") i += 1;
-		while (i < text.length && (text[i] === " " || text[i] === "\t")) i += 1;
+		while (isInlineSpace(text[i])) i += 1;
 	}
 	return i;
 }
@@ -63,7 +67,7 @@ export function appendTurnChunk(state: NoticeScanState, chunk: string): { quota?
 	}
 	const tailStart = state.lastNewline + 1;
 	let ws = Math.max(tailStart, state.quotaScanFrom);
-	while (ws < state.text.length && (state.text[ws] === " " || state.text[ws] === "\t")) ws += 1;
+	while (isInlineSpace(state.text[ws])) ws += 1;
 	if (ws === state.text.length) {
 		state.quotaScanFrom = ws;
 		return { shown: state.text.slice(0, tailStart) };

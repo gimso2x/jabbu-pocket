@@ -8,6 +8,7 @@ import { promptImageBlocks } from "../src/omp/agy-images";
 import { appendTurnChunk, type NoticeScanState, resetTurnText } from "../src/omp/agy-notice";
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7, 6]);
+const PNG_B = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const tempDirs: string[] = [];
 
 afterAll(() => {
@@ -23,12 +24,13 @@ describe("qa-ab agy·스레드 맥락 수정", () => {
 		const f1 = join(inbound, "m1", "a.png");
 		const f2 = join(inbound, "m1", "b.png");
 		writeFileSync(f1, PNG);
-		writeFileSync(f2, PNG);
+		writeFileSync(f2, PNG_B);
 		const n1 = `[첨부: ${f1} (image/png)]`;
 		const n2 = `[첨부: ${f2} (image/png)]`;
 		const text = ["````md", "```", n1, "````", n2].join("\n");
 		const blocks = await promptImageBlocks(text, inbound);
-		expect(blocks).toHaveLength(1);
+		expect(blocks).toEqual([{ type: "image", mimeType: "image/png", data: Buffer.from(PNG_B).toString("base64") }]);
+		expect(await promptImageBlocks(["````md", "```", n1, "````"].join("\n"), inbound)).toEqual([]);
 	});
 
 	test("#15: threadContextBlock folds newlines in the thread root so an embedded attachment note is not standalone", async () => {
@@ -87,5 +89,9 @@ describe("qa-ab agy·스레드 맥락 수정", () => {
 		expect(second.quota).toBe("RESOURCE_EXHAUSTED (code 429)");
 		resetTurnText(state);
 		expect(state).toEqual({ text: "", lastNewline: -1, quotaScanFrom: 0, quotaLineDead: false });
+
+		const nbsp: NoticeScanState = { text: "", lastNewline: -1, quotaScanFrom: 0, quotaLineDead: false };
+		expect(appendTurnChunk(nbsp, "앞 줄\n\u00A0⚠️\u00A0API error (attempt 1): ")).toEqual({ shown: "앞 줄\n" });
+		expect(appendTurnChunk(nbsp, "RESOURCE_EXHAUSTED (code 429)\n").quota).toBe("RESOURCE_EXHAUSTED (code 429)");
 	});
 });
