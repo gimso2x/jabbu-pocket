@@ -292,7 +292,7 @@ export class Store {
 			clock: options.clock,
 			redact: options.redact,
 			onCheckErrorAlert: (alert) => this.postCheckErrorNotice(alert),
-			canAlert: (monitorId) => this.ownerHome() !== undefined || this.noteUnroutableCheckError(monitorId),
+			canAlert: (id) => Boolean(this.alertChannels.discord ?? this.ownerHome()) || this.noteUnroutableCheckError(id),
 		});
 		this.tasks = new TaskLedger(this.db, { clock: options.clock, timezone: options.timezone });
 		this.web = new WebMessageStore(this.db, options.clock, options.redact);
