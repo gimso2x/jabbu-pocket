@@ -18,8 +18,6 @@ import { isRecord } from "./type-guards";
 
 export const DEFAULT_QUOTA_BLOCK_MS = 60 * 60_000;
 export const QUOTA_RESET_BUFFER_MS = 120_000;
-/** Longest block one reset phrase can set: agy's text is outside input, and a block must stay a valid Date. */
-export const MAX_QUOTA_BLOCK_MS = 30 * 24 * 3_600_000;
 export const EFFORT_SUFFIX = /-(low|medium|high|xhigh)$/;
 
 /** Updates that only refresh state; any other kind is debug-logged once. */
@@ -48,7 +46,7 @@ export function parseResetDurationMs(detail: string): number {
 			else if (unit === "m") totalMs += value * 60_000;
 			else if (unit === "s") totalMs += value * 1_000;
 		}
-		if (totalMs > 0) return Math.min(Math.ceil(totalMs), MAX_QUOTA_BLOCK_MS) + QUOTA_RESET_BUFFER_MS;
+		if (totalMs > 0) return Math.ceil(totalMs) + QUOTA_RESET_BUFFER_MS;
 	}
 	return DEFAULT_QUOTA_BLOCK_MS + QUOTA_RESET_BUFFER_MS;
 }
