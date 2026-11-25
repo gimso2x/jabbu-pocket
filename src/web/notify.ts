@@ -1,6 +1,7 @@
 import { parseChatOrigin, platformOfConversationId } from "../core/origin-key";
 import type { DaemonContext } from "../daemon/daemon-context";
 import { redact } from "../redact";
+import { slugOfBotHome } from "./bots";
 
 export interface WebOwnerTurnInfo {
 	kind: "approval" | "choice";
@@ -21,9 +22,14 @@ export function ownerTurnInfo(
 	return { kind, channel, messageId, summary, ...(originKey === undefined ? {} : { originKey }) };
 }
 
-function webChatLink(ctx: DaemonContext, conversationId: string): string {
+function webChatLink(ctx: DaemonContext, info: WebOwnerTurnInfo): string {
 	const host = ctx.options.config.dashboard?.allowedHosts?.[0];
-	const query = `/?view=chat&c=${encodeURIComponent(conversationId)}`;
+	const parsed = info.originKey === undefined ? undefined : parseChatOrigin(info.originKey);
+	const bot = slugOfBotHome(ctx.options.config.homeDir, "");
+	const params = [`c=${encodeURIComponent(info.channel)}`];
+	if (parsed?.threadId !== undefined) params.push(`t=${encodeURIComponent(parsed.threadId)}`);
+	if (bot !== "") params.push(`bot=${encodeURIComponent(bot)}`);
+	const query = `/?view=chat&${params.join("&")}`;
 	return host ? `https://${host}${query}` : query;
 }
 
@@ -43,7 +49,7 @@ export function notifyWebOwnerTurn(ctx: DaemonContext, info: WebOwnerTurnInfo): 
 	}
 	const prefix = info.kind === "approval" ? "🔐 웹 대화 승인 대기" : "❓ 웹 대화 질문 대기";
 	const cleanSummary = redact(info.summary).replace(/\s+/g, " ").trim().slice(0, 120);
-	const link = webChatLink(ctx, info.channel);
+	const link = webChatLink(ctx, info);
 	const line = cleanSummary ? `${prefix}: ${cleanSummary} — ${link}` : `${prefix} — ${link}`;
 	void discord.postNotice(dmRef.conversationId, line).catch((error: unknown) => {
 		ctx.log.warn("web_notify_discord_failed", { conversation: info.channel, error: String(error) });

@@ -53,7 +53,7 @@ export function readFreeze(homeDir: string): FreezeState | undefined {
 		const raw = JSON.parse(readRegularText(path)) as Partial<FreezeState>;
 		return {
 			since: typeof raw.since === "string" ? oneToken(raw.since) : "unknown",
-			reason: typeof raw.reason === "string" ? oneLine(raw.reason) : "",
+			reason: typeof raw.reason === "string" ? oneLine(raw.reason).slice(0, MAX_REASON_CHARS) : "",
 			by: typeof raw.by === "string" ? oneToken(raw.by) : "unknown",
 		};
 	} catch {
