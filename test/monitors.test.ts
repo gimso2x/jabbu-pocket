@@ -169,6 +169,17 @@ const stages = (): EventStage[] => store.monitors.listEvents().map((event) => ev
 const answered = (event: MonitorEventRow) => event.stage === "authored" || event.stage === "delivered";
 const prompts = () => drivers.flatMap((driver) => driver.calls).filter((call) => call.startsWith("prompt:"));
 
+describe("monitors: claim against a disabled row", () => {
+	test("a claim after the monitor was disabled answers disabled and records nothing; a manual claim still goes through", () => {
+		const monitor = cronMonitor("* * * * *");
+		store.monitors.setEnabled(monitor.id, false);
+		expect(store.monitors.claimSlot({ monitorId: monitor.id, slotAt: T0 }).status).toBe("disabled");
+		expect(store.monitors.listEvents()).toHaveLength(0);
+		expect(store.monitors.listSlots(monitor.id)).toHaveLength(0);
+		expect(store.monitors.claimSlot({ monitorId: monitor.id, slotAt: T0, manual: true }).status).toBe("admitted");
+	});
+});
+
 describe("monitors: exactly once", () => {
 	test("a slot claimed twice, or replayed from a rewound cursor, produces one event and one prompt", async () => {
 		const monitor = cronMonitor("* * * * *");
