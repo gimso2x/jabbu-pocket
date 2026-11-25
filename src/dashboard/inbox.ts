@@ -152,8 +152,7 @@ export function inboxAttention(s: DashboardSnapshot, live?: BoardPanel | null): 
 
 /** Why the owner should look at a 확인 필요 entry, failure first, cut at 120 characters. Self-contained (shipped). */
 export function inboxNextReason(entry: InboxEntry, live: boolean): string {
-	const task = entry.task;
-	const card = entry.card;
+	const { task, card } = entry;
 	const herdr = task?.herdr;
 	const reason =
 		task?.error ??
@@ -170,7 +169,8 @@ export function inboxNextReason(entry: InboxEntry, live: boolean): string {
 							: entry.kind === "task" && live
 								? "에이전트 카드 없음"
 								: "확인 필요");
-	return reason.length > 120 ? `${reason.slice(0, 119)}…` : reason;
+	const text = task?.overlap === undefined ? reason : `${reason} · ${task.overlap}`;
+	return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }
 
 /** The tab icon for a state: the brand mark, the same with a red dot (확인 필요), all grey (이상). Self-contained. */

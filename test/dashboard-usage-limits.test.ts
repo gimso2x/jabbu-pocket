@@ -429,6 +429,8 @@ describe("AC-1: html strip", () => {
 		) as typeof renderDashboardMain;
 		expect(() => client(snapshot, undefined, NOW, { view: "system" })).not.toThrow();
 		expect(strip(server)).not.toBe("");
+		// T-20261125-08: the trend line (`trendHtml`) ships with the script.
+		expect(strip(server)).toContain('<span class="limit-trend" title="최근 90분 · 표본 1개');
 		expect(strip(client(snapshot, undefined, NOW, { view: "system" }))).toBe(strip(server));
 	});
 });

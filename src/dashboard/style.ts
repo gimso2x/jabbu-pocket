@@ -436,7 +436,7 @@ a.flow-box:hover { background: var(--c-hover); }
 .limit-row.is-warn .limit-pct { color: var(--c-warning-tint-text); }
 .limit-row.is-danger .limit-pct { color: var(--c-danger); }
 .limit-reset { text-align: right; color: var(--c-text-3); font-size: var(--fs-caption); white-space: nowrap; }
-.limit-error { font-size: var(--fs-sub); }
+.limit-error { font-size: var(--fs-sub); } .limit-trend { grid-column: 1 / -1; color: var(--c-text-3); font-size: var(--fs-caption); } .limit-trend.is-danger { color: var(--c-danger); }
 
 .detail { position: fixed; inset: 0; z-index: 10; overflow-y: auto; overscroll-behavior: contain; background: var(--c-surface); padding: 0 var(--page-x) var(--stack-l); display: flex; flex-direction: column; gap: var(--stack-s); transition: transform var(--dur-panel) ease, opacity var(--dur-panel) ease; }
 .detail[hidden] { display: none; }

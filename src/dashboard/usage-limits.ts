@@ -3,6 +3,7 @@ import { isRecord } from "../omp/type-guards";
 import { redact } from "../redact";
 import { cleanError, sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
+import { type TrendOptions, type UsageTrend, withTrends } from "./usage-forecast";
 
 /**
  * The "모델 한도" card's data: config `dashboard.usageLimits` lists commands, each
@@ -23,6 +24,8 @@ export interface UsageRow {
 	remainingPct: number;
 	/** Epoch ms of the window's reset, when the source tells. */
 	resetsAt?: number;
+	/** Five-hour and weekly rows of a run that records samples (`usage-forecast.ts`). */
+	trend?: UsageTrend;
 }
 
 /** `account`: the Antigravity account label from config `agyAccount` (the agy output names none). */
@@ -51,29 +54,32 @@ const cache = sectionCache<UsageLimitsInfo>(USAGE_LIMITS_TTL_MS);
 /** Test only: forget every cached run. */
 export const clearUsageLimitsCache = (): void => cache.clear();
 
-/** The card's section, one run per config within {@link USAGE_LIMITS_TTL_MS}. Never rejects. */
+/** The card's section, one run per config within {@link USAGE_LIMITS_TTL_MS}; `samples` adds trends. Never rejects. */
 export function readUsageLimits(
 	config: UsageLimitsConfig,
 	run: ProcessRunner,
 	now: () => number,
+	samples?: TrendOptions,
 ): Promise<Section<UsageLimitsInfo>> {
-	return cache.read(JSON.stringify(config), now, () => collect(config, run));
+	return cache.read(JSON.stringify(config), now, async () => {
+		const sources = await collect(config, run);
+		return { ok: true, sources: samples === undefined ? sources : withTrends(sources, samples, now()) };
+	});
 }
 
-async function collect(config: UsageLimitsConfig, run: ProcessRunner): Promise<Section<UsageLimitsInfo>> {
+async function collect(config: UsageLimitsConfig, run: ProcessRunner): Promise<UsageSource[]> {
 	const jobs: Array<{ kind: Kind; argv: string[] }> = [
 		...(config.omp ?? []).map((argv) => ({ kind: "omp" as const, argv })),
 		...(config.agy === undefined ? [] : [{ kind: "agy" as const, argv: config.agy }]),
 	];
 	const account =
 		config.agy === undefined || config.agyAccount === undefined ? undefined : readAccount(config.agyAccount, run);
-	const sources = await Promise.all(
+	return Promise.all(
 		jobs.map(async (job) => {
 			const source = await readSource(job.kind, job.argv, run);
 			return job.kind === "agy" && account !== undefined ? { ...source, account: await account } : source;
 		}),
 	);
-	return { ok: true, sources };
 }
 
 const ACCOUNT_CHARS = 40;
@@ -197,18 +203,4 @@ export function parseAgy(stdout: string): UsageRow[] | string {
 
 function clampPct(pct: number): number {
 	return Math.min(100, Math.max(0, pct));
-}
-
-/** `warn` under 20% remaining, `danger` under 5%; serialized into the page script, so it stays self-contained. */
-export function usageLevel(remainingPct: number): "ok" | "warn" | "danger" {
-	return remainingPct < 5 ? "danger" : remainingPct < 20 ? "warn" : "ok";
-}
-
-/** Time until a reset as `1h46m`, `4d6h`, `12m`; empty once it has passed. Self-contained for the page script. */
-export function resetIn(resetsAt: number | undefined, now: number): string {
-	if (resetsAt === undefined || resetsAt <= now) return "";
-	const minutes = Math.floor((resetsAt - now) / 60_000);
-	const hours = Math.floor(minutes / 60);
-	if (hours >= 24) return `${Math.floor(hours / 24)}d${hours % 24}h`;
-	return hours >= 1 ? `${hours}h${minutes % 60}m` : `${minutes}m`;
 }
