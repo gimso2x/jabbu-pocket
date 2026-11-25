@@ -14,10 +14,9 @@ CONSTANTS
     MaxRestarts,        \* 계획 재시작(apply drain) 횟수 상한
     MaxFailures,        \* delivery 확정 실패 상한 (MAX_DEFINITIVE_FAILURES를 줄인 값)
     LedgerFaults,       \* markDispatched가 던질 수 있다 (SQLITE_FULL/BUSY)
-    \* 환경 가정. Mailbox.cfg는 FALSE, finding-*.cfg가 TRUE로 켜서 알려진 틈을 재현한다.
-    KillAfterSend,      \* drain cut이 prompt/steer 전송과 장부 기록 사이의 프로세스를 끊는다
-    TimeoutDelivered,   \* request_timeout으로 끝난 prompt가 실제로는 child에 닿았다
     \* 일부러 깬 규칙. broken-*.cfg가 하나씩 켠다.
+    BugNoWriteAhead,    \* 전송 전 sending을 쓰지 않는다: 보낸 뒤 장부 기록 전에 끊기면 행이 pending으로 남는다
+    BugTimeoutRetry,    \* child에 닿은 뒤 request_timeout으로 끝난 prompt를 새 driver로 한 번 더 보낸다
     BugReplayUncertain, \* 원장 쓰기 실패 행을 uncertain이 아닌 pending으로 남긴다
     BugStickySkip,      \* drain이 한 번 건너뛴 행(동결 보류·steer 상한)을 그 뒤에도 계속 건너뛴다
     BugAnyOrder,        \* drain이 첫 행이 아닌 아무 행이나 고른다
@@ -33,7 +32,8 @@ Kinds == {"owner", "auto", "waiter"}
 \* 1행만 세 종류를 다 고른다. 2행 owner는 1행 뒤의 FIFO 짝·steer 대상, 3행 auto는 동결 보류와 steer 상한 이월을 맡는다.
 KindsOf(r) == CASE r = 1 -> Kinds [] r = 2 -> {"owner"} [] OTHER -> {"auto"}
 \* closed: answered와 failed_notified를 묶은 끝 상태 (규칙 5개는 둘을 구별하지 않는다)
-RowStates == {"none", "pending", "dispatched", "closed", "uncertain"}
+\* sending: prompt·steer 직전의 write-ahead (mailbox-sending.ts beginSend). drain은 pending 행만 고른다.
+RowStates == {"none", "pending", "sending", "dispatched", "closed", "uncertain"}
 \* NoLostRow가 기다리는 끝: pending을 벗어난 상태
 LeftPending == {"dispatched", "closed", "uncertain"}
 Steps == {"", "steer", "steer_sent", "start", "start_sent"}
@@ -46,7 +46,6 @@ VARIABLES
     retried,    \* 오너가 `/queue retry`를 이미 썼다 (행마다 한 번: 끝없는 재시도·원장 실패 고리를 막는다)
     fifoOut,    \* OriginFifo에서 빠지는 행: steer로 합쳐짐·동결 보류·steer 상한 이월·`/queue retry`
     step,       \* 진행 중인 #dispatch 단계
-    timedOut,   \* 이번 dispatch에서 request_timeout을 한 번 받았다 (한 번만 다시 시도)
     turn,       \* origin별 턴: "none" | "running" | "final"(final 도착, #onFinal 대기)
     steers,     \* origin별 이번 턴 steer 수
     origin3,    \* 3행의 origin (Init에서 고르고 바뀌지 않는다)
@@ -54,7 +53,7 @@ VARIABLES
     fifoBroken, \* 관찰 변수: 앞선 일반 행이 pending인데 뒤 행이 새 턴으로 골라졌다
     dstate, attempts, defFails, confirms
 
-rowVars == <<rstate, kind, sends, retried, fifoOut, step, timedOut>>
+rowVars == <<rstate, kind, sends, retried, fifoOut, step>>
 originVars == <<turn, steers>>
 sysVars == <<origin3, frozen, freezes, up, draining, restarts, fifoBroken>>
 delVars == <<dstate, attempts, defFails, confirms>>
@@ -67,7 +66,7 @@ TypeOK ==
     /\ rstate \in [Rows -> RowStates]
     /\ kind \in [Rows -> Kinds]
     /\ sends \in [Rows -> Nat]
-    /\ retried \in [Rows -> BOOLEAN] /\ fifoOut \in [Rows -> BOOLEAN] /\ timedOut \in [Rows -> BOOLEAN]
+    /\ retried \in [Rows -> BOOLEAN] /\ fifoOut \in [Rows -> BOOLEAN]
     /\ step \in [Rows -> Steps]
     /\ turn \in [Origins -> {"none", "running", "final"}]
     /\ steers \in [Origins -> Nat]
@@ -81,7 +80,6 @@ Init ==
     /\ retried = [r \in Rows |-> FALSE]
     /\ fifoOut = [r \in Rows |-> FALSE]
     /\ step = [r \in Rows |-> ""]
-    /\ timedOut = [r \in Rows |-> FALSE]
     /\ turn = [o \in Origins |-> "none"]
     /\ steers = [o \in Origins |-> 0]
     /\ origin3 \in Origins
@@ -99,7 +97,6 @@ Folded(r) ==
 Pend(o) == {r \in Rows : rstate[r] = "pending" /\ OriginOf[r] = o}
 \* 직렬 체인이 이 origin의 #dispatch 하나를 기다리는 중
 Busy(o) == \E r \in Rows : OriginOf[r] = o /\ step[r] # ""
-Quiet == \A o \in Origins : turn[o] = "none" /\ ~Busy(o)
 Starting(o) == {r \in Rows : OriginOf[r] = o /\ step[r] \in {"start", "start_sent"}}
 \* 새 턴을 받은 순서대로 시작해야 하는 일반 행
 Plain(r) == kind[r] \in {"owner", "auto"}
@@ -122,7 +119,7 @@ Arrive(r) ==
     /\ \E k \in KindsOf(r) :
         /\ rstate' = [rstate EXCEPT ![r] = "pending"]
         /\ kind' = [kind EXCEPT ![r] = k]
-    /\ UNCHANGED <<sends, retried, fifoOut, step, timedOut, originVars, sysVars, delVars>>
+    /\ UNCHANGED <<sends, retried, fifoOut, step, originVars, sysVars, delVars>>
 
 (* #drain: pending 행을 들어온 순서로 보고, 건너뛸 행은 건너뛰고 첫 행을       *)
 (* #dispatch한다. 턴이 돌면 steer, 없으면 새 턴(#startTurn). drain을 부르는 곳 *)
@@ -146,24 +143,31 @@ DrainPass(o) ==
                                             /\ \E q \in Pend(o) : q < r /\ Plain(q) /\ ~fifoOut'[q]
                    ELSE /\ step' = [step EXCEPT ![r] = "steer"]
                         /\ UNCHANGED fifoBroken
-    /\ UNCHANGED <<rstate, kind, sends, retried, timedOut, originVars, origin3, frozen, freezes, up, draining, restarts, delVars>>
+    /\ UNCHANGED <<rstate, kind, sends, retried, originVars, origin3, frozen, freezes, up, draining, restarts, delVars>>
+
+(* 보내기 직전의 write-ahead(beginSend): 행을 sending으로 적고 보낸다. 적기와 *)
+(* 보내기 사이에 끊기면 sends = 0인 sending 행이 남아 Boot에서 uncertain이 될  *)
+(* 뿐이라(놓침, 두 번 실행 아님) 둘을 한 단계로 묶었다. 쓰기 실패는 보내지 않고 *)
+(* pending에 둔다: DrainPass 전과 같은 상태라 모델에 넣지 않았다.              *)
+SendState == IF BugNoWriteAhead THEN "pending" ELSE "sending"
 
 (* steer 경로: leafId를 기다린 뒤 턴이 끝났으면(final) 아무것도 안 보내고     *)
-(* pending으로 둔다. 아니면 steer를 보낸다. steer가 던지면 child가 읽었을 수  *)
-(* 있으므로 uncertain.                                                       *)
+(* pending으로 둔다. 아니면 write-ahead 뒤 steer를 보낸다. steer가 던지면     *)
+(* child가 읽었을 수 있으므로 uncertain.                                      *)
 SteerSend(r) ==
     /\ up /\ step[r] = "steer"
     /\ IF turn[OriginOf[r]] # "running"
           THEN /\ step' = [step EXCEPT ![r] = ""]
                /\ UNCHANGED <<rstate, sends, fifoOut>>
           ELSE \/ /\ sends' = [sends EXCEPT ![r] = @ + 1]
+                  /\ rstate' = [rstate EXCEPT ![r] = SendState]
                   /\ step' = [step EXCEPT ![r] = "steer_sent"]
-                  /\ UNCHANGED <<rstate, fifoOut>>
+                  /\ UNCHANGED fifoOut
                \/ /\ sends' = [sends EXCEPT ![r] = @ + 1] \* child가 읽었다고 본다(최악)
                   /\ rstate' = [rstate EXCEPT ![r] = "uncertain"]
                   /\ fifoOut' = [fifoOut EXCEPT ![r] = TRUE]
                   /\ step' = [step EXCEPT ![r] = ""]
-    /\ UNCHANGED <<kind, retried, timedOut, originVars, sysVars, delVars>>
+    /\ UNCHANGED <<kind, retried, originVars, sysVars, delVars>>
 
 (* #markOrPark: 원장 쓰기가 던지면 uncertain(다시 보내지 않음). steer 뒤 턴이 *)
 (* 끝났으면 turn_ended_after_steer로 uncertain.                             *)
@@ -184,25 +188,30 @@ SteerRecord(r) ==
                   /\ rstate' = [rstate EXCEPT ![r] = LedgerFailState]
                   /\ fifoOut' = [fifoOut EXCEPT ![r] = ~BugReplayUncertain]
                   /\ UNCHANGED <<kind, sends, steers>>
-    /\ UNCHANGED <<retried, timedOut, turn, sysVars, delVars>>
+    /\ UNCHANGED <<retried, turn, sysVars, delVars>>
 
-(* 새 턴 경로(#startTurn → #openTurn): child를 띄우고 prompt를 보낸다.        *)
-(* prompt가 보내지기 전에 실패하면 dispatch_failed 공지(closed). request_timeout *)
-(* 이면 driver를 버리고 같은 dispatch를 한 번 더 한다(mailbox.ts 1091-1106).   *)
-(* 닿지 않은 timeout은 재시도까지 상태가 같으므로 TimeoutDelivered일 때만 둔다. *)
+(* 새 턴 경로(#startTurn → #openTurn): child를 띄우고 write-ahead 뒤 prompt를  *)
+(* 보낸다. child가 받지 않은 실패는 dispatch_failed 공지(closed). child에 닿은  *)
+(* 뒤 request_timeout으로 끝나면 행은 sending이므로 다시 보내지 않고 uncertain  *)
+(* (prompt_timeout)으로 두고 child를 멈춘다(mailbox-sending.ts settleFailedSend). *)
+(* 닿지 않은 timeout·not_started의 재시도는 sends가 그대로라 넣지 않았다.        *)
 StartSend(r) ==
     /\ up /\ step[r] = "start"
     /\ \/ /\ sends' = [sends EXCEPT ![r] = @ + 1]
+          /\ rstate' = [rstate EXCEPT ![r] = SendState]
           /\ step' = [step EXCEPT ![r] = "start_sent"]
-          /\ UNCHANGED <<rstate, kind, fifoOut, timedOut>>
+          /\ UNCHANGED <<kind, fifoOut>>
        \/ /\ rstate' = [rstate EXCEPT ![r] = "closed"]
           /\ Folded(r)
           /\ step' = [step EXCEPT ![r] = ""]
-          /\ UNCHANGED timedOut
-       \/ /\ TimeoutDelivered /\ ~timedOut[r]
-          /\ timedOut' = [timedOut EXCEPT ![r] = TRUE]
-          /\ sends' = [sends EXCEPT ![r] = @ + 1]
-          /\ UNCHANGED <<rstate, kind, fifoOut, step>>
+       \/ /\ sends' = [sends EXCEPT ![r] = @ + 1]
+          /\ IF BugTimeoutRetry
+                THEN /\ rstate' = [rstate EXCEPT ![r] = SendState] \* 새 driver로 같은 dispatch를 다시 한다
+                     /\ UNCHANGED <<kind, fifoOut, step>>
+                ELSE /\ rstate' = [rstate EXCEPT ![r] = "uncertain"]
+                     /\ fifoOut' = [fifoOut EXCEPT ![r] = TRUE]
+                     /\ step' = [step EXCEPT ![r] = ""]
+                     /\ UNCHANGED kind
     /\ UNCHANGED <<retried, originVars, sysVars, delVars>>
 
 (* prompt가 받아진 뒤 원장 기록. 실패하면 child를 멈추고 uncertain.          *)
@@ -210,7 +219,6 @@ StartRecord(r) ==
     LET o == OriginOf[r] IN
     /\ up /\ step[r] = "start_sent"
     /\ step' = [step EXCEPT ![r] = ""]
-    /\ timedOut' = [timedOut EXCEPT ![r] = FALSE]
     /\ \/ /\ rstate' = [rstate EXCEPT ![r] = "dispatched"]
           /\ Folded(r)
           /\ turn' = [turn EXCEPT ![o] = "running"]
@@ -232,7 +240,7 @@ Settle(o) ==
     /\ rstate' = [r \in Rows |-> IF OriginOf[r] = o /\ rstate[r] = "dispatched" THEN "closed" ELSE rstate[r]]
     /\ turn' = [turn EXCEPT ![o] = "none"]
     /\ steers' = [steers EXCEPT ![o] = 0]
-    /\ UNCHANGED <<kind, sends, retried, fifoOut, step, timedOut, sysVars, delVars>>
+    /\ UNCHANGED <<kind, sends, retried, fifoOut, step, sysVars, delVars>>
 
 Freeze ==
     /\ ~frozen /\ freezes < 1
@@ -252,7 +260,7 @@ QueueRetry(r) ==
     /\ rstate' = [rstate EXCEPT ![r] = "pending"]
     /\ sends' = [sends EXCEPT ![r] = 0]
     /\ fifoOut' = [fifoOut EXCEPT ![r] = TRUE]
-    /\ UNCHANGED <<kind, step, timedOut, originVars, sysVars, delVars>>
+    /\ UNCHANGED <<kind, step, originVars, sysVars, delVars>>
 
 (* 계획 재시작: drain 모드 → 턴이 다 끝나거나(busyTurns 0) cut 한도에서 끊고  *)
 (* 종료 → 새 프로세스가 recoverDispatched 뒤 resumePending.                   *)
@@ -261,28 +269,31 @@ BeginDrain ==
     /\ draining' = TRUE
     /\ UNCHANGED <<rowVars, originVars, origin3, frozen, freezes, up, restarts, fifoBroken, delVars>>
 
-SentUnrecorded == \E r \in Rows : step[r] \in {"steer_sent", "start_sent"}
-
+(* 프로세스 끝: drain cut은 턴이 끝나기를 기다리지 않으므로 prompt·steer를     *)
+(* 보낸 뒤 장부 기록 전(start_sent·steer_sent)에도 끊는다. OOM·kill -9도 같은 *)
+(* 자리에서 끊기므로 BeginDrain 바로 뒤의 Shutdown이 그 경우를 덮는다.          *)
 Shutdown ==
     /\ up /\ draining
-    /\ Quiet \/ KillAfterSend \/ ~SentUnrecorded
     /\ up' = FALSE /\ draining' = FALSE
     /\ step' = [r \in Rows |-> ""]
-    /\ timedOut' = [r \in Rows |-> FALSE]
     /\ turn' = [o \in Origins |-> "none"]
     /\ steers' = [o \in Origins |-> 0]
     /\ UNCHANGED <<rstate, kind, sends, retried, fifoOut, origin3, frozen, freezes, restarts, fifoBroken, delVars>>
 
 (* recoverDispatched: 죽은 프로세스의 dispatched 행은 답이나 끊김 공지 하나로  *)
-(* 닫는다(closed). prompt는 다시 보내지 않는다. pump는 남은 inflight delivery를 *)
-(* recover로 pending(redelivered)에 돌린다.                                  *)
+(* 닫는다(closed). sending 행은 child에 닿았을 수 있으므로 cut 기록과 상관없이 *)
+(* uncertain으로 둔다(settleDeadProcessRows). prompt는 다시 보내지 않는다.      *)
+(* pump는 남은 inflight delivery를 recover로 pending(redelivered)에 돌린다.      *)
 Boot ==
     /\ ~up
     /\ up' = TRUE /\ restarts' = restarts + 1
-    /\ rstate' = [r \in Rows |-> IF rstate[r] = "dispatched" THEN "closed" ELSE rstate[r]]
+    /\ rstate' = [r \in Rows |-> CASE rstate[r] = "dispatched" -> "closed"
+                                   [] rstate[r] = "sending" -> "uncertain"
+                                   [] OTHER -> rstate[r]]
+    /\ fifoOut' = [r \in Rows |-> fifoOut[r] \/ rstate[r] = "sending"]
     /\ dstate' = IF dstate = "inflight" \/ (BugRecoverConfirmed /\ dstate = "confirmed")
                     THEN "pending" ELSE dstate
-    /\ UNCHANGED <<kind, sends, retried, fifoOut, step, timedOut, originVars,
+    /\ UNCHANGED <<kind, sends, retried, step, originVars,
                    origin3, frozen, freezes, draining, fifoBroken, attempts, defFails, confirms>>
 
 ----------------------------------------------------------------------------
