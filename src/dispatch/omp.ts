@@ -10,6 +10,8 @@ export interface RunProcessResult {
 	/** Tail of stderr; herdr writes its `{"error":{code,message}}` here. Fakes may leave it out. */
 	stderr?: string;
 	timedOut: boolean;
+	/** Stdout hit the collection cap and later output was dropped: `stdout` is a prefix, not the whole. Fakes may leave it out. */
+	truncated?: boolean;
 }
 
 export interface RunProcessOptions {
@@ -65,11 +67,13 @@ const spawnProcess: ProcessRunner = (cmd, opts) => {
 		child.stdin?.end(opts.stdin);
 	}
 	let stdout = "";
-	let timedOut = false;
+	let timedOut = false,
+		truncated = false;
 	const stdoutCap = opts.stdoutCap ?? DEFAULT_STDOUT_CAP;
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
 		if (stdout.length < stdoutCap) stdout += chunk;
+		else truncated = true;
 	});
 	let stderr = "";
 	child.stderr?.setEncoding("utf8");
@@ -116,13 +120,12 @@ const spawnProcess: ProcessRunner = (cmd, opts) => {
 		clearTimeout(grace);
 		signal?.removeEventListener("abort", killGroup);
 		if (spawnError !== undefined) return { code: null, stdout: `spawn failed: ${spawnError}`, timedOut };
-		return { code, stdout, stderr, timedOut };
+		return { code, stdout, stderr, timedOut, ...(truncated ? { truncated: true } : {}) };
 	});
 };
 
 /**
- * One process with a hard timeout: the whole process group is killed, stdout is capped by the collector. Every
- * external call of the bot passes here (herdr, ssh, task git), so this is where the dispatch audit line is written.
+ * One process with a hard timeout: the whole process group is killed, stdout is capped by the collector. Every external call of the bot passes here (herdr, ssh, task git), so this is where the dispatch audit line is written.
  */
 export const realProcessRunner: ProcessRunner = async (cmd, opts) => {
 	const startedAt = Date.now();
@@ -192,8 +195,7 @@ export function ompPrintArgs(
 }
 
 /**
- * `omp -p … -- <task>`: one-shot agent run for simple tasks. The task comes last after `--`, so a task starting with
- * `-` is the prompt, never an omp flag. Output is capped; timeout kills the process group.
+ * `omp -p … -- <task>`: one-shot agent run for simple tasks. The task comes last after `--`, so a task starting with `-` is the prompt, never an omp flag. Output is capped; timeout kills the process group.
  */
 export async function runOmpPrint(options: OmpPrintOptions): Promise<OmpPrintResult> {
 	const maxChars = options.maxChars ?? 8_000;
@@ -240,8 +242,7 @@ export function remoteShellQuote(arg: string): string {
 }
 
 /**
- * The ssh argv for running `bin args…` on a remote host. Every remote word is quoted; the only exception is a
- * `--cwd` value of exactly `~`, left bare so the remote shell expands it (the `workDir ?? "~"` fallback).
+ * The ssh argv for running `bin args…` on a remote host. Every remote word is quoted; the only exception is a `--cwd` value of exactly `~`, left bare so the remote shell expands it (the `workDir ?? "~"` fallback).
  */
 export function herdrSshArgv(sshTarget: string, bin: string, args: string[]): string[] {
 	const remote = [remoteShellQuote(bin)];
@@ -314,8 +315,7 @@ function parseHerdrAgents(stdout: string): NonNullable<NonNullable<HerdrAgentLis
 }
 
 /**
- * Why a herdr call failed, at most `max` chars: herdr's stderr `{"error":{code,message}}` as `code: message`
- * (e.g. `agent_blocked` when the agent waits on an approval), else the raw stderr/stdout, else the exit code.
+ * Why a herdr call failed, at most `max` chars: herdr's stderr `{"error":{code,message}}` as `code: message` (e.g. `agent_blocked` when the agent waits on an approval), else the raw stderr/stdout, else the exit code.
  */
 function herdrFailure(result: RunProcessResult, max = 160): string {
 	if (result.timedOut) return "timed out";
