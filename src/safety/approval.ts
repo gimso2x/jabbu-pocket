@@ -76,13 +76,12 @@ function shownDetail(detail: ApprovalDetail | undefined): ApprovalDetail {
 	return shown;
 }
 
-/** `gh` commands that write to GitHub where others can see it (issue/PR/comment/release/gist/repo, mutating `gh api`). */
+/** `gh` commands that write to GitHub where others can see it (issue/PR/comment/release/gist/repo, mutating `gh api`: an explicit method, or a field/`--input`/`graphql`, which make `gh api` POST by itself). */
 const GITHUB_PUBLISH =
-	/\bgh\s+(?:(?:issue|pr)\s+(?:create|comment|edit|close|reopen|review|merge)|release\s+(?:create|edit|upload)|gist\s+create|repo\s+(?:create|edit|rename)|api\b[^\n]*?(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE))\b/i;
+	/\bgh\s+(?:(?:issue|pr)\s+(?:create|comment|edit|close|reopen|review|merge)|release\s+(?:create|edit|upload)|gist\s+create|repo\s+(?:create|edit|rename)|api\b[^\n]*?(?:(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)(?:[\s=]|$)|(?:^|\s)graphql(?:\s|$)))\b/i;
 
 /**
- * The detail with `external` filled in when the caller left it empty but the action (or summary) publishes to GitHub,
- * so a public post never reaches the owner looking like an ordinary local approval.
+ * The detail with `external` filled in when the caller left it empty but the action (or summary) publishes to GitHub, so a public post never reaches the owner looking like an ordinary local approval.
  */
 function withExposure(summary: string, detail: ApprovalDetail | undefined): ApprovalDetail | undefined {
 	if (detail?.external !== undefined && detail.external.trim() !== "") return detail;
@@ -491,7 +490,7 @@ export class ApprovalBroker {
 		// Before the buttons go up (no click can arrive yet); a failed lookup only leaves the dashboard without a link.
 		const cardUrl = await this.#permalink(channel, card.messageId);
 		const now = this.#clock.now();
-		const timeoutMs = this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+		const timeoutMs = Math.min(this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS, MAX_TIMER_DELAY_MS);
 		let recorded = true;
 		try {
 			store.createApproval({

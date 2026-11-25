@@ -1445,33 +1445,33 @@ export class Store {
 	 * by that bound come back as `pruned` so the caller can delete their refs.
 	 */
 	recordTurnSnapshot(input: TurnSnapshotInput): { id: number; pruned: TurnSnapshotRow[] } {
-		const inserted = this.db
-			.query(
-				`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				input.originKey,
-				input.opRef,
-				input.repo,
-				input.headBefore,
-				input.treeBefore,
-				input.headAfter,
-				input.treeAfter,
-				input.startedAt,
-				input.endedAt,
-			);
-		const id = Number(inserted.lastInsertRowid);
-		const overflow = this.db
-			.query(
-				`SELECT * FROM turn_snapshots WHERE origin_key = ?
-				 ORDER BY id DESC LIMIT -1 OFFSET ?`,
-			)
-			.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
-		const pruned = overflow.map(toTurnSnapshot);
-		const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
-		for (const row of pruned) drop.run(row.id);
-		return { id, pruned };
+		// One transaction, like `recordHerdrPrompt`: a crash mid-prune would strand refs the caller deletes.
+		return this.db.transaction(() => {
+			const inserted = this.db
+				.query(
+					`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run(
+					input.originKey,
+					input.opRef,
+					input.repo,
+					input.headBefore,
+					input.treeBefore,
+					input.headAfter,
+					input.treeAfter,
+					input.startedAt,
+					input.endedAt,
+				);
+			const id = Number(inserted.lastInsertRowid);
+			const overflow = this.db
+				.query(`SELECT * FROM turn_snapshots WHERE origin_key = ? ORDER BY id DESC LIMIT -1 OFFSET ?`)
+				.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
+			const pruned = overflow.map(toTurnSnapshot);
+			const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
+			for (const row of pruned) drop.run(row.id);
+			return { id, pruned };
+		})();
 	}
 
 	/** Rows newest first; every filter is optional and compared literally. */

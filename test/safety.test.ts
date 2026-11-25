@@ -594,6 +594,23 @@ describe("ApprovalBroker", () => {
 		await result;
 	});
 
+	test("a `gh api` call that mutates by carrying fields is flagged like an explicit-method one", async () => {
+		for (const action of [
+			"gh api repos/a/b/issues -f title='버그' -f body='내용'",
+			"gh api repos/a/b/issues --field title=x",
+			"gh api repos/a/b/pulls/1/comments --input body.json",
+			"gh api graphql -f query='mutation { addComment(input: {}) { clientMutationId } }'",
+		]) {
+			transport = new ButtonTransport();
+			broker = make();
+			const result = broker.request(CHANNEL, "이슈 등록", undefined, { action });
+			await transport.shown.promise;
+			expect(createdContent().startsWith("🌐 외부 공개 승인 요청\n"), action).toBe(true);
+			timers.fireAll();
+			await result;
+		}
+	});
+
 	test("an explicit `external` wins over detection; read-only gh and local git stay a plain card", async () => {
 		const explicit = broker.request(CHANNEL, "메일 발송", undefined, {
 			external: "외부 메일 a@example.com",

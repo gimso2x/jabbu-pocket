@@ -490,6 +490,8 @@ export class TaskSweeper {
 				log.info("task_reach_deferred", { task: row.taskId, reason: "not_ready" });
 				return this.#result(row, status, judgement, actions);
 			}
+			// Marked before the transition, like this sweep's other notices: a crash in between would lose the reach for good — the review path never re-derives an un-noticed one.
+			const firstReach = ledger.recordNotice(row.taskId, `reached:${judgement.reachKey}`);
 			// The reviewed row, not the swept one: the core landing behind `autoLand` refuses a task not in review.
 			const reviewed = ledger.transition(
 				row.taskId,
@@ -500,9 +502,7 @@ export class TaskSweeper {
 			status = "review";
 			await setStatusReaction(this.#deps.channels, log, row.threadRef, "review");
 			actions.push("working → review, 🔍");
-			if (ledger.recordNotice(row.taskId, `reached:${judgement.reachKey}`)) {
-				await this.#reachedNotice(reviewed, judgement, actions);
-			}
+			if (firstReach) await this.#reachedNotice(reviewed, judgement, actions);
 			return this.#result(row, status, judgement, actions);
 		}
 

@@ -14,7 +14,9 @@ const worktreeGit =
 			stdoutCap: 1_000_000,
 			env: dispatchEnv(process.env),
 		});
-		return result.code === 0 && !result.timedOut ? result.stdout : undefined;
+		// A capped read is a prefix of the real output: hashing or parsing it as complete would freeze the
+		// evidence key (or invent partial paths), so it counts as unreadable like any other git failure.
+		return result.code === 0 && !result.timedOut && result.truncated !== true ? result.stdout : undefined;
 	};
 
 /**

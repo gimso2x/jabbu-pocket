@@ -72,6 +72,12 @@ describe("oneLine bidi", () => {
 		expect(oneLine("  a\nb\tc  ", 200)).toBe("a b c");
 		expect(oneLine("x".repeat(50), 10)).toHaveLength(10);
 	});
+
+	test("the cut never leaves a lone high surrogate (the other cutters of this module promise the same)", () => {
+		// 😀 is a surrogate pair: a raw slice at 3 would keep the pair and half of the next emoji.
+		expect(oneLine("😀😀😀", 3)).toBe("😀");
+		expect(oneLine("😀😀😀", 4)).toBe("😀😀");
+	});
 });
 
 describe("display width", () => {

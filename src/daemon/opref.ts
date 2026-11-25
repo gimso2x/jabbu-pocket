@@ -12,9 +12,8 @@ import type {
 } from "../omp/driver";
 
 /**
- * omp numbers its RPC requests `req_<n>` per child process, so after a restart a new turn can reuse an `op_ref` that an
- * earlier process already used. The ledger keys deliveries by (origin, op_ref, part) and would silently drop the new
- * answer. This wrapper prefixes every opRef with an id that is unique per driver instance.
+ * omp numbers its RPC requests `req_<n>` per child process, so after a restart a new turn can reuse an `op_ref` an earlier process already used; the ledger keys deliveries by (origin, op_ref, part) and would silently drop the new answer.
+ * This wrapper prefixes every opRef — prompt results, finals and event payloads — with an id unique per driver instance.
  */
 export class NamespacedDriver implements OmpSessionDriver {
 	/** Side question, defined only when the wrapped driver supports it (absent = unsupported, like the inner driver). */
@@ -108,13 +107,14 @@ export class NamespacedDriver implements OmpSessionDriver {
 	}
 
 	onEvent(listener: (event: OmpEvent) => void): () => void {
-		return this.inner.onEvent(listener);
+		return this.inner.onEvent((event) =>
+			listener(typeof event.opRef === "string" ? { ...event, opRef: `${this.prefix}:${event.opRef}` } : event),
+		);
 	}
 
 	onExit(listener: (info: OmpExitInfo) => void): () => void {
 		return this.inner.onExit(listener);
 	}
-
 	stop(): Promise<void> {
 		return this.inner.stop();
 	}
