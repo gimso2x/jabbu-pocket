@@ -26,6 +26,11 @@ export class PrWatchRunner {
 	readonly #watching = new Set<string>();
 	/** The last read failure posted per lane: the same reason is not repeated until a read succeeds. */
 	readonly #warned = new Map<string, string>();
+	/**
+	 * Lines of a pass whose cursor was held back because a later line failed to post, per lane: the next pass reads the
+	 * same news again and skips these. Memory only: after a restart a line may repeat, never get lost.
+	 */
+	readonly #posted = new Map<string, Set<string>>();
 	/** Our `gh api user` login (the pr-watch reads our own comments and pushes as news without it); read once. */
 	#self: string | undefined;
 	/** Aborts the pr-watch reads of this process (`stop()`); made on the first pass. */
@@ -53,6 +58,7 @@ export class PrWatchRunner {
 		const ended = pr.watch !== undefined && pr.watch.state !== "open";
 		this.#ctx.patchPr(name, { state: pr.state, watchOff: true }, { event: "pr_watch_off", detail: "오너 요청" });
 		this.#warned.delete(name);
+		this.#posted.delete(name);
 		if (ended) return { handled: true, text: `👀 PR 추적은 머지·닫힘으로 이미 끝났습니다(${lane.title}).` };
 		return { handled: true, text: `👀 PR 추적을 끕니다(${lane.title}).` };
 	}
@@ -119,7 +125,18 @@ export class PrWatchRunner {
 		});
 		if (!pass.ok) return await warn(pass.reason);
 		this.#warned.delete(name);
-		for (const event of pass.events) await this.#post(lane, prWatchLine(event));
+		const done = this.#posted.get(name) ?? new Set<string>();
+		for (const event of pass.events) {
+			const line = prWatchLine(event);
+			if (done.has(line)) continue;
+			if (!(await this.#post(lane, line))) {
+				// The cursor stays where it was: the next pass reads this news again and posts what is still missing.
+				this.#posted.set(name, done);
+				return;
+			}
+			done.add(line);
+		}
+		this.#posted.delete(name);
 		const ended = pass.entry.state !== "open";
 		const current = store.getLane(name)?.meta.pr;
 		// The owner may have turned the watch off meanwhile: the cursor then stays as the record of what was read.
@@ -131,14 +148,16 @@ export class PrWatchRunner {
 		);
 	}
 
-	/** One pr-watch line into the lane thread; a failed post is logged, never retried (the next pass reads again). */
-	async #post(lane: LaneRow, text: string): Promise<void> {
+	/** One pr-watch line into the lane thread; false when the post failed (logged, and the pass keeps its cursor). */
+	async #post(lane: LaneRow, text: string): Promise<boolean> {
 		const route = this.#ctx.deps.channels.forThreadRef(lane.threadRef);
-		if (route === undefined) return;
+		if (route === undefined) return true;
 		try {
 			await route.port.post(route.target, { text });
+			return true;
 		} catch (error) {
 			this.#ctx.deps.log.warn("lane_pr_watch_post_failed", { lane: lane.name, error: String(error) });
+			return false;
 		}
 	}
 }
