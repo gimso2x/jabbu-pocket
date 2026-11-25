@@ -2,12 +2,16 @@ import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import { parseChatOrigin } from "../core/origin-key";
 import type { DaemonContext } from "./daemon-context";
 
+/** Refusal message when `작업:` lane creation is triggered from a web conversation. */
+export const WEB_LANE_REFUSED = "레인은 디스코드 스레드에서 시작할 수 있습니다.";
+
 /**
  * Where a lane asked for from `originKey` opens: its own conversation (`channel`), except that a Discord DM, which
- * has no threads, opens it in `channels.discord.laneChannelId`; `undefined` when there is none.
+ * has no threads, opens it in `channels.discord.laneChannelId`; web conversations return `undefined`.
  */
 export function laneChannelOf(ctx: DaemonContext, originKey: string, channel: string | undefined): string | undefined {
 	const ref = parseChatOrigin(originKey);
+	if (ref?.platform === "web") return undefined;
 	return ref?.platform === "discord" && ref.kind === "dm"
 		? ctx.options.config.channels.discord?.laneChannelId
 		: channel;

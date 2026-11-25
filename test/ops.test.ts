@@ -2507,7 +2507,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 
 	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
 	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
-	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0, monitorSlots: 0 };
+	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0, monitorSlots: 0, webMessages: 0 };
 
 	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
@@ -2526,6 +2526,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveryPosts: 0,
 			monitorEvents: 0,
 			monitorSlots: 0,
+			webMessages: 0,
 		});
 	});
 
@@ -2548,6 +2549,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveryPosts: 0,
 			monitorEvents: 0,
 			monitorSlots: 0,
+			webMessages: 0,
 		});
 		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
