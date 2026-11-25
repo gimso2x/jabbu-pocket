@@ -21,7 +21,7 @@ import {
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
-import { laneTriggerRefusal } from "../lanes/trigger-format";
+import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseApprovalRetryActionId } from "../safety/approval";
@@ -280,6 +280,7 @@ export class DaemonInbound {
 				if (platform === "web") throw new LaneInputError(WEB_LANE_REFUSED);
 				if (channel === undefined && platform === "discord") throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
 				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
+				assertNoSpacedPath(trigger.cwd, trigger.brief);
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
 				const lane = await this.#lanes.start({

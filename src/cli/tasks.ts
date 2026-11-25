@@ -84,15 +84,16 @@ export async function tasksCommand(
 		allowPositionals: true,
 		options: { json: { type: "boolean" }, as: { type: "string" } },
 	});
+	if (positionals.length > (sub === "list" ? 0 : 1)) {
+		process.stderr.write(`tasks ${sub}: too many arguments\n`);
+		return 2;
+	}
 	const dbPath = join(homeDir, "jabbu.db");
 	// A read must not create a ledger holding only `tasks`: `gates` and `status` would call it unreadable.
 	const noLedger = (): number => {
-		if (sub === "list") {
-			process.stdout.write(values.json === true ? `${JSON.stringify({ tasks: [] })}\n` : "no tasks\n");
-			return 0;
-		}
-		process.stderr.write(`tasks ${sub}: task not found: ${positionals[0] ?? "(id required)"}\n`);
-		return 1;
+		if (sub !== "list") process.stderr.write(`tasks ${sub}: task not found: ${positionals[0] ?? "(id required)"}\n`);
+		else process.stdout.write(values.json === true ? `${JSON.stringify({ tasks: [] })}\n` : "no tasks\n");
+		return sub === "list" ? 0 : 1;
 	};
 	if (!existsSync(dbPath)) return noLedger();
 	let ledger: TaskLedger;
@@ -186,11 +187,8 @@ export async function tasksCommand(
 				out(checked);
 				return 0;
 			}
-			process.stderr.write(
-				checked === "unreachable"
-					? "tasks check: daemon not reachable — judging only, nothing posted\n"
-					: `tasks check: daemon refused: ${String(checked.error)} — judging only, nothing posted\n`,
-			);
+			const note = checked === "unreachable" ? "daemon not reachable" : `daemon refused: ${String(checked.error)}`;
+			process.stderr.write(`tasks check: ${note} — judging only, nothing posted\n`);
 		}
 		const evaluation = await evaluateTask(row, taskHostOf(taskConfigOf(homeDir), row.host));
 		if (!evaluation.ok) {
