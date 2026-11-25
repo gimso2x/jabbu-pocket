@@ -60,7 +60,9 @@ export async function hiddenChanges(git: Git, dir: string): Promise<string[] | {
 		// A gitlink (`160000`) is a directory on disk: its mode says nothing.
 		if (mode === "160000") continue;
 		fileMode ??= (await git(["-C", dir, "config", "--bool", "core.fileMode"])).stdout.trim() !== "false";
-		if (diskMode(stats, fileMode) !== mode) changed.push(path);
+		// Without `core.fileMode` the disk's execute bit is not read (diskMode says 100644), so the index's is not compared.
+		const indexMode = !fileMode && mode === "100755" ? "100644" : mode;
+		if (diskMode(stats, fileMode) !== indexMode) changed.push(path);
 	}
 	return changed;
 }

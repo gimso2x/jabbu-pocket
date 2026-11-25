@@ -307,6 +307,16 @@ describe("review before auto-merge", () => {
 	test.each([
 		["timed out", { code: null, stdout: "절반", timedOut: true }, "시간 초과"],
 		["exit code 1", { code: 1, stdout: "boom\nVERDICT: CLEAR", timedOut: false }, "종료 코드 1"],
+		[
+			"exit code 1 with a provider refusal on stderr",
+			{
+				code: 1,
+				stdout: "",
+				stderr: "Working...\n429 Weekly/Monthly Limit Exhausted (xoxb-TEST-0)\n",
+				timedOut: false,
+			},
+			"종료 코드 1: 429 Weekly/Monthly Limit Exhausted ([REDACTED])",
+		],
 		["no VERDICT line", { code: 0, stdout: "다 좋아 보입니다", timedOut: false }, "VERDICT 없음"],
 		[
 			"two VERDICT lines",
@@ -658,7 +668,7 @@ describe("run QA after the review", () => {
 		expect(after.meta.land?.state).toBe("landed");
 		const cards = cardPosts(h.transport, lane);
 		expect(cards).toHaveLength(1);
-		expect(cards[0]?.content).toContain("🧪 실행 QA(뚱기 · test-qa): PASS");
+		expect(cards[0]?.content).toContain("🧪 실행 QA(test-qa): PASS");
 		// AC-6: the copy is gone, from disk and from git's worktree list.
 		expect(leftCopies()).toEqual([]);
 		expect(worktreeList(repo)).not.toContain(copy);

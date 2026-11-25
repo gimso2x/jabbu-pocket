@@ -240,7 +240,7 @@ export async function runQa(input: GateQaInput, deps: LaneQaDeps): Promise<LaneQ
 			const result = await runOmpPrint(printOptions);
 			if (input.signal?.aborted === true) return inconclusive("중단됨");
 			if (result.timedOut) return inconclusive("시간 초과");
-			if (result.code !== 0) return inconclusive(`종료 코드 ${result.code ?? "없음"}`);
+			if (result.code !== 0) return inconclusive(result.failure ?? "종료 코드 없음");
 			const parsed = parseQaVerdict(result.output);
 			if ("reason" in parsed) return inconclusive(parsed.reason);
 			return receipt(parsed.verdict, parsed.findings);
