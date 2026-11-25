@@ -546,8 +546,8 @@ describe("AC-4, AC-5, AC-7, AC-9: web channel end-to-end delivery, approvals, re
 	});
 });
 
-describe("AC-8: schema migrations (10->12, 11->12) and web_messages GC", () => {
-	test("openStore migrates v10 and v11 databases to SCHEMA_VERSION 12 with web_messages and its indexes", () => {
+describe("AC-8: schema migrations (10, 11 -> current) and web_messages GC", () => {
+	test("openStore migrates v10 and v11 databases to SCHEMA_VERSION with web_messages and its indexes", () => {
 		for (const fromVersion of [10, 11] as const) {
 			const dir = mkdtempSync(join(tmpdir(), `jabbu-web-mig-${fromVersion}-`));
 			dirs.push(dir);
@@ -592,7 +592,6 @@ describe("AC-8: schema migrations (10->12, 11->12) and web_messages GC", () => {
 			const verify = new Database(dbPath, { readonly: true });
 			const version = (verify.query("PRAGMA user_version").get() as { user_version: number }).user_version;
 			expect(version).toBe(SCHEMA_VERSION);
-			expect(version).toBe(12);
 			const indexes = (
 				verify
 					.query("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'web_messages'")
