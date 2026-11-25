@@ -1046,8 +1046,10 @@ describe("replies to the bot's posts", () => {
 		expect(first?.startsWith("이모지 경계\n")).toBe(true);
 		const lines = (first ?? "").split("\n");
 		const at = lines.findIndex((line) => line.startsWith("답장 대상("));
-		expect(lines[at - 1]).toMatch(/^<<<quoted-/);
-		expect(lines[at + 1]).toMatch(/^<<<end-quoted-/);
+		expect(lines[at - 2]).toMatch(/^<<<quoted-/);
+		expect(lines[at - 1]).toBe("```");
+		expect(lines[at + 1]).toBe("```");
+		expect(lines[at + 2]).toMatch(/^<<<end-quoted-/);
 	});
 
 	test("the context line names the owner and a peer, and is left out for anyone else", async () => {
@@ -1151,7 +1153,7 @@ describe("forwarded messages", () => {
 		expect(inbound).toHaveLength(1);
 		const text = inbound[0]?.text ?? "";
 		expect(text.startsWith(QUOTED_HEADER)).toBe(true);
-		expect(text).toMatch(/<<<quoted-[0-9a-f]+>>>\n전달한 원문 첫 줄\n둘째 줄\n<<<end-quoted-[0-9a-f]+>>>/);
+		expect(text).toMatch(/<<<quoted-[0-9a-f]+>>>\n```\n전달한 원문 첫 줄\n둘째 줄\n```\n<<<end-quoted-[0-9a-f]+>>>/);
 		expect(logged("inbound_dropped")).toBe(false);
 	});
 
