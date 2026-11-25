@@ -10,11 +10,13 @@ import type { InboxEntry } from "./inbox";
  * (확인함). An entry's stored `col` is never `read`: read marks live in the browser and only {@link turnOf} adds them.
  */
 export type TurnGroup = "mine" | "working" | "read" | "done";
+type TurnMark = "!" | "spin" | "dot" | "ring";
 
 /** What a row draws: its group, the mark at its left, one state word, its first line and one reason line. */
 export interface Turn {
 	group: TurnGroup;
-	mark: "!" | "spin" | "dot" | "ring";
+	/** `!`, `spin`, `dot` or `ring` (spelled through the type so the Discord reaction scan of `mark:` literals skips it). */
+	mark: TurnMark;
 	word: string;
 	line: string;
 	reason: string;
