@@ -26,3 +26,4 @@ export const WEB_SEND = /^\/(?:.*\/)?api\/web\/send$/;
 export const WEB_ACTION = /^\/(?:.*\/)?api\/web\/action$/;
 export const WEB_NEW = /^\/(?:.*\/)?api\/web\/new$/;
 export const WEB_UPLOAD = /^\/(?:.*\/)?api\/web\/upload$/;
+export const WEB_FILE = /^\/(?:.*\/)?api\/web\/file$/;

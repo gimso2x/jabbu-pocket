@@ -1,8 +1,15 @@
 import { join } from "node:path";
+import type { JabbuConfig } from "../config";
 import type { WebChannelConfig } from "../config-web";
 import { GRAMMAR } from "../core/origin-key";
 import * as route from "../dashboard/routes";
-import { readWebChanges, readWebConversations, readWebMessages, readWebWatermark } from "../store/web-messages";
+import {
+	parentMessageIdOfThread,
+	readWebConversations,
+	readWebMessageById,
+	readWebMessages,
+	readWebThreads,
+} from "../store/web-messages";
 import {
 	authenticateWebRequest,
 	createWebAuthState,
@@ -11,16 +18,29 @@ import {
 	type WebAuthConfig,
 	type WebAuthState,
 } from "./auth";
+import {
+	accentForBot,
+	resolveBotTarget,
+	resolveWebBots,
+	slugOfBotHome,
+	summarizeWebBots,
+	type WebBotTarget,
+} from "./bots";
 import { renderWebMessageHtml } from "./card-html";
 import { renderWebChatPage, serveWebChatAsset } from "./chat-page";
+import { serveWebFile } from "./file-serve";
+import { type EventStreamFn, handleWebStream, nonNegInt } from "./stream";
 import { saveWebUpload } from "./upload";
 
+export type { EventStreamFn };
 export { serveWebChatAsset };
 
 export interface WebDashboardOptions {
 	homeDir: string;
 	auth: WebAuthConfig;
 	callDaemon: (request: unknown) => Promise<unknown>;
+	bots?: readonly WebBotTarget[] | undefined;
+	botName?: string | undefined;
 	/** Interval between `web_messages` change polls on open SSE streams (default 1000 ms). */
 	streamPollMs?: number | undefined;
 	/** Test seam: schedules the next stream poll and returns its cancel function. */
@@ -28,23 +48,30 @@ export interface WebDashboardOptions {
 	keepAliveMs?: number | undefined;
 }
 
-export type EventStreamFn = (
-	request: Request,
-	keepAliveMs: number,
-	subscribe: (send: (chunk: string) => void) => () => void,
-) => Response;
-
 export interface WebRouterContext {
 	options: WebDashboardOptions;
 	auth: WebAuthState;
+	bots: readonly WebBotTarget[];
 }
 
-const DEFAULT_POLL_MS = 1_000;
-const DEFAULT_KEEP_ALIVE_MS = 15_000;
 const MAX_POST_BODY_BYTES = 64 * 1024;
 
 export function createWebRouterContext(options: WebDashboardOptions | undefined): WebRouterContext | undefined {
-	return options === undefined ? undefined : { options, auth: createWebAuthState(options.auth) };
+	if (options === undefined) return undefined;
+	const defaultId = slugOfBotHome(options.homeDir, "main");
+	const bots =
+		options.bots && options.bots.length > 0
+			? options.bots
+			: [
+					{
+						id: defaultId,
+						name: options.botName ?? "송박",
+						homeDir: options.homeDir,
+						callDaemon: options.callDaemon,
+						accent: accentForBot(defaultId, 0),
+					},
+				];
+	return { options, auth: createWebAuthState(options.auth), bots };
 }
 
 /** Builds dashboard web-chat options from config when `channels.web.enabled` is true. */
@@ -52,9 +79,11 @@ export function webDashboardOptionsFor(
 	homeDir: string,
 	webConfig: WebChannelConfig | undefined,
 	callDaemon: (path: string, request: unknown, timeoutMs?: number) => Promise<unknown>,
+	config?: JabbuConfig,
 ): WebDashboardOptions | undefined {
 	if (webConfig?.enabled !== true) return undefined;
 	const sockPath = join(homeDir, "jabbu.sock");
+	const bots = config === undefined ? undefined : resolveWebBots(homeDir, config, callDaemon);
 	return {
 		homeDir,
 		auth: {
@@ -64,6 +93,8 @@ export function webDashboardOptionsFor(
 			localTokenPath: join(homeDir, "state", "web-local.token"),
 		},
 		callDaemon: (request) => callDaemon(sockPath, request, 5_000),
+		...(bots === undefined ? {} : { bots }),
+		...(config?.channels.discord?.displayName === undefined ? {} : { botName: config.channels.discord.displayName }),
 	};
 }
 
@@ -97,12 +128,6 @@ async function readJsonBody(request: Request): Promise<{ ok: true; value: Record
 	}
 }
 
-function nonNegInt(raw: string | null): number | undefined {
-	if (raw === null || raw === "") return 0;
-	if (!/^\d{1,15}$/.test(raw)) return undefined;
-	return Number(raw);
-}
-
 /** Compact router bundle used by the dashboard HTTP server to keep route wiring minimal. */
 export function webDashboardRouter(
 	options: WebDashboardOptions | undefined,
@@ -120,7 +145,7 @@ export function webDashboardRouter(
 	};
 }
 
-/** Authenticates and server-renders `?view=chat` (with SSR messages/cards and CSRF cookie). */
+/** Authenticates and server-renders `?view=chat` (with 3-pane multi-bot + thread SSR and CSRF cookie). */
 export async function webChatPageResponse(
 	request: Request,
 	url: URL,
@@ -133,16 +158,37 @@ export async function webChatPageResponse(
 	const auth = await authenticateWebRequest(request, ctx.auth);
 	if (!auth.ok) return jsonReply({ error: auth.error }, auth.status, head, commonHeaders);
 	const csrf = issueCsrfCookie(request, ctx.auth);
-	const conversations = readWebConversations(ctx.options.homeDir);
+	const target = resolveBotTarget(ctx.bots, url.searchParams.get("bot")) ?? ctx.bots[0];
+	if (target === undefined) return jsonReply({ error: "web_disabled" }, 404, head, commonHeaders);
+	const conversations = readWebConversations(target.homeDir);
 	const requestedConv = url.searchParams.get("c") ?? "";
 	const activeConversation =
 		GRAMMAR.web.conversation.test(requestedConv) && conversations.some((c) => c.conversation === requestedConv)
 			? requestedConv
 			: (conversations[0]?.conversation ?? "");
-	const messages = activeConversation ? readWebMessages(ctx.options.homeDir, activeConversation) : [];
+	const messages = activeConversation ? readWebMessages(target.homeDir, activeConversation) : [];
+	const threads = activeConversation ? readWebThreads(target.homeDir, activeConversation) : [];
+	const reqThread = url.searchParams.get("t") ?? "";
+	const activeThread = activeConversation && GRAMMAR.web.thread.test(reqThread) ? reqThread : "";
+	const threadMessages = activeThread
+		? readWebMessages(target.homeDir, activeConversation, { thread: activeThread })
+		: [];
+	const parentId = activeThread ? parentMessageIdOfThread(activeThread) : undefined;
+	const rawParent = parentId !== undefined ? readWebMessageById(target.homeDir, parentId) : undefined;
+	const parentMessage = rawParent?.conversation === activeConversation ? rawParent : undefined;
 	const themeParam = url.searchParams.get("theme");
 	const theme = themeParam === "dark" || themeParam === "light" ? themeParam : undefined;
-	const html = renderWebChatPage({ conversations, activeConversation, messages, csrfToken: csrf.token, theme });
+	const html = renderWebChatPage({
+		conversations,
+		activeConversation,
+		messages,
+		csrfToken: csrf.token,
+		theme,
+		bots: summarizeWebBots(ctx.bots),
+		activeBot: target.id,
+		threads,
+		...(activeThread ? { activeThread, threadMessages, parentMessage } : {}),
+	});
 	return new Response(head ? null : html, {
 		headers: {
 			...commonHeaders,
@@ -153,86 +199,14 @@ export async function webChatPageResponse(
 	});
 }
 
-function handleStream(
-	request: Request,
-	url: URL,
-	ctx: WebRouterContext,
-	head: boolean,
-	commonHeaders: Record<string, string>,
-	eventStream: EventStreamFn,
-): Response {
-	const conversationParam = url.searchParams.get("c");
-	const conversation = conversationParam === null || conversationParam === "" ? undefined : conversationParam;
-	if (conversation !== undefined && !GRAMMAR.web.conversation.test(conversation)) {
-		return jsonReply({ error: "invalid_conversation" }, 400, head, commonHeaders);
-	}
-	const after = nonNegInt(url.searchParams.get("after"));
-	const afterEdited = nonNegInt(url.searchParams.get("afterEdited"));
-	if (after === undefined || afterEdited === undefined) {
-		return jsonReply({ error: "invalid_cursor" }, 400, head, commonHeaders);
-	}
-	if (head) {
-		return new Response(null, {
-			headers: { ...commonHeaders, "content-type": "text/event-stream; charset=utf-8" },
-		});
-	}
-	const schedule =
-		ctx.options.streamSchedule ??
-		((fn: () => void, ms: number) => {
-			const timer = setTimeout(fn, ms);
-			return () => clearTimeout(timer);
-		});
-	const pollMs = ctx.options.streamPollMs ?? DEFAULT_POLL_MS;
-	const keepAliveMs = ctx.options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
-
-	return eventStream(request, keepAliveMs, (send) => {
-		let open = true;
-		let cancel: (() => void) | undefined;
-		let lastId = after;
-		let lastEditedAt = afterEdited;
-
-		const poll = (): void => {
-			cancel = undefined;
-			if (!open) return;
-			const mark = readWebWatermark(ctx.options.homeDir, conversation);
-			if (mark.maxId > lastId || mark.maxEditedAt > lastEditedAt) {
-				const changes = readWebChanges(ctx.options.homeDir, lastId, lastEditedAt, conversation, 200);
-				if (changes.length < 200) {
-					lastId = mark.maxId;
-					lastEditedAt = mark.maxEditedAt;
-				} else {
-					const tail = changes.at(-1);
-					if (tail !== undefined) {
-						lastId = Math.max(lastId, tail.id);
-						if (tail.editedAt !== null) lastEditedAt = Math.max(lastEditedAt, tail.editedAt);
-					}
-				}
-				if (changes.length > 0) {
-					const enriched = changes.map((row) => ({ ...row, html: renderWebMessageHtml(row) }));
-					send(`event: messages\ndata: ${JSON.stringify({ messages: enriched })}\n\n`);
-				}
-			}
-			if (open) cancel = schedule(poll, pollMs);
-		};
-
-		send(": web\n\n");
-		cancel = schedule(poll, 0);
-		return () => {
-			open = false;
-			cancel?.();
-			cancel = undefined;
-		};
-	});
-}
-
 async function forwardDaemonOp(
-	ctx: WebRouterContext,
+	callDaemon: (request: unknown) => Promise<unknown>,
 	opPayload: Record<string, unknown>,
 	commonHeaders: Record<string, string>,
 ): Promise<Response> {
 	let answer: unknown;
 	try {
-		answer = await ctx.options.callDaemon(opPayload);
+		answer = await callDaemon(opPayload);
 	} catch {
 		return jsonReply({ error: "daemon_unreachable" }, 503, false, commonHeaders);
 	}
@@ -251,7 +225,7 @@ async function forwardDaemonOp(
 	return jsonReply(answer, 200, false, commonHeaders);
 }
 
-/** Handles all `/api/web/*` endpoints with authentication, CSRF verification on POST, and SSE streaming. */
+/** Handles all `/api/web/*` endpoints with authentication, multi-bot selection, CSRF verification on POST, and SSE. */
 export async function handleWebRequest(
 	request: Request,
 	pathname: string,
@@ -262,29 +236,32 @@ export async function handleWebRequest(
 ): Promise<Response> {
 	const head = request.method === "HEAD";
 	if (ctx === undefined) return jsonReply({ error: "web_disabled" }, 404, head, commonHeaders);
-
 	const auth = await authenticateWebRequest(request, ctx.auth);
 	if (!auth.ok) return jsonReply({ error: auth.error }, auth.status, head, commonHeaders);
 
-	const readMethod = request.method === "GET" || head;
 	if (request.method === "POST") {
 		const csrf = verifyWebCsrf(request, ctx.auth);
 		if (!csrf.ok) return jsonReply({ error: csrf.error }, 403, false, commonHeaders);
 		if (route.WEB_UPLOAD.test(pathname)) {
-			const uploaded = await saveWebUpload(request, ctx.options.homeDir);
+			const target = resolveBotTarget(ctx.bots, url.searchParams.get("bot"));
+			if (target === undefined) return jsonReply({ error: "invalid_bot" }, 400, false, commonHeaders);
+			const uploaded = await saveWebUpload(request, target.homeDir);
 			return uploaded.ok
 				? jsonReply(uploaded, 200, false, commonHeaders)
 				: jsonReply({ error: uploaded.error }, uploaded.status, false, commonHeaders);
 		}
 		const body = await readJsonBody(request);
 		if (!body.ok) return jsonReply({ error: "invalid_json" }, 400, false, commonHeaders);
+		const rawBot = typeof body.value.bot === "string" ? body.value.bot : url.searchParams.get("bot");
+		const target = resolveBotTarget(ctx.bots, rawBot);
+		if (target === undefined) return jsonReply({ error: "invalid_bot" }, 400, false, commonHeaders);
 
 		if (route.WEB_NEW.test(pathname)) {
-			return forwardDaemonOp(ctx, { op: "web_new", title: body.value.title }, commonHeaders);
+			return forwardDaemonOp(target.callDaemon, { op: "web_new", title: body.value.title }, commonHeaders);
 		}
 		if (route.WEB_SEND.test(pathname)) {
 			return forwardDaemonOp(
-				ctx,
+				target.callDaemon,
 				{
 					op: "web_send",
 					conversation: body.value.conversation,
@@ -297,7 +274,7 @@ export async function handleWebRequest(
 		}
 		if (route.WEB_ACTION.test(pathname)) {
 			return forwardDaemonOp(
-				ctx,
+				target.callDaemon,
 				{
 					op: "web_action",
 					actionId: body.value.actionId,
@@ -310,24 +287,31 @@ export async function handleWebRequest(
 		return jsonReply({ error: "not_found" }, 404, false, commonHeaders);
 	}
 
-	if (!readMethod) {
+	if (request.method !== "GET" && !head) {
 		return new Response("method not allowed\n", {
 			status: 405,
 			headers: { ...commonHeaders, allow: "GET, HEAD, POST", "content-type": "text/plain; charset=utf-8" },
 		});
 	}
 
+	const target = resolveBotTarget(ctx.bots, url.searchParams.get("bot"));
+	if (target === undefined) return jsonReply({ error: "invalid_bot" }, 400, head, commonHeaders);
+
 	if (route.WEB_CONVERSATIONS.test(pathname)) {
 		const csrf = issueCsrfCookie(request, ctx.auth);
 		return jsonReply(
-			{ conversations: readWebConversations(ctx.options.homeDir), csrfToken: csrf.token },
+			{
+				bot: target.id,
+				bots: summarizeWebBots(ctx.bots),
+				conversations: readWebConversations(target.homeDir),
+				csrfToken: csrf.token,
+			},
 			200,
 			head,
 			commonHeaders,
 			{ "set-cookie": csrf.cookie, "x-jabbu-csrf": csrf.token },
 		);
 	}
-
 	if (route.WEB_MESSAGES.test(pathname)) {
 		const conversation = url.searchParams.get("c") ?? "";
 		if (!GRAMMAR.web.conversation.test(conversation)) {
@@ -341,12 +325,15 @@ export async function handleWebRequest(
 		const after = nonNegInt(url.searchParams.get("after"));
 		if (after === undefined) return jsonReply({ error: "invalid_cursor" }, 400, head, commonHeaders);
 		const csrf = issueCsrfCookie(request, ctx.auth);
+		const msgs = readWebMessages(target.homeDir, conversation, { thread, after }).map((row) => ({
+			...row,
+			html: renderWebMessageHtml(row, { botId: target.id }),
+		}));
 		return jsonReply(
 			{
-				messages: readWebMessages(ctx.options.homeDir, conversation, { thread, after }).map((row) => ({
-					...row,
-					html: renderWebMessageHtml(row),
-				})),
+				bot: target.id,
+				messages: msgs,
+				...(thread === undefined ? { threads: readWebThreads(target.homeDir, conversation) } : {}),
 			},
 			200,
 			head,
@@ -354,7 +341,9 @@ export async function handleWebRequest(
 			{ "set-cookie": csrf.cookie, "x-jabbu-csrf": csrf.token },
 		);
 	}
-
-	if (route.WEB_STREAM.test(pathname)) return handleStream(request, url, ctx, head, commonHeaders, eventStream);
+	if (route.WEB_FILE.test(pathname)) return serveWebFile(target.homeDir, url, head, commonHeaders);
+	if (route.WEB_STREAM.test(pathname)) {
+		return handleWebStream(request, url, ctx.options, target, head, commonHeaders, eventStream);
+	}
 	return jsonReply({ error: "not_found" }, 404, head, commonHeaders);
 }
