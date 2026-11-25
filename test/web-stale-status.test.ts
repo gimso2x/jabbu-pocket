@@ -105,4 +105,36 @@ describe("web: 재시작이 남긴 ⏳ 상태 행", () => {
 		chA.editStatus(live.messageId, "", true);
 		expect(readWebConversations(dirA).find((c) => c.conversation === "w_eeeeeeee")?.inProgress).toBe(false);
 	});
+
+	test("이미 결과 문구로 끝난 옛 행(🚫 취소됨 등)은 문구를 지우지 않고 final로만 표시하고, 이미 final인 행은 그대로 둔다", () => {
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-stale-status-"));
+		dirs.push(dir);
+		const first = open(dir);
+		const ch = new WebChannel();
+		ch.attach(first.web);
+		const legacy = ch.postStatus({ conversationId: "w_ffffffff" }, "🚫 취소됨 · 00:03");
+		const running = ch.postStatus({ conversationId: "w_ffffffff" }, "⏳ 작업 중 · 00:20");
+		const marked = first.web.insert({
+			conversation: "w_ffffffff",
+			role: "status",
+			text: "⚠️ 실패 · 00:07",
+			cardJson: JSON.stringify({ kind: "status", deleted: false, final: true }),
+		});
+		const before = readWebMessages(dir, "w_ffffffff").find((r) => r.id === marked.id)?.editedAt;
+		first.close();
+		stores.pop();
+
+		const second = open(dir);
+		const ch2 = new WebChannel();
+		ch2.attach(second.web);
+		adapterFor(second, dir, ch2);
+		const rows = readWebMessages(dir, "w_ffffffff");
+		const get = (id: string | number) => rows.find((r) => r.id === Number(id));
+		expect(get(legacy.messageId)?.text).toBe("🚫 취소됨 · 00:03");
+		expect(JSON.parse(get(legacy.messageId)?.cardJson ?? "{}")).toMatchObject({ deleted: false, final: true });
+		expect(get(running.messageId)?.text).toBe("");
+		expect(JSON.parse(get(running.messageId)?.cardJson ?? "{}").deleted).toBe(true);
+		expect(get(marked.id)?.text).toBe("⚠️ 실패 · 00:07");
+		expect(get(marked.id)?.editedAt).toBe(before ?? null);
+	});
 });
