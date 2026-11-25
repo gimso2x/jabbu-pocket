@@ -227,6 +227,19 @@ describe("doctor: discord", () => {
 		expect(lines).toEqual([]);
 		expect(seen).toHaveLength(0);
 	});
+
+	test("a missing token file names the path and what to put there", async () => {
+		const discord = home.config.channels.discord;
+		if (discord === undefined) throw new Error("fixture has no discord channel");
+		const missing = join(home.dir, "secrets", "no-such-token");
+		await checkDiscord(
+			{ ...home.config, channels: { discord: { ...discord, botTokenFile: missing } } },
+			report,
+			fakeFetch(healthy),
+		);
+		expect(lines).toEqual([`fail discord token: missing: ${missing} (put the bot token there, mode 0600)`]);
+		expect(seen).toHaveLength(0);
+	});
 });
 
 describe("doctor: core dump limit", () => {
