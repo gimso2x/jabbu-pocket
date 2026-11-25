@@ -1,7 +1,6 @@
 // `!restart`: the daemon starts the same detached apply `jabbu-pocket apply --detach`
 // starts, without a model turn, after refusing up front what would only end in a SKIP or a second apply. The apply
 // reports back with `--report-plain` (IPC `notify`), so neither the request nor the report needs a working model.
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import { parseChatOrigin, platformOfConversationId } from "../core/origin-key";
@@ -18,6 +17,7 @@ import {
 import { APPLY_LOCK_FILE, parseApplyLock } from "../ops/apply-lock";
 import { backupStamp } from "../ops/backup";
 import type { Runner } from "../ops/run-types";
+import { readRegularText } from "../ops/stamp";
 
 /** Op ref prefix of an apply's `--report-plain` line (IPC `notify`): `notify:<stamp>`. */
 export const NOTIFY_OP_PREFIX = "notify:";
@@ -192,7 +192,7 @@ export class RestartLauncher {
 	#lockHolder(): string | undefined {
 		let text: string;
 		try {
-			text = readFileSync(join(this.#deps.homeDir, APPLY_LOCK_FILE), "utf8");
+			text = readRegularText(join(this.#deps.homeDir, APPLY_LOCK_FILE));
 		} catch (error) {
 			// No lock: no apply of this home runs. Any other read failure is the command's failure notice.
 			if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;

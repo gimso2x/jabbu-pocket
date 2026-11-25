@@ -504,7 +504,7 @@ function globsIntoSecrets(line: string): Hit[] {
 const COMMAND_START = "(?:^\\s*(?:[-*]\\s+|\\$\\s+)?|[;&|(`{!]\\s*|\\$\\(\\s*|\\b(?:then|do|if|while|until)\\s+)";
 /** Wrappers a command may hide behind: `sudo`, `doas`, `nohup`, `exec`, `time`, `nice`, `command`, `xargs`, `env VAR=x`, `timeout N`. */
 const COMMAND_WRAPPERS =
-	"(?:(?:(?:sudo|doas)(?:\\s+-\\S+)*|nohup|exec|time|nice(?:\\s+-\\S+(?:\\s+\\d+)?)*|command|xargs(?:\\s+-\\S+)*|env(?:\\s+[A-Za-z_]\\w*=\\S*)*|timeout(?:\\s+-\\S+)*\\s+\\d\\S*)\\s+)*";
+	"(?:(?:(?:sudo|doas)(?:\\s+-(?:[ugChprtUT]|-user|-group)\\s+\\S+|\\s+-(?!(?:[ugChprtUT]|-user|-group)(?:\\s|$))\\S+)*|nohup|exec|time|nice(?:\\s+-\\S+(?:\\s+\\d+)?)*|command|xargs(?:\\s+-\\S+)*|env(?:\\s+-(?:[uCS]|-unset|-chdir|-split-string)\\s+\\S+|\\s+-(?!(?:[uCS]|-unset|-chdir|-split-string)(?:\\s|$))\\S+|\\s+[A-Za-z_]\\w*=\\S*)*|timeout(?:\\s+-\\S+)*\\s+\\d\\S*)\\s+)*";
 /** After a power word: the line or command ends, or an option, `now`, `+N` or `HH:MM` follows — not more prose. */
 const POWER_ARGS = "(?=\\s*$|\\s*[;&|)`]|\\s+(?:-{1,2}\\w|now\\b|\\+\\d|\\d{1,2}:\\d{2}))";
 const POWER_COMMAND = new RegExp(
@@ -606,7 +606,7 @@ const COMMAND_WITH_FILE_ARGS =
 	"cat|ls|rm|cp|mv|less|more|head|tail|tar|zip|rsync|scp|grep|rg|find|chmod|chown|source|bat|xxd|od|strings|sed|awk|vi|vim|nano|stat|du|wc|file|ln|install|shred|base64|jq";
 /** A `secrets` path word as a command's argument, `secrets/…`, or `./secrets`: what makes a bare `secrets` an order. */
 const HOME_RELATIVE_SECRETS = new RegExp(
-	`(?<![\\w.$/-])secrets\\/|(?<![\\w.$/-])\\.\\/secrets(?![\\w.-])|${COMMAND_START}${COMMAND_WRAPPERS}(?:${COMMAND_WITH_FILE_ARGS})\\b[^;&|\`\\n]*?(?<![\\w.$/-])secrets(?=[\\s;&|\`'"]|$)`,
+	`(?<![\\w.$/-])secrets\\/|(?<![\\w.$/-])(?:\\.|\\$PWD|\\$\\{PWD\\})\\/secrets(?![\\w.-])|${COMMAND_START}${COMMAND_WRAPPERS}(?:${COMMAND_WITH_FILE_ARGS})\\b[^;&|\`\\n]*?(?<![\\w.$/-])secrets(?=[\\s;&|\`'"]|$)`,
 	"gi",
 );
 /** Whether a hit lies within a top-level `cd`'s own words: going into `secrets` reads nothing, what runs there does. */
@@ -636,7 +636,7 @@ function secretsFromSubdir(text: string, cwd: string): Hit[] {
 	for (const m of text.matchAll(FILE_COMMAND)) {
 		const reaches = (m[1] ?? "")
 			.split(/\s+/)
-			.map((word) => word.replace(/^["']|["']$/g, ""))
+			.map((word) => word.replace(/^["']|["']$/g, "").replace(/^(?:\$\{PWD\}|\$PWD)(?=\/|$)/, "."))
 			.some(
 				(word) =>
 					word !== "" &&

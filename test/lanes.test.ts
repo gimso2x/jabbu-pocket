@@ -17,7 +17,7 @@ import {
 } from "../src/lanes/manager-constants";
 import { buildLaneTools, buildWorkStartTool } from "../src/lanes/tools";
 import { buildLanePrompt, buildLaneTodos, isReopenCommand, parseLaneTrigger } from "../src/lanes/trigger";
-import { laneTriggerRefusal } from "../src/lanes/trigger-format";
+import { laneTriggerRefusal, spacedPathRefusal } from "../src/lanes/trigger-format";
 import { type VerifyResult, verifyClaim } from "../src/lanes/verify";
 import { createLogger } from "../src/log";
 import type { LaneModelTiers } from "../src/model-tiers";
@@ -1626,5 +1626,25 @@ describe("lane turn end without a done claim", () => {
 		expect(h.store.getLane(lane.name)?.history.some((entry) => entry.event.includes("nudge"))).toBe(false);
 		expect(h.store.getLane(lane.name)?.status).toBe("working");
 		h.close();
+	});
+});
+
+describe("spacedPathRefusal", () => {
+	const dirs = new Set(["/a/my", "/a/my proj", "/a/my proj folder"]);
+	const isDir = (path: string) => dirs.has(path);
+
+	test("a brief that continues the path into an existing directory is refused, naming both paths", () => {
+		for (const brief of ["proj", "proj 폴더 고쳐줘", "proj folder\n자세히"]) {
+			const refusal = spacedPathRefusal("/a/my", brief, isDir);
+			expect(refusal).toContain("`/a/my`");
+			expect(refusal).toContain("/a/my proj");
+		}
+	});
+
+	test("an ordinary brief, an empty brief, or a longer path that is no directory is not refused", () => {
+		expect(spacedPathRefusal("/a/my", "로그인 버그 수정", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/my", "", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/my", "\nproj", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/other", "proj", isDir)).toBeUndefined();
 	});
 });

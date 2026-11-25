@@ -2,7 +2,7 @@
 // channel — root in the parent, a thread started from it, status and cards inside — and the owner drives it with the
 // same words and buttons as everywhere else. Everything git-related stays on this machine; Discord is a fake transport.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
@@ -412,6 +412,35 @@ describe("lanes asked for from a Discord DM", () => {
 		expect(reply?.channelId).toBe(DM);
 		expect(reply?.content).not.toContain("공백이 든 경로");
 		expect(daemon.store.listLanes()).toHaveLength(0);
+	});
+});
+
+describe("a path with a space", () => {
+	test("a lane is not started in the prefix repository when the longer path is a directory", async () => {
+		const discord = discordTransport();
+		const daemon = await boot(discord, LANE_CH);
+		const outer = makeRepo(repos, "jabbu-spc-");
+		const spaced = `${outer} proj`;
+		mkdirSync(spaced);
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: `작업: 고쳐줘 @${spaced}`,
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("공백이 있는 경로는 쓸 수 없으니"));
+		expect(daemon.store.listLanes()).toHaveLength(0);
+		// The same words after a path whose longer form is no directory still start the lane.
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: `작업: 고쳐줘 @${outer} proj2 부분만`,
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("작업 레인 `고쳐줘`을 시작했습니다"));
+		expect(daemon.store.listLanes().map((lane) => lane.meta.requestedCwd)).toEqual([outer]);
 	});
 });
 

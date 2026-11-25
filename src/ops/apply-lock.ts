@@ -1,4 +1,5 @@
-import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readRegularText } from "./stamp";
 
 export const STAMP_PATTERN = /^\d{8}-\d{6}$/;
 
@@ -14,10 +15,7 @@ export interface ApplyLockInfo {
 	pid: number;
 	stamp: string;
 	startedAt: string;
-	/**
-	 * Kernel boot id of the holder (`currentBootId`): a lock left from before a reboot is stale even when its pid
-	 * now belongs to another process. Absent in locks written before this field (judged by pid alone).
-	 */
+	/** Kernel boot id of the holder (`currentBootId`): stale across reboots even if pid is reused. */
 	bootId?: string;
 }
 
@@ -87,7 +85,7 @@ export function reclaimStaleApplyLock(
 		if (errorCode(error) === "ENOENT") return { outcome: "changed", aside };
 		throw error;
 	}
-	if (readFileSync(aside, "utf8") === seen) {
+	if (readRegularText(aside) === seen) {
 		rmSync(aside, { force: true });
 		return { outcome: "taken", aside };
 	}
@@ -105,7 +103,7 @@ export function reclaimStaleApplyLock(
 export function releaseApplyLock(lockPath: string, info: ApplyLockInfo): boolean {
 	let text: string;
 	try {
-		text = readFileSync(lockPath, "utf8");
+		text = readRegularText(lockPath);
 	} catch (error) {
 		if (errorCode(error) === "ENOENT") return false;
 		throw error;
