@@ -5,10 +5,11 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync 
 import { join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
-import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole } from "../src/daemon/doctor";
+import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole, runDoctor } from "../src/daemon/doctor";
 import { readVersion } from "../src/daemon/tools";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
+import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 
 let home: TestHome;
 let lines: string[];
@@ -182,6 +183,15 @@ describe("qa50b I-18: the doctor's bun line", () => {
 		expect(line).toContain(`${join(bin, "bun")} 0.0.1`);
 		expect(line).toContain(`running ${Bun.version}`);
 	}, 30_000); // spawns a bun child that runs every doctor probe: slow on a 2-core machine
+});
+
+describe("doctor: home", () => {
+	test("a home that does not exist yet says to run init first", async () => {
+		const out: string[] = [];
+		const missing = join(home.dir, "no-such-home");
+		await runDoctor(missing, (line) => out.push(line), undefined, OFFLINE_DOCTOR);
+		expect(out).toContain(`fail home: ${missing} missing (no home yet: run the \`init\` command first)`);
+	});
 });
 
 describe("doctor: discord", () => {
