@@ -64,14 +64,13 @@ function tools(originKey = ORIGIN) {
 	};
 }
 
-function tools2(webhook: { port: number } | undefined) {
+function tools2() {
 	const built = buildMonitorTools({
 		timezone: "Asia/Seoul",
 		originKey: ORIGIN,
 		ledger,
 		scriptsRoot: join(home.dir, "scripts"),
 		workspaceDir: home.config.workspaceDir,
-		webhook,
 		log,
 	});
 	const get = (name: string) => {
@@ -355,27 +354,28 @@ describe("status shows monitors", () => {
 	});
 });
 
-describe("webhook trigger and procedureFiles through the tool", () => {
-	test("add returns the URL and token once; list shows the path but never the token", async () => {
-		const { add, list } = tools2({ port: 8123 });
-		const result = String(await add({ name: "hook", trigger: { kind: "webhook" }, instruction: "x" }));
-		const row = ledger.getMonitor("hook");
-		if (row?.trigger.kind !== "webhook") throw new Error("not a webhook monitor");
-		expect(result).toContain(`http://127.0.0.1:8123/hook/${row.trigger.id}`);
-		expect(result).toContain(`Bearer ${row.trigger.token}`);
-		const listed = String(await list({}));
-		expect(listed).toContain(`/hook/${row.trigger.id}`);
-		expect(listed).not.toContain(row.trigger.token);
-	});
-
-	test("a webhook trigger is refused without config.webhook", async () => {
-		const { add } = tools2(undefined);
-		await expect(add({ name: "hook", trigger: { kind: "webhook" }, instruction: "x" })).rejects.toThrow(/webhook/);
+describe("removed trigger kinds and procedureFiles through the tool", () => {
+	test("the removed webhook and watcher kinds are refused and the tool schema lists only at, cron and script", async () => {
+		const { add } = tools2();
+		for (const kind of ["webhook", "watcher"]) {
+			await expect(add({ name: kind, trigger: { kind }, instruction: "x" })).rejects.toThrow(
+				'trigger.kind must be "cron", "at" or "script"',
+			);
+		}
 		expect(ledger.listMonitors()).toEqual([]);
+		const addTool = buildMonitorTools({
+			timezone: "Asia/Seoul",
+			originKey: ORIGIN,
+			ledger,
+			scriptsRoot: join(home.dir, "scripts"),
+			log,
+		}).find((candidate) => candidate.name === "jabbu_monitor_add");
+		expect(JSON.stringify(addTool?.parameters)).not.toMatch(/webhook|watcher/);
+		expect(addTool?.description).not.toMatch(/webhook|watcher/);
 	});
 
 	test("procedureFiles are stored for a workspace file and refused outside the workspace", async () => {
-		const { add } = tools2(undefined);
+		const { add } = tools2();
 		const inside = join(home.config.workspaceDir, "proc.md");
 		writeFileSync(inside, "steps");
 		await add({ name: "proc", trigger: AT, instruction: "x", procedureFiles: [inside] });

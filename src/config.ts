@@ -145,10 +145,8 @@ const ROOT_KEYS = new Set([
 	"taskAutoLand",
 	"restartNotice",
 	"recallEnabled",
-	"watcherRoots",
-	"turnSnapshot",
 	"wikiNotes",
-	"webhook",
+	"hostTools",
 	"dashboard",
 	"briefing",
 	"lanes",
@@ -165,9 +163,6 @@ const ROOT_KEYS = new Set([
 const CODE_ROLLBACK_MODES = ["push", "detach", "off"] as const;
 export type CodeRollbackMode = (typeof CODE_ROLLBACK_MODES)[number];
 const DEFAULT_CODE_ROLLBACK: CodeRollbackMode = "detach";
-
-/** A commit identity email (`taskAutoLand.commitEmails`): one `@`, no blanks around it. */
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+$/;
 
 /** The code rollback mode of a home's config (`DEFAULT_CODE_ROLLBACK` without config or setting). */
 export function codeRollbackMode(config: Pick<JabbuConfig, "apply"> | undefined): CodeRollbackMode {
@@ -295,8 +290,6 @@ export interface JabbuConfig {
 		maxRisk?: TaskRisk;
 		review?: { model: string; timeoutMs?: number; confident?: LaneReviewConfident };
 		qa?: { minRisk?: TaskRisk; overlay: string; model: string; timeoutMs?: number };
-		/** Per repository (absolute path): the author/committer emails a lane's commits may carry (case-insensitive). */
-		commitEmails?: Record<string, string[]>;
 	};
 	/**
 	 * Work lanes. `models`: the model (`provider/id`) of each tier the session may pick when it starts a lane
@@ -310,13 +303,6 @@ export interface JabbuConfig {
 	restartNotice?: boolean;
 	/** Prepend channel-scoped recall of earlier conversation rows to a turn prompt that points at the past. Default true. */
 	recallEnabled?: boolean;
-	/** Absolute directories a `watcher` monitor may watch (its root must sit inside one, symlinks resolved). */
-	watcherRoots?: string[];
-	/**
-	 * Git work trees whose changes a conversation turn snapshots for `!undo` (absolute paths; each must be a git work
-	 * tree). Absent or empty = the feature is off and no git is ever run.
-	 */
-	turnSnapshot?: { repos: string[] };
 	/**
 	 * Work-unit result notes for the wiki (`src/wiki`): `client` is the wiki client root holding
 	 * `integrations/omp/omp-wiki-session-note.py`, `agentDir` the omp agent dir whose `wiki-outbox/` it drains
@@ -324,10 +310,10 @@ export interface JabbuConfig {
 	 */
 	wikiNotes?: { client: string; agentDir?: string; repos?: string[]; turns?: boolean };
 	/**
-	 * Loopback listener for `webhook` monitor triggers (POST /hook/<id> with a bearer token). Absent = no server and
-	 * webhook triggers cannot be created. `bind` must be a loopback address; the default is 127.0.0.1.
+	 * Host tools (`jabbu_*`). `extraForbiddenPaths`: paths (`~/…` or absolute) the file tools refuse on top of the
+	 * built-in list, matched the same way (symlinks resolved, everything under them included).
 	 */
-	webhook?: { port: number; bind?: "127.0.0.1" | "::1" };
+	hostTools?: { extraForbiddenPaths?: string[] };
 	/**
 	 * Read-only status page of `jabbu-pocket dashboard` (a separate process; `--port`/`--bind` override). `bind` must be a
 	 * loopback address; the default is 127.0.0.1. Absent = the command needs `--port`. `herdrWebUrl` is herdr-web-ui's
@@ -666,7 +652,7 @@ function requireGitRepo(configPath: string, repo: string, field: string): void {
 		workTree = false;
 	}
 	if (!workTree) invalid(configPath, field);
-	// A repo without a commit never yields a snapshot (qa-l #19): require HEAD to resolve.
+	// A repo without a commit never yields a HEAD (qa-l #19): require HEAD to resolve.
 	if (spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], { stdio: "ignore" }).status !== 0) {
 		invalid(configPath, field);
 	}
@@ -887,28 +873,11 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			invalid(configPath, "taskAutoLand.maxRisk");
 		}
 		for (const key of Object.keys(record)) {
-			if (key !== "repos" && key !== "maxRisk" && key !== "review" && key !== "qa" && key !== "commitEmails") {
+			if (key === "commitEmails") {
+				// Removed (the leak check's author denylist covers it): an old file still loads, the setting does nothing.
+				warnings.push({ field: `taskAutoLand.${key}`, reason: "config_key_ignored" });
+			} else if (key !== "repos" && key !== "maxRisk" && key !== "review" && key !== "qa") {
 				invalid(configPath, `taskAutoLand.${key}`);
-			}
-		}
-		let commitEmails: Record<string, string[]> | undefined;
-		if (record.commitEmails !== undefined) {
-			const emailsRecord = asRecord(record.commitEmails);
-			if (emailsRecord === undefined) invalid(configPath, "taskAutoLand.commitEmails");
-			commitEmails = {};
-			for (const [repo, emails] of Object.entries(emailsRecord)) {
-				// A repository key is an absolute path (a wrong one would silently never match a lane's repository).
-				if (!isAbsolute(repo)) invalid(configPath, `taskAutoLand.commitEmails.${repo}`);
-				if (!Array.isArray(emails) || emails.length === 0) {
-					invalid(configPath, `taskAutoLand.commitEmails.${repo}`);
-				}
-				const list = emails as unknown[];
-				list.forEach((email, i) => {
-					if (typeof email !== "string" || !EMAIL_SHAPE.test(email.trim())) {
-						invalid(configPath, `taskAutoLand.commitEmails.${repo}.${i}`);
-					}
-				});
-				commitEmails[repo.replace(/(?<=.)\/+$/, "")] = (list as string[]).map((email) => email.trim());
 			}
 		}
 		let qa: NonNullable<JabbuConfig["taskAutoLand"]>["qa"];
@@ -995,7 +964,6 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			...(maxRisk === undefined ? {} : { maxRisk: maxRisk as TaskRisk }),
 			...(review === undefined ? {} : { review }),
 			...(qa === undefined ? {} : { qa }),
-			...(commitEmails === undefined ? {} : { commitEmails }),
 		};
 	}
 
@@ -1018,29 +986,23 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (restartNotice !== undefined && typeof restartNotice !== "boolean") invalid(configPath, "restartNotice");
 	const recallEnabled = root.recallEnabled;
 	if (recallEnabled !== undefined && typeof recallEnabled !== "boolean") invalid(configPath, "recallEnabled");
-	const watcherRoots = root.watcherRoots;
-	if (
-		watcherRoots !== undefined &&
-		(!Array.isArray(watcherRoots) || watcherRoots.some((r) => typeof r !== "string" || !isAbsolute(r)))
-	) {
-		invalid(configPath, "watcherRoots");
-	}
-
-	const turnSnapshotRaw = root.turnSnapshot;
-	let turnSnapshot: { repos: string[] } | undefined;
-	if (turnSnapshotRaw !== undefined) {
-		const record = asRecord(turnSnapshotRaw);
-		if (record === undefined) invalid(configPath, "turnSnapshot");
-		const repos = record.repos;
-		if (
-			repos !== undefined &&
-			(!Array.isArray(repos) || repos.some((repo) => typeof repo !== "string" || !isAbsolute(repo)))
-		) {
-			invalid(configPath, "turnSnapshot.repos");
+	const hostToolsRaw = root.hostTools;
+	let hostTools: JabbuConfig["hostTools"];
+	if (hostToolsRaw !== undefined) {
+		const record = asRecord(hostToolsRaw);
+		if (record === undefined) invalid(configPath, "hostTools");
+		for (const key of Object.keys(record)) if (key !== "extraForbiddenPaths") invalid(configPath, `hostTools.${key}`);
+		const extra = record.extraForbiddenPaths;
+		if (extra !== undefined) {
+			if (!Array.isArray(extra)) invalid(configPath, "hostTools.extraForbiddenPaths");
+			// `~/…` resolves against the user's home where it is checked; anything else must be absolute.
+			extra.forEach((path: unknown, i: number) => {
+				if (typeof path !== "string" || !(path.startsWith("~/") || isAbsolute(path)) || /\p{Cc}/u.test(path)) {
+					invalid(configPath, `hostTools.extraForbiddenPaths.${i}`);
+				}
+			});
 		}
-		for (const key of Object.keys(record)) if (key !== "repos") invalid(configPath, `turnSnapshot.${key}`);
-		for (const repo of (repos as string[] | undefined) ?? []) requireGitRepo(configPath, repo, "turnSnapshot.repos");
-		turnSnapshot = { repos: (repos as string[] | undefined) ?? [] };
+		hostTools = extra === undefined ? {} : { extraForbiddenPaths: extra as string[] };
 	}
 
 	const wikiNotesRaw = root.wikiNotes;
@@ -1106,19 +1068,6 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			invalid(configPath, "apply.codeRollback");
 		}
 		apply = mode === undefined ? {} : { codeRollback: mode as CodeRollbackMode };
-	}
-
-	const webhook = root.webhook;
-	if (webhook !== undefined) {
-		const record = asRecord(webhook);
-		if (record === undefined) invalid(configPath, "webhook");
-		if (!Number.isInteger(record.port) || (record.port as number) < 1 || (record.port as number) > 65535) {
-			invalid(configPath, "webhook.port");
-		}
-		if (record.bind !== undefined && record.bind !== "127.0.0.1" && record.bind !== "::1") {
-			invalid(configPath, "webhook.bind");
-		}
-		for (const key of Object.keys(record)) if (key !== "port" && key !== "bind") invalid(configPath, `webhook.${key}`);
 	}
 
 	const dashboard = root.dashboard;
@@ -1194,21 +1143,6 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		for (const key of Object.keys(record)) if (!dashboardKeys.includes(key)) invalid(configPath, `dashboard.${key}`);
 	}
 
-	// One address, one listener: a second bind on it fails at start (the daemon logs it and runs on without one).
-	const listeners: Array<[string, string, number]> = [];
-	const addressOf = (host: string): string => (host === "localhost" ? "127.0.0.1" : host);
-	for (const [name, block] of [
-		["webhook", webhook],
-		["dashboard", dashboard],
-	] as const) {
-		const record = asRecord(block);
-		if (record === undefined) continue;
-		const address = addressOf((record.bind as string | undefined) ?? "127.0.0.1");
-		const taken = listeners.some(([, host, port]) => host === address && port === record.port);
-		if (taken) invalid(configPath, `${name}.port`);
-		listeners.push([`${name}.port`, address, record.port as number]);
-	}
-
 	const candidatesRaw = root.candidates;
 	let candidates: NonNullable<JabbuConfig["candidates"]> | undefined;
 	if (candidatesRaw !== undefined) {
@@ -1269,13 +1203,11 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 	if (restartNotice !== undefined) config.restartNotice = restartNotice;
 	if (recallEnabled !== undefined) config.recallEnabled = recallEnabled;
-	if (watcherRoots !== undefined) config.watcherRoots = (watcherRoots as string[]).map((r) => resolve(r));
-	if (turnSnapshot !== undefined) config.turnSnapshot = { repos: turnSnapshot.repos.map((repo) => resolve(repo)) };
+	if (hostTools !== undefined) config.hostTools = hostTools;
 	if (wikiNotes !== undefined) config.wikiNotes = wikiNotes;
 	if (briefing !== undefined) config.briefing = briefing;
 	if (candidates !== undefined) config.candidates = candidates;
 	if (apply !== undefined) config.apply = apply;
-	if (webhook !== undefined) config.webhook = webhook as { port: number; bind?: "127.0.0.1" | "::1" };
 	if (dashboard !== undefined) config.dashboard = dashboard as NonNullable<JabbuConfig["dashboard"]>;
 	if (herdr !== undefined) config.herdr = herdr;
 	if (dispatchHosts !== undefined) config.dispatchHosts = dispatchHosts;

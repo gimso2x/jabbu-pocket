@@ -1,34 +1,17 @@
-// QA qa-x fixes: RPC client/driver edge cases, select cards, `!undo` ledger and paths.
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+// QA qa-x fixes: RPC client/driver edge cases, select cards.
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type OmpDialogRequest, OmpDriverError, type OmpFinal } from "../src/omp/driver";
 import { MAX_RPC_FRAME_BYTES, OmpRpcClient, RpcProtocolError, readLines } from "../src/omp/rpc-client";
 import { RpcOmpDriver } from "../src/omp/rpc-driver";
 import { ExtensionUiTap } from "../src/omp/rpc-ui-tap";
-import { gcSessions } from "../src/ops/gc";
-import {
-	applyUndo,
-	captureTree,
-	planUndo,
-	recordTurn,
-	type TurnSnapshotRow,
-	undoPlanNotes,
-} from "../src/ops/turn-snapshot";
 import type { ApprovalBroker } from "../src/safety/approval";
 import { answerDialog } from "../src/safety/choice";
-import { openStore, type Store } from "../src/store/db";
 import { FakeOmpPeer, fakeOmpExecutable } from "./helpers/fake-omp-rpc";
-import { makeRepo } from "./helpers/git-fixtures";
 
 const root = mkdtempSync(join(tmpdir(), "jabbu-qa-x-core-rpc-"));
-const repos: string[] = [];
-const stores: Store[] = [];
-afterEach(() => {
-	for (const store of stores.splice(0)) store.close();
-	for (const dir of repos.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 let dirCounter = 0;
 
@@ -175,98 +158,5 @@ describe("select cards", () => {
 		expect(text).toContain("1. ☐ 빌드");
 		expect(text).toContain("2. ☑ 테스트");
 		expect(text).toContain("3. ▶ Done");
-	});
-});
-
-/** A repository with one turn that changed `file`, and the ledger row of it. */
-async function turnOf(file: string, extra: Partial<TurnSnapshotRow> = {}) {
-	const repo = makeRepo(repos);
-	const before = await captureTree(repo);
-	writeFileSync(join(repo, file), "turn\n");
-	const after = await captureTree(repo);
-	const row: TurnSnapshotRow = {
-		id: 1,
-		originKey: "discord/dm/200000000000000001",
-		opRef: "op_1",
-		repo,
-		headBefore: before.head,
-		treeBefore: before.tree,
-		headAfter: after.head,
-		treeAfter: after.tree,
-		startedAt: 1000,
-		endedAt: 2000,
-		revertedAt: null,
-		...extra,
-	};
-	return { repo, row, before, after };
-}
-
-describe("!undo", () => {
-	test("#6 gc keeps the ledger row of a turn whose ref could not be deleted, and drops the others", async () => {
-		const home = mkdtempSync(join(tmpdir(), "jabbu-qa-x-gc-"));
-		repos.push(home);
-		const dbPath = join(home, "jabbu.db");
-		const now = 100 * 86_400_000;
-		const open = () =>
-			openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => now }, redact: (text) => text });
-		const store = open();
-		stores.push(store);
-		const repo = makeRepo(repos);
-		const base = await captureTree(repo);
-		writeFileSync(join(repo, "x.txt"), "x\n");
-		const after = await captureTree(repo);
-		const origin = "discord/dm/200000000000000001";
-		for (const opRef of ["op_a", "op_b"]) {
-			const endedAt = now - 8 * 86_400_000;
-			await recordTurn({
-				store,
-				originKey: origin,
-				opRef,
-				capture: { startedAt: endedAt - 1, endedAt, before: new Map([[repo, base]]), after: new Map([[repo, after]]) },
-			});
-		}
-		const [first, second] = store.listTurnSnapshots({ originKey: origin }).sort((a, b) => a.id - b.id);
-		if (first === undefined || second === undefined) throw new Error("two rows expected");
-		// A ref lock git cannot take makes `update-ref -d` fail for the first row only.
-		writeFileSync(join(repo, ".git", "refs", "jabbu", "turns", String(first.id), "before.lock"), "");
-		store.close();
-
-		const result = gcSessions({ homeDir: home, retentionDays: 30, now });
-		expect(result.turnSnapshotsRemoved).toBe(1);
-		const reopened = open();
-		stores.push(reopened);
-		expect(reopened.listTurnSnapshots({ originKey: origin }).map((row) => row.id)).toEqual([first.id]);
-		expect(second.id).not.toBe(first.id);
-	});
-
-	test("#7 undo never deletes a file through a parent directory that became a symlink out of the repository", async () => {
-		const { repo, row } = await turnOf("keep.txt");
-		const outside = mkdtempSync(join(tmpdir(), "jabbu-qa-x-outside-"));
-		repos.push(outside);
-		// The plan deletes sub/x.txt as turn-created; since then `sub` was swapped for a link to a directory outside.
-		writeFileSync(join(outside, "x.txt"), "precious\n");
-		symlinkSync(outside, join(repo, "sub"));
-		const applied = await applyUndo({ repo, source: row.treeBefore, files: [{ path: "sub/x.txt", kind: "revert" }] });
-		expect(applied.conflicts).toEqual(["sub/x.txt"]);
-		expect(applied.reverted).toBe(0);
-		expect(existsSync(join(outside, "x.txt"))).toBe(true);
-	});
-
-	test("#8 a turn whose repository is gone plans as missing, with a note, so the turn can be closed", async () => {
-		const { repo, row } = await turnOf("a.txt");
-		rmSync(repo, { recursive: true, force: true });
-		const plan = await planUndo({ row });
-		expect(plan).toMatchObject({ repo, missing: true, files: [] });
-		expect(undoPlanNotes(plan)).toEqual([`저장소를 찾을 수 없음: ${repo}`]);
-	});
-
-	test("#9 the revert advice quotes a repository path with spaces and quotes", async () => {
-		const { row } = await turnOf("a.txt");
-		const spaced = join(root, `my repo's ${++dirCounter}`);
-		mkdirSync(spaced, { recursive: true });
-		const plan = await planUndo({ row: { ...row, repo: spaced, headAfter: "f".repeat(40) } });
-		expect(plan.commit?.advice).toBe(
-			`git -C '${spaced.replaceAll("'", "'\\''")}' revert --no-edit ${row.headBefore}..${"f".repeat(40)}`,
-		);
 	});
 });

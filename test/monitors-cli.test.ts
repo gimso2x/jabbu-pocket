@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
 import { createLogger } from "../src/log";
@@ -480,33 +480,50 @@ describe("jabbu-pocket monitors (CLI)", () => {
 		expect(parse(fired.stdout)).toMatchObject({ fired: true, stage: "admitted" });
 	});
 
-	test("webhook: refused without config.webhook; with it add + show print the URL and the token", async () => {
-		const spec = JSON.stringify({ name: "hook", trigger: { kind: "webhook" }, instruction: "i" });
-		const refused = await monitors("add", "--json", spec);
-		expect(refused.code).toBe(1);
-		expect(refused.stderr).toContain("webhook");
-
-		const raw = JSON.parse(readFileSync(home.config.configPath, "utf8")) as Record<string, unknown>;
-		writeFileSync(home.config.configPath, JSON.stringify({ ...raw, webhook: { port: 8123 } }), { mode: 0o600 });
-		const added = await monitors("add", "--json", spec);
+	test("a stored webhook row reads as unsupported: list shows it, show still works, add/update refuse the kind", async () => {
+		const added = await monitors(
+			"add",
+			"--json",
+			JSON.stringify({ name: "hook", trigger: { kind: "at", at: "2099-01-01T00:00:00Z" }, instruction: "i" }),
+		);
 		expect(added.code).toBe(0);
-		const trigger = parse(added.stdout).monitor.trigger as { id: string; token: string };
-		const shown = JSON.parse((await monitors("show", "hook")).stdout) as {
-			webhook: { url: string; token: string };
-		};
-		expect(shown.webhook).toEqual({ url: `http://127.0.0.1:8123/hook/${trigger.id}`, token: trigger.token });
-		// A plain `list` line names the hook path but not the secret.
+		const db = new Database(join(home.dir, "jabbu.db"));
+		db.run("UPDATE monitors SET trigger_json = ? WHERE name = 'hook'", [
+			JSON.stringify({ kind: "webhook", id: "old-id", token: "old-token" }),
+		]);
+		db.close();
+
 		const listed = await monitors("list");
-		expect(listed.stdout).toContain(`/hook/${trigger.id}`);
-		expect(listed.stdout).not.toContain(trigger.token);
-		const listJson = await monitors("list", "--json");
-		expect(listJson.stdout).not.toContain(trigger.token);
-		expect(listJson.stdout).toContain(trigger.id);
-		const updated = await monitors("update", "hook", "--json", JSON.stringify({ instruction: "j" }));
-		expect(updated.stdout).not.toContain(trigger.token);
-		const after = JSON.parse((await monitors("show", "hook")).stdout) as { webhook: { token: string } };
-		expect(after.webhook.token).toBe(trigger.token);
-		expect((await monitors("show", "missing")).code).toBe(1);
+		expect(listed.code).toBe(0);
+		expect(listed.stdout).toContain("[지원 안 함 (webhook)]");
+		expect(listed.stdout).toContain("next=-");
+		expect(listed.stdout).not.toContain("old-token");
+		const shown = parse((await monitors("show", "hook")).stdout) as unknown as {
+			monitor: { trigger: unknown };
+			schedule: { nextFireAt: string | null };
+		};
+		expect(shown.monitor.trigger).toEqual({ kind: "unsupported", was: "webhook" });
+		expect(shown.schedule.nextFireAt).toBeNull();
+
+		const refusedAdd = await monitors(
+			"add",
+			"--json",
+			JSON.stringify({ name: "again", trigger: { kind: "webhook" }, instruction: "i" }),
+		);
+		expect(refusedAdd.code).toBe(1);
+		expect(refusedAdd.stderr).toContain('trigger.kind must be "cron", "at" or "script"');
+		// The row has no usable trigger to inherit, so an update must bring one.
+		const noTrigger = await monitors("update", "hook", "--json", JSON.stringify({ instruction: "j" }));
+		expect(noTrigger.code).toBe(1);
+		expect(noTrigger.stderr).toContain("trigger is required");
+		const fixed = await monitors(
+			"update",
+			"hook",
+			"--json",
+			JSON.stringify({ trigger: { kind: "at", at: "2099-01-01T00:00:00Z" } }),
+		);
+		expect(fixed.code).toBe(0);
+		expect((await monitors("list")).stdout).not.toContain("지원 안 함");
 	});
 
 	test("procedureFiles: add / update / clear, and a file outside the workspace is refused", async () => {

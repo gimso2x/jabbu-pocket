@@ -9,9 +9,9 @@ import { createStuckDetector } from "./stuck";
 export function newActiveTurn(
 	clock: MailboxDeps["clock"],
 	row: InboundRow,
-	start: Pick<ActiveTurn, "opRef" | "entryCursor" | "undoBefore" | "headsBefore">,
+	start: Pick<ActiveTurn, "opRef" | "entryCursor" | "headsBefore">,
 ): ActiveTurn {
-	const { opRef, entryCursor, undoBefore, headsBefore } = start;
+	const { opRef, entryCursor, headsBefore } = start;
 	return {
 		opRef,
 		threadRef: row.threadRef,
@@ -37,7 +37,6 @@ export function newActiveTurn(
 		progress: { tools: 0, recentTools: [], steers: 0, retries: 0 },
 		live: new LiveTurn(clock, row.platformMessageId),
 		interim: [],
-		...(undoBefore === undefined ? {} : { undoBefore }),
 		...(headsBefore === undefined ? {} : { headsBefore }),
 		pendingAnswer: undefined,
 		capDeferred: new Set(),

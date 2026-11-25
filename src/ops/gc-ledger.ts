@@ -1,7 +1,11 @@
 import type { Database } from "bun:sqlite";
-import { hasTable } from "./gc-turns";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** An older ledger may lack a table a gc pass reads: the pass then has nothing to do there. */
+export function hasTable(db: Database, name: string): boolean {
+	return db.query("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null;
+}
 
 /** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
 export const LEDGER_RETENTION_DAYS = 90;

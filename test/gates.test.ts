@@ -427,7 +427,7 @@ describe("collectGates", () => {
 
 	describe("monitors_stalled", () => {
 		const CRON = '{"kind":"cron","schedule":"*/5 * * * *","timezone":"UTC"}';
-		const INTERVAL = '{"kind":"interval","intervalMs":300000}';
+		const INTERVAL = '{"kind":"script","command":["/bin/true"],"intervalMs":300000}';
 
 		/** Interval trigger: next fire = cursor_at + intervalMs, so cursor_at is set to put it `overdueMs` in the past. */
 		function seedMonitor(overdueMs: number, trigger = INTERVAL, cursorAt = now - overdueMs - 300_000): void {

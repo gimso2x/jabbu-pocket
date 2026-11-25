@@ -8,7 +8,7 @@ import { OmpDriverError, type OmpFinal, type OmpSessionDriver, type TodoPhase } 
 import { newestSessionFile } from "../omp/session-heal";
 import type { CacheMiss } from "../ops/cache-monitor";
 import type { SubAgentCostCache } from "../ops/cost-cap";
-import type { GitRunner, RepoPlan } from "../ops/turn-snapshot";
+import type { GitRunner } from "../ops/turn-heads";
 import type { Store } from "../store/db";
 import type { InboundRow, OriginRow } from "../store/db-rows";
 import type { TypicalDuration } from "../store/turn-duration";
@@ -277,8 +277,8 @@ export interface MailboxDeps {
 	 * was recorded and before the next queued row starts. Called on the actor chain: it must never await.
 	 */
 	onTurnSettled?: (info: TurnSettledInfo) => void;
-	/** Turn snapshots and `!undo`; absent = no snapshot is taken and `!undo` says it is not wired. */
-	turnUndo?: TurnUndoDeps;
+	/** The repository HEADs around a conversation turn (wiki turn notes); absent = no git is started. */
+	turnHeads?: TurnHeadsDeps;
 	/**
 	 * `!brief`: draws the origin's one-page status picture and uploads it to `threadRef`. Resolving = the image is in
 	 * the thread; throwing = nothing was uploaded and the reason becomes the one failure line. Absent = not wired.
@@ -289,33 +289,20 @@ export interface MailboxDeps {
 }
 
 /**
- * What `!undo` needs from the daemon: the repositories to snapshot, the approval card and the
- * git runner. The mailbox only decides *when* a snapshot, a card and a restore happen.
+ * What the turn HEAD reading needs from the daemon: the repositories, where a commit goes and the git runner. The
+ * mailbox only decides *when* the HEADs are read.
  */
-export interface TurnUndoDeps {
-	/** Read on every turn and every `!undo`: a config reload changes it without a restart. */
-	repos: () => readonly string[];
+export interface TurnHeadsDeps {
 	/**
-	 * The owner's answer to the undo card; only `approved` writes anything. `originKey` is the asking conversation,
-	 * stored on the card's ledger row like every other approval of that conversation.
+	 * Read on every conversation turn (a config reload changes it without a restart): the repositories whose HEAD is
+	 * read before and after the turn. Empty = no git at all.
 	 */
-	approve: (info: {
-		summary: string;
-		threadRef: string;
-		originKey: string;
-	}) => Promise<"approved" | "denied" | "timeout">;
+	headRepos: () => readonly string[];
 	/** Git runner (tests inject one that counts or fails); absent = the real git. */
 	run?: GitRunner;
 	/**
-	 * Read on every turn while `repos()` is empty (no snapshots): the repositories whose HEAD alone is read before and
-	 * after the turn, so a commit still reaches `onCommitted` without tree snapshots, ledger rows or `!undo`. Absent or
-	 * empty = no git at all.
-	 */
-	headRepos?: () => readonly string[];
-	/**
-	 * A turn left a repository at another head (it committed): its before and after heads per repository (the ledger
-	 * rows it wrote, or with `headRepos` the heads alone). The wiki result notes (`src/wiki`) keep the turn from here.
-	 * Must not throw; a failure never costs the turn anything.
+	 * A turn left a repository at another head (it committed): its before and after heads per repository. The wiki
+	 * result notes (`src/wiki`) keep the turn from here. Must not throw; a failure never costs the turn anything.
 	 */
 	onCommitted?: (turn: {
 		originKey: string;
@@ -325,19 +312,12 @@ export interface TurnUndoDeps {
 	}) => Promise<void>;
 }
 
-/** A repository's head before and after one turn (a `turn_snapshots` row carries the same fields). */
+/** A repository's head before and after one turn. */
 export interface TurnHeads {
 	repo: string;
 	headBefore: string;
 	headAfter: string;
 	endedAt: number;
-}
-
-/** One turn's `!undo` card: the per-repository plans, the card text, and the answer when nothing can be reverted. */
-export interface UndoCard {
-	plans: RepoPlan[];
-	summary: string;
-	nothing: string;
 }
 
 /** The owner-facing omp dialogs of each origin (`ApprovalBroker.choose` cards), as the mailbox sees them. */
@@ -500,16 +480,9 @@ export interface ActiveTurn {
 	/** Texts this turn already sent as interim deliveries, in order (`<opRef>:interim:<index>`). */
 	interim: string[];
 	/**
-	 * The work trees captured right before the prompt (`!undo`): absent when the feature is off or this turn is not a
-	 * conversation turn. The after-state is taken in `#onFinal`.
+	 * The HEADs of `turnHeads.headRepos()` right before the prompt (the wiki turn notes): absent when none is configured
+	 * or this turn is not a conversation turn. The after-state is read in `#onFinal`.
 	 */
-	undoBefore?: {
-		startedAt: number;
-		before: ReadonlyMap<string, { head: string; tree: string }>;
-		/** Repositories whose snapshot failed on either side; `!undo` must not read their older turns as "the last turn". */
-		failed: ReadonlyMap<string, string>;
-	};
-	/** Without snapshots: the HEADs of `turnUndo.headRepos()` right before the prompt (the wiki turn notes). */
 	headsBefore?: ReadonlyMap<string, string>;
 	pendingAnswer: string | undefined;
 	/** Pending owner rows the drain held back because the turn is at `MAX_STEERS` (they never answer a dialog card). */
@@ -578,16 +551,13 @@ export interface PauseCheck {
 }
 
 /**
- * What the moved mailbox parts (`mailbox-cost.ts`, `mailbox-undo.ts`, `mailbox-commands.ts`) read and call on the
+ * What the moved mailbox parts (`mailbox-cost.ts`, `mailbox-commands.ts`) read and call on the
  * `OriginMailbox` that owns them; every accessor reads the mailbox's live field, so no state is copied.
  */
 export interface MailboxHost {
 	readonly deps: MailboxDeps;
 	turn(): ActiveTurn | undefined;
 	driver(): OmpSessionDriver | undefined;
-	turnGeneration(): number;
-	lastUndoFailures(): { opRef: string; failed: ReadonlyMap<string, string> } | undefined;
-	serial<T>(task: () => Promise<T>): Promise<T>;
 	background(event: string, task: () => Promise<void>): void;
 	onFinal(driver: OmpSessionDriver, final: OmpFinal, stopFirst?: boolean): Promise<void>;
 	ensureDriver(threadRef: string): Promise<OmpSessionDriver>;

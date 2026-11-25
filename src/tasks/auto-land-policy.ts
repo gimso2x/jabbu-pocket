@@ -12,11 +12,6 @@ export interface AutoLandPolicy {
 	review?: { model: string; timeoutMs: number; confident?: LaneReviewConfident };
 	/** The run QA a reviewed lane or banded [TASK] at `minRisk` or above needs a `PASS` receipt from for that commit. */
 	qa?: LaneQaPolicy;
-	/**
-	 * `taskAutoLand.commitEmails`: per repository (absolute path) the author/committer emails a lane's commits may
-	 * carry. A repository not listed is not checked.
-	 */
-	commitEmails?: Record<string, string[]>;
 }
 
 /** `taskAutoLand.qa` as the lanes apply it (`minRisk` defaults to L3, `timeoutMs` to the review's default). */

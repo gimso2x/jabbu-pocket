@@ -1,5 +1,4 @@
 import { accessSync, constants, existsSync, readFileSync, statSync } from "node:fs";
-import { connect } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, HOME_MODE, type JabbuConfig, loadConfig, readDiscordToken, SECRET_MODE } from "../config";
@@ -12,22 +11,6 @@ import { BACKUP_MAX_AGE_MS } from "../ops/gates";
 import { OWNER_NOTES_MAX_BYTES, PERSONA_MAX_BYTES, SOUL_MAX_BYTES } from "../safety/prompt";
 import { checkCoreDumpLimit } from "./core-dump";
 import { readVersion } from "./tools";
-
-/** Whether something accepts TCP connections at `host:port` (the webhook listener answers only when it bound). */
-function listening(host: string, port: number): Promise<boolean> {
-	return new Promise((resolve) => {
-		const socket = connect({ host, port, timeout: 1000 });
-		socket.once("connect", () => {
-			socket.destroy();
-			resolve(true);
-		});
-		socket.once("timeout", () => {
-			socket.destroy();
-			resolve(false);
-		});
-		socket.once("error", () => resolve(false));
-	});
-}
 
 /** What a short `omp` probe printed, or why it could not be read (spawn error, time limit, unreadable stdout). */
 type OmpProbe = { out: string; code: number } | { failure: string };
@@ -399,18 +382,6 @@ export async function runDoctor(
 					`modelRoles.judge is empty (set it in omp: /models → Roles → Judge, or modelRoles.judge in ${config.ompConfigOverlay ?? "the omp config"})`,
 				);
 			} else warn("omp judge", `확인 불가 (${judge.unreadable})`);
-		}
-
-		if (config.webhook !== undefined) {
-			const { port, bind = "127.0.0.1" } = config.webhook;
-			const up = await listening(bind, port);
-			report(
-				up,
-				"webhook",
-				up
-					? `${bind}:${port} listening`
-					: `${bind}:${port} not listening (daemon down or webhook_bind_failed in the log)`,
-			);
 		}
 
 		// agent "agy": the Antigravity CLI must exist, and its Google login must be on disk (presence only).

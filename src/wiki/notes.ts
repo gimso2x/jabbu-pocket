@@ -371,9 +371,8 @@ export class WikiNotes {
 	// ---- conversation turns ----
 
 	/**
-	 * A conversation turn ended with a changed head in `rows` (its `turn_snapshots` rows): kept in the turn ledger at once,
-	 * because those rows are pruned and gc'd long before the day's note goes out. A lane's or [TASK]'s own thread is
-	 * left to their result notes.
+	 * A conversation turn ended with a changed head in `rows`: kept in the turn ledger at once, because the day's note
+	 * goes out later. A lane's or [TASK]'s own thread is left to their result notes.
 	 */
 	async recordTurn(turn: {
 		originKey: string;
@@ -470,14 +469,13 @@ export class WikiNotes {
 }
 
 /**
- * The repositories a conversation turn reads the HEAD of for its turn note when `turnSnapshot` is off (with a non-empty list, the
- * snapshot rows carry the heads and nothing else is read): `wikiNotes.repos` when listed, otherwise the bot's own work
- * repositories `taskAutoLand.repos` (a list of every repository would be unbounded and "all" cannot be read). No
- * `wikiNotes`, no repository: no git.
+ * The repositories a conversation turn reads the HEAD of for its turn note: `wikiNotes.repos` when listed, otherwise
+ * the bot's own work repositories `taskAutoLand.repos` (a list of every repository would be unbounded and "all" cannot
+ * be read). No `wikiNotes`, no repository: no git.
  */
-export function turnNoteRepos(config: Pick<JabbuConfig, "wikiNotes" | "taskAutoLand" | "turnSnapshot">): string[] {
+export function turnNoteRepos(config: Pick<JabbuConfig, "wikiNotes" | "taskAutoLand">): string[] {
 	const notes = config.wikiNotes;
-	if (notes === undefined || notes.turns === false || (config.turnSnapshot?.repos.length ?? 0) > 0) return [];
+	if (notes === undefined || notes.turns === false) return [];
 	return notes.repos?.length ? notes.repos : (config.taskAutoLand?.repos ?? []);
 }
 

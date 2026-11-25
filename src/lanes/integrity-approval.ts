@@ -3,8 +3,6 @@ import type { LogFields } from "../log";
 import { laneDeclared } from "./declared";
 import {
 	classifyLaneCompletion,
-	collectLaneCommitIdentities,
-	commitIdentityRefusals,
 	type IntegrityRefusal,
 	type LaneDiffRange,
 	LaneDiffUnavailable,
@@ -51,21 +49,17 @@ export function approvalRecord(
 	return { sha, fingerprint: refusalFingerprint(refusals), at };
 }
 
-/** What the integrity check needs of the manager: its seams and the lane's own commit-identity policy. */
+/** What the integrity check needs of the manager: its seams. */
 export interface IntegrityReaders {
 	collectDiff?: (laneCwd: string, range: LaneDiffRange, sha: string) => ReturnType<typeof collectLaneDiff>;
 	integrity?: typeof classifyLaneCompletion;
-	collectIdentities?: typeof collectLaneCommitIdentities;
-	/** The allowed commit emails of the lane's repository; undefined = not checked. */
-	allowedEmails: (lane: LaneRow) => Promise<string[] | undefined>;
 	/** The records repository (`recordsRepo`) the lane's plans are read from; undefined = the lane's worktree. */
 	plansRoot: () => string | undefined;
 	warn: (event: string, fields: LogFields) => void;
 }
 
 /**
- * Collects the lane's diff (from the merge-base with its base branch) and judges the claim text + diff, then the
- * author/committer emails of its own commits when the repository lists them. A base branch that cannot be read is a
+ * Collects the lane's diff (from the merge-base with its base branch) and judges the claim text + diff. A base branch that cannot be read is a
  * refusal of its own, and so are code files too large to read (the rest is judged); any other unreadable diff
  * degrades to text-only.
  */
@@ -92,33 +86,5 @@ export async function integrityRefusalsOf(
 	}
 	const refusals = classify({ summary: claim.summary, diff, declared: await laneDeclared(lane, readers.plansRoot()) });
 	const unreadRefusals = unread.length > 0 ? [laneDiffUnreadRefusal(unread)] : [];
-	const identities = await commitIdentityRefusalsOf(readers, lane, range, sha);
-	return capRefusals([...unreadRefusals, ...refusals, ...identities]);
-}
-
-/**
- * The refusals of the lane's commit identities: none when the repository is not in `taskAutoLand.commitEmails`, and a
- * `commit_identity_mismatch` for each commit whose author or committer email is not allowed.
- */
-async function commitIdentityRefusalsOf(
-	readers: IntegrityReaders,
-	lane: LaneRow,
-	range: LaneDiffRange,
-	sha: string,
-): Promise<IntegrityRefusal[]> {
-	const allowed = await readers.allowedEmails(lane);
-	if (allowed === undefined) return [];
-	try {
-		const identities = await (readers.collectIdentities ?? collectLaneCommitIdentities)(lane.cwd, range, sha);
-		const refusals = commitIdentityRefusals(identities, allowed);
-		if (refusals.length > 0)
-			readers.warn("lane_commit_identity_refused", { lane: lane.name, refusals: refusals.length });
-		return refusals;
-	} catch (error) {
-		// Like an unreadable diff: the claim is refused (`lane_diff_unavailable`), not passed on a read that did not run.
-		readers.warn("lane_commit_identity_unavailable", { lane: lane.name, error: String(error) });
-		return [
-			laneDiffUnavailableRefusal(error instanceof LaneDiffUnavailable ? error : new LaneDiffUnavailable(String(error))),
-		];
-	}
+	return capRefusals([...unreadRefusals, ...refusals]);
 }

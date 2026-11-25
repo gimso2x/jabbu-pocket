@@ -117,61 +117,6 @@ export const toWikiTurn = (r: WikiTurnSql): WikiTurnRow => ({
 	endedAt: r.ended_at,
 });
 
-export interface TurnSnapshotRow {
-	id: number;
-	originKey: string;
-	opRef: string;
-	repo: string;
-	headBefore: string;
-	treeBefore: string;
-	headAfter: string;
-	treeAfter: string;
-	startedAt: number;
-	endedAt: number;
-	/** Undo happened at this time; NULL while the turn is still undoable. */
-	revertedAt: number | null;
-}
-
-export interface TurnSnapshotInput {
-	originKey: string;
-	opRef: string;
-	repo: string;
-	headBefore: string;
-	treeBefore: string;
-	headAfter: string;
-	treeAfter: string;
-	startedAt: number;
-	endedAt: number;
-}
-
-export interface TurnSnapshotSql {
-	id: number;
-	origin_key: string;
-	op_ref: string;
-	repo: string;
-	head_before: string;
-	tree_before: string;
-	head_after: string;
-	tree_after: string;
-	started_at: number;
-	ended_at: number;
-	reverted_at: number | null;
-}
-
-export const toTurnSnapshot = (r: TurnSnapshotSql): TurnSnapshotRow => ({
-	id: r.id,
-	originKey: r.origin_key,
-	opRef: r.op_ref,
-	repo: r.repo,
-	headBefore: r.head_before,
-	treeBefore: r.tree_before,
-	headAfter: r.head_after,
-	treeAfter: r.tree_after,
-	startedAt: r.started_at,
-	endedAt: r.ended_at,
-	revertedAt: r.reverted_at,
-});
-
 /** start: a new agent (a resume that starts one too) · followup: a prompt to a running one · remind: the sweep's nudge. */
 type HerdrPromptKind = "start" | "followup" | "remind";
 

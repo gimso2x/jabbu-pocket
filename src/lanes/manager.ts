@@ -1276,7 +1276,6 @@ export class LaneManager {
 		return integrityRefusalsOf(
 			{
 				...this.#deps,
-				allowedEmails: (row) => this.#allowedCommitEmails(row),
 				plansRoot: () => this.#deps.recordsRepo?.(),
 				warn: (e, f) => log.warn(e, f),
 			},
@@ -1284,17 +1283,6 @@ export class LaneManager {
 			claim,
 			sha,
 		);
-	}
-
-	/** The allowed commit emails of the lane's repository (`taskAutoLand.commitEmails`), `undefined` when not listed. */
-	async #allowedCommitEmails(lane: LaneRow): Promise<string[] | undefined> {
-		const record = this.#deps.autoLandPolicy?.()?.commitEmails;
-		if (record === undefined) return undefined;
-		const path = lane.meta.repo ?? lane.cwd;
-		for (const [repo, emails] of Object.entries(record)) {
-			if (await this.#repoMatches(path, [repo])) return emails;
-		}
-		return undefined;
 	}
 
 	/**
