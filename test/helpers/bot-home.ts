@@ -84,7 +84,10 @@ export function hasButtons(components: readonly unknown[] | undefined): boolean 
 	return (components?.length ?? 0) > 0;
 }
 
-/** The Discord binding the daemon gets for `transport`, owner `OWNER` (the shape `runDaemon` builds). */
+/**
+ * The Discord binding the daemon gets for `transport`, owner `OWNER` (the shape `runDaemon` builds). A peer post is
+ * taken at once (`peerPartWaitMs` 0): the split-answer wait has its own test in discord-adapter.test.ts.
+ */
 export function discordBinding(
 	transport: FakeDiscordTransport,
 	options: { peerBots?: ReadonlyArray<{ userId: string; name: string }>; startWaitMs?: number } = {},
@@ -92,7 +95,7 @@ export function discordBinding(
 	const { startWaitMs, peerBots } = options;
 	return new DiscordBinding(
 		new DiscordChannel(transport, { ownerUserId: OWNER, ...(peerBots === undefined ? {} : { peerBots }) }),
-		startWaitMs === undefined ? {} : { startWaitMs },
+		{ peerPartWaitMs: 0, ...(startWaitMs === undefined ? {} : { startWaitMs }) },
 	);
 }
 

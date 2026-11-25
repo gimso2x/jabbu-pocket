@@ -470,6 +470,7 @@ describe("peer bots", () => {
 					base.knowsThread?.(threadRef) === true || peers.some((p) => p.message.threadRef === threadRef),
 			},
 			peerBots: [{ userId: PEER, name: "떡" }],
+			peerPartWaitMs: 0,
 			...options,
 		});
 	}
@@ -508,6 +509,29 @@ describe("peer bots", () => {
 			{ method: "startThread", channelId: CH, messageId: root.id, name: "스펙 검토 부탁", id: root.id },
 		]);
 		expect(calls("addReaction")[0]).toMatchObject({ channelId: CH, messageId: root.id, emoji: "👀" });
+	});
+
+	// The wait itself is the behaviour: the later part is emitted while the mentioned post waits, never after a sleep.
+	test("a split peer answer: the unmentioned later parts posted during the wait join the mentioned post as one request", async () => {
+		await peerAdapter(undefined, { peerPartWaitMs: 300 });
+		const first = peerMessage(`<@${BOT}> 검토 1~4번`, { channel_id: THREAD });
+		const second = peerMessage("검토 5번", { channel_id: THREAD });
+		const waiting = transport.emitMessage(first);
+		await transport.emitMessage(second);
+		expect(peers).toHaveLength(0);
+		await waiting;
+		expect(peers).toHaveLength(1);
+		const text = peers[0]?.message.text ?? "";
+		expect(text).toContain("검토 1~4번");
+		expect(text).toContain("검토 5번");
+		expect(text.indexOf("검토 1~4번")).toBeLessThan(text.indexOf("검토 5번"));
+		expect(peers[0]?.message.platformMessageId).toBe(`${CH}:${first.id}`);
+		expect(logged("event=peer_part_merged")).toBe(true);
+		expect(logged("reason=peer_not_mentioned")).toBe(false);
+		// Once the wait is over an unmentioned post is dropped as before.
+		await transport.emitMessage(peerMessage("다 했어", { channel_id: THREAD }));
+		expect(peers).toHaveLength(1);
+		expect(logged("reason=peer_not_mentioned")).toBe(true);
 	});
 
 	test("a reply in a thread (nickname mention, no bot flag) keeps the thread's keys and opens no thread", async () => {
@@ -774,6 +798,7 @@ describe("typing indicator", () => {
 		await typingAdapter({
 			core: { ...core(), onPeerInbound: () => ({}) },
 			peerBots: [{ userId: PEER, name: "떡" }],
+			peerPartWaitMs: 0,
 		});
 		await transport.emitMessage(message(`<@${BOT}> 검토`, { author: { id: PEER, bot: true } }));
 		await transport.emitMessage(message("!status", { channel_id: DM, guild_id: undefined }));
