@@ -82,7 +82,7 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 	});
 
 	let server: Server<undefined>;
-	const web = webDashboardOptionsFor(homeDir, config?.channels.web, callDaemon);
+	const web = webDashboardOptionsFor(homeDir, config?.channels.web, callDaemon, config);
 	try {
 		server = startDashboardServer({
 			port,
