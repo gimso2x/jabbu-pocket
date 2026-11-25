@@ -8,6 +8,7 @@ import {
 	renderMentions,
 } from "../channel/port";
 import type { ChannelRegistry } from "../channel/registry";
+import { cutCodePointSafe } from "../channel/text";
 import { parseThreadRef } from "../core/normalize";
 import { confidentBand, type ReceiptNow, receiptBlockers, receiptNowOf } from "../lanes/land";
 import { formatConfidence } from "../lanes/review";
@@ -243,7 +244,7 @@ export function buildAcceptedCard(
 	};
 }
 
-const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const clip = (text: string, max: number): string => (text.length > max ? `${cutCodePointSafe(text, max - 1)}…` : text);
 
 const MAX_SUMMARY_LINES = 3;
 
