@@ -1,8 +1,8 @@
 // Taking `<home>/apply.lock` for one apply: a live holder is waited for (no drain, no restart meanwhile), a stale one
 // taken over. Running past the limit changes nothing and fails, leaving the holder's lock alone.
-import { readFileSync } from "node:fs";
 import { holderAlive } from "../daemon/lock";
 import { type ApplyLockInfo, createApplyLock, errorCode, parseApplyLock, reclaimStaleApplyLock } from "./apply-lock";
+import { readRegularText } from "./stamp";
 
 const LOCK_POLL_MS = 1_000;
 
@@ -51,7 +51,7 @@ export async function acquireApplyLock(
 		}
 		let seen: string;
 		try {
-			seen = readFileSync(lockPath, "utf8");
+			seen = readRegularText(lockPath);
 		} catch (error) {
 			if (errorCode(error) === "ENOENT") continue; // released between our link and read: try again
 			throw error;

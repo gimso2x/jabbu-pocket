@@ -114,7 +114,7 @@ function gcCommand(args: string[], homeDir: string): number {
 	return 0;
 }
 
-const firstLine = (text: string | undefined): string => text?.trim().split("\n")[0]?.trim() ?? "";
+const firstLine = (text: string | undefined): string => escapeControl(text?.trim().split("\n")[0]?.trim() ?? "");
 
 /**
  * Reach check per `dispatchHosts` entry, run together: one `ok`/`fail <ssh's first stderr line>` line each, in config
@@ -133,7 +133,8 @@ async function checkDispatchHosts(config: JabbuConfig, run: ProcessRunner): Prom
 				checkHerdrIntegration(herdrSshArgv(host.ssh, host.herdrBin ?? "herdr", ["integration", "status"]), run),
 			]);
 			const integrationLine = `${integration.ok ? "ok" : "fail"} herdr omp integration on ${name}: ${integration.detail}`;
-			if (result.code === 0 && !result.timedOut) return [`ok dispatch host ${name}: ssh ${host.ssh}`, integrationLine];
+			if (result.code === 0 && !result.timedOut)
+				return [`ok dispatch host ${name}: ssh ${escapeControl(host.ssh)}`, integrationLine];
 			const reason = result.timedOut
 				? "timed out"
 				: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
@@ -162,20 +163,21 @@ async function checkHerdrIntegration(cmd: string[], run: ProcessRunner): Promise
 		.map((line) => line.trim())
 		.find((line) => line.startsWith("omp:"));
 	if (omp === undefined) return { ok: false, detail: `no omp line ${fix}` };
-	const summary = stripExtensionPath(omp);
+	const summary = escapeControl(stripExtensionPath(omp));
 	return /^omp:\s*current\b/.test(omp) ? { ok: true, detail: summary } : { ok: false, detail: `${summary} ${fix}` };
 }
 
 /** Local herdr (config `herdr` on): `<bin> --version` must answer; the line carries its first output line or why not. */
 async function checkLocalHerdr(herdr: { bin?: string }, run: ProcessRunner): Promise<{ ok: boolean; line: string }> {
 	const bin = herdr.bin ?? "herdr";
+	const safeBin = escapeControl(bin);
 	const result = await run([bin, "--version"], { timeoutMs: DISPATCH_HOST_CHECK_MS, env: dispatchEnv(process.env) });
 	if (result.code === 0 && !result.timedOut)
-		return { ok: true, line: `ok herdr: ${bin} ${firstLine(result.stdout)}`.trim() };
+		return { ok: true, line: `ok herdr: ${safeBin} ${firstLine(result.stdout)}`.trim() };
 	const reason = result.timedOut
 		? "timed out"
 		: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
-	return { ok: false, line: `fail herdr: ${bin} ${reason}` };
+	return { ok: false, line: `fail herdr: ${safeBin} ${reason}` };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -394,7 +394,9 @@ export const LANE_REVIEW_TIMEOUT_MS = 600_000;
 
 export function defaultHomeDir(env: Record<string, string | undefined> = process.env): string {
 	// An empty value is "unset", never "" (which `resolve` would turn into the current directory).
-	return env.JABBU_HOME || join(homedir(), ".jabbu");
+	const raw = env.JABBU_HOME;
+	if (!raw) return join(homedir(), ".jabbu");
+	return raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
 }
 
 function modeString(mode: number): string {
@@ -543,15 +545,20 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
  * The realpath of `path`, or of its deepest existing ancestor with the missing rest appended (it may not exist yet).
  * `undefined` when a symlink loop (ELOOP) makes it unresolvable: such a path can never be created or used.
  */
-function realOrPending(path: string): string | undefined {
+function realOrPending(path: string, depth = 0): string | undefined {
+	if (depth >= 40) return undefined;
 	const absolute = resolve(path);
 	try {
 		return realpathSync(absolute);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ELOOP") return undefined;
+		try {
+			if (lstatSync(absolute).isSymbolicLink())
+				return realOrPending(resolve(dirname(absolute), readlinkSync(absolute)), depth + 1);
+		} catch {}
 		const parent = dirname(absolute);
 		if (parent === absolute) return absolute;
-		const resolved = realOrPending(parent);
+		const resolved = realOrPending(parent, depth);
 		return resolved === undefined ? undefined : join(resolved, basename(absolute));
 	}
 }
