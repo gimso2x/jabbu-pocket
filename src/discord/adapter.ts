@@ -868,15 +868,9 @@ export class DiscordAdapter implements ChannelAdapter {
 		});
 		if (!result.accept) return drop(result.reason);
 		const { inbound } = result;
-		// A root gets the cap notice as a reply, no thread.
-		const refused = await recordPeerInbound(
-			this.#core,
-			this.#log,
-			inbound,
-			this.#peerHopLimit,
-			drop,
-			async () => void (await this.postNotice(conversationId, PEER_HOP_NOTICE, root)),
-		);
+		const refused = await recordPeerInbound(this.#core, this.#log, inbound, this.#peerHopLimit, drop, () =>
+			this.postNotice(conversationId, PEER_HOP_NOTICE, root),
+		); // A root gets the cap notice as a reply, no thread.
 		if (refused !== undefined && refused !== "held") return refused;
 		if (opensThread) await this.#startThread(conversationId, event, text, false);
 		// A frozen bot only records the peer's message: no ⏳ status for a turn that will not run now.
