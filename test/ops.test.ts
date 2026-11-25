@@ -2450,26 +2450,22 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			state: string,
 			opRef: string,
 			threadRef = "300000000000000001:11",
+			originKey = KEY,
 		) => {
 			const row = db
 				.query(
 					"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at, op_ref, thread_ref) VALUES (?, ?, 1, 'x', ?, ?, ?, ?) RETURNING inbound_id",
 				)
-				.get(name, KEY, state, NOW - ageDays * DAY_MS, opRef, threadRef) as { inbound_id: number };
+				.get(name, originKey, state, NOW - ageDays * DAY_MS, opRef, threadRef) as { inbound_id: number };
 			ids.set(name, row.inbound_id);
 		};
-		const delivery = (name: string, ageDays: number, state: string, posts: number) => {
+		const delivery = (name: string, ageDays: number, state: string) => {
 			const row = db
 				.query(
 					"INSERT INTO deliveries (origin_key, op_ref, part, thread_ref, body, state, next_at, created_at) VALUES (?, ?, 0, '300000000000000001:11', 'b', ?, 0, ?) RETURNING delivery_id",
 				)
 				.get(KEY, `op-${name}`, state, NOW - ageDays * DAY_MS) as { delivery_id: number };
 			ids.set(name, row.delivery_id);
-			for (let i = 0; i < posts; i += 1) {
-				db.query(
-					"INSERT INTO delivery_posts (channel, ts, delivery_id, part, created_at) VALUES ('300000000000000001', ?, ?, ?, 0)",
-				).run(`${name}.${i}`, row.delivery_id, i);
-			}
 		};
 		const approval = (id: string, status: string, threadRef: string) =>
 			db
@@ -2485,12 +2481,19 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		inbound("in-old-pending", 91, "pending", "opK2");
 		inbound("in-old-dispatched", 91, "dispatched", "opK3");
 		inbound("in-approval-pending", 91, "answered", "opK6", "300000000000000001:77");
-		delivery("d-old-confirmed", 91, "confirmed", 2);
-		delivery("d-old-expired", 91, "expired", 1);
-		delivery("d-old-ambiguous", 91, "failed_ambiguous", 0);
-		delivery("d-89", 89, "confirmed", 1);
-		delivery("d-old-pending", 91, "pending", 0);
-		delivery("d-old-inflight", 91, "inflight", 0);
+		// Rows whose origin is gone (origins expire at 30 days, inbound at 90): finished ones go at any age.
+		const GONE = "discord/ch/300000000000000001/t/99";
+		inbound("in-orphan-answered", 1, "answered", "opO1", "300000000000000001:99", GONE);
+		inbound("in-orphan-discarded", 1, "discarded", "opO2", "300000000000000001:99", GONE);
+		inbound("in-orphan-old", 91, "failed_notified", "opO3", "300000000000000001:99", GONE);
+		inbound("in-orphan-pending", 1, "pending", "opO4", "300000000000000001:99", GONE);
+		inbound("in-orphan-approval", 1, "answered", "opO5", "300000000000000001:77", GONE);
+		delivery("d-old-confirmed", 91, "confirmed");
+		delivery("d-old-expired", 91, "expired");
+		delivery("d-old-ambiguous", 91, "failed_ambiguous");
+		delivery("d-89", 89, "confirmed");
+		delivery("d-old-pending", 91, "pending");
+		delivery("d-old-inflight", 91, "inflight");
 		approval("ap-pending", "pending", "300000000000000001:77");
 		approval("ap-done", "approved", "300000000000000001:88");
 		db.close();
@@ -2527,63 +2530,51 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		}
 	}
 
-	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
+	const KEPT_INBOUND = [
+		"in-89",
+		"in-approval-pending",
+		"in-old-dispatched",
+		"in-old-pending",
+		"in-orphan-approval",
+		"in-orphan-pending",
+	];
 	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
-	const EXPECTED = {
-		inbound: 4,
-		deliveries: 3,
-		deliveryPosts: 3,
+	const NONE = {
+		inbound: 0,
+		inboundOrphans: 0,
+		deliveries: 0,
 		monitorEvents: 0,
 		monitorSlots: 0,
 		webMessages: 0,
 		inboundConflicts: 0,
 	};
+	// The 91-day orphan counts under `inbound` (the age rule); `inboundOrphans` are the younger ones.
+	const EXPECTED = { ...NONE, inbound: 5, inboundOrphans: 2, deliveries: 3 };
 
-	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
+	test("91-day finished rows and younger finished orphans go; 89-day, waiting and pending-approval rows stay", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
 		expect(result.ledgerRemoved).toEqual(EXPECTED);
 		expect(names("inbound")).toEqual(KEPT_INBOUND);
 		expect(names("deliveries")).toEqual(KEPT_DELIVERIES);
-		expect(count("SELECT COUNT(*) AS n FROM delivery_posts")).toBe(1);
-		expect(
-			count("SELECT COUNT(*) AS n FROM delivery_posts WHERE delivery_id NOT IN (SELECT delivery_id FROM deliveries)"),
-		).toBe(0);
 		expect(count("SELECT COUNT(*) AS n FROM approvals")).toBe(2);
 		// A second pass finds nothing more.
-		expect(gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW }).ledgerRemoved).toEqual({
-			inbound: 0,
-			deliveries: 0,
-			deliveryPosts: 0,
-			monitorEvents: 0,
-			monitorSlots: 0,
-			webMessages: 0,
-			inboundConflicts: 0,
-		});
+		expect(gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW }).ledgerRemoved).toEqual(NONE);
 	});
 
 	test("dry-run counts the same rows and deletes none", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW, dryRun: true });
 		expect(result.ledgerRemoved).toEqual(EXPECTED);
-		expect(names("inbound")).toHaveLength(8);
+		expect(names("inbound")).toHaveLength(13);
 		expect(names("deliveries")).toHaveLength(6);
-		expect(count("SELECT COUNT(*) AS n FROM delivery_posts")).toBe(4);
 	});
 
-	test("a home without the posts and approvals tables prunes by age and state alone", () => {
+	test("a home without the approvals table prunes by age, state and origin alone", () => {
 		const db = new Database(dbFile(), { strict: true });
-		db.exec("DROP TABLE delivery_posts; DROP TABLE approvals");
+		db.exec("DROP TABLE approvals");
 		db.close();
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
-		expect(result.ledgerRemoved).toEqual({
-			inbound: 5,
-			deliveries: 3,
-			deliveryPosts: 0,
-			monitorEvents: 0,
-			monitorSlots: 0,
-			webMessages: 0,
-			inboundConflicts: 0,
-		});
-		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
+		expect(result.ledgerRemoved).toEqual({ ...NONE, inbound: 6, inboundOrphans: 3, deliveries: 3 });
+		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending", "in-orphan-pending"]);
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
 	});
 
@@ -2591,9 +2582,9 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
 		expect(dry.stdout).toMatch(
-			/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+ monitor_slots=\d+ inbound_conflicts=\d+\n/,
+			/gc_done .* inbound=\d+ inbound_orphans=\d+ deliveries=\d+ monitor_events=\d+ monitor_slots=\d+ inbound_conflicts=\d+\n/,
 		);
-		expect(names("inbound")).toHaveLength(8);
+		expect(names("inbound")).toHaveLength(13);
 	});
 });
 

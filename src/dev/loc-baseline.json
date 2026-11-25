@@ -208,7 +208,7 @@
 	"src/safety/prompt.ts": 810,
 	"src/safety/secret-index.ts": 104,
 	"src/store/db-rows.ts": 340,
-	"src/store/db-schema.ts": 307,
+	"src/store/db-schema.ts": 284,
 	"src/store/db.ts": 2387,
 	"src/store/schema-version.ts": 38,
 	"src/store/transitions.ts": 117,
