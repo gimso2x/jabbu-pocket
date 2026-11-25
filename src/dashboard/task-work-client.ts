@@ -37,6 +37,18 @@ export function renderTaskWork(task: TaskInfo): string {
 	return `<section class="task-work" aria-label="작업 내역" data-task-work="${esc(task.taskId)}" data-conversation="api/thread/conversation?origin=${origin}" data-live="api/thread/live/events?origin=${origin}" data-running="${running ? "1" : ""}"><h3 class="h3">작업 내역</h3><div class="task-work-conv" data-task-work-conv><p class="block-note">대화를 불러오는 중이에요</p></div><div class="live-slot" data-task-work-live></div><p class="task-work-note" data-task-work-note role="status"></p>${form}</section>`;
 }
 
+/** The panel's rules, appended to the page stylesheet (`PAGE_CSS`). */
+export const TASK_WORK_STYLE = `.task-work { display: flex; flex-direction: column; gap: var(--stack-s); min-width: 0; padding-top: var(--stack-m); border-top: 1px solid var(--c-line); }
+.task-work-conv { display: flex; flex-direction: column; gap: var(--stack-s); min-width: 0; }
+.task-work-note { font-size: var(--fs-caption); color: var(--c-text-2); }
+.task-work-note:empty { display: none; }
+.task-work-form { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-2) 0; background: var(--c-surface); }
+.task-work-form textarea { width: 100%; min-height: 64px; padding: var(--sp-2); border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-bg); color: var(--c-text-1); font: inherit; font-size: var(--fs-sub); resize: vertical; }
+.task-work-form[hidden] { display: none; }
+.task-work-buttons { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+@media (max-width: 640px) { .task-work-form { position: sticky; bottom: 0; z-index: 1; border-top: 1px solid var(--c-line); } }
+`;
+
 /**
  * The page script of the panel (prepended to the boot script): `taskWork.paint(head, html)` replaces the detail head
  * and refills the panel from its own state, so a snapshot redraw keeps the conversation, the draft and the caret. The

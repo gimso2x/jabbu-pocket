@@ -6,6 +6,7 @@ import { redact } from "../redact";
 import { followupTask } from "../tasks/followup";
 import type { TaskRow } from "../tasks/ledger";
 import { postToThread } from "../tasks/notify";
+import { handleWebIpc } from "../web/ipc";
 import type { DaemonContext } from "./daemon-context";
 import type { DaemonIpcHost } from "./daemon-ipc";
 import { taskRuntimeOf } from "./daemon-task-resume";
@@ -35,7 +36,7 @@ export function withControlSource(fields: LogFields): LogFields {
 }
 
 /** Whether an IPC request is one of the panel's: `task_followup`, or a pause/resume marked `source: "web"`. */
-export function isWebTaskRequest(request: object): boolean {
+function isWebTaskRequest(request: object): boolean {
 	const { op, source } = request as Record<string, unknown>;
 	return op === "task_followup" || ((op === "tasks_pause" || op === "tasks_resume") && source === "web");
 }
@@ -75,11 +76,24 @@ function followupTextProblem(text: unknown): { error: string; text: string } | u
 	return undefined;
 }
 
+/** The web's IPC ops: the chat's (`web_send|web_action|web_new`) and the panel's; `undefined` = not a web request. */
+export async function webIpc(
+	ctx: DaemonContext,
+	daemon: Pick<DaemonIpcHost, "controlTask">,
+	request: object,
+): Promise<unknown> {
+	const { op } = request as Record<string, unknown>;
+	if (op === "web_send" || op === "web_action" || op === "web_new") {
+		return handleWebIpc(ctx, request as Record<string, unknown>);
+	}
+	return isWebTaskRequest(request) ? webTaskIpc(ctx, daemon, request) : undefined;
+}
+
 /**
  * The panel's IPC ops. `task_followup`: the tool's own `followupTask` with `source: "web"`; a frozen bot keeps the row
  * pending (an autonomous row) and says it waits. Pause/resume: `controlTask` with its log lines marked. `{ok, text}`.
  */
-export async function webTaskIpc(
+async function webTaskIpc(
 	ctx: DaemonContext,
 	daemon: Pick<DaemonIpcHost, "controlTask">,
 	raw: object,

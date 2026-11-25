@@ -1,8 +1,7 @@
 import { STAMP_PATTERN } from "../ops/apply-lock";
-import { handleWebIpc } from "../web/ipc";
 import type { DaemonContext } from "./daemon-context";
 import type { DaemonTaskLanding } from "./daemon-task-land";
-import { isWebTaskRequest, webTaskIpc } from "./daemon-task-web";
+import { webIpc } from "./daemon-task-web";
 import type { InjectRequest, InjectResult } from "./daemon-types";
 import type { ReloadResult } from "./reload";
 import type { DrainCounts, StatusReport } from "./status";
@@ -70,9 +69,8 @@ export async function handleIpc(
 		return { ok: true, sessionFile: (await ctx.router?.openSessionFile(origin)) ?? null };
 	}
 	if (request.op === "lane_attach" || request.op === "lane_detach") return laneAttachIpc(ctx, request);
-	if (request.op === "web_send" || request.op === "web_action" || request.op === "web_new") {
-		return handleWebIpc(ctx, request as Record<string, unknown>);
-	}
+	const web = await webIpc(ctx, daemon, request);
+	if (web !== undefined) return web;
 	if (request.op === "reload") return daemon.reloadConfig("ipc");
 	if (request.op === "drain" || request.op === "drain_status" || request.op === "drain_cancel") {
 		if (request.op !== "drain_status") daemon.setDraining(request.op === "drain");
@@ -112,7 +110,6 @@ export async function handleIpc(
 		}
 		return daemon.notify({ origin, text, thread, stamp });
 	}
-	if (isWebTaskRequest(request)) return webTaskIpc(ctx, daemon, request);
 	if (request.op === "tasks_pause" || request.op === "tasks_resume") {
 		const id = "id" in request ? request.id : undefined;
 		if (typeof id !== "string" || ctx.store?.tasks.get(id) === undefined) return { ok: false, error: "task not found" };
