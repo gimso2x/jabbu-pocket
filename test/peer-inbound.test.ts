@@ -30,6 +30,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 
 const PEER = "200000000000000001";
@@ -210,6 +211,7 @@ describe("daemon: peer bot input", () => {
 		const discord = home.config.channels.discord;
 		if (discord === undefined) throw new Error("makeHome without channels.discord");
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: {

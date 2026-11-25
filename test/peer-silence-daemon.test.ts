@@ -11,6 +11,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { PEER_SILENCE_OP_PREFIX } from "../src/store/db";
 import { discordBinding, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const PEER = "200000000000000001";
 const GUILD = "300000000000000001";
@@ -60,6 +61,7 @@ async function boot(config: JabbuConfig, discord: WaitingDiscordTransport): Prom
 	const channels: ChannelBinding[] = [discordBinding(discord, { peerBots: config.channels.discord?.peerBots })];
 	const clock = { now: () => now };
 	const started = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels,
 		clock,

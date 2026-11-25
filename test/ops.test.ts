@@ -47,7 +47,6 @@ import { readStamp, runBackup, STAMP_FILE } from "../src/ops/backup";
 import { BackupError } from "../src/ops/backup-error";
 import { collectGates, INBOUND_STARVATION_MS, SWEEP_STALLED_MS, TURNS_FAILING_WINDOW_MS } from "../src/ops/gates";
 import { gcSessions } from "../src/ops/gc";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { LOG_FILES, LOG_MAX_BYTES, LogDirError, openLogSink, rotatingFileSink } from "../src/ops/logfile";
 import { redact } from "../src/redact";
 import { ALERT_INCIDENT_REPEAT_MS, type Store } from "../src/store/db";
@@ -64,6 +63,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { killSpawned, runMain, spawnDaemon } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 import { isRoot } from "./helpers/privileges";
 
@@ -756,13 +756,13 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 	): Promise<void> {
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
 			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
 			ompVersion: "omp-test 0",
 			bootId: "boot",
-			hostLoad: IDLE_HOST_LOAD, // status is read twice (slash, CLI): live load would differ between the readings
 			driverFactory: (_origin, sessionDir) => {
 				const driver = new OpsDriver({
 					sessionDir,
@@ -1014,6 +1014,7 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		const sessions = new FakeSessionStore();
 		const failPrompts = options.failPrompts ?? 0;
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
@@ -1099,6 +1100,27 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		const status = renderStatusText(daemon.status());
 		expect(status).toContain("자가진단 게이트");
 		expect(status).toContain("turns_failing recent=4");
+	});
+
+	test("a failed owner DM of the turn-failure escalation re-arms the incident: the next failure notifies again, not 24h later", async () => {
+		await startDaemon({ failPrompts: 99 });
+		const real = transport.createMessage.bind(transport);
+		let dropped = 0;
+		transport.createMessage = async (args) => {
+			if ((args.content ?? "").includes("연속 실패") && dropped === 0) {
+				dropped++;
+				throw new Error("discord_http_500");
+			}
+			return real(args);
+		};
+		for (let i = 0; i < 3; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		await transport.waitForPosts((text) => text.startsWith("[turn failed]"), 3);
+		for (let i = 3; i < 8; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		clock.advance(23 * 3_600_000);
+		for (let i = 8; i < 11; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		expect(dropped).toBe(1);
+		// the dropped DM did not start a 24h silence: a later failure of the same sign reached the owner
+		expect(transport.posts((text) => text.includes("연속 실패"))).toHaveLength(1);
 	});
 
 	test("turns_failing (a window gate) closes silently when its evidence ages out: no false '회복' DM", async () => {
@@ -2224,6 +2246,7 @@ describe.each([
 		const prompts: string[] = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,

@@ -16,6 +16,7 @@ import type { TaskEvaluation } from "../../src/tasks/evaluate";
 import { landTask } from "../../src/tasks/land";
 import type { TaskRow } from "../../src/tasks/ledger";
 import { discordBinding, GUILD, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./bot-home";
+import { daemonTestOptions } from "./disk";
 import { FakeGh } from "./fake-gh";
 import { git } from "./git-fixtures";
 
@@ -147,6 +148,7 @@ export class TaskPrWorld {
 			return { code: 0, stdout: cmd.includes("list") ? JSON.stringify({ result: { agents } }) : "{}", timedOut: false };
 		};
 		this.daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...this.home.config,
 				herdr: { bin: "herdr" },

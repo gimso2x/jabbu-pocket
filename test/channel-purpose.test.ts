@@ -23,6 +23,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CH = "111111111111111111"; // gitleaks:allow (fake snowflake)
 const PEER = "200000000000000001"; // gitleaks:allow (fake snowflake)
@@ -48,6 +49,7 @@ async function boot(): Promise<void> {
 	discord.setChannel({ id: CH, type: 0, guildId: GUILD });
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels: [discordBinding(discord)],
 		log: createLogger({ sink: () => {}, clock, redact }),

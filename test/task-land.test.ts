@@ -17,6 +17,7 @@ import { createTaskHostOps } from "../src/tasks/host";
 import { landTask, type TaskLandDeps, taskLandHold } from "../src/tasks/land";
 import type { TaskRow } from "../src/tasks/ledger";
 import { discordBinding, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = "111111111111111111";
 const THREAD = "222222222222222222";
@@ -59,6 +60,7 @@ beforeEach(async () => {
 	home = makeHome("jabbu-task-land-home-");
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(new WaitingDiscordTransport())],
 		log: createLogger({ sink: () => {}, clock, redact }),

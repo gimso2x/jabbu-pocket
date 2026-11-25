@@ -5,10 +5,11 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync 
 import { join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
-import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole } from "../src/daemon/doctor";
+import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole, runDoctor } from "../src/daemon/doctor";
 import { readVersion } from "../src/daemon/tools";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
+import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 
 let home: TestHome;
 let lines: string[];
@@ -184,6 +185,15 @@ describe("qa50b I-18: the doctor's bun line", () => {
 	}, 30_000); // spawns a bun child that runs every doctor probe: slow on a 2-core machine
 });
 
+describe("doctor: home", () => {
+	test("a home that does not exist yet says to run init first", async () => {
+		const out: string[] = [];
+		const missing = join(home.dir, "no-such-home");
+		await runDoctor(missing, (line) => out.push(line), undefined, OFFLINE_DOCTOR);
+		expect(out).toContain(`fail home: ${missing} missing (no home yet: run the \`init\` command first)`);
+	});
+});
+
 describe("doctor: discord", () => {
 	test("on: token mode, the bot user and the gateway each give one ok discord line; the token never shows", async () => {
 		const config: JabbuConfig = home.config;
@@ -225,6 +235,19 @@ describe("doctor: discord", () => {
 	test("off: no discord line and no request", async () => {
 		await checkDiscord({ ...home.config, channels: {} }, report, fakeFetch(healthy));
 		expect(lines).toEqual([]);
+		expect(seen).toHaveLength(0);
+	});
+
+	test("a missing token file names the path and what to put there", async () => {
+		const discord = home.config.channels.discord;
+		if (discord === undefined) throw new Error("fixture has no discord channel");
+		const missing = join(home.dir, "secrets", "no-such-token");
+		await checkDiscord(
+			{ ...home.config, channels: { discord: { ...discord, botTokenFile: missing } } },
+			report,
+			fakeFetch(healthy),
+		);
+		expect(lines).toEqual([`fail discord token: missing: ${missing} (put the bot token there, mode 0600)`]);
 		expect(seen).toHaveLength(0);
 	});
 });

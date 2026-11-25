@@ -18,6 +18,7 @@ import { redact } from "../src/redact";
 import { openStore, type Store } from "../src/store/db";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const STRANGER = "100000000000000002";
 const BOT = "500000000000000000";
@@ -493,6 +494,7 @@ describe("daemon start", () => {
 		const sessions = new FakeSessionStore();
 		const clock = { now: () => Date.now() };
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels: [new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER }))],
 			clock,

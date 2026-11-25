@@ -9,6 +9,7 @@ import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const DISCORD_DM = "123456789012345678"; // gitleaks:allow (fake snowflake)
 const DISCORD_CH = "111111111111111111"; // gitleaks:allow (fake snowflake)
@@ -23,6 +24,7 @@ beforeEach(async () => {
 	discord = new WaitingDiscordTransport();
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER }))],
 		log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact }),

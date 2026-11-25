@@ -143,8 +143,7 @@ export async function readJudgeRole(
 		if (typeof judge === "string" && judge.trim() !== "") return { model: judge };
 		// qa-z #9: the probe does not always merge the overlay — the file itself is checked as the effective role.
 		const fromOverlay = overlayJudgeRole(overlayConfig);
-		if (fromOverlay !== undefined) return { model: fromOverlay };
-		return { missing: true };
+		return fromOverlay === undefined ? { missing: true } : { model: fromOverlay };
 	} catch {
 		return { unreadable: "unparsable output" };
 	} finally {
@@ -191,6 +190,7 @@ export async function checkDiscord(
 ): Promise<void> {
 	const discord = config.channels.discord;
 	if (discord === undefined) return;
+	const tokenMissing = `missing: ${discord.botTokenFile} (put the bot token there, mode 0600)`;
 	let token: string;
 	try {
 		const mode = modeOf(discord.botTokenFile);
@@ -198,7 +198,7 @@ export async function checkDiscord(
 		if (mode !== SECRET_MODE) return;
 		token = readDiscordToken(config);
 	} catch (error) {
-		report(false, "discord token", error instanceof ConfigError ? error.code : "missing");
+		report(false, "discord token", error instanceof ConfigError ? error.code : tokenMissing);
 		return;
 	}
 	const rest = new DiscordRest({ token, fetchImpl });
@@ -343,7 +343,7 @@ export async function runDoctor(
 			report(homeMode === HOME_MODE, "home", `${homeDir} mode=${octal(homeMode)} expected=${octal(HOME_MODE)}`);
 		}
 	} catch {
-		report(false, "home", `${homeDir} missing`);
+		report(false, "home", `${homeDir} missing (no home yet: run the \`init\` command first)`);
 	}
 	// A token file problem is reported on its own `secret …` line below, so it must not hide every later check: the
 	// config is loaded again without the token files and the report goes on.
