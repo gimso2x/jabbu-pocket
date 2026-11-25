@@ -428,10 +428,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 
 		if (host !== undefined) {
 			// Remote dispatch (hub fleet pattern): the named host runs its own herdr+omp. The host implies herdr.
-			if (hostEntry === undefined) {
-				const known = Object.keys(hosts ?? {}).join(", ") || "없음";
-				throw new Error(`알 수 없는 호스트: ${host} (등록된 호스트: ${known})`);
-			}
+			if (hostEntry === undefined)
+				throw new Error(`알 수 없는 호스트: ${host} (등록된 호스트: ${Object.keys(hosts ?? {}).join(", ") || "없음"})`);
 			const sshOptions = { ...herdrOptions, sshTarget: hostEntry.ssh };
 			if (name === undefined) throw new Error("원격 실행에는 name이 필요합니다");
 			if (!OWNER_NAME_PATTERN.test(name)) throw new Error(`name은 소문자·숫자·-·_ 32자 이내여야 합니다: ${name}`);
@@ -442,6 +440,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				const summary = taskDeps === undefined ? undefined : await taskSummaryLine(taskDeps, name, host);
 				return `▸ ${host}/${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
+			const closedRow = taskDeps?.ledger?.getByAgent?.(name, host);
+			if (closedRow !== undefined && (closedRow.status === "done" || closedRow.status === "cancelled"))
+				throw new Error(`${closedRow.taskId}는 이미 ${closedRow.status}로 닫힌 작업입니다`);
 			const gate = await gateWork(task, signal);
 			// A name the host already runs gets the task as a follow-up, like the local herdr branch.
 			const existing = await herdrAgentExists(name, sshOptions);

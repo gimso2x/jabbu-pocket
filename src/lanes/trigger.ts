@@ -4,6 +4,7 @@ import type { AcceptanceItem } from "../tasks/docs";
 import { withoutCheckTail } from "../tasks/signals";
 import { isGithubRepo } from "./pr";
 import type { LaneLandState } from "./status";
+import { scanLaneTrigger } from "./trigger-format";
 import { type WorkflowChoice, workflowLine } from "./workflow";
 
 export interface LaneTrigger {
@@ -13,15 +14,8 @@ export interface LaneTrigger {
 	brief: string;
 }
 
-/** `작업: <제목> @<절대경로>` then an optional description. The title starts at a non-blank (one split of a blank run). */
-const TRIGGER = /^작업:[ \t]*([^ \t\n].*?)[ \t]+@(\/\S*)(?:[ \t]+|\n|$)([\s\S]*)$/;
-
 export function parseLaneTrigger(text: string): LaneTrigger | undefined {
-	const match = TRIGGER.exec(text.trim());
-	const title = match?.[1]?.trim();
-	const cwd = match?.[2];
-	if (title === undefined || title === "" || cwd === undefined) return undefined;
-	return { title, cwd, brief: (match?.[3] ?? "").trim() };
+	return scanLaneTrigger(text);
 }
 
 /** Why a Discord DM opens no lane: a lane lives in a server-channel thread, and the DM has none to name. */

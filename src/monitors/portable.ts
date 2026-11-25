@@ -9,16 +9,22 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { secretInodes } from "../ops/backup-tree";
 import type { MonitorLedger, MonitorRow } from "./ledger";
 import {
+	assertSafeFilesLayout,
 	canTakeExport,
 	clearWriteTarget,
 	exportStem,
 	isMonitorFile,
+	isOutside,
 	PortableUsageError,
+	placeholderRootsOf,
+	SCRIPTS_PLACEHOLDER,
 	splitOption,
+	underRoot,
+	WORKSPACE_PLACEHOLDER,
 } from "./portable-files";
 import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext } from "./spec";
 
@@ -27,8 +33,6 @@ import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext 
  * fields, with paths under the scripts root and the workspace written as `@SCRIPTS@/…` and `@WORKSPACE@/…`, so the
  * same file applies on a home with other paths. Ids, cursors, state and timestamps stay in the database.
  */
-const SCRIPTS_PLACEHOLDER = "@SCRIPTS@";
-const WORKSPACE_PLACEHOLDER = "@WORKSPACE@";
 /** A value spelled like a placeholder (`@SCRIPTS@`, `@WORKSPACE@/x`) or like one with extra leading `@`s. */
 const PLACEHOLDER_LIKE = /^(@+)((?:SCRIPTS|WORKSPACE)@(?:\/.*)?)$/s;
 /** The spec context of one home; export and apply need the workspace to map paths against. */
@@ -56,37 +60,6 @@ export function specOfRow(row: MonitorRow): MonitorSpec {
 	return { ...specBaseOfRow(row), trigger: row.trigger };
 }
 
-interface PlaceholderRoot {
-	root: string;
-	placeholder: string;
-}
-
-/** Placeholder roots, longest first, so a workspace inside the home never captures `<home>/scripts`. */
-function rootsOf(ctx: PortableContext): PlaceholderRoot[] {
-	return [
-		{ root: resolve(ctx.scriptsRoot), placeholder: SCRIPTS_PLACEHOLDER },
-		{ root: resolve(ctx.workspaceDir), placeholder: WORKSPACE_PLACEHOLDER },
-	].sort((a, b) => b.root.length - a.root.length);
-}
-
-/**
- * An absolute path inside a placeholder root as `{placeholder, rest}` (`rest` empty for the root itself), judged after
- * `..` and `.` are resolved: `<scripts>/../../x` is outside, whatever its spelling starts with.
- */
-function underRoot(path: string, roots: readonly PlaceholderRoot[]): (PlaceholderRoot & { rest: string }) | undefined {
-	const normal = resolve(path);
-	for (const { root, placeholder } of roots) {
-		const rest = relative(root, normal);
-		if (!isOutside(rest)) return { root, placeholder, rest };
-	}
-	return undefined;
-}
-
-/** A `relative()` result that leaves its base: `..` first, or absolute (another drive). */
-function isOutside(rest: string): boolean {
-	return rest === ".." || rest.startsWith(`..${sep}`) || isAbsolute(rest);
-}
-
 /**
  * The portable spec with a fixed key order (stable diffs). `onOutside` hears about absolute paths outside both roots,
  * which are kept as they are.
@@ -96,7 +69,7 @@ function portableSpec(
 	ctx: PortableContext,
 	onOutside: (path: string) => void = () => {},
 ): Record<string, unknown> {
-	const roots = rootsOf(ctx);
+	const roots = placeholderRootsOf(ctx.scriptsRoot, ctx.workspaceDir, true);
 	const pathToPortable = (path: string): string => {
 		if (!isAbsolute(path)) {
 			// A relative value spelled like a placeholder gets one more `@`, so apply does not mistake it for one.
@@ -186,11 +159,12 @@ export function exportMonitors(
 			`--dir is not a directory: ${dir} (${error instanceof Error ? error.message : String(error)})`,
 		);
 	}
+	if (options.withFiles) assertSafeFilesLayout(dir);
 	const warnings: string[] = [];
 	const written = new Set<string>();
 	/** Source path → where it lands, the monitor naming it first and the placeholder root it was found under. */
 	const copies = new Map<string, { target: string; name: string; root: string }>();
-	const roots = rootsOf(ctx);
+	const roots = placeholderRootsOf(ctx.scriptsRoot, ctx.workspaceDir, true);
 	const filesRoots: Record<string, string> = {
 		[SCRIPTS_PLACEHOLDER]: join(dir, "files", "scripts"),
 		[WORKSPACE_PLACEHOLDER]: join(dir, "files", "workspace"),
@@ -320,7 +294,7 @@ export interface ApplyResult {
 
 /** Replaces `@SCRIPTS@`/`@WORKSPACE@` in the path fields of a parsed file; anything malformed is left to validation. */
 function resolvePlaceholders(input: Record<string, unknown>, ctx: PortableContext): Record<string, unknown> {
-	const roots = rootsOf(ctx);
+	const roots = placeholderRootsOf(ctx.scriptsRoot, ctx.workspaceDir, false);
 	const pathToLocal = (value: string): string => {
 		const escaped = PLACEHOLDER_LIKE.exec(value);
 		// Two or more `@`s is export's escape of a literal value: drop one and leave the rest alone.
