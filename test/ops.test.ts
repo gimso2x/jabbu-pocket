@@ -2084,6 +2084,39 @@ describe("jabbu-pocket gc: thread-scoped sessions", () => {
 		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/50"))).toBe(true);
 		expect(hasOrigin("discord/ch/300000000000000001/t/50")).toBe(true);
 	});
+
+	test.each(["pending", "sending"])(
+		"a %s inbound that arrives after gc scanned the ledger keeps its expired thread origin",
+		(late) => {
+			const thread = "discord/ch/300000000000000001/t/50";
+			const result = gcSessions({
+				homeDir: home.dir,
+				retentionDays: 30,
+				now: Date.now(),
+				afterScan: () => {
+					// The daemon takes a message for the expired thread between gc's scan and its delete.
+					const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
+					db.run("PRAGMA busy_timeout = 5000");
+					db.run(
+						"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('late', ?, 1, 'x', ?, 0)",
+						[thread, late],
+					);
+					db.close();
+				},
+			});
+			expect(result.threadOriginsRemoved).toEqual([]);
+			expect(existsSync(sessionOf(thread))).toBe(true);
+			expect(hasOrigin(thread)).toBe(true);
+			const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
+			const orphans = db
+				.query(
+					"SELECT COUNT(*) AS n FROM inbound i WHERE NOT EXISTS (SELECT 1 FROM origins o WHERE o.origin_key = i.origin_key)",
+				)
+				.get() as { n: number };
+			db.close();
+			expect(orphans.n).toBe(0);
+		},
+	);
 });
 
 describe("jabbu-pocket gc: uncertain inbound keeps its origin", () => {
