@@ -72,7 +72,7 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 
 | 파일 | 함께 할 일 |
 | --- | --- |
-| `scripts/tla-covered.ts`의 `COVERED` 목록(`core/mailbox.ts`·`mailbox-active-turn.ts`·`mailbox-types.ts`·`mailbox-commands.ts`·`mailbox-sending.ts`, `store/transitions.ts`·`db.ts`, `daemon/recovery.ts`, `channel/pump.ts`) | `Mailbox.tla`가 바뀐 동작을 여전히 모델링하는지 보고, `bun scripts/tla-check.ts --strict`가 통과한 뒤에만 `bun scripts/tla-covered.ts --record`. 모델이 실패하면 기록하지 않는다. 모델이 다루는 소스 파일을 새로 만들거나 쪼개면 `COVERED`에도 넣는다 |
+| `scripts/tla-covered.ts`의 `COVERED` 목록(`core/mailbox.ts`·`mailbox-active-turn.ts`·`mailbox-types.ts`·`mailbox-commands.ts`·`mailbox-sending.ts`·`mailbox-park.ts`, `store/transitions.ts`·`db.ts`, `daemon/recovery.ts`, `channel/pump.ts`) | `Mailbox.tla`가 바뀐 동작을 여전히 모델링하는지 보고, `bun scripts/tla-check.ts --strict`가 통과한 뒤에만 `bun scripts/tla-covered.ts --record`. 모델이 실패하면 기록하지 않는다. 모델이 다루는 소스 파일을 새로 만들거나 쪼개면 `COVERED`에도 넣는다 |
 | 스키마를 정의하는 파일(`CREATE TABLE`이 있는 곳): `store/db-schema.ts`·`legacy-ddl.ts`·`card-answers.ts`, `tasks/ledger-schema.ts`, `monitors/ledger.ts`, 그리고 `store/db-sending.ts`·`rename-migration.ts` | I6의 버전 올림과 이전 시험 |
 | `release/leak-check.ts` | 누출 검사를 느슨하게 하는 변경(패턴 삭제·건너뛰기 조건 추가)은 그 이유와 대체 검사를 PR 본문에 적는다 |
 | `dashboard/server.ts`·`host-guard.ts`, `monitors/webhook.ts`, `daemon/ipc.ts`, `daemon/lock.ts` | I10. 바인드 주소·권한·Host 검사·잠금을 느슨하게 하지 않는다. 바꾸면 거부되는 경우의 시험을 같이 넣는다 |
