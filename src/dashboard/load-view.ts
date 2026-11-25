@@ -38,5 +38,5 @@ export function costCardBody(cost: Section<CostLedgerInfo>): string {
 				`<li class="gate-row"><span class="sys-dot" aria-hidden="true"></span><span class="gate-word">${esc(session.kind)}</span><span class="gate-label">${esc(session.title)}</span><code class="gate-detail">${usd(session.cost)}</code></li>`,
 		)
 		.join("");
-	return `${days}${top === "" ? "" : `<ul class="gate-list">${top}</ul>`}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}%</p>`;
+	return `${days}${top === "" ? "" : `<ul class="gate-list">${top}</ul>`}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
 }
