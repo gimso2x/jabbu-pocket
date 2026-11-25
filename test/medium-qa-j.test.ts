@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { workspaceOverlapsHome } from "../src/config";
 import { resolveProcedureFile } from "../src/monitors/spec";
-import { runGit } from "../src/ops/turn-snapshot";
+import { runGit } from "../src/ops/turn-heads";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
 const dirs: string[] = [];

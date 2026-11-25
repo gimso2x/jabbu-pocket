@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
@@ -28,13 +29,11 @@ afterEach(() => {
 	for (const cleanup of cleanups.splice(0)) cleanup();
 });
 
-/** A bot home with a scripts dir and a webhook listener configured, so every trigger kind under test can be created. */
+/** A bot home with a scripts dir. */
 function home(prefix: string): TestHome {
 	const h = makeHome(prefix);
 	cleanups.push(h.remove);
 	mkdirSync(join(h.dir, "scripts"));
-	const config = JSON.parse(readFileSync(h.config.configPath, "utf8")) as Record<string, unknown>;
-	writeFileSync(h.config.configPath, JSON.stringify({ ...config, webhook: { port: 1 } }), { mode: 0o600 });
 	return h;
 }
 
@@ -54,13 +53,12 @@ function addMonitor(h: TestHome, spec: Record<string, unknown>) {
 	const ctx = {
 		scriptsRoot: join(h.dir, "scripts"),
 		workspaceDir: h.config.workspaceDir,
-		webhook: { port: 1 },
 		defaultTimezone: "Asia/Seoul",
 	};
 	return ledgerOf(h).addMonitor(parseMonitorSpec(spec, ctx));
 }
 
-/** Home A: a script monitor, a cron monitor with procedure files in both roots, and a webhook monitor. */
+/** Home A: a script monitor, a cron monitor with procedure files in both roots, and a disabled one-shot. */
 function seedSource(h: TestHome): void {
 	const script = join(h.dir, "scripts", "check.sh");
 	writeFileSync(script, "#!/bin/sh\nexit 1\n");
@@ -83,7 +81,12 @@ function seedSource(h: TestHome): void {
 		thinking: "low",
 		procedureFiles: [join(h.config.workspaceDir, "procedure.md"), join(h.dir, "scripts", "steps.md"), "procedure.md"],
 	});
-	addMonitor(h, { name: "hook", trigger: { kind: "webhook" }, instruction: "handle hook", enabled: false });
+	addMonitor(h, {
+		name: "hook",
+		trigger: { kind: "at", at: "2099-01-01T00:00:00.000Z" },
+		instruction: "handle hook",
+		enabled: false,
+	});
 }
 
 const monitors = (h: TestHome, ...args: string[]) => runMain(h.dir, ["monitors", ...args]);
@@ -199,22 +202,17 @@ describe("jabbu-pocket monitors export/apply", () => {
 		expect(after).toEqual(before);
 	});
 
-	test("AC-3: exports carry no home path, token or id; apply keeps an existing webhook's id and token", async () => {
+	test("AC-3: exports carry no home path or id; apply keeps an existing row's id", async () => {
 		const a = home("jabbu-portable-a-");
 		seedSource(a);
 		const dir = tempDir("jabbu-export-");
 		expect((await monitors(a, "export", "--dir", dir)).code).toBe(0);
 		const rows = rowsOf(a);
-		const hook = rows.hook?.trigger;
-		if (hook?.kind !== "webhook") throw new Error("seed has no webhook monitor");
 		const text = Object.values(jsonFiles(dir)).join("\n");
 		expect(text).not.toContain(a.dir);
-		expect(text).not.toContain(hook.token);
-		expect(text).not.toContain(hook.id);
 		for (const row of Object.values(rows)) expect(text).not.toContain(row.id);
-		expect(JSON.parse(readFileSync(join(dir, "hook.json"), "utf8")).trigger).toEqual({ kind: "webhook" });
 
-		// Same content: untouched. Changed content: updated, the webhook URL and token still the same.
+		// Same content: untouched. Changed content: updated in place.
 		expect((await monitors(a, "apply", "--dir", dir)).stdout).toBe("added=0 updated=0 unchanged=3 removed=0\n");
 		const file = join(dir, "hook.json");
 		writeFileSync(file, readFileSync(file, "utf8").replace("handle hook", "handle the hook"));
@@ -223,7 +221,28 @@ describe("jabbu-pocket monitors export/apply", () => {
 		const after = rowsOf(a).hook;
 		expect(after?.instruction).toBe("handle the hook");
 		expect(after?.id).toBe(rows.hook?.id as string);
-		expect(after?.trigger).toEqual(hook);
+	});
+
+	test("a stored webhook row is not exported (warning); applying a file for it replaces the trigger", async () => {
+		const a = home("jabbu-portable-a-");
+		seedSource(a);
+		const db = new Database(join(a.dir, "jabbu.db"));
+		db.run("UPDATE monitors SET trigger_json = ? WHERE name = 'hook'", [
+			JSON.stringify({ kind: "webhook", id: "old-id", token: "old-token" }),
+		]);
+		db.close();
+		const dir = tempDir("jabbu-export-");
+		const exported = await monitors(a, "export", "--dir", dir);
+		expect(exported.code).toBe(0);
+		expect(exported.stderr).toContain('hook: trigger kind "webhook" is no longer supported, not exported');
+		expect(Object.keys(jsonFiles(dir))).toEqual(["disk-check.json", "morning-brief.json"]);
+
+		writeFileSync(
+			join(dir, "hook.json"),
+			JSON.stringify({ name: "hook", trigger: { kind: "at", at: "2099-01-01T00:00:00.000Z" }, instruction: "x" }),
+		);
+		expect((await monitors(a, "apply", "--dir", dir)).stdout).toBe("added=0 updated=1 unchanged=2 removed=0\n");
+		expect(rowsOf(a).hook?.trigger).toEqual({ kind: "at", at: "2099-01-01T00:00:00.000Z" });
 	});
 
 	test("AC-4: one invalid file fails the whole apply with exit 2 and no row changes", async () => {
@@ -412,14 +431,16 @@ describe("monitors portable apply/export on odd entries (qa-i low)", () => {
 	const portableCtx = (h: TestHome) => ({
 		scriptsRoot: join(h.dir, "scripts"),
 		workspaceDir: h.config.workspaceDir,
-		webhook: { port: 1 },
 		defaultTimezone: "Asia/Seoul",
 	});
 
 	test("apply skips a FIFO and a directory named *.json instead of blocking or failing", () => {
 		const h = home("portable-odd-");
 		const dir = tempDir("portable-odd-dir-");
-		writeFileSync(join(dir, "ok.json"), JSON.stringify({ name: "ok", trigger: { kind: "webhook" }, instruction: "x" }));
+		writeFileSync(
+			join(dir, "ok.json"),
+			JSON.stringify({ name: "ok", trigger: { kind: "at", at: "2099-01-01T00:00:00.000Z" }, instruction: "x" }),
+		);
 		mkdirSync(join(dir, "dir.json"));
 		expect(Bun.spawnSync(["mkfifo", join(dir, "pipe.json")]).exitCode).toBe(0);
 		const result = applyMonitors(ledgerOf(h), dir, portableCtx(h));

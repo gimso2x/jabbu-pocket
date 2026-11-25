@@ -1,5 +1,4 @@
 import { CARD_ANSWERS_DDL } from "./card-answers";
-import { LEGACY_FEEDBACK_DDL } from "./legacy-ddl";
 import { WEB_MESSAGES_DDL } from "./web-messages";
 
 /**
@@ -61,30 +60,10 @@ const LANE_RESERVATIONS_DDL = `CREATE TABLE IF NOT EXISTS lane_reservations (
 CREATE INDEX IF NOT EXISTS lane_reservations_state ON lane_reservations(state);`;
 
 /**
- * Turn snapshot ledger for `!undo`: one row per repository a conversation turn changed, with
- * the git trees before and after it. `reverted_at` marks a turn already put back (NULL = still undoable).
- */
-const TURN_SNAPSHOTS_DDL = `CREATE TABLE IF NOT EXISTS turn_snapshots (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	origin_key TEXT NOT NULL,
-	op_ref TEXT NOT NULL,
-	repo TEXT NOT NULL,
-	head_before TEXT NOT NULL,
-	tree_before TEXT NOT NULL,
-	head_after TEXT NOT NULL,
-	tree_after TEXT NOT NULL,
-	started_at INTEGER NOT NULL,
-	ended_at INTEGER NOT NULL,
-	reverted_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS turn_snapshots_origin ON turn_snapshots(origin_key, id);
-CREATE INDEX IF NOT EXISTS turn_snapshots_ended ON turn_snapshots(ended_at);`;
-
-/**
  * Wiki result notes (`src/wiki`). `wiki_notes`: one row per note `source_id`, a `draft` (collected before a landing
  * removes its worktree and branch) until the note is written, then `sent`: a unit is written once, restarts included.
- * `wiki_turn_notes`: one row per committing conversation turn and repository, kept here because `turn_snapshots` keeps
- * 20 rows per origin and is gc'd; the grouping into one note per thread and day is made when the day is over.
+ * `wiki_turn_notes`: one row per committing conversation turn and repository, kept at the turn's end; the grouping into
+ * one note per thread and day is made when the day is over.
  */
 const WIKI_NOTES_DDL = `CREATE TABLE IF NOT EXISTS wiki_notes (
 	source_id TEXT PRIMARY KEY,
@@ -295,8 +274,6 @@ CREATE TABLE IF NOT EXISTS auto_choices (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS auto_choices_at ON auto_choices(created_at);
-${LEGACY_FEEDBACK_DDL}
-${TURN_SNAPSHOTS_DDL}
 ${WIKI_NOTES_DDL}
 ${HERDR_PROMPTS_DDL}
 ${PEER_CALLS_DDL}

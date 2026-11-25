@@ -118,11 +118,10 @@ export function dispatchPending(ctx: DaemonContext, originKey: string): void {
 export function autoLandPolicy(ctx: DaemonContext): AutoLandPolicy | undefined {
 	const policy = ctx.options.config.taskAutoLand;
 	if (policy === undefined) return undefined;
-	const { review, qa, commitEmails } = policy;
+	const { review, qa } = policy;
 	return {
 		repos: policy.repos,
 		maxRisk: policy.maxRisk ?? "L2",
-		...(commitEmails === undefined ? {} : { commitEmails }),
 		...(qa === undefined
 			? {}
 			: {

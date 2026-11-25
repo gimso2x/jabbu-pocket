@@ -4,8 +4,9 @@ import { SCRIPT } from "../src/dashboard/html";
 
 // Budgets and their measured baseline live in docs/performance.md. Raise a budget only by editing that page in the same change.
 const KIB = 1024;
-const STYLE_GZIP_BUDGET = 12 * KIB;
-const SCRIPT_GZIP_BUDGET = 64 * KIB;
+// 2026-11-26 T-20261126-01: raised for the headless TASK 작업 내역 panel (owner-approved), from 12 / 64 KiB.
+const STYLE_GZIP_BUDGET = 12.5 * KIB;
+const SCRIPT_GZIP_BUDGET = 68 * KIB;
 
 describe("dashboard size budget", () => {
 	// The page's script and style ship as cached assets, but a first load still pays for them, so they carry the budget.

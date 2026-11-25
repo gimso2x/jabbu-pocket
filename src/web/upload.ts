@@ -1,30 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { MAX_INBOUND_FILES, MAX_INBOUND_IMAGE_BYTES, sniffImageMime } from "../channel/attachments";
+import { protectedDirs, realOrSelf } from "../safety/forbidden-paths";
 import { isInside } from "../safety/inside";
 
 /** Maximum uploaded file size on web chat (25 MiB per file, matching `MAX_INBOUND_IMAGE_BYTES`). */
 export const WEB_UPLOAD_MAX_BYTES = MAX_INBOUND_IMAGE_BYTES;
 const MULTIPART_OVERHEAD_BYTES = 512 * 1024;
 const CONTROL_CHARS = /\p{Cc}/u;
-
-const PROTECTED_HOME_DIRS = [
-	".jabbu/secrets",
-	".ssh",
-	".gnupg",
-	".aws",
-	".omp/agent",
-	".gajaeway-hub",
-	".git-credentials",
-	".netrc",
-	".config/gh",
-	".config/gcloud",
-	".npmrc",
-	".kube",
-	".docker",
-];
 
 const FORBIDDEN_PATH_TOKENS =
 	/(?:^|[/\\])(?:\.\.|secrets|\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.git-credentials|\.netrc|\.npmrc)(?:$|[/\\])/i;
@@ -43,18 +28,6 @@ export type WebUploadOutcome =
 /** Directory holding inbound attachments uploaded via `/api/web/upload`. */
 export function webUploadRoot(homeDir: string): string {
 	return join(homeDir, "media", "inbound", "web");
-}
-
-function realOrSelf(path: string): string {
-	try {
-		return realpathSync(path);
-	} catch {
-		return path;
-	}
-}
-
-function protectedDirs(homeDir: string, userHome = homedir()): string[] {
-	return [join(homeDir, "secrets"), ...PROTECTED_HOME_DIRS.map((rel) => join(userHome, rel))].map(realOrSelf);
 }
 
 /** True when `realPath` resolves inside `<homeDir>/secrets` or any user credential store. */
@@ -175,6 +148,25 @@ function writeAtomicUpload(root: string, name: string, mime: string, bytes: Uint
 		throw err;
 	}
 	return { path: dest, name, bytes: bytes.byteLength, mime };
+}
+
+/**
+ * Copies a file the bot sends into the chat (already vetted by the host tool: protected directories, token scan) into the
+ * served upload root, so the web file route can serve it later whatever happens to the source. Returns the copy's path, or
+ * `undefined` when it cannot be taken over (missing, not a regular file, over the serve cap, unsafe root): the message then
+ * keeps the original path and the chat shows the file without a download.
+ */
+export function adoptWebFile(sourcePath: string, homeDir: string, userHome = homedir()): string | undefined {
+	try {
+		const stat = lstatSync(sourcePath);
+		if (!stat.isFile() || stat.size === 0 || stat.size > WEB_UPLOAD_MAX_BYTES) return undefined;
+		const root = resolveUploadDir(homeDir, userHome);
+		const bytes = readFileSync(sourcePath);
+		const mime = sniffImageMime(bytes.subarray(0, 12)) ?? "application/octet-stream";
+		return writeAtomicUpload(root, basename(sourcePath), mime, bytes).path;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Validates, size-caps (25 MiB), and stores uploaded files from `/api/web/upload` under `<home>/media/inbound/web/`. */

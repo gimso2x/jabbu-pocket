@@ -35,7 +35,7 @@ import {
 import { type FlowTransition, type TaskStage, taskFlowStatus, taskStage } from "../flow/task-flow";
 import { heavyRunPaths, readHeavyRunStates } from "../heavy-run";
 import { type MonitorRow, type MonitorSql, monitorOrigin, nextFireOf, toMonitor } from "../monitors/ledger";
-import type { MonitorDeliver, MonitorOverlap, MonitorTrigger } from "../monitors/spec";
+import type { MonitorDeliver, MonitorOverlap } from "../monitors/spec";
 import { type AssistantTail, pendingToolCall, readLastAssistant, sessionPathOf } from "../omp/session-tail";
 import { isRecord } from "../omp/type-guards";
 import { parseSystemctlShow, parseUnixTimestamp, readLockStartedAt } from "../ops/apply";
@@ -62,6 +62,7 @@ import type { PeerInstall } from "./peers";
 import { previewLine } from "./preview-line";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
+import { type TaskRuntimeField, withoutTaskThreads } from "./task-work-client";
 import { type TaskTurnFields, taskTurnFields } from "./turn";
 import { buildTurnsSection, type PeerTurnError, rows, type ThreadInfo, type TurnInfo } from "./turn-board";
 import { readUsageLimits, type UsageLimitsInfo } from "./usage-limits";
@@ -120,7 +121,7 @@ export type { PeerTurnError, ThreadInfo, TurnInfo, TurnKind, TurnWaitReason } fr
 
 type HerdrState = { ok: true; status: HerdrAgentStatus } | { ok: false; error: string };
 
-export interface TaskInfo extends TaskTurnFields {
+export interface TaskInfo extends TaskTurnFields, TaskRuntimeField {
 	taskId: string;
 	title: string;
 	risk: TaskRisk;
@@ -484,7 +485,7 @@ function cronWords(schedule: string, timezone: string, botTimezone: string): str
 	return timezone === botTimezone ? label : `${label} (${timezone})`;
 }
 
-function monitorSchedule(trigger: MonitorTrigger, timezone: string): string {
+function monitorSchedule(trigger: MonitorRow["trigger"], timezone: string): string {
 	switch (trigger.kind) {
 		case "cron":
 			return cronWords(trigger.schedule, trigger.timezone, timezone);
@@ -494,10 +495,8 @@ function monitorSchedule(trigger: MonitorTrigger, timezone: string): string {
 			const every = trigger.intervalMs;
 			return `조건 감시 · ${every % 60_000 === 0 ? `${every / 60_000}분` : `${every / 1000}초`}마다`;
 		}
-		case "webhook":
-			return "외부 호출 때";
-		case "watcher":
-			return "파일 바뀔 때";
+		case "unsupported":
+			return `지원 안 함 (${trigger.was})`;
 	}
 }
 
@@ -525,9 +524,7 @@ function monitorFiles(row: MonitorRow): MonitorFile[] {
 	return files.slice(0, MONITOR_FILES);
 }
 
-/**
- * A channel as the owner knows it: the DM, the config's Discord log, escalation or alert channel, else its id.
- */
+/** A channel as the owner knows it: the DM, the config's Discord log, escalation or alert channel, else its id. */
 function channelName(channel: string | null, config: DashboardConfig | undefined): string {
 	if (channel === null) return "오너 DM";
 	if (channel === config?.channels?.discord?.logChannelId) return "로그 채널";
@@ -2010,7 +2007,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			generatedAt: iso(now),
 			timezone,
 			daemon: await daemon,
-			turns: await turns,
+			turns: withoutTaskThreads(await turns),
 			tasks: await tasks,
 			flows: await flows,
 			lanes: await lanes,
@@ -2087,6 +2084,7 @@ function baseTask({ row, broken }: ReadTask, timezone: string): TaskInfo {
 		status: row.status,
 		host: row.host ?? "local",
 		agent: row.agent,
+		runtime: row.runtime,
 		branch: row.branch,
 		open,
 		updatedAt: localIso(row.updatedAt, timezone),

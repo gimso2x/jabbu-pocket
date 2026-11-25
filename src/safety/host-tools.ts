@@ -7,6 +7,7 @@ import { buildDispatchTool, type DispatchToolDeps } from "../dispatch/tool";
 import type { Logger } from "../log";
 import { maskKnownFragments, redact, secretShapes } from "../redact";
 import type { ApprovalBroker, ApprovalDetail } from "./approval";
+import { protectedDirs } from "./forbidden-paths";
 import { isInside } from "./inside";
 import { sendFileToolName } from "./prompt";
 
@@ -115,6 +116,8 @@ export interface HostToolDeps {
 	ompConfigOverlay?: string;
 	/** Home of the user running the bot (tests override); default `os.homedir()`. */
 	userHome?: string;
+	/** Read on every upload (a reload changes it): config `hostTools.extraForbiddenPaths`, refused on top of the built-ins. */
+	extraForbiddenPaths?: () => readonly string[];
 	/** Remote dispatch targets (config `dispatchHosts`) for the dispatch tool. */
 	dispatchHosts?: DispatchToolDeps["dispatchHosts"];
 	/** Local herdr worker omp extra arguments (config `workerOmpArgs`) for the dispatch tool. */
@@ -135,18 +138,10 @@ export interface HostToolDeps {
 	herdr?: DispatchToolDeps["herdr"];
 }
 
-function realOrSelf(path: string): string {
-	try {
-		return realpathSync(path);
-	} catch {
-		return path;
-	}
-}
-
 /** Throws with a reason when the file must not be uploaded; returns the resolved real path otherwise. */
 export function checkUploadable(
 	rawPath: string,
-	deps: Pick<HostToolDeps, "homeDir" | "workspaceDir" | "userHome">,
+	deps: Pick<HostToolDeps, "homeDir" | "workspaceDir" | "userHome" | "extraForbiddenPaths">,
 ): string {
 	const userHome = deps.userHome ?? homedir();
 	const absolute = isAbsolute(rawPath) ? rawPath : resolve(deps.workspaceDir, rawPath);
@@ -156,22 +151,7 @@ export function checkUploadable(
 	} catch {
 		throw new Error(`file not found: ${absolute}`);
 	}
-	const forbidden = [
-		join(deps.homeDir, "secrets"),
-		join(userHome, ".jabbu", "secrets"),
-		join(userHome, ".ssh"),
-		join(userHome, ".gnupg"),
-		join(userHome, ".aws"),
-		join(userHome, ".omp", "agent"),
-		join(userHome, ".gajaeway-hub"),
-		join(userHome, ".git-credentials"),
-		join(userHome, ".netrc"),
-		join(userHome, ".config", "gh"),
-		join(userHome, ".config", "gcloud"),
-		join(userHome, ".npmrc"),
-		join(userHome, ".kube"),
-		join(userHome, ".docker"),
-	].map(realOrSelf);
+	const forbidden = protectedDirs(deps.homeDir, userHome, deps.extraForbiddenPaths?.() ?? []);
 	if (forbidden.some((dir) => isInside(real, dir))) throw new Error("upload refused: path is in a protected directory");
 	const stat = statSync(real);
 	if (!stat.isFile()) throw new Error("upload refused: not a regular file");

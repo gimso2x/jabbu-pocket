@@ -23,7 +23,8 @@ export const LIVE_FIELDS = [
 	"peerHopLimit",
 	// The peer silence sweep and the call recording read it after every reload.
 	"peerSilenceAlert",
-	"turnSnapshot",
+	// Every upload reads `hostTools.extraForbiddenPaths` through a getter (`daemon-host-tools`), never a captured copy.
+	"hostTools",
 	// Every note write reads it, so an added or removed block turns the notes on or off.
 	"wikiNotes",
 	"costCap",
@@ -58,10 +59,8 @@ export const RESTART_FIELDS = [
 	"idleKeepResident",
 	// The lane manager and the [TASK] tool deps take the ceiling when the daemon starts.
 	"hostSessionCeiling",
-	"watcherRoots",
 	// The daemon reads it only to decide whether the `offsite_age` gate exists; the CLI re-reads it on every run.
 	"offsite",
-	"webhook",
 	// The dispatch tool schema and the [TASK] sweeper are decided when the daemon starts.
 	"herdr",
 ] as const satisfies ReadonlyArray<keyof JabbuConfig>;

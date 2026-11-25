@@ -8,11 +8,10 @@ const RANK: Record<IntegrityRefusal["category"], number> = {
 	lane_diff_unavailable: 0,
 	guard_deletion_without_adversarial_regression: 1,
 	undeclared_feature_removal: 2,
-	commit_identity_mismatch: 3,
-	stub_implementation: 4,
-	skipped_test: 5,
-	unproven_claim_word: 6,
-	unfinished_work_marker: 7,
+	stub_implementation: 3,
+	skipped_test: 4,
+	unproven_claim_word: 5,
+	unfinished_work_marker: 6,
 };
 
 interface Entry {

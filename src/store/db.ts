@@ -51,16 +51,12 @@ import {
 	type OriginSettings,
 	type OriginSql,
 	type RecallCandidate,
-	type TurnSnapshotInput,
-	type TurnSnapshotRow,
-	type TurnSnapshotSql,
 	toDelivery,
 	toInbound,
 	toLane,
 	toLaneBoardPost,
 	toLaneReservation,
 	toOrigin,
-	toTurnSnapshot,
 	toWikiTurn,
 	type WikiTurnInput,
 	type WikiTurnRow,
@@ -76,6 +72,7 @@ import {
 } from "./db-schema";
 import { columnsOf, migrateInbound } from "./db-sending";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
+import { dropRemovedTables } from "./removed-tables";
 import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
 import {
@@ -90,6 +87,9 @@ import {
 	type UncertainReason,
 } from "./transitions";
 import { WebMessageStore } from "./web-messages";
+
+/** Schema 13: tables of removed features that nothing reads or writes; `dropRemovedTables` drops them on open. */
+const DROPPED_AT_13 = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
 
 /** Words a placeholder answer uses when omp returned no text (mailbox writes it); a monitor treats it as a failure. */
 const EMPTY_ANSWER = "(응답 없음)";
@@ -213,9 +213,6 @@ interface OwnerHome {
 	platform: ChatPlatform;
 	conversationId: string;
 }
-
-/** Rows kept per origin: an old turn's `!undo` target stops being reachable long before `gc` runs. */
-const TURN_SNAPSHOT_ROWS_KEPT = 20;
 
 /** Rows kept per agent. */
 const HERDR_PROMPT_ROWS_KEPT = 20;
@@ -1465,84 +1462,6 @@ export class Store {
 		})();
 	}
 
-	// ---- turn snapshots (`!undo`) ----
-
-	/**
-	 * Appends one turn snapshot and keeps only the newest `TURN_SNAPSHOT_ROWS_KEPT` rows of that origin. The rows dropped
-	 * by that bound come back as `pruned` so the caller can delete their refs.
-	 */
-	recordTurnSnapshot(input: TurnSnapshotInput): { id: number; pruned: TurnSnapshotRow[] } {
-		// One transaction: a failure while pruning must not leave the new row behind, or the caller (which deletes the
-		// refs of `pruned` only on success) would keep a ledger that no longer matches its refs.
-		return this.db.transaction(() => {
-			const inserted = this.db
-				.query(
-					`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				)
-				.run(
-					input.originKey,
-					input.opRef,
-					input.repo,
-					input.headBefore,
-					input.treeBefore,
-					input.headAfter,
-					input.treeAfter,
-					input.startedAt,
-					input.endedAt,
-				);
-			const id = Number(inserted.lastInsertRowid);
-			const overflow = this.db
-				.query(
-					`SELECT * FROM turn_snapshots WHERE origin_key = ?
-				 ORDER BY id DESC LIMIT -1 OFFSET ?`,
-				)
-				.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
-			const pruned = overflow.map(toTurnSnapshot);
-			const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
-			for (const row of pruned) drop.run(row.id);
-			return { id, pruned };
-		})();
-	}
-
-	/** Rows newest first; every filter is optional and compared literally. */
-	listTurnSnapshots(
-		filter: { originKey?: string; repo?: string; opRef?: string; undoable?: boolean } = {},
-	): TurnSnapshotRow[] {
-		const rows = this.db
-			.query(
-				`SELECT * FROM turn_snapshots
-				 WHERE (?1 IS NULL OR origin_key = ?1) AND (?2 IS NULL OR repo = ?2) AND (?3 IS NULL OR op_ref = ?3)
-				   AND (?4 = 0 OR reverted_at IS NULL)
-				 ORDER BY id DESC`,
-			)
-			.all(
-				filter.originKey ?? null,
-				filter.repo ?? null,
-				filter.opRef ?? null,
-				filter.undoable === true ? 1 : 0,
-			) as TurnSnapshotSql[];
-		return rows.map(toTurnSnapshot);
-	}
-
-	/**
-	 * The origin's most recent turn that can still be undone: its newest `op_ref` among rows with no `reverted_at`.
-	 * Returns every repository row of that turn (oldest first), or `[]` when nothing changed or all was undone.
-	 */
-	latestUndoableTurn(originKey: string): TurnSnapshotRow[] {
-		const newest = this.listTurnSnapshots({ originKey, undoable: true })[0];
-		if (newest === undefined) return [];
-		const rows = this.listTurnSnapshots({ originKey, opRef: newest.opRef, undoable: true });
-		return rows.reverse();
-	}
-
-	/** Marks a turn's rows as undone at `at`; returns how many rows changed. */
-	markTurnReverted(originKey: string, opRef: string, at: number): number {
-		return this.db
-			.query("UPDATE turn_snapshots SET reverted_at = ? WHERE origin_key = ? AND op_ref = ? AND reverted_at IS NULL")
-			.run(at, originKey, opRef).changes;
-	}
-
 	// ---- wiki result notes ----
 
 	/** The note's state: its draft JSON, `"sent"`, or `undefined` for a unit never seen. */
@@ -2240,11 +2159,7 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
-		// Schema 7: the removed Teams channel's tables (namespace `teams_`) go with their index; rows were only Teams state.
-		const teamsTables = this.db
-			.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'teams[_]*'")
-			.all() as Array<{ name: string }>;
-		for (const { name } of teamsTables) this.db.run(`DROP TABLE IF EXISTS "${name}"`);
+		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);
 		migrateInbound(this.db);

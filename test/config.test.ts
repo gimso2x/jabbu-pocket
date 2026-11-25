@@ -1366,12 +1366,35 @@ describe("qa-l low config (#1 #2 #3 #19)", () => {
 		expect(error.message).toContain("field=workspaceDir");
 	});
 
-	test("#19: a turnSnapshot repo without any commit is rejected", async () => {
-		const repo = join(home, "empty-repo");
-		mkdirSync(repo);
-		await Bun.spawn(["git", "init", "-q", repo]).exited;
-		writeConfig(baseConfig({ turnSnapshot: { repos: [repo] } }));
-		const error = catchError(() => loadConfig(home));
-		expect(error.message).toContain("field=turnSnapshot.repos");
+	test("webhook, watcherRoots and turnSnapshot were removed: each loads with one unknown_key warning", () => {
+		for (const key of ["webhook", "watcherRoots", "turnSnapshot"]) {
+			writeConfig(baseConfig({ [key]: key === "webhook" ? { port: 8123 } : { repos: [], roots: [] } }));
+			const loaded = loadConfig(home);
+			expect(loaded.warnings).toContainEqual({ field: key, reason: "unknown_key" });
+			expect(key in loaded).toBe(false);
+		}
+	});
+
+	test("taskAutoLand.commitEmails was removed: it loads with a config_key_ignored warning and is dropped", () => {
+		writeConfig(baseConfig({ taskAutoLand: { repos: ["/srv/repo"], commitEmails: { "/srv/repo": ["a@b.c"] } } }));
+		const loaded = loadConfig(home);
+		expect(loaded.warnings).toContainEqual({ field: "taskAutoLand.commitEmails", reason: "config_key_ignored" });
+		expect(loaded.taskAutoLand).toBeDefined();
+		expect("commitEmails" in (loaded.taskAutoLand ?? {})).toBe(false);
+	});
+
+	test("hostTools.extraForbiddenPaths takes ~/… and absolute paths; a relative path or a non-array is config_invalid", () => {
+		expect(loadConfig(home).hostTools).toBeUndefined();
+		writeConfig(baseConfig({ hostTools: { extraForbiddenPaths: ["~/x", "/abs"] } }));
+		expect(loadConfig(home).hostTools).toEqual({ extraForbiddenPaths: ["~/x", "/abs"] });
+		for (const [bad, field] of [
+			[["rel"], "hostTools.extraForbiddenPaths.0"],
+			["str", "hostTools.extraForbiddenPaths"],
+		] as const) {
+			writeConfig(baseConfig({ hostTools: { extraForbiddenPaths: bad } }));
+			const error = catchError(() => loadConfig(home));
+			expect(error.code).toBe("config_invalid");
+			expect(error.message).toContain(`field=${field}`);
+		}
 	});
 });

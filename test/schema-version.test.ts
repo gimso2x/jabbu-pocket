@@ -92,8 +92,8 @@ describe("inbound uncertain migration", () => {
 			}>
 		).map((row) => row.name);
 
-	test("SCHEMA_VERSION is 12", () => {
-		expect(SCHEMA_VERSION).toBe(12);
+	test("SCHEMA_VERSION is 13", () => {
+		expect(SCHEMA_VERSION).toBe(13);
 	});
 
 	test("a version-10 inbound table (no 'sending') is rebuilt: every column kept, uncertain rows too, sending accepted", () => {
@@ -127,7 +127,7 @@ describe("inbound uncertain migration", () => {
 		expect(indexNames(db).sort()).toEqual([...INDEXES].sort());
 		expect(db.query("SELECT name FROM sqlite_master WHERE name = 'inbound_old'").all()).toEqual([]);
 		db.close();
-		expect(userVersion(path)).toBe(12);
+		expect(userVersion(path)).toBe(13);
 	});
 
 	test("a pre-uncertain inbound table is rebuilt: rows, inbound_id, all 7 indexes kept, uncertain accepted", () => {
@@ -200,6 +200,55 @@ describe("inbound uncertain migration", () => {
 		expect(indexNames(db).sort()).toEqual([...INDEXES].sort());
 		db.close();
 	});
+});
+
+describe("dead tables (schema 13)", () => {
+	const DEAD = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
+	const tableNames = (db: Database) =>
+		(
+			db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{
+				name: string;
+			}>
+		).map((row) => row.name);
+	const rowCounts = (db: Database, tables: string[]) =>
+		Object.fromEntries(
+			tables.map((name) => [name, (db.query(`SELECT COUNT(*) AS n FROM "${name}"`).get() as { n: number }).n]),
+		);
+
+	test("a new home never creates the five tables", () => {
+		open().close();
+		const db = new Database(path, { readonly: true });
+		expect(tableNames(db).filter((name) => DEAD.includes(name))).toEqual([]);
+		db.close();
+	});
+
+	for (const version of [11, 12]) {
+		test(`a version-${version} ledger with rows in the five tables loses them; every other table keeps its rows`, () => {
+			const store = open();
+			store.ensureOrigin("o1", "/s/o1");
+			store.recordInbound({ originKey: "o1", platformMessageId: "m1", textRef: "r1" });
+			store.close();
+			const old = new Database(path);
+			for (const name of DEAD) {
+				old.run(`DROP TABLE IF EXISTS ${name}`);
+				old.run(`CREATE TABLE ${name} (id INTEGER PRIMARY KEY, note TEXT)`);
+				old.run(`INSERT INTO ${name} (note) VALUES ('a'), ('b')`);
+			}
+			old.run(`PRAGMA user_version = ${version}`);
+			const kept = tableNames(old).filter((name) => !DEAD.includes(name));
+			const before = rowCounts(old, kept);
+			old.close();
+			expect(before.origins).toBe(1);
+			expect(before.inbound).toBe(1);
+
+			open().close();
+			expect(userVersion(path)).toBe(SCHEMA_VERSION);
+			const db = new Database(path, { readonly: true });
+			expect(tableNames(db).filter((name) => DEAD.includes(name))).toEqual([]);
+			expect(rowCounts(db, kept)).toEqual(before);
+			db.close();
+		});
+	}
 });
 
 describe("newer schema refusal", () => {

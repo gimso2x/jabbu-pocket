@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
-import { planReload, RESTART_FIELDS } from "../src/daemon/reload";
+import { LIVE_FIELDS, planReload, RESTART_FIELDS } from "../src/daemon/reload";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
@@ -96,6 +96,17 @@ describe("planReload", () => {
 		);
 		expect(changed.restartRequired).toEqual(["channels"]);
 		expect(changed.next.channels.discord?.ownerUserId).toBe(OWNER);
+	});
+
+	test("hostTools applies live: a changed extraForbiddenPaths is taken without a restart", () => {
+		expect(LIVE_FIELDS as readonly string[]).toContain("hostTools");
+		const plan = planReload(
+			{ ...home.config },
+			{ ...home.config, hostTools: { extraForbiddenPaths: ["~/private-hub"] } },
+		);
+		expect(plan.changed).toEqual(["hostTools"]);
+		expect(plan.restartRequired).toEqual([]);
+		expect(plan.next.hostTools).toEqual({ extraForbiddenPaths: ["~/private-hub"] });
 	});
 
 	test("recallEnabled applies live", () => {
@@ -297,12 +308,12 @@ describe("boot last-good", () => {
 test("real daemon process: SIGHUP reloads config.json instead of stopping", async () => {
 	const spawned = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"));
 	await spawned.waitLog(/event=daemon_ready/);
-	patchConfig({ recallEnabled: false, watcherRoots: [home.dir] });
+	patchConfig({ recallEnabled: false, idleTimeoutMinutes: 45 });
 	spawned.signal("SIGHUP");
 	const line = await spawned.waitLog(/event=config_reloaded/);
 	expect(line).toContain("trigger=sighup");
 	expect(line).toContain("changed=recallEnabled");
-	expect(line).toContain("restart_required=watcherRoots");
+	expect(line).toContain("restart_required=idleTimeoutMinutes");
 	expect(JSON.parse((await runMain(home.dir, ["status", "--json"])).stdout)).toMatchObject({ daemonRunning: true });
 	spawned.signal("SIGTERM");
 	expect(await spawned.exited).toBe(0);
