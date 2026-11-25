@@ -25,6 +25,9 @@ function repo(withGate = true): string {
 	const dir = mkdtempSync(join(tmpdir(), "tla-refresh-"));
 	dirs.push(dir);
 	sh(dir, "init", "-q");
+	// The commit under test runs a plain `git commit`: CI runners have no global identity.
+	sh(dir, "config", "user.name", "t");
+	sh(dir, "config", "user.email", "t@t");
 	mkdirSync(join(dir, "scripts"));
 	mkdirSync(join(dir, "spec", "tla", "mailbox"), { recursive: true });
 	if (withGate) {
