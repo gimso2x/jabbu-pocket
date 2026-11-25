@@ -19,15 +19,14 @@ export function deadlineOf(request: OmpDialogRequest): number | undefined {
 	return Math.max(request.timeout - DEADLINE_LEAD_MS, 0);
 }
 
-/** A reply naming an option: its 1-based number or its exact label. */
+/** A reply naming an option: its exact label first, else its 1-based number. */
 export function optionOf(labels: readonly string[], text: string): number | undefined {
 	const trimmed = text.trim();
-	if (/^\d+$/.test(trimmed)) {
-		const index = Number(trimmed) - 1;
-		return index >= 0 && index < labels.length ? index : undefined;
-	}
 	const exact = labels.indexOf(trimmed);
-	return exact === -1 ? undefined : exact;
+	if (exact !== -1) return exact;
+	if (!/^\d+$/.test(trimmed)) return undefined;
+	const index = Number(trimmed) - 1;
+	return index >= 0 && index < labels.length ? index : undefined;
 }
 
 /** Ends the card for a non-answer: the timeout or the withdrawal line, and the matching omp response. */

@@ -111,7 +111,6 @@ export class DiscordBackfill extends SingleFlightBackfill {
 	readonly #deps: DiscordBackfillDeps;
 	/** Channel → epoch ms it was quarantined at; an entry older than `QUARANTINE_RETRY_MS` is dropped when next asked. */
 	readonly #quarantined = new Map<string, number>();
-	readonly #attempts = new Map<string, number>();
 
 	constructor(deps: DiscordBackfillDeps) {
 		super();
@@ -242,12 +241,12 @@ export class DiscordBackfill extends SingleFlightBackfill {
 			}
 			done.scanned += messages.length;
 			for (const message of messages) {
-				const attemptKey = `${target.channelId}:${message.id}`;
+				const attemptKey = `bfa:dc:${target.channelId}:${message.id}`;
 				try {
 					// History rows name no server: the target's is put back, so a server message never reads as a DM.
 					const outcome = await this.#deps.ingest({ ...message, channel_id: target.channelId, guild_id: guildId });
 					if (outcome === "recorded") recovered.push(message.id);
-					this.#attempts.delete(attemptKey);
+					cursors.deleteCursor(attemptKey);
 				} catch (err) {
 					const platform =
 						err instanceof DiscordRateLimitedError
@@ -261,9 +260,10 @@ export class DiscordBackfill extends SingleFlightBackfill {
 						if (watermark !== stored) cursors.setCursor(key, watermark);
 						return done.scanned;
 					}
-					const attempts = (this.#attempts.get(attemptKey) ?? 0) + 1;
+					const prev = Number(cursors.getCursor(attemptKey));
+					const attempts = (Number.isFinite(prev) && prev > 0 ? prev : 0) + 1;
 					if (attempts < MAX_MESSAGE_ATTEMPTS) {
-						this.#attempts.set(attemptKey, attempts);
+						cursors.setCursor(attemptKey, String(attempts));
 						log.warn("backfill_message_failed", {
 							target: key,
 							id: message.id,
@@ -273,7 +273,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 						if (watermark !== stored) cursors.setCursor(key, watermark);
 						return done.scanned;
 					}
-					this.#attempts.delete(attemptKey);
+					cursors.deleteCursor(attemptKey);
 					log.error("backfill_dead_letter", { target: key, id: message.id, error: redact(errorText(err)) });
 				}
 				watermark = laterId(watermark, message.id);
