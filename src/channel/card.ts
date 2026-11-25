@@ -1,8 +1,4 @@
-/**
- * json-render card specs (` ```card ` fences in an answer), the platform-neutral part: cutting an answer at its card
- * fences, validating one fence into a `CardElement`, and the ASCII forms of tables and charts. Each platform draws the
- * validated card its own way (Discord embeds in `src/discord/card.ts`).
- */
+/** Platform-neutral ` ```card ` spec parser/validator and ASCII table/chart helpers (Discord embeds live in `src/discord/card.ts`). */
 import { CardSpecError, standardComponentDefinitions, toCard } from "@json-render/chat";
 import type { CardChild, CardElement } from "chat";
 import { isRecord } from "../omp/type-guards";
@@ -38,12 +34,7 @@ export type CardSegment =
 
 const CLOSING_FENCE = /^```\s*$/;
 
-/**
- * The body cut at its ` ```card ` and ` ```copy ` fences: one opening a line and closed by a ` ``` ` line (`copy`: text
- * the owner copies as it is, its content in `text`). A fence inside another fence and an unclosed one stay text, so do
- * ` ```card ` fences after the first `MAX_CARDS` (copy fences have no cap). Joining every segment's `text`/`raw` with
- * "\n" gives the body back byte for byte.
- */
+/** Cuts `body` at ` ```card ` and ` ```copy ` fences (joining segments with "\n" preserves `body` byte for byte). */
 export function splitCards(body: string): CardSegment[] {
 	const lines = body.split("\n");
 	const segments: CardSegment[] = [];
@@ -51,6 +42,7 @@ export function splitCards(body: string): CardSegment[] {
 	/** Backtick run of the open fence (0 = none): only a run at least as long closes it, so ```` may quote ```. */
 	let fenceRun = 0;
 	let cards = 0;
+	let noClose = false;
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? "";
 		if (fenceRun > 0) {
@@ -59,9 +51,17 @@ export function splitCards(body: string): CardSegment[] {
 			continue;
 		}
 		const opens = /^```(card|copy)\s*$/.exec(line)?.[1];
-		if (opens !== undefined && (opens === "copy" || cards < MAX_CARDS)) {
-			const close = lines.findIndex((next, j) => j > i && CLOSING_FENCE.test(next));
-			if (close > i) {
+		if (!noClose && opens !== undefined && (opens === "copy" || cards < MAX_CARDS)) {
+			let close = -1;
+			for (let j = i + 1; j < lines.length; j++) {
+				if (CLOSING_FENCE.test(lines[j] ?? "")) {
+					close = j;
+					break;
+				}
+			}
+			if (close === -1) {
+				noClose = true;
+			} else {
 				if (text.length > 0) segments.push({ kind: "text", text: text.join("\n") });
 				text = [];
 				const inner = lines.slice(i + 1, close).join("\n");
@@ -88,12 +88,7 @@ export type CardRun<T> =
 	| { kind: "copy"; text: string }
 	| ({ kind: "card"; raw: string } & T);
 
-/**
- * `body` as text runs (leading blank lines and trailing space trimmed, blank ones dropped) and the cards `accept`
- * takes; `first`: no text precedes the card. A card `accept` refuses (returns its issues) stays in the text around it,
- * its issues in `issues` as `card <n>: <issue>`. A ` ```copy ` fence is a `copy` run: its content without the blank
- * lines around it; one that is blank or longer than `copyLimit` stays in the text around it.
- */
+/** `body` as text runs and validated cards (`issues` collects `card <n>: <issue>` for refused cards; blank/long `copy` stays text). */
 export function cardRuns<T extends object>(
 	body: string,
 	issues: string[],
@@ -129,7 +124,7 @@ export function cardRuns<T extends object>(
 		n += 1;
 		const card = accept(segment.json, runs.length === 0 && text.join("\n").trim() === "");
 		if (Array.isArray(card)) {
-			issues.push(...card.map((issue) => `card ${n}: ${issue}`));
+			for (const issue of card.slice(0, 50)) issues.push(`card ${n}: ${issue}`);
 			text.push(segment.raw);
 			continue;
 		}

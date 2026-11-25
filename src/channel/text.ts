@@ -368,7 +368,7 @@ export function delimiterAligns(line: string): ColumnAlign[] | undefined {
 	});
 }
 
-const BLOCK_START = /^ {0,3}(?:>|#{1,6}(?:[ \t]|$)|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$))/;
+const BLOCK_START = /^(?: {4}|\t| {0,3}(?:>|#{1,6}(?:[ \t]|$)|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)))/;
 
 /**
  * When a GFM table starts at line `i`, the index of the first line after it: a row of 2+ cells, a delimiter row of the

@@ -44,7 +44,7 @@ const KNOWN_MIME_EXT: Record<string, string> = {
 function attachmentExtension(name: string | undefined, mimetype: string | undefined): string {
 	const fromName = name === undefined ? undefined : /\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1]?.toLowerCase();
 	if (fromName !== undefined) return fromName;
-	if (mimetype !== undefined && KNOWN_MIME_EXT[mimetype] !== undefined) return KNOWN_MIME_EXT[mimetype];
+	if (mimetype !== undefined && Object.hasOwn(KNOWN_MIME_EXT, mimetype)) return KNOWN_MIME_EXT[mimetype] as string;
 	if (mimetype?.startsWith("image/"))
 		return (
 			mimetype

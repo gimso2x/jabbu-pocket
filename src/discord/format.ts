@@ -12,7 +12,7 @@ import {
 	splitRowCells,
 	tableEndAt,
 } from "../channel/text";
-import { maxBacktickRun, outsideCode } from "./code-spans";
+import { clampBacktickRuns, maxBacktickRun, outsideCode } from "./code-spans";
 import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
 export { outsideCode };
@@ -30,6 +30,7 @@ function convertPlain(text: string): string {
 			.replace(/(^|[^\w*\\])\*(?=\S)([^*\n]+?)(?<=[^\s\\])\*(?![\w*])/g, "$1**$2**")
 			.replace(/(^|[^\w~\\])~(?=\S)([^~\n]+?)(?<=[^\s\\])~(?![\w~])/g, "$1~~$2~~")
 			// Slack's `&`/`<`/`>` escapes, undone last so a literal `<` never reads as a Slack token above.
+			.replace(/&lt;(?=[@#!])/g, "\\<")
 			.replace(/&lt;/g, "<")
 			.replace(/&gt;/g, ">")
 			.replace(/&amp;/g, "&")
@@ -49,7 +50,7 @@ export function mrkdwnToDiscord(text: string): string {
  * backslash-escaped so they show as typed, and `&`/`<`/`>` get the core text escapes `mrkdwnToDiscord` undoes.
  */
 export function escapeDiscordMarkdown(text: string): string {
-	return escapeMrkdwn(text.replace(/[\\*_`~|>]/g, "\\$&"));
+	return escapeMrkdwn(text.replace(/[\\*_`~|>()[\]]/g, "\\$&").replace(/(^|\n)( {0,3})(#)/g, "$1$2\\$3"));
 }
 
 /** Inline `code`, `[label](url)`, `**bold**`, `__bold__` show literally in a fence; spans are capped (linear time). */
@@ -69,12 +70,8 @@ function stripCellMarkdown(cell: string): string {
 	);
 }
 
-/**
- * GFM tables (a header row, a `|---|` rule of 3+ hyphens a cell, more rows) outside code fences, each aligned by
- * `displayWidth` and wrapped in a code fence: Discord does not draw tables. Returns the text and the wrapped spans,
- * which a split must keep whole.
- */
-function fenceTables(text: string): { text: string; spans: Array<[number, number]> } {
+/** GFM tables outside code fences, aligned by `displayWidth` and wrapped in a trackable code fence. */
+function fenceTables(text: string, limit = MESSAGE_CONTENT_LIMIT): { text: string; spans: Array<[number, number]> } {
 	const lines = text.split("\n");
 	const out: string[] = [];
 	const spans: Array<[number, number]> = [];
@@ -102,7 +99,8 @@ function fenceTables(text: string): { text: string; spans: Array<[number, number
 		});
 		// The delimiter row's `:` markers pick the padding side; the markers themselves never reach the output.
 		const align = delimiterAligns(lines[i + 1] ?? "");
-		const ascii = tableToAscii({ headers, rows }, { rule: true, align });
+		const maxFence = Math.max(16, Math.floor(limit / 4));
+		const ascii = clampBacktickRuns(tableToAscii({ headers, rows }, { rule: true, align }), maxFence);
 		const fence = "`".repeat(Math.max(3, maxBacktickRun(ascii) + 1));
 		const start = offset;
 		push(fence);
@@ -128,7 +126,7 @@ export function renderDiscordParts(body: string, redelivered: boolean, footer?: 
 
 /** Plain text in parts of at most `limit`: tables fenced and kept whole when they fit, fences closed in each part. */
 export function chunkPlain(body: string, limit: number): string[] {
-	const { text, spans } = fenceTables(body);
+	const { text, spans } = fenceTables(body, limit);
 	// A table longer than a message cannot stay whole; it is split like any fenced block.
 	return chunkText(
 		text,

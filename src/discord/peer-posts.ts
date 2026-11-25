@@ -63,6 +63,56 @@ export class PeerParts {
 	}
 }
 
+export interface BackfillPeerBatch {
+	event: DiscordMessageEvent;
+	/** Highest snowflake id absorbed into `event`, so backfill watermarks advance past absorbed continuation parts. */
+	watermarkId: string;
+}
+
+/**
+ * Joins split peer replies inside a backfill page (`fromBackfill` skips `PeerParts.gather`'s 8s wait): a mentioned
+ * peer post absorbs consecutive unmentioned posts by the same author within `PEER_PART_WAIT_MS` in the page.
+ */
+export function mergeBackfillPeerParts(
+	messages: readonly DiscordMessageEvent[],
+	botUserId: string | undefined,
+	peerUserIds: ReadonlySet<string>,
+): BackfillPeerBatch[] {
+	if (botUserId === undefined || peerUserIds.size === 0) {
+		return messages.map((event) => ({ event, watermarkId: event.id }));
+	}
+	const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
+	const out: BackfillPeerBatch[] = [];
+	for (let i = 0; i < messages.length; i += 1) {
+		const head = messages[i] as DiscordMessageEvent;
+		const authorId = head.author?.id;
+		const isPeerMention =
+			authorId !== undefined && peerUserIds.has(authorId) && tokens.some((token) => head.content.includes(token));
+		if (!isPeerMention) {
+			out.push({ event: head, watermarkId: head.id });
+			continue;
+		}
+		const parts = [head.content];
+		const embeds = [...(head.embeds ?? [])];
+		let last = head;
+		while (i + 1 < messages.length) {
+			const next = messages[i + 1] as DiscordMessageEvent;
+			if (next.author?.id !== authorId) break;
+			if (tokens.some((token) => next.content.includes(token))) break;
+			if (snowflakeTime(next.id) - snowflakeTime(last.id) > PEER_PART_WAIT_MS) break;
+			parts.push(next.content);
+			if (next.embeds) embeds.push(...next.embeds);
+			last = next;
+			i += 1;
+		}
+		out.push({
+			event: last === head ? head : { ...head, content: parts.join("\n"), ...(embeds.length > 0 ? { embeds } : {}) },
+			watermarkId: last.id,
+		});
+	}
+	return out;
+}
+
 /** What `notePeerSeen` reads of the adapter. */
 export interface PeerSeenDeps {
 	core: CoreSink;

@@ -11,6 +11,28 @@ export function maxBacktickRun(text: string): number {
 	return max;
 }
 
+/** Splits any backtick run reaching `maxRun` with U+200B so wrapping code fences stay trackable by `chunkText`. */
+export function clampBacktickRuns(text: string, maxRun: number): string {
+	if (maxRun < 2) return text;
+	let out = "";
+	let run = 0;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i] as string;
+		if (ch === "`") {
+			if (run === maxRun - 1) {
+				out += "\u200B";
+				run = 0;
+			}
+			out += ch;
+			run += 1;
+		} else {
+			out += ch;
+			run = 0;
+		}
+	}
+	return out;
+}
+
 function isEscaped(text: string, index: number): boolean {
 	let backslashes = 0;
 	for (let i = index - 1; i >= 0 && text[i] === "\\"; i--) backslashes += 1;

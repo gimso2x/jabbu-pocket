@@ -1,5 +1,4 @@
-// Discord's inbound path and delivery sender: the same rules as the other adapters (owner gate, addressing,
-// 👀 + ⏳ status, the shared delivery pump), on Discord's shapes.
+// Discord's inbound path and delivery sender (owner gate, addressing, 👀 + ⏳ status, shared delivery pump).
 import { join } from "node:path";
 import type { ChannelAdapter, ChannelPolicy, OwnerIngest } from "../channel/adapter";
 import {
@@ -65,7 +64,7 @@ import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, TH
 import { toDiscordEmoji } from "./emoji";
 import { InlineRoots } from "./inline-root";
 import { type DiscordPart, renderDiscordMessages } from "./messages";
-import { notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
+import { mergeBackfillPeerParts, notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
 import {
 	type DiscordAttachment,
 	DiscordCallError,
@@ -182,11 +181,9 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #gate: RetryAfterGate;
 	readonly #pump: DeliveryPump;
 	readonly #recovery: DiscordBackfill | undefined;
-	/** Interactions already handled (a resumed gateway can replay one): insertion-ordered, capped. */
+	/** Recovered server roots that opened their thread until their scan notice picks one; `#seenInteractions` deduplicates replayed interactions. */
 	readonly #seenInteractions = new Set<string>();
-	/** Messages whose refused thread start already left the channel notice (`#startThread`). */
 	readonly #threadNoticeSent = new Set<string>();
-	/** Recovered server roots that opened their thread, until their scan's notice picks one (`#recoveryNotice`). */
 	readonly #recoveredThreads = new Set<string>();
 	#ready: Promise<string | undefined> = Promise.resolve(undefined);
 	readonly #startWaitMs: number;
@@ -274,10 +271,12 @@ export class DiscordAdapter implements ChannelAdapter {
 						maxPages: recovery.maxPages,
 						ready: async () => (await this.#ready) !== undefined,
 						locate: async (channelId) => {
-							const info = await this.#port.channelInfo(channelId);
+							const info = await this.#port.channelInfo(channelId, false);
 							if (info === undefined) return undefined;
 							return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
 						},
+						preparePage: (msgs) =>
+							mergeBackfillPeerParts(msgs, this.#botUserId, new Set(this.#peerBots.map((p) => p.userId))),
 						ingest: async (event) => {
 							let opened = false;
 							const outcome = await this.#processMessage(
