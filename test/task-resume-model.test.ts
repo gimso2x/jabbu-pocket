@@ -4,12 +4,13 @@ import { DiscordChannel } from "../src/discord/channel";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { buildDispatchTool } from "../src/dispatch/tool";
 import type { LaneModelTiers } from "../src/model-tiers";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { diskHeadroom, IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import type { HostResult, TaskHostOps, TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
 import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { ROOMY_STATFS } from "./helpers/disk";
 
 const NOW = Date.parse("2026-11-21T00:00:00Z");
 const SONNET = "anthropic/claude-sonnet-5-5";
@@ -114,6 +115,7 @@ function setup() {
 			now: () => NOW,
 			hostOps: () => host,
 			hostLoad: IDLE_HOST_LOAD,
+			diskHeadroom: (path) => diskHeadroom(path, ROOMY_STATFS),
 		},
 	});
 	const call = (params: Record<string, unknown>) => tool.execute(params, { signal: new AbortController().signal });

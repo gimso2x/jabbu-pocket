@@ -153,8 +153,9 @@ export function readStatusFromDb(
 	timezone: string,
 	gateOptions: ConfigGateOptions = {},
 	hostLoad?: Partial<HostLoadReader>,
+	statfs?: StatfsReader,
 ): StatusReport {
-	const openGates = (): OpenGateSummary[] => openGateSummary(dbPath, Date.now(), gateOptions, hostLoad);
+	const openGates = (): OpenGateSummary[] => openGateSummary(dbPath, Date.now(), gateOptions, hostLoad, statfs);
 	let db: Database | undefined;
 	let counts: Pick<StatusReport, "inbound" | "ledger" | "origins" | "monitors">;
 	try {
@@ -192,23 +193,16 @@ export function readStatusFromDb(
 	};
 }
 
+type StateCount<S extends string> = { state: S; n: number };
+
 /** Inbound and delivery counts, origins and monitors of a read-only handle; throws on an unreadable ledger. */
 function readCoreCounts(db: Database): Pick<StatusReport, "inbound" | "ledger" | "origins" | "monitors"> {
 	// No prototype: a stored state named `__proto__` is counted like any other, not swallowed by the setter (qa-l #11).
 	const inbound = Object.assign(Object.create(null) as Record<InboundState, number>, emptyInbound());
-	for (const row of db.query(INBOUND_COUNT_SQL).all() as Array<{
-		state: InboundState;
-		n: number;
-	}>) {
-		inbound[row.state] = row.n;
-	}
+	for (const row of db.query(INBOUND_COUNT_SQL).all() as StateCount<InboundState>[]) inbound[row.state] = row.n;
 	const deliveryCounts: Partial<Record<DeliveryState, number>> = {};
-	for (const row of db.query("SELECT state, COUNT(*) AS n FROM deliveries GROUP BY state").all() as Array<{
-		state: DeliveryState;
-		n: number;
-	}>) {
-		deliveryCounts[row.state] = row.n;
-	}
+	const deliverySql = "SELECT state, COUNT(*) AS n FROM deliveries GROUP BY state";
+	for (const row of db.query(deliverySql).all() as StateCount<DeliveryState>[]) deliveryCounts[row.state] = row.n;
 	const origins = (
 		db.query("SELECT origin_key, epoch FROM origins ORDER BY origin_key").all() as Array<{
 			origin_key: string;

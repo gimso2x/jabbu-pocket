@@ -32,6 +32,7 @@ export function spawnDaemon(homeDir: string, transportFile: string, env: Record<
 			JABBU_TEST_HOOKS: "1",
 			JABBU_TEST_DISCORD_TRANSPORT: transportFile,
 			JABBU_TEST_HOST_LOAD: "idle", // gates judge an idle host, not this machine's load
+			JABBU_TEST_STATFS: "roomy", // gates and start capacity judge a roomy disk, not /tmp
 			...env,
 		},
 		stdin: "ignore",

@@ -35,6 +35,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { killSpawned, runCliCapture, runMain } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 
 const DM = OWNER_DM;
 const ORIGIN = `discord/dm/${DM}`;
@@ -68,6 +69,7 @@ async function boot(holdTurns: boolean): Promise<Daemon> {
 	transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
 	transport.setChannel({ id: THREAD, type: 11, parentId: CHANNEL, guildId: GUILD });
 	const started = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		clock,

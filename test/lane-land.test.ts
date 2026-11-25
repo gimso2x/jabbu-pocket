@@ -39,6 +39,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -2146,6 +2147,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 			const sessions = new FakeSessionStore();
 			const clock = { now: () => Date.now() };
 			const daemon = new Daemon({
+				...daemonTestOptions(),
 				config: herdrBoard === undefined ? laneConfig() : { ...laneConfig(), herdrBoard },
 				channels: [discordBinding(transport)],
 				log: createLogger({ sink: (line) => logs.push(line), clock, redact }),

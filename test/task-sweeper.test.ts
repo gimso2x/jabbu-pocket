@@ -50,6 +50,7 @@ import { discordBinding, makeHome, OWNER, OWNER_DM, type TestHome, WaitingDiscor
 import { registryOf } from "./helpers/channels";
 import { killSpawned, runMain } from "./helpers/daemon-process";
 import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git as gitFixture } from "./helpers/git-fixtures";
 
 const formatAgentWaitingNotice = (...args: Parameters<typeof buildAgentWaitingCard>): string =>
@@ -1867,6 +1868,7 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		herdrAgents = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			herdrRun: async (cmd) => {
 				herdrCalls.push(cmd);
 				const agents = herdrAgents.map((name) => ({ name, pane_id: `p-${name}`, agent_status: "idle" }));
@@ -1983,6 +1985,7 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		await daemon.stop();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			herdrRun: async () => ({ code: 0, stdout: JSON.stringify({ result: { agents: [] } }), timedOut: false }),
 			config: { ...home.config, herdr: {}, herdrBoard: { url: "https://board.test/", api: "http://127.0.0.1:9" } },
 			channels: [discordBinding(transport)],
@@ -2062,6 +2065,7 @@ describe("daemon: herdr off (config without herdr)", () => {
 		const herdrCalls: string[][] = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			herdrRun: async (cmd) => {
 				herdrCalls.push(cmd);
 				return { code: 0, stdout: JSON.stringify({ result: { agents: [] } }), timedOut: false };

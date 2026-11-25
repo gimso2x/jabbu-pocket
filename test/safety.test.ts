@@ -58,6 +58,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = OWNER_DM;
 const ORIGIN = `discord/dm/${CHANNEL}`;
@@ -1021,6 +1022,7 @@ describe("approval through the daemon (adapter owner gate, logs)", () => {
 		const transport = new ButtonTransport();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
@@ -1069,6 +1071,7 @@ describe("file upload thread routing (daemon)", () => {
 		const transport = new WaitingDiscordTransport();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: quietLog(),
@@ -1114,6 +1117,7 @@ describe("file upload thread routing (daemon)", () => {
 		const drivers: FakeOmpDriver[] = [];
 		const steerDelivered = Promise.withResolvers<void>();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({

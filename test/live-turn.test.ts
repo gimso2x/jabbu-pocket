@@ -14,6 +14,7 @@ import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../s
 import { clearSecretIndex, indexSecretValue, redact } from "../src/redact";
 import type { Store } from "../src/store/db";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const T = (text: string) => expect.objectContaining({ text, state: "running" });
 
@@ -317,6 +318,7 @@ describe("daemon live op", () => {
 		const started = Promise.withResolvers<void>();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log: createLogger({

@@ -47,7 +47,6 @@ import { readStamp, runBackup, STAMP_FILE } from "../src/ops/backup";
 import { BackupError } from "../src/ops/backup-error";
 import { collectGates, INBOUND_STARVATION_MS, SWEEP_STALLED_MS, TURNS_FAILING_WINDOW_MS } from "../src/ops/gates";
 import { gcSessions } from "../src/ops/gc";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { LOG_FILES, LOG_MAX_BYTES, LogDirError, openLogSink, rotatingFileSink } from "../src/ops/logfile";
 import { redact } from "../src/redact";
 import { ALERT_INCIDENT_REPEAT_MS, type Store } from "../src/store/db";
@@ -64,6 +63,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { killSpawned, runMain, spawnDaemon } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 import { isRoot } from "./helpers/privileges";
 
@@ -756,13 +756,13 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 	): Promise<void> {
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
 			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
 			ompVersion: "omp-test 0",
 			bootId: "boot",
-			hostLoad: IDLE_HOST_LOAD, // status is read twice (slash, CLI): live load would differ between the readings
 			driverFactory: (_origin, sessionDir) => {
 				const driver = new OpsDriver({
 					sessionDir,
@@ -1014,6 +1014,7 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		const sessions = new FakeSessionStore();
 		const failPrompts = options.failPrompts ?? 0;
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
@@ -2191,6 +2192,7 @@ describe.each([
 		const prompts: string[] = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,

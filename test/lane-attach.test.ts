@@ -22,6 +22,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -120,6 +121,7 @@ describe("lane attach / detach through the daemon", () => {
 	async function startDaemon(): Promise<Daemon> {
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: {

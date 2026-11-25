@@ -19,6 +19,7 @@ import { landModeOfRemote } from "../src/lanes/pr-land-remote";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
+import { daemonTestOptions } from "./helpers/disk";
 
 let home: string;
 
@@ -1208,6 +1209,7 @@ describe("Discord-only: no other platform configured", () => {
 
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels,
 			log,

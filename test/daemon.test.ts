@@ -13,7 +13,6 @@ import { INTERRUPTED_NOTICE } from "../src/daemon/recovery";
 import { runDaemon } from "../src/daemon/run";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import { acceptanceItems } from "../src/tasks/docs";
 import {
@@ -27,6 +26,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 /** Fake message snowflakes the tests seed rows with (the transport's own ids start higher). */
@@ -51,12 +51,12 @@ afterEach(async () => {
 
 function newDaemon(transport: WaitingDiscordTransport): Daemon {
 	const daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		log: createLogger({ sink: () => undefined, clock, redact }),
 		ompVersion: "omp-test 0",
 		bootId: BOOT_ID,
-		hostLoad: IDLE_HOST_LOAD, // the gates these tests assert never depend on this machine's load
 		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 	});
 	daemons.push(daemon);
@@ -272,6 +272,7 @@ describe("sweep heartbeat", () => {
 	test("a sweep step that throws does not reject the sweep: sweep_failed is logged and the heartbeat is not rewritten", async () => {
 		const lines: string[] = [];
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
@@ -310,6 +311,7 @@ describe("sweep heartbeat", () => {
 		const verify = Promise.withResolvers<{ ok: false; reasons: string[] }>();
 		let verifyCalls = 0;
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log: createLogger({ sink: () => undefined, clock, redact }),
@@ -364,6 +366,7 @@ describe("sweep heartbeat", () => {
 		}
 		const transport = new WaitingDiscordTransport();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, idleTimeoutMinutes: 1, idleKeepResident: false },
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),
@@ -535,6 +538,7 @@ describe("stop() drains running turns before stopping the children", () => {
 		options: { stopDrainMs: number; lines: string[]; drivers: FakeOmpDriver[] },
 	): Daemon {
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: (line) => options.lines.push(line), clock, redact }),
@@ -693,6 +697,7 @@ describe("sweep retry for stranded pending rows (dispatch_pending_failed follow-
 
 	function newRetryDaemon(transport: WaitingDiscordTransport, drivers: FakeOmpDriver[], holdTurns: boolean): Daemon {
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
@@ -838,6 +843,7 @@ describe("provider limit notice", () => {
 	test("provider limit: two turns hitting the same limit DM the owner once within 24h", async () => {
 		const transport = new WaitingDiscordTransport();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),
@@ -1024,12 +1030,12 @@ describe("adapter start isolation", () => {
 	test("when the only adapter fails to start, the start fails", async () => {
 		const tap = logTap();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new RefusedDiscordTransport())],
 			log: createLogger({ sink: tap.sink, clock, redact }),
 			ompVersion: "omp-test 0",
 			bootId: BOOT_ID,
-			hostLoad: IDLE_HOST_LOAD,
 			driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 		});
 		daemons.push(daemon);
@@ -1051,12 +1057,12 @@ describe("lane settle failure", () => {
 			const transport = new WaitingDiscordTransport();
 			const tap = logTap();
 			const daemon = new Daemon({
+				...daemonTestOptions(),
 				config: home.config,
 				channels: [discordBinding(transport)],
 				log: createLogger({ sink: tap.sink, clock, redact }),
 				ompVersion: "omp-test 0",
 				bootId: BOOT_ID,
-				hostLoad: IDLE_HOST_LOAD,
 				driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 			});
 			daemons.push(daemon);

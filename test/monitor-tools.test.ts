@@ -10,6 +10,7 @@ import { createLogger } from "../src/log";
 import { type MonitorLedger, monitorOrigin, openMonitorLedger } from "../src/monitors/ledger";
 import { buildMonitorTools } from "../src/monitors/tools";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import { buildFloorsPrompt } from "../src/safety/prompt";
 import {
@@ -20,6 +21,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions, ROOMY_STATFS } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 const CHANNEL_ORIGIN = `discord/ch/${CHANNEL}`;
@@ -230,6 +232,7 @@ describe("who gets the tools", () => {
 	test("the daemon registers them for the owner DM only", async () => {
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log,
@@ -253,6 +256,7 @@ describe("who gets the tools", () => {
 		const discordDm = ORIGIN;
 		const discordThread = `${CHANNEL_ORIGIN}/t/222222222222222222`;
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log,
@@ -296,7 +300,9 @@ describe("status groups thread sessions", () => {
 		} finally {
 			store.close();
 		}
-		const text = renderStatusText(readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul"));
+		const text = renderStatusText(
+			readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS),
+		);
 		expect(text).toContain("origin 4개");
 		expect(text).toContain(`• ${ORIGIN} epoch=1`);
 		expect(text).toContain(`• ${CHANNEL_ORIGIN} epoch=1`);
@@ -342,7 +348,7 @@ describe("status shows monitors", () => {
 		} finally {
 			store.close();
 		}
-		const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul");
+		const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS);
 		expect(report.monitors).toEqual({ count: 1, next: { name: "soon", at: "2026-10-19T06:05:00.000Z" } });
 		expect(renderStatusText(report)).toContain("모니터 1개 · 다음 발사 soon 2026-10-19 15:05:00 (Asia/Seoul)");
 		expect(renderStatusText({ ...report, monitors: { count: 0, next: null } })).toContain("모니터 0개");

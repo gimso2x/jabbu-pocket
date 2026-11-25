@@ -12,6 +12,7 @@ import { ompSessionDirFor } from "../src/omp/session-dir";
 import { redact } from "../src/redact";
 import { TASK_SCHEMA } from "../src/tasks/ledger-schema";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const LANE = "watch-lane";
 const LANE_ORIGIN = `jabbu/work/${LANE}`;
@@ -218,6 +219,7 @@ describe("daemon session_file op", () => {
 		const started = Promise.withResolvers<void>();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log: createLogger({

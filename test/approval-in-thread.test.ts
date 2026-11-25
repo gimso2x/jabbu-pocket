@@ -39,6 +39,7 @@ import {
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ESC = "300000000000000010";
 const REQ = CHANNEL;
@@ -457,6 +458,7 @@ describe("daemon: 다시 요청 on a timed-out approval card", () => {
 		const discord = home.config.channels.discord;
 		if (discord === undefined) throw new Error("no discord config");
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: { ...home.config.channels, discord: { ...discord, escalationChannelId: ESC } },

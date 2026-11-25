@@ -16,6 +16,7 @@ import { createTaskHostOps, type TaskHostOps } from "../src/tasks/host";
 import { removeRemoteWorktree, syncRemoteBase } from "../src/tasks/host-sync";
 import { landTask } from "../src/tasks/land";
 import { discordBinding, GUILD, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { FakeGh } from "./helpers/fake-gh";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
@@ -201,6 +202,7 @@ async function build(): Promise<World> {
 			return { code, stdout, stderr, timedOut: false };
 		};
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels: [discordBinding(transport)],
 			clock,

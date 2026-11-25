@@ -11,9 +11,9 @@ import { bootRuntime } from "../lanes/runtime";
 import { createLogger, type Logger } from "../log";
 import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
-import { testHostLoad } from "../ops/host-resources";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
+import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
 import { NewerSchemaError, SCHEMA_VERSION } from "../store/schema-version";
@@ -226,6 +226,7 @@ export async function runDaemon(
 		);
 	};
 	const hostLoad = testHostLoad(env); // test-only idle host, behind JABBU_TEST_HOOKS=1
+	const statfs = testStatfs(env); // test-only roomy disk, behind JABBU_TEST_HOOKS=1
 	const ompVersion = await checkOmpVersion(config, log);
 	// What every review, QA and check receipt of this run is recorded on: omp, the source checkout commit, OS and arch.
 	const runtime = await bootRuntime({ omp: ompVersion, sourceDir: join(import.meta.dir, "..", ".."), log });
@@ -249,6 +250,7 @@ export async function runDaemon(
 		channels: channelBindings(config, env, log),
 		crash: crashHook(env),
 		...(hostLoad === undefined ? {} : { hostLoad }),
+		...(statfs === undefined ? {} : { statfs }),
 		sweepMs: env.JABBU_TEST_HOOKS === "1" && env.JABBU_SWEEP_MS ? Number(env.JABBU_SWEEP_MS) : undefined,
 		...(agyPool === undefined ? {} : { agyStatus: () => agyPool.status(clock.now()) }),
 		driverFactory: createBotDriverFactory({

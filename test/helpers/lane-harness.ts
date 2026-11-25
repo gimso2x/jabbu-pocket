@@ -15,6 +15,7 @@ import { redact } from "../../src/redact";
 import type { Store } from "../../src/store/db";
 import { OWNER, WaitingDiscordTransport } from "./bot-home";
 import { registryOf } from "./channels";
+import { ROOMY_STATFS } from "./disk";
 
 /** 2027-01-15 KST: lane ids of a harness lane read `L-20270115-NN`. */
 export const LANE_START = 1_800_000_000_000;
@@ -141,8 +142,9 @@ export function laneHarness(homeDir: string, extra: LaneHarnessExtra = {}): Lane
 		clock,
 		log,
 		sessionsRoot,
-		// The start-capacity gate would otherwise read this machine's live memory.
+		// The start-capacity gate would otherwise read this machine's live memory and disk.
 		hostLoad: IDLE_HOST_LOAD,
+		statfs: ROOMY_STATFS,
 		route: (record) => {
 			if (routeFails?.(record) === true) return Promise.reject(new Error("route refused"));
 			const run = router.route(record);
