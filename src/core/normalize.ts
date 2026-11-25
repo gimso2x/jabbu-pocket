@@ -73,13 +73,13 @@ export function originKeyForMessage(
 	return `${originKeyForChannel(channel, channelType, platform)}/t/${root ? ts : threadTs}`;
 }
 
-/** Thread ref (`<channel>:<rootTs>`) a thread-session origin serves; undefined for every other origin kind. */
+/** Thread ref (`<channel>:<rootTs>`) a thread-session origin serves (`web/dm/…/t/…` included); undefined otherwise. */
 export function threadRefOfOrigin(originKey: string): string | undefined {
 	const ref = parseChatOrigin(originKey);
-	return ref?.kind === "ch" && ref.threadId !== undefined ? threadRefOf(ref.conversationId, ref.threadId) : undefined;
+	return ref?.threadId !== undefined ? threadRefOf(ref.conversationId, ref.threadId) : undefined;
 }
 
-/** True for thread-session origins (`<platform>/ch/<C>/t/<rootTs>`). */
+/** True for thread-session origins (`<platform>/<kind>/<C>/t/<rootTs>`). */
 export function isThreadOrigin(originKey: string): boolean {
 	return threadRefOfOrigin(originKey) !== undefined;
 }
