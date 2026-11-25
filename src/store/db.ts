@@ -977,7 +977,7 @@ export class Store {
 		body: string,
 	): void {
 		if (threads.length === 0) return;
-		const first = (body.split("\n").find((line) => line.trim() !== "") ?? "").trim().slice(0, 200);
+		const first = cutCodePointSafe((body.split("\n").find((line) => line.trim() !== "") ?? "").trim(), 200);
 		const answered = parseThreadRef(input.threadRef);
 		const link =
 			answered === undefined || answered.threadTs === TOP_LEVEL_TS
@@ -2469,4 +2469,4 @@ export function openDeliveryLedger(path: string, clock?: StoreClock): DeliveryLe
 		throw error;
 	}
 	return new DeliveryLedger(db, clock);
-}
+			}
