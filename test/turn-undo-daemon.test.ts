@@ -10,6 +10,7 @@ import { createLogger } from "../src/log";
 import { FakeOmpDriver, type FakeOmpDriverOptions, FakeSessionStore } from "../src/omp/fake-driver";
 import { discordBinding, makeHome, OWNER, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
@@ -40,6 +41,7 @@ function withTurnSnapshot(config: JabbuConfig, list: readonly string[]): JabbuCo
 async function boot(config: JabbuConfig, driver: FakeOmpDriverOptions = {}): Promise<Daemon> {
 	const instance = new FakeOmpDriver({ ...driver, sessionDir: join(home.dir, "s"), store: new FakeSessionStore() });
 	const d = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels: [discordBinding(transport)],
 		clock: { now: () => Date.now() },

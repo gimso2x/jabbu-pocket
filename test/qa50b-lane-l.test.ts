@@ -8,6 +8,7 @@ import { renderStatusText } from "../src/daemon/status-render";
 import { checkOmpRuntime } from "../src/omp/runtime-check";
 import { listsBefore, newestSessionFile } from "../src/omp/session-heal";
 import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { ROOMY_STATFS } from "./helpers/disk";
 
 const root = mkdtempSync(join(tmpdir(), "jabbu-qa50b-lane-l-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -67,7 +68,7 @@ describe("qa50b-low lane L", () => {
 			mkdirSync(home);
 			const dbPath = join(home, "jabbu.db");
 			writeFileSync(dbPath, bytes);
-			const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+			const report = readStatusFromDb(dbPath, "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS);
 			expect(report.daemonRunning).toBe(false);
 			expect(report.origins).toEqual([]);
 			expect(report.openGates.map((gate) => gate.name)).toContain("ledger_unreadable");

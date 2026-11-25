@@ -11,11 +11,11 @@ import { Daemon } from "../src/daemon/daemon";
 import { DiscordCallError } from "../src/discord/transport";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import { openDeliveryLedger, openStore, type Store } from "../src/store/db";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import { runCliCapture } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 
 class FakeClock {
 	constructor(public t = 1_800_000_000_000) {}
@@ -394,12 +394,12 @@ describe("the daemon holds and notices (real pump, real adapter)", () => {
 		homes.push(home);
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),
 			ompVersion: "omp-test 0",
 			bootId: BOOT_ID,
-			hostLoad: IDLE_HOST_LOAD,
 			driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 		});
 		daemons.push(daemon);

@@ -6,7 +6,6 @@ import { Daemon } from "../src/daemon/daemon";
 import { planReload, RESTART_FIELDS } from "../src/daemon/reload";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import {
 	BOT,
@@ -21,7 +20,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { killSpawned, runMain, spawnDaemon } from "./helpers/daemon-process";
-import { ROOMY_STATFS } from "./helpers/disk";
+import { daemonTestOptions } from "./helpers/disk";
 
 let home: TestHome;
 let daemon: Daemon | undefined;
@@ -122,6 +121,7 @@ test("jabbu-pocket reload applies a live field and refreshes last-good; an inval
 	const clock = { now: () => Date.now() };
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		clock,
@@ -179,6 +179,7 @@ describe("peer bot policy reload", () => {
 		const discord = home.config.channels.discord;
 		if (discord === undefined) throw new Error("home without channels.discord");
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, channels: { discord: { ...discord, peerBots: [{ userId: PEER, name: "떡" }] } } },
 			channels: [discordBinding(transport, { peerBots: [{ userId: PEER, name: "떡" }] })],
 			clock,
@@ -232,6 +233,7 @@ test("reloading a config that turns herdr on answers restartRequired with herdr"
 	const clock = { now: () => Date.now() };
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(new WaitingDiscordTransport())],
 		clock,
@@ -255,6 +257,7 @@ describe("boot last-good", () => {
 		const clock = { now: () => Date.now() };
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			bootConfigText,
 			channels: [discordBinding(new WaitingDiscordTransport())],
@@ -312,6 +315,7 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 	const live = { herdr: {} };
 	patchConfig({ ...live, lanes: { models: { middle: "a/one" } } });
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: { ...home.config, ...live, lanes: { models: { middle: "a/one" } } },
 		channels: [discordBinding(transport)],
 		clock,
@@ -321,8 +325,6 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 		sweepMs: 3_600_000,
 		gateSweepMs: 0,
 		taskSweepMs: 0,
-		statfs: ROOMY_STATFS, // the [TASK] start's disk check never depends on this machine's free space
-		hostLoad: IDLE_HOST_LOAD, // ...nor does its memory·cgroup floor
 		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
 	});
 	await daemon.start();
@@ -363,6 +365,7 @@ test("qa-z #29: a reload logs the new file's config warnings and carries them", 
 	const clock = { now: () => Date.now() };
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(new WaitingDiscordTransport())],
 		clock,

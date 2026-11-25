@@ -1836,7 +1836,7 @@ export class Store {
 	}
 
 	/**
-	 * A confirmed Discord thread post (not a channel root, DM, #log or board post, log copy or peer failure notice)
+	 * A confirmed Discord thread post (not a channel root, DM, channel-body answer, #log or board post, log copy or peer failure notice)
 	 * that mentions a policy peer (`<@id>`, `<@!id>` or the core's mention token) is one pending call per peer.
 	 */
 	private recordPeerCalls(row: DeliveryRow, now: number): void {
@@ -1845,7 +1845,8 @@ export class Store {
 		const thread = parseThreadRef(row.threadRef);
 		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) return;
 		if (platformOfThreadRef(row.threadRef) !== "discord" || policy.skipConversations.includes(thread.channel)) return;
-		if (parseChatOrigin(row.originKey)?.kind === "dm") return;
+		const origin = parseChatOrigin(row.originKey);
+		if (origin !== undefined && origin.threadId === undefined) return;
 		const insert = this.db.query(
 			"INSERT INTO peer_calls (thread_ref, peer_user_id, delivery_id, called_at) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id, peer_user_id) DO NOTHING",
 		);

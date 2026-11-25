@@ -12,6 +12,7 @@ import { redact } from "../src/redact";
 import { approvalActionId, choiceActionId } from "../src/safety/approval";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const DM = "123456789012345678";
 const ORIGIN = `discord/dm/${DM}`;
@@ -33,6 +34,7 @@ async function boot(approvalTimeoutMs?: number, escalationChannelId?: string): P
 	const discordConfig = config.channels.discord;
 	if (discordConfig === undefined) throw new Error("no discord config");
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: {
 			...config,
 			channels: {

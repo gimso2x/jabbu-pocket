@@ -8,6 +8,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { ledgerDay } from "../src/ops/cost-cap";
 import { redact } from "../src/redact";
 import { discordBinding, GUILD, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 const MINUTE = 60_000;
@@ -63,6 +64,7 @@ afterEach(async () => {
 async function boot(costCap: { turnUsd?: number; dailyUsd?: number }, holdTurns = false): Promise<Daemon> {
 	const sessions = new FakeSessionStore();
 	const d = new Daemon({
+		...daemonTestOptions(),
 		config: { ...home.config, costCap },
 		channels: [discordBinding(transport)],
 		clock,

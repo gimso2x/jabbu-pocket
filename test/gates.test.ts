@@ -24,7 +24,8 @@ import {
 	SWEEP_STALLED_MS,
 } from "../src/ops/gates";
 import { HERDR_HEALTH_FILE, HERDR_HEALTH_STALE_MS, HerdrHealthProbe, readHerdrHealth } from "../src/ops/herdr-health";
-import { IDLE_HOST_LOAD, testHostLoad } from "../src/ops/host-resources";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { ROOMY_STATFS, testHostLoad, testStatfs } from "../src/ops/test-host-hooks";
 import { localDay } from "../src/time";
 
 let home: string;
@@ -999,6 +1000,24 @@ describe("JABBU_TEST_HOST_LOAD test hook", () => {
 	});
 });
 
+describe("JABBU_TEST_STATFS test hook", () => {
+	test("inert without JABBU_TEST_HOOKS=1, so production always reads this machine", () => {
+		expect(testStatfs({})).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_STATFS: "roomy" })).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_HOOKS: "0", JABBU_TEST_STATFS: "roomy" })).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_HOOKS: "1" })).toBeUndefined();
+	});
+
+	test("with JABBU_TEST_HOOKS=1, roomy closes disk_low and any other value is refused", () => {
+		const roomy = testStatfs({ JABBU_TEST_HOOKS: "1", JABBU_TEST_STATFS: "roomy" });
+		expect(roomy).toBe(ROOMY_STATFS);
+		const gate = collectGates({ homeDir: home, now, statfs: roomy }).find((g) => g.name === "disk_low");
+		expect(gate?.state).toBe("closed");
+		expect(gate?.detail).toContain("free_gib=50.0 pct=50");
+		expect(() => testStatfs({ JABBU_TEST_HOOKS: "1", JABBU_TEST_STATFS: "tight" })).toThrow("unknown value tight");
+	});
+});
+
 describe("drain_orphaned (cataly-apply-release-guards)", () => {
 	const orphanGate = (isAlive: (pid: number) => boolean = () => false) =>
 		collectGates({ homeDir: home, now, isAlive }).find((g) => g.name === "drain_orphaned");
@@ -1131,7 +1150,14 @@ describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and t
 
 	test("an omp_runtime gate the sweep opens is listed by the status fallback too", () => {
 		const options = gateOptionsFromConfig({ timezone: "Asia/Seoul", ompExecutable: join(home, "no-such-omp") });
-		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", options, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(
+			join(home, "jabbu.db"),
+			"omp-test 0",
+			"Asia/Seoul",
+			options,
+			IDLE_HOST_LOAD,
+			ROOMY_STATFS,
+		);
 		expect(report.openGates.map((gate) => gate.name)).toContain("omp_runtime");
 	});
 
@@ -1142,7 +1168,14 @@ describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and t
 				"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('m1', 'o', 1, 't', '__proto__', 1)",
 			);
 		});
-		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(
+			join(home, "jabbu.db"),
+			"omp-test 0",
+			"Asia/Seoul",
+			{},
+			IDLE_HOST_LOAD,
+			ROOMY_STATFS,
+		);
 		expect(Object.getOwnPropertyDescriptor(report.inbound, "__proto__")?.value).toBe(1);
 	});
 });
