@@ -102,7 +102,7 @@ umask 077; cat > ~/.jabbu/secrets/discord-bot-token   # 2절의 봇 토큰 붙�
       "logChannelId": "<#log로 쓸 서버 텍스트 채널 ID>",
       "escalationChannelId": "<승인 카드를 받을 서버 텍스트 채널 ID>",
       "alertChannelId": "<경보를 받을 서버 텍스트 채널 ID>",
-      "displayName": "송박"
+      "displayName": "잡부"
     }
   }
 }

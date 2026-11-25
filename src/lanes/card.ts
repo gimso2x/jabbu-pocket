@@ -226,7 +226,7 @@ export function buildLaneOutcomeCard(
 		qa === undefined
 			? []
 			: [
-					`🧪 실행 QA(뚱기 · ${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${
+					`🧪 실행 QA(${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${
 						qa.verdict === "inconclusive" ? `확인 불가(${qa.reason ?? "?"})` : qa.verdict
 					}`,
 					...qa.findings.slice(0, QA_FINDINGS_SHOWN).map((finding) => `> ${escapeMrkdwn(clip(redact(finding), 200))}`),

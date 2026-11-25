@@ -88,9 +88,7 @@ function protectedInodeMatches(root: string, target: { dev: number; ino: number 
 }
 
 /** How a tool description names each platform. */
-const PLATFORM_NAMES: Record<ChatPlatform, string> = {
-	discord: "Discord",
-};
+const PLATFORM_NAMES: Record<ChatPlatform, string> = { discord: "Discord", web: "Web" };
 
 export interface HostToolDeps {
 	originKey: string;
