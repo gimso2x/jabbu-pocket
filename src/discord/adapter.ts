@@ -421,7 +421,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** Best-effort post; failures are logged under `event`, never thrown. */
-	async #postText(conversationId: string, threadId: string | undefined, text: string, event: string): Promise<void> {
+	async #postText(conversationId: string, threadId: string | undefined, text: string, event: string): Promise<boolean> {
 		try {
 			const destination = await this.#port.destination(conversationId, threadId);
 			await this.#call("post", () =>
@@ -434,7 +434,9 @@ export class DiscordAdapter implements ChannelAdapter {
 			);
 		} catch (err) {
 			this.#log.warn(event, { channel: conversationId, error: errorText(err) });
+			return false;
 		}
+		return true;
 	}
 
 	/**
@@ -453,8 +455,8 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** Best-effort notice at the channel's top level, or under `threadId` (a thread, or the message it answers). */
-	async postNotice(conversationId: string, text: string, threadId?: string): Promise<void> {
-		await this.#postText(conversationId, threadId, text, "notice_failed");
+	async postNotice(conversationId: string, text: string, threadId?: string): Promise<boolean> {
+		return await this.#postText(conversationId, threadId, text, "notice_failed");
 	}
 
 	// ---- button clicks ----
@@ -866,10 +868,9 @@ export class DiscordAdapter implements ChannelAdapter {
 		});
 		if (!result.accept) return drop(result.reason);
 		const { inbound } = result;
-		// A root gets the cap notice as a reply, no thread.
 		const refused = await recordPeerInbound(this.#core, this.#log, inbound, this.#peerHopLimit, drop, () =>
 			this.postNotice(conversationId, PEER_HOP_NOTICE, root),
-		);
+		); // A root gets the cap notice as a reply, no thread.
 		if (refused !== undefined && refused !== "held") return refused;
 		if (opensThread) await this.#startThread(conversationId, event, text, false);
 		// A frozen bot only records the peer's message: no ⏳ status for a turn that will not run now.
