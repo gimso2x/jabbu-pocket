@@ -50,6 +50,16 @@ describe("isChannelMessageAddressed", () => {
 		expect(isChannelMessageAddressed(core(), { ...thread, mentioned: true })).toBe(true);
 		expect(isChannelMessageAddressed(core({ knowsThread: () => true }), thread)).toBe(true);
 	});
+
+	test("a mention-free channel still addresses under requireMention; other channels' known threads do not", () => {
+		const strict = { ...channelInput, requireMention: true };
+		const known = core({ knowsThread: () => true });
+		expect(isChannelMessageAddressed(core(), { ...strict, mentionFree: true })).toBe(true);
+		expect(isChannelMessageAddressed(known, { ...strict, mentionFree: true, threadRef: "C1:1.0" })).toBe(true);
+		expect(isChannelMessageAddressed(core(), { ...strict, mentionFree: true, threadRef: "C1:1.0" })).toBe(false);
+		expect(isChannelMessageAddressed(known, { ...strict, threadRef: "C1:1.0" })).toBe(false);
+		expect(isChannelMessageAddressed(core(), strict)).toBe(false);
+	});
 });
 
 describe("recordPeerInbound", () => {

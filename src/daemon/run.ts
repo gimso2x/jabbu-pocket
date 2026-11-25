@@ -247,7 +247,6 @@ export async function runDaemon(
 			if (isTaskOrigin(origin)) return daemon.taskDriver(origin, sessionDir, botRpcEnv(config.ompProfile)); // never agy
 			// Only the omp driver answers dialogs and narrows host tools for a peer-touched conversation.
 			const omp = config.agent !== "agy";
-			const overlayConfig = config.ompConfigOverlay;
 			const answerDialog = omp ? daemon.answerDialogsFor(origin) : undefined;
 			const systemPrompt = spawnSystemPrompt({
 				secretsDir,
@@ -276,6 +275,7 @@ export async function runDaemon(
 						mcpServers: () => daemonOptions.config.agyMcpServers,
 						log,
 						originKey: origin,
+						inboundRoot: join(config.homeDir, "media", "inbound"),
 					})
 				: new RpcOmpDriver({
 						ompExecutable: config.ompExecutable,
@@ -284,7 +284,7 @@ export async function runDaemon(
 						...model,
 						...(config.thinking === undefined ? {} : { thinking: config.thinking }),
 						...botRpcEnv(config.ompProfile),
-						...(overlayConfig === undefined ? {} : { overlayConfig }),
+						...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
 						extraArgs: ["--append-system-prompt", systemPrompt],
 						hostTools: daemon.hostToolsFor(origin),
 						answerDialog,

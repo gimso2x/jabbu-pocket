@@ -1,17 +1,21 @@
-import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
 import {
 	type AcpConfigOption,
 	AgyAcpClient,
+	acpSessionParams,
 	acpUsageOf,
 	configOptionsOf,
 	quotaRetryNotice,
+	resolveAgyExecutable,
 	shownText,
 	toolOutputOf,
 } from "./agy-acp-client";
+import { promptImageBlocks } from "./agy-images";
 import { AgyToolKeepalive, type AgyToolKeepaliveOptions } from "./agy-tool-keepalive";
+import { isTrajectoryLoss, promptReplyEnd } from "./agy-trajectory";
 import {
 	type OmpCommand,
 	type OmpCompactResult,
@@ -96,6 +100,8 @@ export interface AgyOmpDriverOptions {
 	originKey?: string;
 	/** Tool-execution keepalive timer overrides (tests); defaults to 60 s interval up to 8 min. */
 	toolKeepalive?: AgyToolKeepaliveOptions;
+	/** `<homeDir>/media/inbound`: attached images under it go with the prompt as image blocks (`agy-images.ts`). */
+	inboundRoot?: string;
 }
 
 interface PendingTurn {
@@ -145,6 +151,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	#sessionId: string | undefined;
 	/** True while the live child resumed the session it was asked to (what `openSession().resumed` reports). */
 	#resumedCurrent = false;
+	#loadedUnanswered = false; // live session came from session/load, not answered yet: a lost trajectory reopens once
+	#imageInput = false; // the live child's initialize offered promptCapabilities.image
 	/** Model chosen by config or `/model`, as given; unset = agy's own default. */
 	#model: string | undefined;
 	/** Thinking level chosen by config or `/thinking` (or read off the model's effort suffix). */
@@ -179,7 +187,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 
 	async start(): Promise<void> {
 		if (this.#started) throw new OmpDriverError("already_started", "driver already started");
-		this.#resolveExecutable(buildChildEnv(this.#options.env, this.#options.baseEnv));
+		resolveAgyExecutable(this.#options.agyExecutable, buildChildEnv(this.#options.env, this.#options.baseEnv));
 		mkdirSync(resolve(this.#options.cwd), { recursive: true });
 		mkdirSync(resolve(this.#options.sessionDir), { recursive: true });
 		this.#started = true;
@@ -427,23 +435,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		if (!this.#client) await this.#spawn(this.#sessionId, "child restart");
 	}
 
-	#resolveExecutable(env: Record<string, string>): string {
-		const given = this.#options.agyExecutable;
-		if (given.includes("/")) {
-			try {
-				accessSync(given, constants.X_OK);
-				return given;
-			} catch (cause) {
-				throw new OmpDriverError("agy_executable_missing", `agy executable not found or not executable: ${given}`, {
-					cause,
-				});
-			}
-		}
-		const found = Bun.which(given, { PATH: env.PATH ?? "" });
-		if (!found) throw new OmpDriverError("agy_executable_missing", `agy executable not found on PATH: ${given}`);
-		return found;
-	}
-
 	/**
 	 * Ends the current child (if any) and waits for its exit, so two agy processes never hold one session, then starts
 	 * a new one on `resume` (or a new session). A turn still running ends `aborted` (`reason` in the error) once the new
@@ -453,7 +444,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		// One replacement at a time: a second one started meanwhile would launch beside the first one's new child.
 		while (this.#respawning) await this.#respawning;
 		const env = buildChildEnv(this.#options.env, this.#options.baseEnv);
-		const executable = this.#resolveExecutable(env);
+		const executable = resolveAgyExecutable(this.#options.agyExecutable, env);
 		const previous = this.#client;
 		const cut = this.#turn;
 		const dropped = this.#queued.length;
@@ -493,7 +484,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#resumedCurrent = false;
 		this.#stopping = false;
 		const client: AgyAcpClient = new AgyAcpClient(
-			{ executable, cwd: resolve(options.cwd), env },
+			{ executable, cwd: resolve(options.cwd), env, log: options.log, originKey: options.originKey },
 			{
 				onNotification: (method, params) => {
 					if (client === this.#client && method === "session/update") this.#onUpdate(params);
@@ -506,32 +497,9 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#launching = client;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		try {
-			await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
-			let opened: Record<string, unknown> | undefined;
-			if (resume !== undefined) {
-				try {
-					this.#loading = true;
-					opened = await client.request("session/load", { sessionId: resume, ...this.#sessionParams() }, timeoutMs);
-					this.#sessionId = resume;
-					this.#resumedCurrent = true;
-				} catch (error) {
-					options.log?.warn("agy.acp.load_failed", {
-						origin: options.originKey,
-						sessionId: resume,
-						error: String(error),
-					});
-				}
-			}
-			this.#loading = false;
-			if (opened === undefined) {
-				opened = await client.request("session/new", this.#sessionParams(), timeoutMs);
-				const sessionId = str(opened.sessionId);
-				if (sessionId === undefined) throw new OmpDriverError("rpc_error", "agy session/new without a sessionId");
-				this.#sessionId = sessionId;
-			}
-			this.#writePointer(this.#sessionId ?? "");
-			this.#configOptions = configOptionsOf(opened.configOptions) ?? [];
-			await this.#applyConfig(client);
+			const init = await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
+			this.#imageInput = recordOf(recordOf(init.agentCapabilities)?.promptCapabilities)?.image === true;
+			await this.#openConversation(client, resume);
 			options.log?.info("agy.acp.started", {
 				origin: options.originKey,
 				pid: client.pid,
@@ -551,20 +519,34 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	#sessionParams(): Record<string, unknown> {
-		const system = this.#options.systemPrompt;
-		return {
-			cwd: resolve(this.#options.cwd),
-			mcpServers: (this.#options.mcpServers?.() ?? []).map(({ name, command, args, env }) => ({
-				name,
-				command,
-				args,
-				env,
-			})),
-			...(system === undefined || system === ""
-				? {}
-				: { _meta: { antigravity: { systemPrompt: { append: system } } } }),
-		};
+	/** `session/load` of `resume` (replay ignored), else or when refused `session/new`; then pointer and config. */
+	async #openConversation(client: AgyAcpClient, resume: string | undefined): Promise<void> {
+		const timeoutMs = this.#options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
+		const params = acpSessionParams(this.#options);
+		let opened: Record<string, unknown> | undefined;
+		this.#loadedUnanswered = false;
+		if (resume !== undefined) {
+			try {
+				this.#loading = true;
+				opened = await client.request("session/load", { sessionId: resume, ...params }, timeoutMs);
+				this.#sessionId = resume;
+				this.#resumedCurrent = true;
+				this.#loadedUnanswered = true;
+			} catch (error) {
+				const fields = { origin: this.#options.originKey, sessionId: resume, error: String(error) };
+				this.#options.log?.warn("agy.acp.load_failed", fields);
+			}
+		}
+		this.#loading = false;
+		if (opened === undefined) {
+			opened = await client.request("session/new", params, timeoutMs);
+			const sessionId = str(opened.sessionId);
+			if (sessionId === undefined) throw new OmpDriverError("rpc_error", "agy session/new without a sessionId");
+			this.#sessionId = sessionId;
+		}
+		this.#writePointer(this.#sessionId ?? "");
+		this.#configOptions = configOptionsOf(opened.configOptions) ?? [];
+		await this.#applyConfig(client);
 	}
 
 	#option(id: string): AcpConfigOption | undefined {
@@ -726,25 +708,42 @@ export class AgyOmpDriver implements OmpSessionDriver {
 
 	// ---- prompts ----
 
-	/** Records the user entry and sends one `session/prompt`; its reply continues or ends the turn. */
+	/** Records the user entry (text only), then sends `session/prompt` with the attached images the child takes. */
 	#sendPrompt(client: AgyAcpClient, turn: PendingTurn, text: string): void {
-		turn.text = "";
 		this.#entries.push({ id: `ag-${++this.#entrySeq}`, type: "message", message: { role: "user", content: text } });
-		client.request("session/prompt", { sessionId: this.#sessionId, prompt: [{ type: "text", text }] }).then(
-			(result) => this.#onPromptReply(client, turn, result, undefined),
-			(error: unknown) => this.#onPromptReply(client, turn, undefined, error),
+		const prompt: Array<Record<string, unknown>> = [{ type: "text", text }];
+		const { inboundRoot, log, originKey } = this.#options;
+		if (!this.#imageInput || inboundRoot === undefined) this.#request(client, turn, prompt);
+		else
+			void promptImageBlocks(text, inboundRoot, log, originKey).then((images) => {
+				if (this.#turn !== turn) return;
+				if (!turn.abortRequested) return this.#request(client, turn, [...prompt, ...images]);
+				this.#finish(turn, { opRef: turn.opRef, status: "aborted", text: "", error: "cancelled" });
+			});
+	}
+
+	#request(client: AgyAcpClient, turn: PendingTurn, prompt: Array<Record<string, unknown>>): void {
+		turn.text = "";
+		client.request("session/prompt", { sessionId: this.#sessionId, prompt }).then(
+			(result) => this.#onPromptReply(client, turn, prompt, result, undefined),
+			(error: unknown) => this.#onPromptReply(client, turn, prompt, undefined, error),
 		);
 	}
 
 	#onPromptReply(
 		client: AgyAcpClient,
 		turn: PendingTurn,
+		prompt: Array<Record<string, unknown>>,
 		result: Record<string, unknown> | undefined,
 		failure: unknown,
 	): void {
 		// A child ended on purpose (abort kill, restart) leaves the turn's end to whoever ended it.
 		if (this.#turn !== turn || this.#ended.has(client)) return;
 		this.#toolKeepalive.clear();
+		if (this.#loadedUnanswered && !turn.abortRequested && isTrajectoryLoss(result, failure)) {
+			void this.#reopenLostTrajectory(client, turn, prompt);
+			return;
+		}
 		const usage = acpUsageOf(result?.usage);
 		if (usage !== undefined) {
 			turn.usage.calls += 1;
@@ -754,6 +753,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 		const stopReason = str(result?.stopReason);
 		const succeeded = stopReason === "end_turn";
+		if (succeeded) this.#loadedUnanswered = false;
 		const model = this.#option("model")?.currentValue;
 		if (turn.text.trim() !== "" || usage !== undefined) {
 			this.#entries.push({
@@ -776,32 +776,32 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			this.#sendPrompt(client, turn, queued);
 			return;
 		}
-		const dropped = this.#queued.length;
-		const status: OmpFinal["status"] =
-			turn.rateLimit !== undefined
-				? "error"
-				: turn.abortRequested || stopReason === "cancelled"
-					? "aborted"
-					: succeeded
-						? "completed"
-						: "error";
-		let error =
-			status === "completed"
-				? undefined
-				: turn.rateLimit !== undefined
-					? turn.rateLimit
-					: failure !== undefined
-						? failure instanceof Error
-							? failure.message
-							: String(failure)
-						: status === "aborted"
-							? "cancelled"
-							: `agy turn ended with stopReason ${stopReason ?? "none"}`;
-		if (error !== undefined && dropped > 0) error = `${error} (steer ${dropped}건 미전달)`;
+		const end = promptReplyEnd({ ...turn, stopReason, failure, dropped: this.#queued.length });
 		if (this.#context !== undefined) turn.usage.contextTokens = this.#context.used;
 		// Before the final: a prompt sent on it must already find the conversation dropped.
 		turn.usage.rotated = this.#rotateIfFull();
-		this.#finish(turn, { opRef: turn.opRef, status, text: turn.text, ...(error === undefined ? {} : { error }) });
+		this.#finish(turn, { opRef: turn.opRef, text: turn.text, ...end });
+	}
+
+	/**
+	 * agy loaded the resumed session but cannot prompt it (`trajectory not found`): drop the pointer, open a new session
+	 * on the same child and send the same prompt once more. A failure there ends the turn as error, an abort as aborted.
+	 */
+	async #reopenLostTrajectory(client: AgyAcpClient, turn: PendingTurn, prompt: Array<Record<string, unknown>>) {
+		const { log, originKey: origin } = this.#options;
+		log?.warn("agy.acp.trajectory_reset", { origin, sessionId: this.#sessionId });
+		this.#clearPointer();
+		this.#resumedCurrent = false;
+		try {
+			await this.#openConversation(client, undefined);
+		} catch (cause) {
+			const error = `agy session reopen failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+			if (this.#turn === turn) this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error });
+			return;
+		}
+		if (this.#turn !== turn || this.#client !== client) return;
+		if (!turn.abortRequested) return this.#request(client, turn, prompt);
+		this.#finish(turn, { opRef: turn.opRef, status: "aborted", text: "", error: "cancelled" });
 	}
 
 	/** Ends `turn` once (a turn a restart cut off too): clears it and the queue, sends its final, wakes an abort. */
