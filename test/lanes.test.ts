@@ -16,7 +16,13 @@ import {
 	PROGRESS_INTERVAL_MS,
 } from "../src/lanes/manager-constants";
 import { buildLaneTools, buildWorkStartTool } from "../src/lanes/tools";
-import { buildLanePrompt, buildLaneTodos, isReopenCommand, parseLaneTrigger } from "../src/lanes/trigger";
+import {
+	buildLanePrompt,
+	buildLaneTodos,
+	isReopenCommand,
+	laneTriggerRefusal,
+	parseLaneTrigger,
+} from "../src/lanes/trigger";
 import { type VerifyResult, verifyClaim } from "../src/lanes/verify";
 import { createLogger } from "../src/log";
 import type { LaneModelTiers } from "../src/model-tiers";
@@ -206,6 +212,18 @@ describe("lane trigger parsing", () => {
 		expect(parseLaneTrigger("작업: x @relative/path")).toBeUndefined();
 		expect(parseLaneTrigger("작업: 경로 없음")).toBeUndefined();
 		expect(parseLaneTrigger("안녕 작업: x @/tmp")).toBeUndefined();
+	});
+
+	test("a missed trigger gets the format refusal; mentions and emails are not attempts", () => {
+		expect(laneTriggerRefusal("작업: x @relative/path")).toContain("형식은 `작업: <제목> @<절대경로>`");
+		expect(laneTriggerRefusal("작업: x @~/repo")).toContain("형식은");
+		expect(laneTriggerRefusal("작업: x @./repo")).toContain("형식은");
+		expect(laneTriggerRefusal("작업: <@123456> 확인해 줘")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: 메일은 foo@bar.com 으로 보내줘")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @everyone 공지 확인")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @here 공지 확인")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: 경로 없음")).toBeUndefined();
+		expect(laneTriggerRefusal("일반 메시지 @relative/path")).toBeUndefined();
 	});
 
 	test("the lane prompt names the claim tool and starts with the task when no workflow is chosen", () => {

@@ -19,9 +19,14 @@ const TRIGGER = /^작업:[ \t]*(.+?)[ \t]+@(\/\S*)(?:[ \t]+|\n|$)([\s\S]*)$/;
 export function parseLaneTrigger(text: string): LaneTrigger | undefined {
 	const match = TRIGGER.exec(text.trim());
 	const title = match?.[1]?.trim();
-	const cwd = match?.[2];
-	if (title === undefined || title === "" || cwd === undefined) return undefined;
-	return { title, cwd, brief: (match?.[3] ?? "").trim() };
+	if (title === undefined || title === "" || match?.[2] === undefined) return undefined;
+	return { title, cwd: match[2], brief: (match?.[3] ?? "").trim() };
+}
+
+/** The refusal for a `작업:` message that aimed at the trigger and missed it (a relative/`~` path after a spaced `@`); a mention (`<@…>`), an email (`a@b`) and `@everyone`/`@here` are not attempts. */
+export function laneTriggerRefusal(text: string): string | undefined {
+	if (!/^\s*작업:[\s\S]*?\s@(?!(?:everyone|here)(?:\s|$))\S/.test(text)) return undefined;
+	return "레인으로 열지 못했습니다 — 형식은 `작업: <제목> @<절대경로>`입니다 (상대경로·`~`·공백이 든 경로는 쓸 수 없습니다).";
 }
 
 /** Why a Discord DM opens no lane: a lane lives in a server-channel thread, and the DM has none to name. */
@@ -29,14 +34,10 @@ export const DISCORD_LANE_CHANNEL_MISSING =
 	"Discord DM에서 레인을 열려면 config `channels.discord.laneChannelId`(레인을 열 서버 텍스트 채널 id)가 필요합니다. 서버 채널·스레드에서 요청하면 그 채널에 열립니다.";
 
 /** `!reopen` alone or followed by an instruction: the only owner message that reopens a closed lane. */
-export function isReopenCommand(text: string): boolean {
-	return /^!reopen(?:\s|$)/.test(text.trim());
-}
+export const isReopenCommand = (text: string): boolean => /^!reopen(?:\s|$)/.test(text.trim());
 
 /** `닫아` as the whole message: closes a `not-done` lane whose check failed under a planned deferral. */
-export function isOwnerAcceptText(text: string): boolean {
-	return text.trim() === "닫아";
-}
+export const isOwnerAcceptText = (text: string): boolean => text.trim() === "닫아";
 
 /** `!pr` in a closed lane's thread: the GitHub repository and/or the open PR the lane's work goes to. */
 export type PrCommand = { repo?: string; prNumber?: number } | { problem: string };
@@ -58,9 +59,8 @@ export function parsePrCommand(text: string): PrCommand | undefined {
 	const repo = pull?.[1] ?? (/^[^/\s#]+\/[^/\s#]+$/.test(arg) ? arg : undefined);
 	const digits = pull?.[2] ?? /^#?(\d+)$/.exec(arg)?.[1];
 	const prNumber = digits === undefined ? undefined : Number(digits);
-	if ((repo === undefined && prNumber === undefined) || (repo !== undefined && !isGithubRepo(repo))) {
+	if ((repo === undefined && prNumber === undefined) || (repo !== undefined && !isGithubRepo(repo)))
 		return { problem: `\`!pr\` 뒤에는 owner/name, PR 주소, owner/name#번호 또는 PR 번호를 적어 주세요: ${arg}` };
-	}
 	if (prNumber !== undefined && (prNumber < 1 || prNumber > PR_NUMBER_MAX))
 		return { problem: `PR 번호가 아닙니다: ${arg}` };
 	return { ...(repo === undefined ? {} : { repo }), ...(prNumber === undefined ? {} : { prNumber }) };
@@ -77,8 +77,7 @@ export function parsePrWatchCommand(text: string): PrWatchCommand | undefined {
 	const trim = text.trim();
 	if (!/^!prwatch(?:[ \t]|$)/.test(trim)) return undefined;
 	const lane = /^!prwatch[ \t]+off[ \t]+(\S+)$/.exec(trim)?.[1];
-	if (lane !== undefined) return { op: "off", lane };
-	return { problem: "`!prwatch off <레인 이름>` 형태로 적어 주세요." };
+	return lane === undefined ? { problem: "`!prwatch off <레인 이름>` 형태로 적어 주세요." } : { op: "off", lane };
 }
 
 /** What an owner message does in a closed lane's thread (`classifyClosedLaneMessage`). */
