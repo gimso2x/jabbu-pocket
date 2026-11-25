@@ -17,11 +17,11 @@ import {
 	DISCORD_LANE_CHANNEL_MISSING,
 	isOwnerAcceptText,
 	type LaneTrigger,
-	laneTriggerRefusal,
 	parseLaneTrigger,
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
+import { laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseApprovalRetryActionId } from "../safety/approval";
