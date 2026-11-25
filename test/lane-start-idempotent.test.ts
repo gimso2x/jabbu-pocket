@@ -33,7 +33,7 @@ const roots = (title: string) =>
 	h.transport.calls.filter((call) => call.method === "createMessage" && call.content === `🔄 ${title}`);
 const archives = () => h.transport.calls.filter((call) => call.method === "archiveThread");
 
-/** A harness whose lane omp has no commands loaded: a `ulw-plan` start is refused at launch. */
+/** A harness whose lane omp has no commands loaded: a `super-plan` start is refused at launch. */
 function refusingHarness(extra: Parameters<typeof laneHarness>[1] = {}): LaneHarness {
 	const sessions = new FakeSessionStore();
 	return laneHarness(home.dir, {
@@ -48,7 +48,7 @@ const launchRefusedStart = (title: string) =>
 		cwd: repo,
 		channel: CHANNEL,
 		parentOrigin: PARENT,
-		workflow: { name: "ulw-plan", reason: "plan" },
+		workflow: { name: "super-plan", reason: "plan" },
 	});
 
 describe("a repeated start of the same request", () => {

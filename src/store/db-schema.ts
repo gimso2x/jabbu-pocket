@@ -1,5 +1,6 @@
 import { CARD_ANSWERS_DDL } from "./card-answers";
 import { LEGACY_FEEDBACK_DDL } from "./legacy-ddl";
+import { WEB_MESSAGES_DDL } from "./web-messages";
 
 /**
  * Approval card ledger. `origin_key`/`origin_thread_ref` map a card back to the conversation that asked (NULL on rows
@@ -144,14 +145,7 @@ CREATE INDEX IF NOT EXISTS peer_calls_thread_peer ON peer_calls(thread_ref, peer
 /** Settled calls are kept this long (the sweep prunes older ones). */
 export const PEER_CALL_KEEP_MS = 30 * 24 * 60 * 60_000;
 
-/**
- * The lane board: posts of lanes and owner conversations by channel (`general`,
- * `repo:<path>`), and per reader and channel the last post read and the last post a turn prompt announced.
- */
-/**
- * Same message id re-received with other content (`Store.recordInbound`): the first row stays, this table only counts
- * the re-receipts for the ops view (`jabbu-pocket gates`, `inbound_identity_conflicts`).
- */
+/** Same message id re-received with other content (`Store.recordInbound`), counted for `jabbu-pocket gates`. */
 const INBOUND_CONFLICTS_DDL = `CREATE TABLE IF NOT EXISTS inbound_conflicts (
 	conflict_id INTEGER PRIMARY KEY AUTOINCREMENT,
 	platform_message_id TEXT NOT NULL,
@@ -181,8 +175,8 @@ CREATE TABLE IF NOT EXISTS board_reads (
 export const LANE_BOARD_TEXT_MAX = 2_000;
 
 /**
- * The inbound ledger. `uncertain` parks an input that may already have reached the omp child (`uncertain_reason` says
- * why, `uncertain_at` when) until the owner closes or retries it. A ledger without it is rebuilt by `migrateInbound`.
+ * The inbound ledger. `sending` is written right before a prompt or steer; `uncertain` parks an input that may already
+ * have reached the omp child (`uncertain_reason`, `uncertain_at`). A ledger without either is rebuilt (`db-sending.ts`).
  * `injected` is 1 for a row `jabbu-pocket inject` put in (`OwnerIngest.injected`): it may not answer an ask card.
  */
 export const INBOUND_DDL = `CREATE TABLE IF NOT EXISTS inbound (
@@ -192,7 +186,7 @@ export const INBOUND_DDL = `CREATE TABLE IF NOT EXISTS inbound (
 	epoch INTEGER NOT NULL,
 	text_ref TEXT NOT NULL,
 	state TEXT NOT NULL DEFAULT 'pending'
-		CHECK (state IN ('pending','dispatched','answered','failed_notified','discarded','uncertain')),
+		CHECK (state IN ('pending','sending','dispatched','answered','failed_notified','discarded','uncertain')),
 	created_at INTEGER NOT NULL,
 	dispatched_at INTEGER,
 	op_ref TEXT,
@@ -309,4 +303,5 @@ ${PEER_CALLS_DDL}
 ${LANE_BOARD_DDL}
 ${INBOUND_CONFLICTS_DDL}
 ${CARD_ANSWERS_DDL}
+${WEB_MESSAGES_DDL}
 `;

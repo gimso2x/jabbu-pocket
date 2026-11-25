@@ -10,6 +10,8 @@ export interface RunProcessResult {
 	/** Tail of stderr; herdr writes its `{"error":{code,message}}` here. Fakes may leave it out. */
 	stderr?: string;
 	timedOut: boolean;
+	/** Stdout hit the collection cap and later output was dropped: `stdout` is a prefix, not the whole. Fakes may leave it out. */
+	truncated?: boolean;
 }
 
 export interface RunProcessOptions {
@@ -65,11 +67,13 @@ const spawnProcess: ProcessRunner = (cmd, opts) => {
 		child.stdin?.end(opts.stdin);
 	}
 	let stdout = "";
-	let timedOut = false;
+	let timedOut = false,
+		truncated = false;
 	const stdoutCap = opts.stdoutCap ?? DEFAULT_STDOUT_CAP;
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
 		if (stdout.length < stdoutCap) stdout += chunk;
+		else truncated = true;
 	});
 	let stderr = "";
 	child.stderr?.setEncoding("utf8");
@@ -116,14 +120,11 @@ const spawnProcess: ProcessRunner = (cmd, opts) => {
 		clearTimeout(grace);
 		signal?.removeEventListener("abort", killGroup);
 		if (spawnError !== undefined) return { code: null, stdout: `spawn failed: ${spawnError}`, timedOut };
-		return { code, stdout, stderr, timedOut };
+		return { code, stdout, stderr, timedOut, ...(truncated ? { truncated: true } : {}) };
 	});
 };
 
-/**
- * One process with a hard timeout: the whole process group is killed, stdout is capped by the collector. Every
- * external call of the bot passes here (herdr, ssh, task git), so this is where the dispatch audit line is written.
- */
+/** One process with a hard timeout: the whole process group is killed, stdout is capped by the collector. Every external call of the bot passes here (herdr, ssh, task git), so this is where the dispatch audit line is written. */
 export const realProcessRunner: ProcessRunner = async (cmd, opts) => {
 	const startedAt = Date.now();
 	const result = await spawnProcess(cmd, opts);
@@ -172,6 +173,8 @@ export interface OmpPrintResult {
 	/** The process exit code (`null`: killed, or it never started). */
 	code: number | null;
 	timedOut: boolean;
+	/** Set when `code` is not 0: `종료 코드 N`, then the last stderr line if any (masked, 160 chars): a provider's refusal (a quota 429) is there. */
+	failure?: string;
 }
 
 /** The argv of `runOmpPrint` before the `--` and the task: the binary, the flags in the order omp reads them. */
@@ -191,10 +194,7 @@ export function ompPrintArgs(
 	];
 }
 
-/**
- * `omp -p … -- <task>`: one-shot agent run for simple tasks. The task comes last after `--`, so a task starting with
- * `-` is the prompt, never an omp flag. Output is capped; timeout kills the process group.
- */
+/** `omp -p … -- <task>`: one-shot agent run for simple tasks. The task comes last after `--`, so a task starting with `-` is the prompt, never an omp flag. Output is capped; timeout kills the process group. */
 export async function runOmpPrint(options: OmpPrintOptions): Promise<OmpPrintResult> {
 	const maxChars = options.maxChars ?? 8_000;
 	const result = await (options.run ?? realProcessRunner)([...ompPrintArgs(options), "--", options.task], {
@@ -206,11 +206,14 @@ export async function runOmpPrint(options: OmpPrintOptions): Promise<OmpPrintRes
 	const suffix = result.timedOut ? "\n\n[시간 초과로 중단됨 — 출력 일부만 수집]" : "";
 	// Masked before the cap: a secret straddling the cap would otherwise leave a fragment the shapes no longer match.
 	const output = `${redact(result.stdout.trim()).slice(0, maxChars)}${suffix}`.trim();
+	const said = redact(result.stderr?.trim().split("\n").at(-1) ?? "").slice(0, 160);
+	const failure = `종료 코드 ${result.code ?? "없음"}${said === "" ? "" : `: ${said}`}`;
 	return {
 		ok: !result.timedOut && result.code === 0,
 		output: output === "" ? "(빈 출력)" : output,
 		code: result.code,
 		timedOut: result.timedOut,
+		...(result.code === 0 ? {} : { failure }),
 	};
 }
 
@@ -239,10 +242,7 @@ export function remoteShellQuote(arg: string): string {
 	return `'${arg.replaceAll("'", "'\\''")}'`;
 }
 
-/**
- * The ssh argv for running `bin args…` on a remote host. Every remote word is quoted; the only exception is a
- * `--cwd` value of exactly `~`, left bare so the remote shell expands it (the `workDir ?? "~"` fallback).
- */
+/** The ssh argv for running `bin args…` on a remote host. Every remote word is quoted; the only exception is a `--cwd` value of exactly `~`, left bare so the remote shell expands it (the `workDir ?? "~"` fallback). */
 export function herdrSshArgv(sshTarget: string, bin: string, args: string[]): string[] {
 	const remote = [remoteShellQuote(bin)];
 	args.forEach((arg, index) => {
@@ -313,10 +313,7 @@ function parseHerdrAgents(stdout: string): NonNullable<NonNullable<HerdrAgentLis
 	return agents.filter((agent) => agent !== null && typeof agent === "object");
 }
 
-/**
- * Why a herdr call failed, at most `max` chars: herdr's stderr `{"error":{code,message}}` as `code: message`
- * (e.g. `agent_blocked` when the agent waits on an approval), else the raw stderr/stdout, else the exit code.
- */
+/** Why a herdr call failed, at most `max` chars: herdr's stderr `{"error":{code,message}}` as `code: message` (e.g. `agent_blocked` when the agent waits on an approval), else the raw stderr/stdout, else the exit code. */
 function herdrFailure(result: RunProcessResult, max = 160): string {
 	if (result.timedOut) return "timed out";
 	const stderr = result.stderr?.trim() ?? "";

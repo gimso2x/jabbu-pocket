@@ -28,10 +28,7 @@ interface UnitValues {
 	jabbuHome?: string;
 }
 
-interface RenderedUnit {
-	name: string;
-	text: string;
-}
+type RenderedUnit = { name: string; text: string };
 
 /** Characters that need no quoting in a unit file word. */
 const PLAIN_WORD = /^[\w/.,:@+=-]+$/;
@@ -141,7 +138,9 @@ export function unitsCommand(args: string[], env: Record<string, string | undefi
 		return usage(error instanceof Error ? error.message : String(error));
 	}
 	// An empty JABBU_HOME is unset, as in config.ts: the default ~/.jabbu, no Environment= line.
-	const jabbuHome = env.JABBU_HOME === undefined || env.JABBU_HOME === "" ? undefined : resolve(env.JABBU_HOME);
+	const raw = env.JABBU_HOME;
+	const h = raw && (raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);
+	const jabbuHome = h ? resolve(h) : undefined;
 	if (jabbuHome !== undefined && CONTROL_CHARS.test(jabbuHome))
 		return usage("JABBU_HOME contains a control character; a unit file cannot carry it");
 	if (values.out === "") return usage("--out is empty; leave it out to use ~/.config/systemd/user");

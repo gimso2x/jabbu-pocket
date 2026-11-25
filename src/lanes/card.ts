@@ -1,5 +1,5 @@
 import { type ActionButton, mentionToken } from "../channel/port";
-import { escapeMrkdwn } from "../channel/text";
+import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
 import { diffViewLink } from "../dispatch/board";
 import { redact } from "../redact";
 import { formatTypicalRange, type TypicalDuration } from "../store/turn-duration";
@@ -96,7 +96,7 @@ export type LaneCardView =
 		| { kind: "superseded" }
 	) & { cost?: { usd: number; calls: number } };
 
-const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const clip = (text: string, max: number): string => (text.length > max ? `${cutCodePointSafe(text, max - 1)}…` : text);
 
 /** Up to this many blocking leftovers are named on a card (the rest are counted). */
 const BLOCKING_SHOWN = 3;
@@ -226,7 +226,7 @@ export function buildLaneOutcomeCard(
 		qa === undefined
 			? []
 			: [
-					`🧪 실행 QA(뚱기 · ${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${
+					`🧪 실행 QA(${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${
 						qa.verdict === "inconclusive" ? `확인 불가(${qa.reason ?? "?"})` : qa.verdict
 					}`,
 					...qa.findings.slice(0, QA_FINDINGS_SHOWN).map((finding) => `> ${escapeMrkdwn(clip(redact(finding), 200))}`),

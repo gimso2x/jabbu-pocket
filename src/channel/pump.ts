@@ -70,12 +70,20 @@ export async function finishDeliveryStatus(
 	const outcome: FinalOutcome =
 		result === "undelivered" ? "undelivered" : delivery.body.startsWith("[turn failed]") ? "failed" : "done";
 	const cancelled = new Set(delivery.cancelThreadRefs ?? []);
+	// One thread's failed finish must not abandon the rest: the delivery is already settled in the ledger, so
+	// no later pump retries this finish. The first error still surfaces to the caller's per-delivery catch.
+	let firstError: unknown;
 	for (const threadRef of new Set([delivery.threadRef, ...(delivery.finishThreadRefs ?? [])])) {
 		if (delivery.finishUntracked === false && finisher.tracks?.(threadRef, delivery.originKey) === false) continue;
 		const final = cancelled.has(threadRef) ? "cancelled" : outcome;
 		const holdsAnswer = threadRef === delivery.threadRef && (final === "done" || final === "failed");
-		await finisher.finishStatus(threadRef, delivery.originKey, final, holdsAnswer ? "delete" : "update");
+		await finisher
+			.finishStatus(threadRef, delivery.originKey, final, holdsAnswer ? "delete" : "update")
+			.catch((error) => {
+				firstError ??= error;
+			});
 	}
+	if (firstError !== undefined) throw firstError;
 }
 
 /**
@@ -145,10 +153,8 @@ export class DeliveryPump {
 		let confirmed = 0;
 		for (const delivery of await source.claimDue()) {
 			if (sender.isBlocked()) {
-				await this.#defer(delivery, sender.blockedReason(), {
-					at: sender.blockedUntil(),
-					sentParts: delivery.sentParts ?? 0,
-				});
+				const retry = { at: sender.blockedUntil(), sentParts: delivery.sentParts ?? 0 };
+				await this.#defer(delivery, sender.blockedReason(), retry);
 				continue;
 			}
 			let result: DeliverySendResult;
@@ -160,14 +166,9 @@ export class DeliveryPump {
 				await this.#fail(delivery, failedDelivery(err, delivery.sentParts ?? 0));
 				continue;
 			}
-			if (result.kind === "deferred") {
-				await this.#defer(delivery, errorText(result.error), result.retry);
-				continue;
-			}
-			if (result.kind === "failed") {
-				await this.#fail(delivery, result);
-				continue;
-			}
+			if (result.kind === "deferred") await this.#defer(delivery, errorText(result.error), result.retry);
+			if (result.kind === "failed") await this.#fail(delivery, result);
+			if (result.kind !== "sent") continue;
 			// The answer is out either way: a confirm that throws is logged, never resent, and the status still finishes.
 			if (await this.#ledger(delivery, "confirm", () => source.confirm(delivery.deliveryId))) {
 				log.info("delivery_sent", {
@@ -235,8 +236,8 @@ export class DeliveryPump {
 		log.warn("delivery_deferred", {
 			id: delivery.deliveryId,
 			sent_parts: retry.sentParts,
-			retry_in_ms: Math.max(0, retry.at - clock.now()),
 			error,
+			retry_in_ms: Math.max(0, retry.at - clock.now()),
 		});
 		await this.#ledger(delivery, "defer", () => source.defer(delivery.deliveryId, error, retry));
 	}

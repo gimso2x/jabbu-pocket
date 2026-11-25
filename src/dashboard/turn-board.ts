@@ -6,6 +6,7 @@ import { COMMAND_TEXT, parseCommand } from "../core/types";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { INBOUND_STARVATION_MS } from "../ops/gates";
 import { redact } from "../redact";
+import type { ContextLoad } from "./context-load";
 import type { PeerInstall } from "./peers";
 import { previewLine } from "./preview-line";
 import type { SessionModel } from "./session-model";
@@ -18,8 +19,8 @@ const THREAD_RECENT = 20;
 const AUTO_FOLLOWUP_PREFIX = "[자동 후속";
 const ERROR_CHARS = 200;
 
-const TURN_COLUMNS = `inbound_id, platform_message_id, origin_key, text_ref, thread_ref, state, created_at,
-	dispatched_at, last_event_at`;
+const TURN_COLUMNS = `inbound_id, platform_message_id, origin_key, text_ref, thread_ref, created_at, dispatched_at,
+	last_event_at, CASE state WHEN 'sending' THEN 'dispatched' ELSE state END AS state`;
 
 export interface TurnInfo {
 	inboundId: number;
@@ -100,6 +101,8 @@ export interface ThreadInfo {
 	jobs?: string[];
 	/** The model and thinking its omp session runs with ({@link SessionModel}); absent when unknown (no chip). */
 	model?: SessionModel;
+	/** Its session's context use ({@link ContextLoad}); absent when unknown (no bar). */
+	context?: ContextLoad;
 	/** Peer install name (`dashboard.peerHomes`); absent for the dashboard's own threads. */
 	install?: string;
 }
@@ -145,7 +148,7 @@ export interface TurnsSectionDeps {
 }
 
 /** Rows of a read-only query; a database that predates the table simply has none. */
-function rows<T>(db: Database, sql: string, ...params: Array<string | number>): T[] {
+export function rows<T>(db: Database, sql: string, ...params: Array<string | number>): T[] {
 	try {
 		return db.query(sql).all(...params) as T[];
 	} catch (error) {
@@ -160,7 +163,8 @@ function readInstallTurns(
 ): { items: TurnInfo[]; threads: ThreadInfo[] } {
 	const { now, iso, draining, frozen, activeJobs, sessionModel, install } = opts;
 	const isPeer = install !== undefined;
-	const openStates = isPeer ? "('pending','dispatched')" : "('pending','dispatched','uncertain')";
+	// `sending` (the write-ahead before a prompt or steer) counts as running: TURN_COLUMNS reads it as `dispatched`.
+	const openStates = isPeer ? "('pending','sending','dispatched')" : "('pending','sending','dispatched','uncertain')";
 	const open = rows<TurnSql>(
 		handle,
 		`SELECT ${TURN_COLUMNS} FROM inbound WHERE state IN ${openStates} ORDER BY created_at, inbound_id LIMIT ?`,

@@ -12,14 +12,16 @@ import { readConfigText } from "../ops/apply";
 import { type BackupResult, DEFAULT_KEEP, runBackup } from "../ops/backup";
 import { BackupError } from "../ops/backup-error";
 import { clearFreeze, freezePath, readFreeze, writeFreeze } from "../ops/freeze";
-import { collectGates, type GatesOptions, gateOptionsFromConfig } from "../ops/gates";
+import { gateOptionsFromConfig } from "../ops/gates";
 import { DEFAULT_SESSION_RETENTION_DAYS, gcSessions } from "../ops/gc";
-import { type HostLoadReader, testHostLoad } from "../ops/host-resources";
 import { OffsiteError, type OffsiteResult, runOffsite } from "../ops/offsite";
+import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { APPLY_USAGE, applyCommand } from "./apply";
 import { DASHBOARD_USAGE, dashboardCommand } from "./dashboard";
 import { DELIVERIES_USAGE, deliveriesCommand } from "./deliveries";
 import { DRAIN_USAGE, drainCommand } from "./drain";
+import { GATES_USAGE, type GatesCommandDeps, gatesCommand } from "./gates";
+import { loadConfigIfPresent } from "./home-config";
 import { INIT_USAGE, initCommand } from "./init";
 import { LANES_USAGE, lanesCommand } from "./lanes";
 import { joinLines, stripExtensionPath } from "./linear-text";
@@ -54,16 +56,7 @@ ${INIT_USAGE}${UNITS_USAGE}  daemon                         run the bot (single 
                                  working); a due 'at' monitor waits and fires once after unfreeze; the 'frozen' gate stays
                                  open until unfreeze
   unfreeze                       remove <home>/FROZEN
-  gates [--json] [--strict]      read-only health projection; each gate is open, closed or unknown (nothing to judge: no
-                                 heartbeat stamp or no jabbu.db yet); exit 1 if any open, with --strict also if any unknown.
-                                 gates: backup_age, offsite_age (only with config offsite), sweep_stalled,
-                                 discord_disconnected (only with config channels.discord), frozen,
-                                 herdr_unreachable (only with a herdr-health stamp), omp_runtime (only with agent omp),
-                                 disk_low, host_pressure, inbound_starved, origin_silent, deliveries_overdue,
-                                 deliveries_ambiguous_stuck, lanes_stuck, monitors_failed, monitors_stalled, turns_failing, ledger_unreadable,
-                                 inbound_identity_conflicts (report only, never open), drain_orphaned,
-                                 cost_cap (warning only, with config costCap.dailyUsd)
-  inject --origin discord/<dm|ch>/ID --as-owner --text <t> [--quoted <q>] [--thread <message id>]
+${GATES_USAGE}  inject --origin discord/<dm|ch>/ID --as-owner --text <t> [--quoted <q>] [--thread <message id>]
                                  while no daemon listens (a restart) it tries again every 2s for up to 3 minutes
   reload                         running daemon re-reads config.json (also SIGHUP): policy fields apply live,
                                  startup-bound fields are listed as restart_required; an invalid file changes nothing
@@ -116,21 +109,12 @@ function gcCommand(args: string[], homeDir: string): number {
 	}
 	for (const path of result.laneArtifactsRemoved) process.stdout.write(`gc lane_artifacts_${verb} path=${path}\n`);
 	process.stdout.write(
-		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} deliveries=${result.ledgerRemoved.deliveries} delivery_posts=${result.ledgerRemoved.deliveryPosts} monitor_events=${result.ledgerRemoved.monitorEvents}\n`,
+		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} deliveries=${result.ledgerRemoved.deliveries} delivery_posts=${result.ledgerRemoved.deliveryPosts} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts}\n`,
 	);
 	return 0;
 }
 
-/**
- * Config for the CLI levers (bundle cap, off-site target). A home without a config.json keeps the defaults —
- * `jabbu-pocket backup` must work on a db-only home (it is the recovery tool) — while a config that exists but is invalid
- * fails loudly, so a broken `maxBundleBytes` or `offsite` never silently reverts to "off".
- */
-function loadConfigIfPresent(homeDir: string, options: { checkTokens?: boolean } = {}): JabbuConfig | undefined {
-	return existsSync(join(homeDir, "config.json")) ? loadConfig(homeDir, options) : undefined;
-}
-
-const firstLine = (text: string | undefined): string => text?.trim().split("\n")[0]?.trim() ?? "";
+const firstLine = (text: string | undefined): string => escapeControl(text?.trim().split("\n")[0]?.trim() ?? "");
 
 /**
  * Reach check per `dispatchHosts` entry, run together: one `ok`/`fail <ssh's first stderr line>` line each, in config
@@ -149,7 +133,8 @@ async function checkDispatchHosts(config: JabbuConfig, run: ProcessRunner): Prom
 				checkHerdrIntegration(herdrSshArgv(host.ssh, host.herdrBin ?? "herdr", ["integration", "status"]), run),
 			]);
 			const integrationLine = `${integration.ok ? "ok" : "fail"} herdr omp integration on ${name}: ${integration.detail}`;
-			if (result.code === 0 && !result.timedOut) return [`ok dispatch host ${name}: ssh ${host.ssh}`, integrationLine];
+			if (result.code === 0 && !result.timedOut)
+				return [`ok dispatch host ${name}: ssh ${escapeControl(host.ssh)}`, integrationLine];
 			const reason = result.timedOut
 				? "timed out"
 				: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
@@ -178,20 +163,21 @@ async function checkHerdrIntegration(cmd: string[], run: ProcessRunner): Promise
 		.map((line) => line.trim())
 		.find((line) => line.startsWith("omp:"));
 	if (omp === undefined) return { ok: false, detail: `no omp line ${fix}` };
-	const summary = stripExtensionPath(omp);
+	const summary = escapeControl(stripExtensionPath(omp));
 	return /^omp:\s*current\b/.test(omp) ? { ok: true, detail: summary } : { ok: false, detail: `${summary} ${fix}` };
 }
 
 /** Local herdr (config `herdr` on): `<bin> --version` must answer; the line carries its first output line or why not. */
 async function checkLocalHerdr(herdr: { bin?: string }, run: ProcessRunner): Promise<{ ok: boolean; line: string }> {
 	const bin = herdr.bin ?? "herdr";
+	const safeBin = escapeControl(bin);
 	const result = await run([bin, "--version"], { timeoutMs: DISPATCH_HOST_CHECK_MS, env: dispatchEnv(process.env) });
 	if (result.code === 0 && !result.timedOut)
-		return { ok: true, line: `ok herdr: ${bin} ${firstLine(result.stdout)}`.trim() };
+		return { ok: true, line: `ok herdr: ${safeBin} ${firstLine(result.stdout)}`.trim() };
 	const reason = result.timedOut
 		? "timed out"
 		: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
-	return { ok: false, line: `fail herdr: ${bin} ${reason}` };
+	return { ok: false, line: `fail herdr: ${safeBin} ${reason}` };
 }
 
 /**
@@ -307,59 +293,21 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 	return config?.offsite === undefined ? 0 : offsiteRun(config, homeDir, false);
 }
 
-/** Test seam of `jabbu-pocket gates`: the clock and the host readers `collectGates` would otherwise take from this machine. */
-export type GatesCommandDeps = Pick<GatesOptions, "statfs" | "hostLoad"> & { now?: () => number };
-
-/** The `JABBU_TEST_HOOKS=1` host readers as gates deps; none in production. */
+/** The `JABBU_TEST_HOOKS=1` host readers as gates and status deps; none in production. */
 function hostLoadDeps(env: Record<string, string | undefined>): GatesCommandDeps {
 	const hostLoad = testHostLoad(env);
-	return hostLoad === undefined ? {} : { hostLoad };
+	const statfs = testStatfs(env);
+	return {
+		...(hostLoad === undefined ? {} : { hostLoad }),
+		...(statfs === undefined ? {} : { statfs }),
+	};
 }
 
-/** `jabbu-pocket gates`: exit 1 when a gate is open, or with `--strict` also when one cannot be judged (`unknown`); exit 2 when the config cannot be read, so no gate was judged. */
-export function gatesCommand(args: string[], homeDir: string, deps: GatesCommandDeps = {}): number {
-	const { values } = parseArgs({ args, options: { json: { type: "boolean" }, strict: { type: "boolean" } } });
-	// A db-only home (no config.json) has no omp to check; the omp_runtime gate is then omitted.
-	let config: JabbuConfig | undefined;
-	try {
-		config = loadConfigIfPresent(homeDir);
-	} catch (error) {
-		if (!(error instanceof ConfigError)) throw error;
-		// No verdict: exit 2 keeps this apart from "a gate is open" (1) and "all closed" (0), and the last line still
-		// says so for an alerting tool that shows only it.
-		if (values.json === true) {
-			process.stdout.write(`${JSON.stringify({ error: error.code, message: error.message, gates: [] })}\n`);
-		} else {
-			process.stdout.write(`gates_done error=${error.code} detail=${JSON.stringify(error.message)}\n`);
-		}
-		return 2;
-	}
-	const gates = collectGates({
-		homeDir,
-		now: (deps.now ?? Date.now)(),
-		...gateOptionsFromConfig(config),
-		...(deps.statfs === undefined ? {} : { statfs: deps.statfs }),
-		...(deps.hostLoad === undefined ? {} : { hostLoad: deps.hostLoad }),
-	});
-	const open = gates.filter((gate) => gate.state === "open");
-	const unknown = gates.filter((gate) => gate.state === "unknown");
-	if (values.json === true) {
-		process.stdout.write(`${JSON.stringify({ open: open.length, unknown: unknown.length, gates })}\n`);
-	} else {
-		for (const gate of gates) process.stdout.write(`gate=${gate.name} state=${gate.state} detail=${gate.detail}\n`);
-		// Alerting tools show only the last line, so it names the open and the unjudgeable gates.
-		const opened = open.map((gate) => `${gate.name}(${gate.detail})`).join(",");
-		const unjudged = unknown.map((gate) => gate.name).join(",");
-		process.stdout.write(
-			`gates_done open=${open.length} unknown=${unknown.length} total=${gates.length}${opened ? ` opened=${opened}` : ""}${
-				unjudged ? ` unknown_gates=${unjudged}` : ""
-			}\n`,
-		);
-	}
-	return open.length > 0 || (values.strict === true && unknown.length > 0) ? 1 : 0;
-}
-
-async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial<HostLoadReader>): Promise<number> {
+async function statusCommand(
+	args: string[],
+	homeDir: string,
+	deps: Pick<GatesCommandDeps, "hostLoad" | "statfs"> = {},
+): Promise<number> {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
 	const socketPath = join(homeDir, "jabbu.sock");
 	let report: StatusReport | undefined;
@@ -397,7 +345,8 @@ async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial
 			config === undefined ? "unknown" : await readVersion([config.ompExecutable, "--version"]),
 			config?.timezone ?? timezoneOfHome(homeDir),
 			gateOptionsFromConfig(config),
-			hostLoad,
+			deps.hostLoad,
+			deps.statfs,
 		);
 	}
 	process.stdout.write(`${values.json ? JSON.stringify(report) : renderStatusText(report)}\n`);
@@ -555,7 +504,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return await runDaemon(loadConfig(homeDir), env, bootConfigText);
 			}
 			case "status":
-				return await statusCommand(rest, homeDir, testHostLoad(env));
+				return await statusCommand(rest, homeDir, hostLoadDeps(env));
 			case "doctor":
 				return await doctorCommand(homeDir, (line) => process.stdout.write(`${line}\n`));
 			case "gc":

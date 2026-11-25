@@ -13,6 +13,7 @@ import { acceptanceItems } from "../src/tasks/docs";
 import { landTask } from "../src/tasks/land";
 import type { TaskLandRecord } from "../src/tasks/ledger-schema";
 import { discordBinding, GUILD, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { FakeGh } from "./helpers/fake-gh";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
@@ -111,6 +112,7 @@ async function boot(): Promise<{ world: World; start: (crashAt: PrLandCrashPoint
 	transport.setChannel({ id: THREAD, type: 11, parentId: CHANNEL, guildId: GUILD });
 	const start = async (crashAt: PrLandCrashPoint | undefined): Promise<Daemon> => {
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels: [discordBinding(transport)],
 			clock,

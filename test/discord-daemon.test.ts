@@ -11,6 +11,7 @@ import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { makeHome, OWNER, PendingDiscordTransport, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const DISCORD_DM = "123456789012345678"; // gitleaks:allow (fake snowflake)
 const QUESTION = "700000000000000001";
@@ -60,6 +61,7 @@ async function boot(
 		channels.push(new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER }), discordOptions));
 	}
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels,
 		log: createLogger({

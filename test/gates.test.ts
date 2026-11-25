@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GatesCommandDeps, gatesCommand } from "../src/cli/index";
+import { type GatesCommandDeps, gatesCommand } from "../src/cli/gates";
 import { readSweepHeartbeat, SweepHeartbeatWriter } from "../src/daemon/heartbeat";
 import { currentBootId } from "../src/daemon/lock";
 import { readStatusFromDb } from "../src/daemon/status";
@@ -24,7 +24,8 @@ import {
 	SWEEP_STALLED_MS,
 } from "../src/ops/gates";
 import { HERDR_HEALTH_FILE, HERDR_HEALTH_STALE_MS, HerdrHealthProbe, readHerdrHealth } from "../src/ops/herdr-health";
-import { IDLE_HOST_LOAD, testHostLoad } from "../src/ops/host-resources";
+import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { ROOMY_STATFS, testHostLoad, testStatfs } from "../src/ops/test-host-hooks";
 import { localDay } from "../src/time";
 
 let home: string;
@@ -959,6 +960,27 @@ describe("jabbu-pocket gates: open, closed and unknown (판정불가)", () => {
 		expect(lastLine(corrupt.out)).toStartWith("gates_done open=1 unknown=0 total=6 opened=ledger_unreadable(");
 		expect(runGates(["--strict"]).code).toBe(1);
 	});
+
+	test("--ko keeps the exit code and the gate lines, and names open and unjudged gates by their dashboard label", () => {
+		writeStamp(0);
+		const fresh = runGates(["--ko", "--strict"]);
+		expect(fresh.code).toBe(1);
+		expect(fresh.out).toContain("gate=lanes_stuck state=unknown");
+		expect(lastLine(fresh.out)).toStartWith("판정 못 한 게이트 9개 — ");
+		expect(lastLine(fresh.out)).toContain(gateText("lanes_stuck").label);
+
+		writeFileSync(join(home, "sweep-heartbeat"), `ts=${new Date(now).toISOString()} loop_ms=0 draining=0\n`);
+		seedDb(() => {});
+		const healthy = runGates(["--ko", "--strict"]);
+		expect(healthy.code).toBe(0);
+		expect(lastLine(healthy.out)).toBe("게이트 14개 모두 정상");
+
+		writeFileSync(join(home, "jabbu.db"), "not a database at all\n".repeat(500));
+		const corrupt = runGates(["--ko"]);
+		expect(corrupt.code).toBe(1);
+		expect(lastLine(corrupt.out)).toStartWith(`게이트 1/6개 열림 — ${gateText("ledger_unreadable").label}(`);
+		expect(lastLine(corrupt.out)).toEndWith(` · 할 일: ${gateText("ledger_unreadable").todo}`);
+	});
 });
 
 describe("JABBU_TEST_HOST_LOAD test hook", () => {
@@ -975,6 +997,24 @@ describe("JABBU_TEST_HOST_LOAD test hook", () => {
 		const gate = collectGates({ homeDir: home, now, hostLoad: idle }).find((g) => g.name === "host_pressure");
 		expect(gate?.state).toBe("closed");
 		expect(() => testHostLoad({ JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "busy" })).toThrow("unknown value busy");
+	});
+});
+
+describe("JABBU_TEST_STATFS test hook", () => {
+	test("inert without JABBU_TEST_HOOKS=1, so production always reads this machine", () => {
+		expect(testStatfs({})).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_STATFS: "roomy" })).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_HOOKS: "0", JABBU_TEST_STATFS: "roomy" })).toBeUndefined();
+		expect(testStatfs({ JABBU_TEST_HOOKS: "1" })).toBeUndefined();
+	});
+
+	test("with JABBU_TEST_HOOKS=1, roomy closes disk_low and any other value is refused", () => {
+		const roomy = testStatfs({ JABBU_TEST_HOOKS: "1", JABBU_TEST_STATFS: "roomy" });
+		expect(roomy).toBe(ROOMY_STATFS);
+		const gate = collectGates({ homeDir: home, now, statfs: roomy }).find((g) => g.name === "disk_low");
+		expect(gate?.state).toBe("closed");
+		expect(gate?.detail).toContain("free_gib=50.0 pct=50");
+		expect(() => testStatfs({ JABBU_TEST_HOOKS: "1", JABBU_TEST_STATFS: "tight" })).toThrow("unknown value tight");
 	});
 });
 
@@ -1110,7 +1150,14 @@ describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and t
 
 	test("an omp_runtime gate the sweep opens is listed by the status fallback too", () => {
 		const options = gateOptionsFromConfig({ timezone: "Asia/Seoul", ompExecutable: join(home, "no-such-omp") });
-		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", options, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(
+			join(home, "jabbu.db"),
+			"omp-test 0",
+			"Asia/Seoul",
+			options,
+			IDLE_HOST_LOAD,
+			ROOMY_STATFS,
+		);
 		expect(report.openGates.map((gate) => gate.name)).toContain("omp_runtime");
 	});
 
@@ -1121,7 +1168,14 @@ describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and t
 				"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('m1', 'o', 1, 't', '__proto__', 1)",
 			);
 		});
-		const report = readStatusFromDb(join(home, "jabbu.db"), "omp-test 0", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(
+			join(home, "jabbu.db"),
+			"omp-test 0",
+			"Asia/Seoul",
+			{},
+			IDLE_HOST_LOAD,
+			ROOMY_STATFS,
+		);
 		expect(Object.getOwnPropertyDescriptor(report.inbound, "__proto__")?.value).toBe(1);
 	});
 });

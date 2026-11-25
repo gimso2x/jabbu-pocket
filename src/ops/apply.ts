@@ -6,7 +6,7 @@ import { type CodeRollbackMode, defaultHomeDir } from "../config";
 import { parseChatOrigin } from "../core/origin-key";
 import { type CrashPoint, crashHook } from "../daemon/crash";
 import type { SweepHeartbeat } from "../daemon/heartbeat";
-import { currentBootId, holderAlive } from "../daemon/lock";
+import { currentBootId } from "../daemon/lock";
 import { RESTART_CUT_FILE } from "../daemon/recovery";
 import { redact } from "../redact";
 import { type BackupResult, backupStamp } from "./backup";
@@ -23,15 +23,8 @@ export class BackupUnusableError extends Error {
 	}
 }
 
-import {
-	APPLY_LOCK_FILE,
-	type ApplyLockInfo,
-	createApplyLock,
-	errorCode,
-	parseApplyLock,
-	reclaimStaleApplyLock,
-	releaseApplyLock,
-} from "./apply-lock";
+import { APPLY_LOCK_FILE, type ApplyLockInfo, errorCode, releaseApplyLock } from "./apply-lock";
+import { acquireApplyLock, type LockWaitResult } from "./apply-lock-wait";
 import { type EnsureDepsResult, ensureDeps } from "./deps";
 import type { Gate } from "./gates";
 import type { Runner, RunOptions, RunResult } from "./run-types";
@@ -101,6 +94,12 @@ export interface ApplyOptions {
 	clearRollback?: boolean;
 	/** `--allow-detached`: a detached HEAD picked by hand is applied as is (no journal); head.last-good stays as it was. */
 	allowDetached?: boolean;
+	/**
+	 * This apply runs as a peer of another home's apply, which holds that home's lock all along. A live holder of this
+	 * home's lock is then not waited for: it is an apply of this checkout that applies this home itself and runs its
+	 * own peers, so waiting could close a cycle (apply A waits for B's home while B's peer step waits for A's, 11-25).
+	 */
+	peerOf?: string;
 }
 
 /** Everything `runApply` touches outside the home directory; tests replace the external effects with fakes. */
@@ -814,66 +813,23 @@ async function applyUnderLock(
 		return { exitCode, receipt };
 	};
 
-	// 0. apply lock: a live holder is waited for (no drain, no restart meanwhile), a stale one taken over. Running
-	// past the limit changes nothing and fails, leaving the holder's lock alone.
-	let waitedFor: string | undefined;
-	const acquire = async (): Promise<StepResult & { noted: boolean }> => {
-		const limitMs = options.timeoutMin * 60_000 + READY_TIMEOUT_MS;
-		const deadline = deps.now() + limitMs;
-		const notes: string[] = [];
-		for (;;) {
-			if (createApplyLock(lockPath, lock.info)) {
-				lock.held = true;
-				deps.log(`apply lock taken ${lockPath}`);
-				if (waitedFor !== undefined) notes.push(`waited for apply ${waitedFor}`);
-				return { ok: true, detail: notes.join("; "), noted: notes.length > 0 };
-			}
-			let seen: string;
-			try {
-				seen = readFileSync(lockPath, "utf8");
-			} catch (error) {
-				if (errorCode(error) === "ENOENT") continue; // released between our link and read: try again
-				throw error;
-			}
-			const holder = parseApplyLock(seen);
-			// The outer apply of this very process (same stamp) already holds this home: waiting would wait on itself.
-			if (holder?.pid === deps.pid && holder.stamp === stamp) {
-				return { ok: false, detail: `${lockPath} is held by this apply ${stamp} itself`, noted: true };
-			}
-			// A dead holder (or one from another boot), broken JSON, or this pid left by an earlier process (another
-			// stamp) is stale.
-			if (holder === undefined || holder.pid === deps.pid || !holderAlive(holder.pid, holder.bootId, deps.isAlive)) {
-				const reclaim = reclaimStaleApplyLock(lockPath, seen, deps.pid);
-				if (reclaim.outcome === "contention") {
-					return { ok: false, detail: `lock contention (moved-aside lock left at ${reclaim.aside})`, noted: true };
-				}
-				if (reclaim.outcome === "taken") notes.push(`stale lock ${holder?.stamp ?? "(unreadable)"} taken over`);
-				continue;
-			}
-			if (waitedFor !== holder.stamp) deps.log(`apply wait_apply waiting for apply ${holder.stamp} pid=${holder.pid}`);
-			waitedFor = holder.stamp;
-			if (deps.now() >= deadline) {
-				return {
-					ok: false,
-					detail: `apply ${holder.stamp} still running after ${limitMs / 60_000} min`,
-					noted: true,
-				};
-			}
-			await deps.sleep(READY_POLL_MS);
-		}
-	};
-	// Recorded as a step only when there was someone to wait for or take over (or it failed).
+	// 0. apply lock (`acquireApplyLock`). Recorded as a step only when there was someone to wait for or take over (or it failed).
 	const lockStartedMs = deps.now();
-	let acquired: StepResult & { noted: boolean };
+	let acquired: LockWaitResult;
 	try {
-		acquired = await acquire();
+		const limitMs = options.timeoutMin * 60_000 + READY_TIMEOUT_MS;
+		acquired = await acquireApplyLock({ lockPath, lock, stamp, limitMs, peerOf: options.peerOf }, deps);
 	} catch (error) {
 		acquired = { ok: false, detail: msg(error), noted: true };
 	}
+	const waitedFor = acquired.waitedFor;
+	// A peer that found its home held by a live apply leaves the home to it: nothing changed here, no failure.
+	const stepOk = acquired.ok || acquired.busy === true;
 	if (acquired.noted) {
-		steps.push({ name: "wait_apply", ok: acquired.ok, detail: acquired.detail, ms: deps.now() - lockStartedMs });
-		deps.log(`apply step=wait_apply ok=${acquired.ok} detail=${acquired.detail}`);
+		steps.push({ name: "wait_apply", ok: stepOk, detail: acquired.detail, ms: deps.now() - lockStartedMs });
+		deps.log(`apply step=wait_apply ok=${stepOk} detail=${acquired.detail}`);
 	}
+	if (acquired.busy === true) return finish("skipped", 0);
 	if (!acquired.ok) return finish("failed", 1);
 
 	// 1. precheck: anything wrong here changes nothing and ends as SKIP.

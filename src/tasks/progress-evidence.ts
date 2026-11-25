@@ -14,7 +14,9 @@ const worktreeGit =
 			stdoutCap: 1_000_000,
 			env: dispatchEnv(process.env),
 		});
-		return result.code === 0 && !result.timedOut ? result.stdout : undefined;
+		// A capped read is a prefix of the real output: hashing or parsing it as complete would freeze the
+		// evidence key (or invent partial paths), so it counts as unreadable like any other git failure.
+		return result.code === 0 && !result.timedOut && result.truncated !== true ? result.stdout : undefined;
 	};
 
 /**
@@ -45,7 +47,7 @@ export async function taskChangedPaths(
 		const record = records[i] ?? "";
 		if (record === "") continue;
 		paths.add(record.slice(3));
-		if (record[0] === "R" || record[0] === "C") {
+		if (/^(?:[RC]|.[RC])/.test(record)) {
 			i += 1;
 			const source = records[i];
 			if (source) paths.add(source);

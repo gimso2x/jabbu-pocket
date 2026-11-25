@@ -7,7 +7,10 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { checkSchemaVersion } from "../store/schema-version";
 import { assertRegularLedger } from "./gates";
 import { gcLaneArtifacts, newestMtimeMs } from "./gc-lanes";
-import { removeTurnRefsSync, TURN_SNAPSHOT_RETENTION_DAYS } from "./turn-snapshot";
+import { emptyLedgerRemoved, gcLedger, LEDGER_RETENTION_DAYS, type LedgerRemoved } from "./gc-ledger";
+import { gcTurnSnapshots, hasTable } from "./gc-turns";
+
+export { LEDGER_RETENTION_DAYS, type LedgerRemoved };
 
 /** Thread-session origins of the removed Slack and Teams channels. */
 const REMOVED_PLATFORM_THREAD = /^(slack|teams)\/ch\/[^/]+\/t\/[^/]+$/;
@@ -15,6 +18,10 @@ const REMOVED_PLATFORM_THREAD = /^(slack|teams)\/ch\/[^/]+\/t\/[^/]+$/;
 export const DEFAULT_SESSION_RETENTION_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const EPOCH_DIR = /^e([1-9][0-9]*)$/;
+/** Inbound states that keep an origin whole (waiting, in flight or parked as uncertain). */
+const WAITING = "state IN ('pending', 'sending', 'dispatched', 'uncertain')";
+/** Re-checks the waiting rows at delete time: gc runs with foreign_keys off, so a late inbound would lose its origin. */
+const REMOVE_IDLE = `DELETE FROM origins WHERE origin_key = ? AND NOT EXISTS (SELECT 1 FROM inbound WHERE origin_key = ? AND ${WAITING})`;
 
 export interface GcOptions {
 	homeDir: string;
@@ -22,6 +29,8 @@ export interface GcOptions {
 	now: number;
 	/** Report what would be removed without deleting. */
 	dryRun?: boolean;
+	/** Test seam: runs between the ledger scan and the first origin delete (a message arriving mid-gc). */
+	afterScan?: () => void;
 }
 
 export interface GcResult {
@@ -40,17 +49,6 @@ export interface GcResult {
 	ledgerRemoved: LedgerRemoved;
 }
 
-/** Row counts `gcLedger` removed per table; `deliveryPosts` are the posts of the removed deliveries. */
-export interface LedgerRemoved {
-	inbound: number;
-	deliveries: number;
-	deliveryPosts: number;
-	monitorEvents: number;
-}
-
-/** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
-export const LEDGER_RETENTION_DAYS = 90;
-
 /** The real path of an existing path; a path that is not there is only resolved. */
 function realpathOrResolve(path: string): string {
 	try {
@@ -65,11 +63,10 @@ function realpathOrResolve(path: string): string {
  * epoch in the ledger) whose newest file is older than the retention window. The current epoch, unknown origins,
  * and anything not named `e<N>` are never touched. The ledger is opened read-only.
  *
- * Thread-session origins (`slack/ch/<C>/t/<R>`) never churn epochs (`!new` is their only epoch path), so their
- * sessions would pile up forever. Once the origin's newest activity is past the retention window the whole
- * directory goes, together with the ledger row — a later message simply opens a fresh origin. Activity is the
- * newest file mtime (the ledger's `updated_at` is not bumped on turns); a missing directory ages by `updated_at`.
- * An origin with pending or dispatched inbound is never removed, and a symlinked origin directory is never followed.
+ * Thread-session origins never churn epochs, so their sessions would pile up forever: once the origin's newest
+ * activity (newest file mtime; a missing directory ages by `updated_at`) is past the retention window the whole
+ * directory goes with the ledger row, and a later message opens a fresh origin. An origin with waiting inbound is
+ * never removed, and a symlinked origin directory is never followed.
  */
 export function gcSessions(options: GcOptions): GcResult {
 	const result: GcResult = {
@@ -79,7 +76,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
 		turnSnapshotsRemoved: 0,
-		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0 },
+		ledgerRemoved: emptyLedgerRemoved(),
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -98,9 +95,7 @@ export function gcSessions(options: GcOptions): GcResult {
 			.all() as typeof origins;
 		waiting = new Set(
 			(
-				db
-					.query("SELECT DISTINCT origin_key FROM inbound WHERE state IN ('pending', 'dispatched', 'uncertain')")
-					.all() as Array<{
+				db.query(`SELECT DISTINCT origin_key FROM inbound WHERE ${WAITING}`).all() as Array<{
 					origin_key: string;
 				}>
 			).map((row) => row.origin_key),
@@ -157,7 +152,8 @@ export function gcSessions(options: GcOptions): GcResult {
 	// everything else stays read-only. A dry run opens it read-only, only to count the turn snapshots.
 	const write = new Database(dbPath, options.dryRun ? { readonly: true, strict: true } : { strict: true });
 	write.run("PRAGMA busy_timeout = 5000");
-	const removeRow = options.dryRun ? undefined : write.query("DELETE FROM origins WHERE origin_key = ?");
+	const removeRow = options.dryRun ? undefined : write.query(REMOVE_IDLE);
+	options.afterScan?.();
 	try {
 		for (const origin of origins) {
 			const orphanMonitor = isOrphanMonitor(origin.origin_key);
@@ -175,9 +171,12 @@ export function gcSessions(options: GcOptions): GcResult {
 				continue;
 			}
 			if (present !== undefined && !present.isDirectory()) continue;
-			if (!options.dryRun) {
+			if (removeRow !== undefined) {
+				if (removeRow.run(origin.origin_key, origin.origin_key).changes === 0) {
+					result.retained.push(originDir);
+					continue;
+				}
 				if (present !== undefined) rmSync(originDir, { recursive: true, force: true });
-				removeRow?.run(origin.origin_key);
 			}
 			(orphanMonitor ? result.monitorOriginsRemoved : result.threadOriginsRemoved).push(origin.origin_key);
 		}
@@ -188,73 +187,4 @@ export function gcSessions(options: GcOptions): GcResult {
 	}
 	result.laneArtifactsRemoved = gcLaneArtifacts(options);
 	return result;
-}
-
-function hasTable(db: Database, name: string): boolean {
-	return db.query("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null;
-}
-
-/**
- * Finished conversation rows past `LEDGER_RETENTION_DAYS` leave the ledger, in one transaction; a dry run only counts.
- * - inbound: `answered`/`failed_notified`/`discarded`, unless a pending approval card was asked from its thread
- *   (`origin_thread_ref`).
- * - deliveries: `confirmed`/`failed_ambiguous`/`expired`; its `delivery_posts` rows (written by older versions) go
- *   first. The gc connection never turns `foreign_keys` on (origins expire at 30 days, inbound at 90, so the origin
- *   delete would be refused), which is why the posts→deliveries order is kept here by hand.
- * - monitor_events: the final stages only, aged by `updated_at`.
- * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing from an old
- * home makes its rule empty instead of failing.
- */
-function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
-	const cutoff = options.now - LEDGER_RETENTION_DAYS * DAY_MS;
-	const inboundWhere = [
-		"i.created_at < ? AND i.state IN ('answered','failed_notified','discarded')",
-		hasTable(db, "approvals")
-			? "NOT EXISTS (SELECT 1 FROM approvals a WHERE a.status = 'pending' AND a.origin_thread_ref = i.thread_ref)"
-			: undefined,
-	]
-		.filter((term) => term !== undefined)
-		.join(" AND ");
-	const deliveriesWhere = "d.created_at < ? AND d.state IN ('confirmed','failed_ambiguous','expired')";
-	const hasDeliveries = hasTable(db, "deliveries");
-	const posts = hasDeliveries && hasTable(db, "delivery_posts");
-	const events = hasTable(db, "monitor_events");
-	const postsWhere = `delivery_id IN (SELECT d.delivery_id FROM deliveries d WHERE ${deliveriesWhere})`;
-	const eventsWhere = "stage IN ('delivered','failed_no_retry','skipped','no_report') AND updated_at < ?";
-	const count = (sql: string) => (db.query(`SELECT COUNT(*) AS n FROM ${sql}`).get(cutoff) as { n: number }).n;
-	const removed: LedgerRemoved = {
-		inbound: count(`inbound i WHERE ${inboundWhere}`),
-		deliveries: hasDeliveries ? count(`deliveries d WHERE ${deliveriesWhere}`) : 0,
-		deliveryPosts: posts ? count(`delivery_posts WHERE ${postsWhere}`) : 0,
-		monitorEvents: events ? count(`monitor_events WHERE ${eventsWhere}`) : 0,
-	};
-	if (options.dryRun === true) return removed;
-	db.transaction(() => {
-		if (posts) db.query(`DELETE FROM delivery_posts WHERE ${postsWhere}`).run(cutoff);
-		if (hasDeliveries) db.query(`DELETE FROM deliveries AS d WHERE ${deliveriesWhere}`).run(cutoff);
-		db.query(`DELETE FROM inbound AS i WHERE ${inboundWhere}`).run(cutoff);
-		if (events) db.query(`DELETE FROM monitor_events WHERE ${eventsWhere}`).run(cutoff);
-	})();
-	return removed;
-}
-
-/**
- * `!undo` rows past the turn-snapshot retention (7 days, independent of the session window) leave the ledger, and the
- * `refs/jabbu/turns/<id>/…` that kept their trees alive go with them. Runs on the writable handle `gcSessions` already
- * opened; a dry run reads the count and writes nothing.
- */
-function gcTurnSnapshots(db: Database, options: GcOptions): number {
-	if (!hasTable(db, "turn_snapshots")) return 0;
-	const cutoff = options.now - TURN_SNAPSHOT_RETENTION_DAYS * DAY_MS;
-	const rows = db.query("SELECT id, repo FROM turn_snapshots WHERE ended_at < ?").all(cutoff) as Array<{
-		id: number;
-		repo: string;
-	}>;
-	if (rows.length === 0 || options.dryRun === true) return rows.length;
-	// Refs go first: a row whose ref could not be deleted stays in the ledger, so the next gc retries it.
-	const kept = new Set<number>();
-	removeTurnRefsSync(rows, (id) => kept.add(id));
-	const remove = db.query("DELETE FROM turn_snapshots WHERE id = ?");
-	for (const row of rows) if (!kept.has(row.id)) remove.run(row.id);
-	return rows.length - kept.size;
 }

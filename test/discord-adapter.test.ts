@@ -74,6 +74,8 @@ async function adapter(options: Partial<DiscordAdapterOptions> = {}): Promise<Di
 		onInboundFailure: () => {
 			failures += 1;
 		},
+		// Like the daemon's store: an edit finds the origin its original was recorded with.
+		inline: { originOf: (id) => inbound.find((m) => m.platformMessageId === id)?.originKey },
 		...options,
 	});
 	await made.start();
@@ -277,14 +279,20 @@ describe("server channel", () => {
 		expect(inbound.map((m) => m.originKey)).toEqual([`discord/ch/${CH}/t/${root.id}`]);
 	});
 
-	test("④ requireMention: only a mention addresses, in a mention-free channel and in a known thread alike", async () => {
-		await adapter({ mentionFreeChannels: [CH], requireMention: true });
+	test("④ requireMention: only a mention addresses, at a root and in a known thread alike", async () => {
+		await adapter({ requireMention: true });
 		await transport.emitMessage(message("멘션 없이"));
 		expect(inbound).toHaveLength(0);
 		const root = message(`<@${BOT}> 멘션`);
 		await transport.emitMessage(root);
 		await transport.emitMessage(message("스레드 안 멘션 없이", { channel_id: root.id }));
 		expect(inbound.map((m) => m.text)).toEqual(["멘션"]);
+	});
+
+	test("④ requireMention: a mention-free channel still takes an unmentioned root", async () => {
+		await adapter({ mentionFreeChannels: [CH], requireMention: true });
+		await transport.emitMessage(message("멘션 없이"));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션 없이"]);
 	});
 
 	test("④ requireMention: the bot's managed role mention addresses it, another role does not", async () => {
@@ -464,6 +472,7 @@ describe("peer bots", () => {
 					base.knowsThread?.(threadRef) === true || peers.some((p) => p.message.threadRef === threadRef),
 			},
 			peerBots: [{ userId: PEER, name: "떡" }],
+			peerPartWaitMs: 0,
 			...options,
 		});
 	}
@@ -502,6 +511,29 @@ describe("peer bots", () => {
 			{ method: "startThread", channelId: CH, messageId: root.id, name: "스펙 검토 부탁", id: root.id },
 		]);
 		expect(calls("addReaction")[0]).toMatchObject({ channelId: CH, messageId: root.id, emoji: "👀" });
+	});
+
+	// The wait itself is the behaviour: the later part is emitted while the mentioned post waits, never after a sleep.
+	test("a split peer answer: the unmentioned later parts posted during the wait join the mentioned post as one request", async () => {
+		await peerAdapter(undefined, { peerPartWaitMs: 300 });
+		const first = peerMessage(`<@${BOT}> 검토 1~4번`, { channel_id: THREAD });
+		const second = peerMessage("검토 5번", { channel_id: THREAD });
+		const waiting = transport.emitMessage(first);
+		await transport.emitMessage(second);
+		expect(peers).toHaveLength(0);
+		await waiting;
+		expect(peers).toHaveLength(1);
+		const text = peers[0]?.message.text ?? "";
+		expect(text).toContain("검토 1~4번");
+		expect(text).toContain("검토 5번");
+		expect(text.indexOf("검토 1~4번")).toBeLessThan(text.indexOf("검토 5번"));
+		expect(peers[0]?.message.platformMessageId).toBe(`${CH}:${first.id}`);
+		expect(logged("event=peer_part_merged")).toBe(true);
+		expect(logged("reason=peer_not_mentioned")).toBe(false);
+		// Once the wait is over an unmentioned post is dropped as before.
+		await transport.emitMessage(peerMessage("다 했어", { channel_id: THREAD }));
+		expect(peers).toHaveLength(1);
+		expect(logged("reason=peer_not_mentioned")).toBe(true);
 	});
 
 	test("a reply in a thread (nickname mention, no bot flag) keeps the thread's keys and opens no thread", async () => {
@@ -768,6 +800,7 @@ describe("typing indicator", () => {
 		await typingAdapter({
 			core: { ...core(), onPeerInbound: () => ({}) },
 			peerBots: [{ userId: PEER, name: "떡" }],
+			peerPartWaitMs: 0,
 		});
 		await transport.emitMessage(message(`<@${BOT}> 검토`, { author: { id: PEER, bot: true } }));
 		await transport.emitMessage(message("!status", { channel_id: DM, guild_id: undefined }));
@@ -1015,8 +1048,10 @@ describe("replies to the bot's posts", () => {
 		expect(first?.startsWith("이모지 경계\n")).toBe(true);
 		const lines = (first ?? "").split("\n");
 		const at = lines.findIndex((line) => line.startsWith("답장 대상("));
-		expect(lines[at - 1]).toMatch(/^<<<quoted-/);
-		expect(lines[at + 1]).toMatch(/^<<<end-quoted-/);
+		expect(lines[at - 2]).toMatch(/^<<<quoted-/);
+		expect(lines[at - 1]).toBe("```");
+		expect(lines[at + 1]).toBe("```");
+		expect(lines[at + 2]).toMatch(/^<<<end-quoted-/);
 	});
 
 	test("the context line names the owner and a peer, and is left out for anyone else", async () => {
@@ -1120,7 +1155,7 @@ describe("forwarded messages", () => {
 		expect(inbound).toHaveLength(1);
 		const text = inbound[0]?.text ?? "";
 		expect(text.startsWith(QUOTED_HEADER)).toBe(true);
-		expect(text).toMatch(/<<<quoted-[0-9a-f]+>>>\n전달한 원문 첫 줄\n둘째 줄\n<<<end-quoted-[0-9a-f]+>>>/);
+		expect(text).toMatch(/<<<quoted-[0-9a-f]+>>>\n```\n전달한 원문 첫 줄\n둘째 줄\n```\n<<<end-quoted-[0-9a-f]+>>>/);
 		expect(logged("inbound_dropped")).toBe(false);
 	});
 
@@ -1455,5 +1490,138 @@ describe("a borrowed lane thread: the conversation's and the lane's turn side by
 		await made.pumpDeliveries();
 		expect(calls("deleteMessage").map((c) => c.messageId)).toEqual([conversationStatus, laneStatus]);
 		expect(calls("removeReaction").map((c) => c.messageId)).toEqual([root.id, reply.id]);
+	});
+});
+
+describe("inline reply channels (channels.discord.inlineReplyChannels)", () => {
+	const OTHER = "222222222222222222";
+	const inlineOptions = (channels: string[] = [CH]) => ({
+		inline: { channels, originOf: (id: string) => inbound.find((m) => m.platformMessageId === id)?.originKey },
+	});
+	const editOf = (original: DiscordMessageEvent, content: string) => ({
+		...original,
+		content,
+		edited_timestamp: new Date(snowflakeTime(original.id) + 60_000).toISOString(),
+	});
+	const lookups = (id: string) => calls("getChannel").filter((c) => c.channelId === id);
+
+	test("AC-1: a root in the channel opens no thread and is taken on the channel origin", async () => {
+		await adapter(inlineOptions());
+		const root = message(`<@${BOT}> 이 링크 뭐야`);
+		await transport.emitMessage(root);
+		expect(calls("startThread")).toHaveLength(0);
+		expect(inbound.map((m) => [m.originKey, m.threadRef, m.text])).toEqual([
+			[`discord/ch/${CH}`, `${CH}:${root.id}`, "이 링크 뭐야"],
+		]);
+	});
+
+	test("AC-3: a split request opens the thread; a negation, question, example, multi-line or quoted phrase does not", async () => {
+		await adapter(inlineOptions());
+		const split = message(`<@${BOT}> 이건 따로 빼줘: 로그 분석`);
+		await transport.emitMessage(split);
+		expect(calls("startThread").map((c) => c.messageId)).toEqual([split.id]);
+		expect(inbound[0]?.originKey).toBe(`discord/ch/${CH}/t/${split.id}`);
+		const keep = inbound.length;
+		for (const text of [
+			"새 스레드 말고 본문에서 해줘",
+			"새 스레드에서 해줄래?",
+			'"이건 따로 빼줘"라고 하면 뭐가 돼?',
+		]) {
+			await transport.emitMessage(message(`<@${BOT}> ${text}`));
+		}
+		await transport.emitMessage(message(`<@${BOT}> 설명 먼저\n이건 따로 빼줘`));
+		// The phrase only in a forward or in the replied-to post is quoted material, not the owner's words.
+		await transport.emitMessage(
+			message(`<@${BOT}>`, { message_snapshots: [{ message: { content: "이건 따로 빼줘" } }] }),
+		);
+		await transport.emitMessage(
+			message(`<@${BOT}> 이거 봐줘`, {
+				referenced_message: { id: "1", author: { id: STRANGER }, content: "이건 따로 빼줘" },
+			}),
+		);
+		expect(calls("startThread")).toHaveLength(1);
+		expect(inbound.slice(keep).map((m) => m.originKey)).toEqual(Array(6).fill(`discord/ch/${CH}`));
+	});
+
+	test("AC-3b: the task after the colon of a split request is not read as a negation, question or quote", async () => {
+		await adapter(inlineOptions());
+		const tasks = [
+			"깨지지 않는 테스트 작성",
+			"로그인 없이 접근되는 버그 확인",
+			"왜 느린지 조사?",
+			'README의 "설치" 고쳐줘',
+		];
+		for (const task of tasks) await transport.emitMessage(message(`<@${BOT}> 이건 따로 빼줘: ${task}`));
+		expect(calls("startThread")).toHaveLength(tasks.length);
+		expect(inbound.map((m) => m.originKey)).toEqual(
+			tasks.map((_, i) => `discord/ch/${CH}/t/${calls("startThread")[i]?.messageId}`),
+		);
+		// A negation in the request itself still keeps the body reply, with or without a task.
+		const before = calls("startThread").length;
+		for (const text of ["따로 빼지 말고: 로그 분석", "새 스레드 말고 본문에서: 로그 분석", "이건 따로 빼줘 말고: 로그"])
+			await transport.emitMessage(message(`<@${BOT}> ${text}`));
+		expect(calls("startThread")).toHaveLength(before);
+	});
+
+	test("AC-4: a channel that is not an inline channel still opens a thread for every root", async () => {
+		transport.setChannel({ id: OTHER, type: 0, guildId: GUILD });
+		await adapter(inlineOptions());
+		const root = message(`<@${BOT}> 질문`, { channel_id: OTHER });
+		await transport.emitMessage(root);
+		expect(calls("startThread").map((c) => c.messageId)).toEqual([root.id]);
+		expect(inbound[0]?.originKey).toBe(`discord/ch/${OTHER}/t/${root.id}`);
+	});
+
+	test("AC-5: a body root's edit goes to the channel session, a split root's to its thread, an unrecorded root's is dropped", async () => {
+		await adapter(inlineOptions());
+		const body = message(`<@${BOT}> 본문`);
+		const split = message(`<@${BOT}> 이건 따로 빼줘`);
+		await transport.emitMessage(body);
+		await transport.emitMessage(split);
+		const unrecorded = message(`<@${BOT}> 기록 없음`);
+		await transport.emitMessageUpdate(editOf(body, `<@${BOT}> 본문 수정`));
+		await transport.emitMessageUpdate(editOf(split, `<@${BOT}> 이건 따로 빼줘, 수정`));
+		const before = logs.length;
+		await transport.emitMessageUpdate(editOf(unrecorded, `<@${BOT}> 수정`));
+		expect(inbound.slice(2).map((m) => [m.originKey, m.threadRef])).toEqual([
+			[`discord/ch/${CH}`, `${CH}:${body.id}`],
+			[`discord/ch/${CH}/t/${split.id}`, `${CH}:${split.id}`],
+		]);
+		expect(inbound).toHaveLength(4);
+		expect(logs.slice(before).some((line) => line.includes("reason=edit_no_original"))).toBe(true);
+	});
+
+	test("AC-5: an edit whose original has no recorded origin is dropped as edit_no_thread", async () => {
+		let known = true;
+		await adapter({
+			inline: {
+				channels: [CH],
+				originOf: (id) => (known ? inbound.find((m) => m.platformMessageId === id)?.originKey : undefined),
+			},
+		});
+		const root = message(`<@${BOT}> 본문`);
+		await transport.emitMessage(root);
+		// The core knows the message (hasInbound) but has no origin for it.
+		known = false;
+		const before = logs.length;
+		await transport.emitMessageUpdate(editOf(root, `<@${BOT}> 수정`));
+		expect(inbound).toHaveLength(1);
+		expect(logs.slice(before).some((line) => line.includes("reason=edit_no_thread"))).toBe(true);
+	});
+
+	test("AC-7: typing, the status and a later thread event cost no lookup of the message id; a thread made from it is read again", async () => {
+		await adapter(inlineOptions());
+		const root = message(`<@${BOT}> 질문`);
+		await transport.emitMessage(root);
+		expect(transport.typing).toEqual([CH]);
+		const [status] = calls("createMessage");
+		expect(status?.channelId).toBe(CH);
+		expect(status?.messageReference).toEqual({ messageId: root.id });
+		expect(lookups(root.id)).toHaveLength(0);
+		// The owner opens a thread from it by hand: its messages are thread messages again.
+		transport.emitChannel({ id: root.id, type: 11, parentId: CH, guildId: GUILD });
+		await transport.emitMessage(message(`<@${BOT}> 스레드에서`, { channel_id: root.id }));
+		expect(inbound.at(-1)?.originKey).toBe(`discord/ch/${CH}/t/${root.id}`);
+		expect(lookups(root.id)).toHaveLength(0);
 	});
 });

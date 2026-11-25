@@ -39,6 +39,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -1858,16 +1859,16 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 			},
 		});
 		const auto = buildLaneOutcomeCard(row("PASS"), { kind: "auto" }).text;
-		expect(auto).toContain("🔎 독립 리뷰 CLEAR · m/x\n🧪 실행 QA(뚱기 · glm-5.3-flash): PASS");
+		expect(auto).toContain("🔎 독립 리뷰 CLEAR · m/x\n🧪 실행 QA(glm-5.3-flash): PASS");
 		const ask = buildLaneOutcomeCard(row("FAIL"), { kind: "ask", skipped: [QA_FAIL] }).text;
-		expect(ask).toContain("🧪 실행 QA(뚱기 · glm-5.3-flash): FAIL");
+		expect(ask).toContain("🧪 실행 QA(glm-5.3-flash): FAIL");
 		expect(ask).toContain("> bun test → 3 fail");
 		expect(ask).toContain("> 셋째");
 		expect(ask).not.toContain("넷째");
 		expect(ask).not.toContain(token);
 		expect(ask).toContain("> token [REDACTED] 노출");
 		const unsure = buildLaneOutcomeCard(row("inconclusive", "시간 초과"), { kind: "ask" }).text;
-		expect(unsure).toContain("🧪 실행 QA(뚱기 · glm-5.3-flash): 확인 불가(시간 초과)");
+		expect(unsure).toContain("🧪 실행 QA(glm-5.3-flash): 확인 불가(시간 초과)");
 		// A receipt of another commit is not shown.
 		const stale: LaneRow = { ...row("PASS"), meta: { ...row("PASS").meta, sha: "f".repeat(40) } };
 		expect(buildLaneOutcomeCard(stale, { kind: "auto" }).text).not.toContain("실행 QA");
@@ -2146,6 +2147,7 @@ describe("merge and discard by the owner (AC-6)", () => {
 			const sessions = new FakeSessionStore();
 			const clock = { now: () => Date.now() };
 			const daemon = new Daemon({
+				...daemonTestOptions(),
 				config: herdrBoard === undefined ? laneConfig() : { ...laneConfig(), herdrBoard },
 				channels: [discordBinding(transport)],
 				log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
@@ -2502,6 +2504,25 @@ describe("a not-done lane merged into the base branch outside the lane", () => {
 		await tick(h);
 		expectUntouched(h, lane, "not-done");
 		expect(h.logs.some((line) => line.includes("lane_external_land_check_failed"))).toBe(true);
+		h.close();
+	});
+
+	test("a lane whose worktree and branch were removed by hand closes as discarded; only the worktree gone keeps it", async () => {
+		const repo = makeRepo(repos);
+		const h = laneHarness(home.dir);
+		const { lane } = await notDoneLane(h, repo);
+		rmSync(lane.meta.worktree ?? "", { recursive: true, force: true });
+		await tick(h);
+		expect(requireLane(h, lane.name).status).toBe("not-done");
+		git(repo, "worktree", "prune");
+		git(repo, "branch", "-D", lane.meta.branch ?? "");
+		await tick(h);
+		const row = requireLane(h, lane.name);
+		expect(row.status).toBe("closed");
+		expect(row.meta.land?.state).toBe("discarded");
+		expect(row.history.at(-1)?.event).toBe("discarded");
+		expect(h.logs.some((line) => line.includes("lane_tree_gone"))).toBe(true);
+		expect(h.logs.some((line) => line.includes("lane_external_land_check_failed"))).toBe(false);
 		h.close();
 	});
 });

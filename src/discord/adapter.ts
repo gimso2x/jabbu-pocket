@@ -64,7 +64,9 @@ import type { Logger } from "../log";
 import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
+import { InlineRoots } from "./inline-root";
 import { type DiscordPart, renderDiscordMessages } from "./messages";
+import { notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
 import {
 	type DiscordAttachment,
 	DiscordCallError,
@@ -115,6 +117,8 @@ export interface DiscordAdapterOptions {
 	mentionFreeChannels?: readonly string[] | undefined;
 	/** The Discord #log ledger channel (`channels.discord.logChannelId`): inbound there or in its threads never becomes a turn. */
 	logChannel?: string | undefined;
+	/** `channels.discord.inlineReplyChannels` and a lookup of a message's recorded origin (an edit goes where its original went). */
+	inline?: ConstructorParameters<typeof InlineRoots>[0];
 	/** In a server channel only a mention addresses the bot. */
 	requireMention?: boolean | undefined;
 	/** Peer bots whose server channel messages that mention this bot are taken (`channels.discord.peerBots`). */
@@ -136,6 +140,8 @@ export interface DiscordAdapterOptions {
 	typingTimers?: TypingTimers | undefined;
 	/** How long `start()` waits for the first Ready before it lets the daemon go on. Default `START_WAIT_MS`. */
 	startWaitMs?: number | undefined;
+	/** How long a mentioned peer post waits for the rest of its split answer. Default `PEER_PART_WAIT_MS`; 0: no wait. */
+	peerPartWaitMs?: number | undefined;
 	/** A fatal gateway close after `start()` returned: the daemon drops this adapter (see `AdapterDeps.detach`). */
 	onFatal?: ((error: Error) => void) | undefined;
 }
@@ -162,6 +168,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #log: Logger;
 	readonly #guildIds: ReadonlySet<string> | undefined;
 	#mentionFree: ReadonlySet<string>;
+	readonly #inline: InlineRoots;
 	readonly #logChannel: string | undefined;
 	#requireMention: boolean;
 	readonly #peerBots: PeerBotList;
@@ -184,6 +191,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #recoveredThreads = new Set<string>();
 	#ready: Promise<string | undefined> = Promise.resolve(undefined);
 	readonly #startWaitMs: number;
+	readonly #peerParts: PeerParts;
 	readonly #onFatal: ((error: Error) => void) | undefined;
 	/** `start()` has returned (Ready, or the wait ran out): a fatal close from here on is for the daemon to handle. */
 	#startReturned = false;
@@ -200,6 +208,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		this.#log = options.log;
 		this.#guildIds = options.guildIds === undefined ? undefined : new Set(options.guildIds);
 		this.#mentionFree = new Set(options.mentionFreeChannels ?? []);
+		this.#inline = new InlineRoots(options.inline, this.#port);
 		this.#logChannel = options.logChannel;
 		this.#requireMention = options.requireMention === true;
 		this.#peerBots = options.peerBots ?? [];
@@ -209,6 +218,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		this.#mediaRoot = options.mediaRoot;
 		this.#typingTimers = options.typingTimers ?? INTERVAL_TIMERS;
 		this.#startWaitMs = options.startWaitMs ?? START_WAIT_MS;
+		this.#peerParts = new PeerParts(options.peerPartWaitMs ?? PEER_PART_WAIT_MS);
 		this.#onFatal = options.onFatal;
 		this.#gate = new RetryAfterGate({
 			clock: options.clock,
@@ -267,14 +277,20 @@ export class DiscordAdapter implements ChannelAdapter {
 						locate: async (channelId) => {
 							const info = await this.#port.channelInfo(channelId);
 							if (info === undefined) return undefined;
-							if (info.guildId === undefined) return { dm: true };
-							return { dm: false, guildId: info.guildId };
+							return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
 						},
 						ingest: async (event) => {
 							let opened = false;
-							const outcome = await this.#processMessage(event, [], false, () => {
-								opened = true;
-							});
+							const outcome = await this.#processMessage(
+								event,
+								[],
+								false,
+								() => {
+									opened = true;
+								},
+								undefined,
+								true,
+							);
 							if (opened && outcome === "recorded") this.#recoveredThreads.add(event.id);
 							return outcome;
 						},
@@ -313,7 +329,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			fatal: (error) => {
 				if (this.#startReturned) this.#onFatal?.(error);
 			},
-			channel: (info) => this.#port.remember(info),
+			channel: (info) => this.#inline.remember(info),
 			channelGone: (id) => this.#port.forget(id),
 			roles: (roles) => {
 				for (const role of roles) {
@@ -411,7 +427,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** Best-effort post; failures are logged under `event`, never thrown. */
-	async #postText(conversationId: string, threadId: string | undefined, text: string, event: string): Promise<void> {
+	async #postText(conversationId: string, threadId: string | undefined, text: string, event: string): Promise<boolean> {
 		try {
 			const destination = await this.#port.destination(conversationId, threadId);
 			await this.#call("post", () =>
@@ -424,7 +440,9 @@ export class DiscordAdapter implements ChannelAdapter {
 			);
 		} catch (err) {
 			this.#log.warn(event, { channel: conversationId, error: errorText(err) });
+			return false;
 		}
+		return true;
 	}
 
 	/**
@@ -443,8 +461,8 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** Best-effort notice at the channel's top level, or under `threadId` (a thread, or the message it answers). */
-	async postNotice(conversationId: string, text: string, threadId?: string): Promise<void> {
-		await this.#postText(conversationId, threadId, text, "notice_failed");
+	async postNotice(conversationId: string, text: string, threadId?: string): Promise<boolean> {
+		return await this.#postText(conversationId, threadId, text, "notice_failed");
 	}
 
 	// ---- button clicks ----
@@ -577,11 +595,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		return "dropped";
 	}
 
-	/**
-	 * The prompt's context line for a reply: `답장 대상(<author>): <first 300 characters>`, fenced with the other quoted
-	 * material. Only a post of this bot, the owner or a peer bot is quoted; a deleted post, one without its author or
-	 * text, and anyone else's post give none. No extra Discord call: what the event carries is all there is.
-	 */
+	/** Prompt context line for a reply (`답장 대상(<author>): …`); only bot/owner/peer posts, no extra API call. */
 	#replyContext(ref: DiscordMessageEvent["referenced_message"], botUserId: string): string | undefined {
 		const author = ref?.author?.id;
 		const content = ref?.content?.replace(/\s+/g, " ").trim() ?? "";
@@ -606,6 +620,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		injected = false,
 		onThread?: () => void,
 		editedAt?: string,
+		fromBackfill = false,
 	): Promise<IngestOutcome> {
 		if (!READ_TYPES.has(event.type)) return this.#drop(event, "subtype");
 		const botUserId = await this.#ready;
@@ -613,7 +628,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		if (event.author.id === botUserId) return this.#drop(event, "bot_message");
 		// A peer is told by its id, whatever the bot flag says.
 		const peer = this.#peerBots.find((p) => p.userId === event.author.id);
-		if (peer !== undefined) return this.#processPeerMessage(event, botUserId, peer);
+		if (peer !== undefined) return this.#processPeerMessage(event, botUserId, peer, fromBackfill);
 		if (event.author.bot === true) return this.#drop(event, "bot_message");
 		// The owner gate comes before any lookup, so a stranger's message costs no API call.
 		if (!isOwner(event.author.id, this.#owner)) return this.#drop(event, "not_owner");
@@ -731,7 +746,8 @@ export class DiscordAdapter implements ChannelAdapter {
 		});
 		if (!gate.accept) return this.#drop(event, gate.reason);
 		// A server root that is no command opens its own thread, each root gets its own origin.
-		let inbound = gate.inbound;
+		const inlineOrigin = dm || threadId !== undefined ? undefined : this.#inline.take(conversationId, event.id, text);
+		let inbound = inlineOrigin === undefined ? gate.inbound : { ...gate.inbound, originKey: inlineOrigin };
 		const opensThread = !dm && threadId === undefined && parseChatOrigin(inbound.originKey)?.threadId !== undefined;
 		if (opensThread) {
 			// A forward has no text of its own: its thread is named after the original.
@@ -763,7 +779,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	/**
 	 * The edit as an owner input. `normalizeInbound` sees the original id and the edited text only, so the origin key
 	 * and thread ref come out as the original's; then the id gets its `#edit:` tail (a redelivery is a duplicate) and the
-	 * text its marker. A channel root's edit goes into the thread the original opened; none is opened here.
+	 * text its marker. A channel root's edit goes where the original went (the channel session or the thread it opened); none is opened here.
 	 */
 	async #recordEdit(
 		event: DiscordMessageEvent,
@@ -773,11 +789,10 @@ export class DiscordAdapter implements ChannelAdapter {
 		editedAt: string,
 	): Promise<IngestOutcome> {
 		const { conversationId, dm, botUserId } = place;
-		let threadTs = place.threadId;
-		if (!dm && threadTs === undefined) {
-			if (this.#core.knowsThread?.(threadRefOf(conversationId, event.id)) !== true)
-				return this.#drop(event, "edit_no_thread");
-			threadTs = event.id;
+		let origin: string | undefined;
+		if (!dm && place.threadId === undefined) {
+			origin = this.#inline.originOf(conversationId, event.id);
+			if (origin === undefined) return this.#drop(event, "edit_no_thread");
 		}
 		const gate = normalizeInbound({
 			userId: event.author.id,
@@ -787,13 +802,14 @@ export class DiscordAdapter implements ChannelAdapter {
 			quoted: [],
 			channel: conversationId,
 			ts: event.id,
-			threadTs,
+			threadTs: place.threadId,
 			channelType: dm ? "im" : "channel",
 			platform: "discord",
 		});
 		if (!gate.accept) return this.#drop(event, gate.reason);
 		const recorded = {
 			...gate.inbound,
+			originKey: origin ?? gate.inbound.originKey,
 			platformMessageId: `${gate.inbound.platformMessageId}#edit:${editedAt}`,
 			text: `${EDIT_MARKER}\n${gate.inbound.text}`,
 		};
@@ -805,27 +821,26 @@ export class DiscordAdapter implements ChannelAdapter {
 		);
 	}
 
-	/**
-	 * A message of an allowlisted peer bot, the peer rules on Discord's shapes: a server channel or thread only, a read
-	 * type, this bot mentioned (whatever the channel policy), no muted thread. It never takes an owner path — no card
-	 * reply, no attachment download, no command parsing (the text goes to the core fenced) — and is capped per thread
-	 * by the core. A channel root's thread is opened only once the core recorded the message, so a dropped peer
-	 * message leaves no empty thread.
-	 */
+	/** Allowlisted peer bot post: server channel/thread only, this bot mentioned, no owner path, capped per thread. */
 	async #processPeerMessage(
 		event: DiscordMessageEvent,
 		botUserId: string,
 		peer: { userId: string; name: string },
+		fromBackfill = false,
 	): Promise<IngestOutcome> {
 		const drop = (reason: string): IngestOutcome => this.#drop(event, reason, peer.userId);
 		if (event.guild_id === undefined) return drop("peer_dm");
 		if (this.#guildIds !== undefined && !this.#guildIds.has(event.guild_id)) return drop("guild_not_allowed");
 		const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
+		const partKey = `${event.channel_id}:${peer.userId}`;
 		if (!tokens.some((token) => event.content.includes(token))) {
-			await this.#notePeerSeen(event, peer.userId);
+			if (!fromBackfill && this.#peerParts.join(partKey, event, this.#log)) return "recorded";
+			const seen = { core: this.#core, log: this.#log, logChannel: this.#logChannel };
+			await notePeerSeen({ ...seen, place: (e) => this.#serverPlace(e) }, event, peer.userId);
 			return drop("peer_not_mentioned");
 		}
 		if (this.#core.onPeerInbound === undefined) return drop("peer_unsupported");
+		const content = fromBackfill ? event.content : await this.#peerParts.gather(partKey, event.content);
 		const { conversationId, threadId } = await this.#serverPlace(event);
 		if (conversationId === this.#logChannel) return drop("log_channel");
 		// A root's keys are those of the thread the owner path would open from it (Discord: thread id = message id).
@@ -833,7 +848,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		const threadRef = threadRefOf(conversationId, root);
 		// Before the hop cap: a post dropped there still shows the peer is awake.
 		this.#core.onPeerSeen?.({ threadRef, peerUserId: peer.userId, at: snowflakeTime(event.id) });
-		let text = event.content;
+		let text = content;
 		for (const token of tokens) text = text.split(token).join(" ");
 		text = text.trim();
 		const quoted = (event.embeds ?? [])
@@ -851,10 +866,9 @@ export class DiscordAdapter implements ChannelAdapter {
 		});
 		if (!result.accept) return drop(result.reason);
 		const { inbound } = result;
-		// A root gets the cap notice as a reply, no thread.
 		const refused = await recordPeerInbound(this.#core, this.#log, inbound, this.#peerHopLimit, drop, () =>
 			this.postNotice(conversationId, PEER_HOP_NOTICE, root),
-		);
+		); // A root gets the cap notice as a reply, no thread.
 		if (refused !== undefined && refused !== "held") return refused;
 		if (opensThread) await this.#startThread(conversationId, event, text, false);
 		// A frozen bot only records the peer's message: no ⏳ status for a turn that will not run now.
@@ -878,25 +892,6 @@ export class DiscordAdapter implements ChannelAdapter {
 		return info.parentId !== undefined && info.type !== 0
 			? { conversationId: info.parentId, threadId: event.channel_id }
 			: { conversationId: event.channel_id, threadId: undefined };
-	}
-
-	/**
-	 * A peer post that does not mention this bot is never taken, but it still answers this bot's calls to that peer in its
-	 * thread (`onPeerSeen`), outside the #log channel. A failed channel lookup is logged and the post dropped as before.
-	 */
-	async #notePeerSeen(event: DiscordMessageEvent, peerUserId: string): Promise<void> {
-		const onPeerSeen = this.#core.onPeerSeen;
-		if (onPeerSeen === undefined) return;
-		let place: { conversationId: string; threadId: string | undefined };
-		try {
-			place = await this.#serverPlace(event);
-		} catch (err) {
-			this.#log.warn("peer_seen_lookup_failed", { channel: event.channel_id, id: event.id, error: errorText(err) });
-			return;
-		}
-		if (place.conversationId === this.#logChannel) return;
-		const threadRef = threadRefOf(place.conversationId, place.threadId ?? event.id);
-		onPeerSeen({ threadRef, peerUserId, at: snowflakeTime(event.id) });
 	}
 
 	/**
@@ -1212,7 +1207,10 @@ export class DiscordAdapter implements ChannelAdapter {
 			kind: "deferred",
 			error: err,
 			retry: {
-				at: this.#gate.untilOf("post") ?? this.#clock.now() + err.retryAfterMs,
+				// `untilOf` also returns a block that already passed (one parked by an unrelated call): a 429 raised
+				// off the gate's path (a channel lookup inside `destination()`) must not schedule the retry in the
+				// past — the row would be claimable again at once and spin without ever counting a failure.
+				at: Math.max(this.#gate.untilOf("post") ?? 0, this.#clock.now() + err.retryAfterMs),
 				sentParts: sent,
 				...(topLevel && replyTo !== undefined ? { replyTs: replyTo } : {}),
 			},

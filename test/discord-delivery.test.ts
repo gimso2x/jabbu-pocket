@@ -121,6 +121,41 @@ async function ownerDm(id = QUESTION): Promise<void> {
 	await transport.emitMessage(event);
 }
 
+describe("inline reply channel answers", () => {
+	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+		const inline = new DiscordAdapter({
+			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
+			core,
+			deliveries: source(),
+			ownerUserId: OWNER,
+			clock: { now: () => now },
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+			mentionFreeChannels: [CH],
+			inline: { channels: [CH] },
+		});
+		await inline.start();
+		await transport.emitMessage({
+			id: QUESTION,
+			channel_id: CH,
+			guild_id: GUILD,
+			author: { id: OWNER },
+			content: "질문",
+			type: 0,
+		});
+		const id = deliver(`${CH}:${QUESTION}`, longBody(2500), `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(row(id)?.state).toBe("confirmed");
+		const lookups = transport.calls.filter((c) => c.method === "getChannel" && c.channelId === QUESTION);
+		expect(lookups.length).toBeLessThanOrEqual(1);
+		expect(transport.calls.some((c) => c.method === "startThread")).toBe(false);
+		await inline.stop();
+	});
+});
+
 describe("splitting and destinations", () => {
 	test("a 2500-character answer goes as two messages of at most 2000, both as replies in the DM", async () => {
 		await ownerDm();
@@ -175,6 +210,22 @@ describe("rate limits and failures", () => {
 		expect(sent).toHaveLength(2);
 		expect(sent[1]?.messageReference).toEqual({ messageId: first?.id ?? "" });
 		expect(row(id)?.state).toBe("confirmed");
+		expect(failed).toHaveLength(0);
+	});
+
+	test("a 429 off the gate's path (a thread lookup) after a stale `post` block retries after its own Retry-After, not in the past", async () => {
+		const first = deliver(`${CH}:-`, "짧은 답", "monitor/x");
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		await adapter.pumpDeliveries();
+		expect(row(first)?.nextAt).toBe(now + 5_000);
+		// The `post` block is over, but the gate still reports its (past) end time.
+		now += 60_000;
+		const thread = "333333333333333333";
+		transport.setChannel({ id: thread, type: 11, parentId: CH, guildId: GUILD });
+		transport.failNext.getChannel = [new DiscordRateLimitedError(2_000)];
+		const second = deliver(`${CH}:${thread}`, "스레드 답", `discord/ch/${CH}/t/${thread}`);
+		await adapter.pumpDeliveries();
+		expect(row(second)).toMatchObject({ state: "pending", attempts: 0, nextAt: now + 2_000 });
 		expect(failed).toHaveLength(0);
 	});
 

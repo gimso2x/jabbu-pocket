@@ -1,5 +1,4 @@
-// Discord's plug into the daemon: its port, its adapter (with the missed-message recovery behind `recover()`) and its
-// thread reader for turn context, built from `channels.discord`.
+// Discord's plug into the daemon: port, adapter (with `recover()`) and thread reader, built from `channels.discord`.
 import { join } from "node:path";
 import type { AdapterDeps, ChannelAdapter, ChannelBinding } from "../channel/adapter";
 import type { ThreadMessage } from "../core/mailbox-thread-context";
@@ -24,15 +23,14 @@ function threadMessage(message: DiscordMessageEvent): ThreadMessage {
 	};
 }
 
+type BindingOptions = { backfillMaxPages?: number; startWaitMs?: number; peerPartWaitMs?: number };
 export class DiscordBinding implements ChannelBinding {
 	readonly port: DiscordChannel;
-	readonly #backfillMaxPages: number | undefined;
-	readonly #startWaitMs: number | undefined;
+	readonly #options: BindingOptions;
 
-	constructor(port: DiscordChannel, options: { backfillMaxPages?: number; startWaitMs?: number } = {}) {
+	constructor(port: DiscordChannel, options: BindingOptions = {}) {
 		this.port = port;
-		this.#backfillMaxPages = options.backfillMaxPages;
-		this.#startWaitMs = options.startWaitMs;
+		this.#options = options;
 	}
 
 	createAdapter(deps: AdapterDeps): ChannelAdapter {
@@ -49,18 +47,20 @@ export class DiscordBinding implements ChannelBinding {
 			log: deps.log,
 			guildIds: discord.guildIds,
 			mentionFreeChannels: discord.mentionFreeChannels,
+			inline: { channels: discord.inlineReplyChannels, originOf: (id) => store.getInbound(id)?.originKey },
 			logChannel: discord.logChannelId,
 			requireMention: discord.requireMention,
 			peerBots: discord.peerBots,
 			peerHopLimit: deps.config.peerHopLimit,
 			isTaskRoot: (threadRef) => store.tasks.isTaskRoot(threadRef),
 			onInboundFailure: () => adapter.recover(),
-			startWaitMs: this.#startWaitMs,
+			startWaitMs: this.#options.startWaitMs,
+			peerPartWaitMs: this.#options.peerPartWaitMs,
 			onFatal: deps.detach,
 			mediaRoot: join(deps.config.homeDir, "media"),
 			recovery: {
 				cursors: store,
-				maxPages: this.#backfillMaxPages,
+				maxPages: this.#options.backfillMaxPages,
 				targets: () => discordBackfillTargets(store),
 			},
 		});

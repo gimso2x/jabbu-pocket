@@ -447,6 +447,7 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+const MISSING_GIT = /not a git repository|bad object|(?:not a |in)valid object|could not access '[0-9a-f]+'/i;
 /** What `!undo` would do to one row's repository. Never writes: the card and the re-check both read this. */
 export async function planUndo(options: {
 	row: TurnSnapshotRow;
@@ -470,13 +471,15 @@ export async function planUndo(options: {
 	}
 	// A repository the owner moved or deleted has no git to ask: it is reported, so the turn can be closed.
 	if (!existsSync(row.repo)) return { repo: row.repo, source: row.treeBefore, missing: true, files: [] };
-	const [paths, before, after, overlap, fileMode] = await Promise.all([
+	const read = await Promise.all([
 		changedPaths(run, row.repo, row.treeBefore, row.treeAfter),
 		treeEntries(run, row.repo, row.treeBefore),
 		treeEntries(run, row.repo, row.treeAfter),
 		overlapPaths(run, row, options.others ?? []),
 		run(row.repo, ["config", "--bool", "core.fileMode"]),
-	]);
+	]).catch((e: unknown) => (!existsSync(row.repo) || MISSING_GIT.test(String(e)) ? undefined : Promise.reject(e)));
+	if (read === undefined) return { repo: row.repo, source: row.treeBefore, missing: true, files: [] };
+	const [paths, before, after, overlap, fileMode] = read;
 	// Only an explicit false relaxes the check; unset or unreadable keeps comparing the executable bit.
 	const ignoreExecBit = fileMode.code === 0 && fileMode.stdout.trim() === "false";
 	const files: PlannedFile[] = [];
@@ -499,10 +502,7 @@ export async function planUndo(options: {
 	return plan;
 }
 
-/**
- * The lines a plan adds beside its per-kind file lists: a repository whose overlap check failed cannot tell its files
- * apart, so the card and the answer say so instead of reading like a complete undo.
- */
+/** Extra lines beside per-kind lists when a repo/snapshot is unreadable or overlap check failed. */
 export function undoPlanNotes(plan: RepoPlan): string[] {
 	if (plan.missing === true) return [`저장소를 찾을 수 없음: ${plan.repo}`];
 	if (plan.overlapFailed === undefined) return [];

@@ -17,6 +17,7 @@ import {
 } from "../src/lanes/manager-constants";
 import { buildLaneTools, buildWorkStartTool } from "../src/lanes/tools";
 import { buildLanePrompt, buildLaneTodos, isReopenCommand, parseLaneTrigger } from "../src/lanes/trigger";
+import { laneTriggerRefusal, spacedPathRefusal } from "../src/lanes/trigger-format";
 import { type VerifyResult, verifyClaim } from "../src/lanes/verify";
 import { createLogger } from "../src/log";
 import type { LaneModelTiers } from "../src/model-tiers";
@@ -38,6 +39,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
+import { daemonTestOptions, ROOMY_STATFS } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -153,8 +155,9 @@ function harness(
 		},
 		sessionDirFor: (origin) => sessionDirFor(sessionsRoot, origin, 1),
 		session: router.sessionOps(),
-		// The start-capacity gate would otherwise read this machine's live memory.
+		// The start-capacity gate would otherwise read this machine's live memory and disk.
 		hostLoad: IDLE_HOST_LOAD,
+		statfs: ROOMY_STATFS,
 		...(options.maxLanes === undefined ? {} : { maxLanes: options.maxLanes }),
 		...(options.frozen === undefined ? {} : { frozen: options.frozen }),
 		...(options.verify === undefined ? {} : { verify: options.verify as never }),
@@ -206,6 +209,34 @@ describe("lane trigger parsing", () => {
 		expect(parseLaneTrigger("작업: x @relative/path")).toBeUndefined();
 		expect(parseLaneTrigger("작업: 경로 없음")).toBeUndefined();
 		expect(parseLaneTrigger("안녕 작업: x @/tmp")).toBeUndefined();
+	});
+
+	test("a missed trigger gets the format refusal; mentions, emails, packages and second-line @ are not attempts", () => {
+		for (const sample of [
+			"작업: x @~/repo",
+			"작업: x @~",
+			"작업: x @./repo",
+			"작업: x @../repo",
+			"작업:제목 @~/repo",
+			"작업:제목 @./repo",
+			"작업:제목 @../repo",
+		]) {
+			const refusal = laneTriggerRefusal(sample);
+			expect(refusal).toContain("형식은 `작업: <제목> @<절대경로>`");
+			expect(refusal).not.toContain("공백이 든 경로");
+		}
+		expect(laneTriggerRefusal("작업: <@123456> 확인해 줘")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: 메일은 foo@bar.com 으로 보내줘")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @everyone 공지 확인")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @here 공지 확인")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @서팍 봐줘")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: @types/bun 올려")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: 검토\n참고 @./repo")).toBeUndefined();
+		expect(laneTriggerRefusal("작업: 경로 없음")).toBeUndefined();
+		expect(laneTriggerRefusal("일반 메시지 @./repo")).toBeUndefined();
+		// No space after the colon is a valid trigger with an absolute path, so it is not a refusal either.
+		expect(laneTriggerRefusal("작업:제목 @/tmp/x")).toBeUndefined();
+		expect(parseLaneTrigger("작업:제목 @/tmp/x")).toBeDefined();
 	});
 
 	test("the lane prompt names the claim tool and starts with the task when no workflow is chosen", () => {
@@ -1295,6 +1326,7 @@ describe("lanes inside the daemon", () => {
 	async function startDaemon(maxLanes?: number): Promise<Daemon> {
 		const clock = { now: () => Date.now() };
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			// Lanes open in the server channel; a DM conversation asks for them there.
 			config: {
 				...home.config,
@@ -1594,5 +1626,25 @@ describe("lane turn end without a done claim", () => {
 		expect(h.store.getLane(lane.name)?.history.some((entry) => entry.event.includes("nudge"))).toBe(false);
 		expect(h.store.getLane(lane.name)?.status).toBe("working");
 		h.close();
+	});
+});
+
+describe("spacedPathRefusal", () => {
+	const dirs = new Set(["/a/my", "/a/my proj", "/a/my proj folder"]);
+	const isDir = (path: string) => dirs.has(path);
+
+	test("a brief that continues the path into an existing directory is refused, naming both paths", () => {
+		for (const brief of ["proj", "proj 폴더 고쳐줘", "proj folder\n자세히"]) {
+			const refusal = spacedPathRefusal("/a/my", brief, isDir);
+			expect(refusal).toContain("`/a/my`");
+			expect(refusal).toContain("/a/my proj");
+		}
+	});
+
+	test("an ordinary brief, an empty brief, or a longer path that is no directory is not refused", () => {
+		expect(spacedPathRefusal("/a/my", "로그인 버그 수정", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/my", "", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/my", "\nproj", isDir)).toBeUndefined();
+		expect(spacedPathRefusal("/a/other", "proj", isDir)).toBeUndefined();
 	});
 });

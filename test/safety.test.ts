@@ -58,6 +58,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = OWNER_DM;
 const ORIGIN = `discord/dm/${CHANNEL}`;
@@ -87,9 +88,11 @@ class ButtonTransport extends WaitingDiscordTransport {
 
 class ManualTimers implements ApprovalTimers {
 	callbacks = new Map<number, () => void>();
+	delays: number[] = [];
 	#next = 1;
-	set(fn: () => void): unknown {
+	set(fn: () => void, ms: number): unknown {
 		const id = this.#next++;
+		this.delays.push(ms);
 		this.callbacks.set(id, fn);
 		return id;
 	}
@@ -519,6 +522,16 @@ describe("ApprovalBroker", () => {
 		expect(await result).toBe("denied");
 	});
 
+	test("a timeout past the timer's limit is cut to it, so the card does not expire at once", async () => {
+		broker = make({ timeoutMs: Number.MAX_SAFE_INTEGER });
+		const result = broker.request(CHANNEL, "git push --force");
+		await transport.shown.promise;
+		// setTimeout fires at once past 2^31-1 ms, which would settle the request as `timeout` the moment it shows.
+		expect(timers.delays).toEqual([2 ** 31 - 1]);
+		timers.fireAll();
+		expect(await result).toBe("timeout");
+	});
+
 	test("a failure to attach the buttons is denied, never approved", async () => {
 		transport.failNext.editMessage = [new Error("boom")];
 		expect(await broker.request(CHANNEL, "x")).toBe("denied");
@@ -594,6 +607,24 @@ describe("ApprovalBroker", () => {
 		await result;
 	});
 
+	test("a `gh api` call that mutates by carrying fields, --input or graphql is flagged like an explicit-method one", async () => {
+		for (const action of [
+			'gh api repos/a/b/issues -f "title=x"',
+			"gh api repos/a/b/issues --field title=x",
+			"gh api repos/a/b/pulls/1/comments --input /tmp/b.json",
+			"gh api graphql -q .data",
+			"gh api repos/a/b/issues -X POST",
+		]) {
+			transport = new ButtonTransport();
+			broker = make();
+			const result = broker.request(CHANNEL, "이슈 등록", undefined, { action });
+			await transport.shown.promise;
+			expect(createdContent().startsWith("🌐 외부 공개 승인 요청\n"), action).toBe(true);
+			timers.fireAll();
+			await result;
+		}
+	});
+
 	test("an explicit `external` wins over detection; read-only gh and local git stay a plain card", async () => {
 		const explicit = broker.request(CHANNEL, "메일 발송", undefined, {
 			external: "외부 메일 a@example.com",
@@ -603,7 +634,12 @@ describe("ApprovalBroker", () => {
 		expect(createdContent()).toContain("• 🌐 외부 공개: 외부 메일 a@example.com\n");
 		timers.fireAll();
 		await explicit;
-		for (const action of ["gh issue view 18559", "gh api repos/a/b/issues", "git push --force origin main"]) {
+		for (const action of [
+			"gh issue view 18559",
+			"gh api repos/a/b",
+			"gh api repos/a/b/issues",
+			"git push --force origin main",
+		]) {
 			transport = new ButtonTransport();
 			broker = make();
 			const plain = broker.request(CHANNEL, "확인", undefined, { action });
@@ -1021,6 +1057,7 @@ describe("approval through the daemon (adapter owner gate, logs)", () => {
 		const transport = new ButtonTransport();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
@@ -1069,6 +1106,7 @@ describe("file upload thread routing (daemon)", () => {
 		const transport = new WaitingDiscordTransport();
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: quietLog(),
@@ -1114,6 +1152,7 @@ describe("file upload thread routing (daemon)", () => {
 		const drivers: FakeOmpDriver[] = [];
 		const steerDelivered = Promise.withResolvers<void>();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({

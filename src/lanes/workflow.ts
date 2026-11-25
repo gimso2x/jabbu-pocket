@@ -1,19 +1,9 @@
 import { LaneInputError } from "./manager-constants";
+import { leadingWorkflow, WORKFLOW_NAMES, type WorkflowName, workflowNamed } from "./workflow-names";
 
-// Ported from omp-superagent src/workflow.ts (fdeeb6a), checked against omp-ulw/ulw.ts: only the six ULW workflows
-// and native jevify are recognised, never arbitrary mentions or skill prose in a brief. A lane prompt needs only the
-// first line, so the runtime-context fence of that file is not carried over.
-
-export const WORKFLOW_NAMES = [
-	"jevify",
-	"ulw",
-	"mass-ulw",
-	"ulw-plan",
-	"ulw-loop",
-	"ulw-execute",
-	"ulw-research",
-] as const;
-export type WorkflowName = (typeof WORKFLOW_NAMES)[number];
+// Ported from omp-superagent src/workflow.ts (c11a6e4), checked against omp-superkit super.ts: only the six SUPER
+// workflows (their ULW spellings as legacy aliases) and native jevify are recognised, never arbitrary mentions or skill
+// prose in a brief. A lane prompt needs only the first line, so the runtime-context fence of that file is not carried over.
 
 /** The head's pick (`jabbu_work_start` `workflow`): the name goes on the prompt's first line, the reason is shown. */
 export interface WorkflowChoice {
@@ -21,71 +11,38 @@ export interface WorkflowChoice {
 	reason: string;
 }
 
-const aliases: Array<[WorkflowName, RegExp]> = [
-	["ulw-research", /^(?:ulw|mass[\s-]*ulw|ulw[\s-]*mass|mulw|meth)[\s-]*research\b/i],
-	["mass-ulw", /^(?:mass[\s-]*ulw|ulw[\s-]*mass|mulw|meth)\b/i],
-	["ulw-plan", /^ulw[\s-]*plan\b/i],
-	["ulw-loop", /^ulw[\s-]*loop\b/i],
-	["ulw-execute", /^ulw[\s-]*execute\b/i],
-];
-const identifierTail = /^(?:[-_][A-Za-z0-9]|\.[A-Za-z0-9]|[-_.]?[A-Za-z0-9]*[/\\])/;
 const nativeWords =
 	/(?<![\p{L}\p{N}_./\\-])(?<!::)(?:ultrathink|orchestrate|workflowz|jevify)(?![\p{L}\p{N}_/\\-])(?!\.[\p{L}\p{N}_-])(?!\()/u;
-/** The omp keyword each workflow adds after its name (`jevify` and plain `ulw` add none). */
+/** The omp keyword each workflow adds after its name (`jevify` and plain `super` add none). */
 const nativeWord: Partial<Record<WorkflowName, string>> = {
-	"ulw-plan": "ultrathink",
-	"ulw-loop": "orchestrate",
-	"ulw-execute": "orchestrate",
-	"mass-ulw": "workflowz",
-	"ulw-research": "workflowz",
+	"super-plan": "ultrathink",
+	"super-loop": "orchestrate",
+	"super-run": "orchestrate",
+	"super-graph": "workflowz",
+	"super-research": "workflowz",
 };
 
-/** The workflow a text starts with and how many characters its call (name and slash prefix) takes. */
-export function leadingWorkflow(text: string): { name: WorkflowName; length: number } | null {
-	// Unlike the ULW commands, native jevify is lowercase prose, never a slash command.
-	const native = /^\s*jevify(?=$|[\s:.,!?])/.exec(text);
-	if (native && !identifierTail.test(text.slice(native[0].length))) return { name: "jevify", length: native[0].length };
-	const prefix = /^\s*\/?/.exec(text)?.[0].length ?? 0;
-	const leading = text.slice(prefix);
-	for (const [name, expression] of aliases) {
-		const match = expression.exec(leading);
-		if (
-			match &&
-			/^(?:[\s:.,!?]|$)/.test(leading.slice(match[0].length)) &&
-			!identifierTail.test(leading.slice(match[0].length))
-		) {
-			return { name, length: prefix + match[0].length };
-		}
-	}
-	const plain = /^(?:ultrawork|ulw)\b/i.exec(leading);
-	if (!plain) return null;
-	const tail = leading.slice(plain[0].length);
-	if (/^[-_.]?[A-Za-z0-9]*[/\\]/.test(tail)) return null;
-	// Native ULW permits a suffix only for its named workflow family; other identifiers and paths are data.
-	if (identifierTail.test(tail) && !/^[-_](?:loop|plan|research|execute|mass)(?![-_.]?[A-Za-z0-9])/i.test(tail)) {
-		return null;
-	}
-	return { name: "ulw", length: prefix + plain[0].length };
-}
-
-/** `jabbu_work_start` `workflow` as the tool received it; `undefined` = none chosen. */
+/**
+ * `jabbu_work_start` `workflow` as the tool received it; `undefined` = none chosen. A legacy ULW name (a reservation
+ * frozen before the SUPER rename) is read as its SUPER workflow.
+ */
 export function workflowChoice(value: unknown): WorkflowChoice | undefined {
 	if (value === undefined) return undefined;
 	const refused = () =>
 		new LaneInputError(`workflow에는 이름(${WORKFLOW_NAMES.join("·")})과 비어 있지 않은 reason이 필요합니다.`);
 	if (value === null || typeof value !== "object") throw refused();
 	const choice = value as Record<string, unknown>;
-	const { name, reason } = choice;
+	const { reason } = choice;
+	const name = typeof choice.name === "string" ? workflowNamed(choice.name) : undefined;
 	if (
-		typeof name !== "string" ||
-		!(WORKFLOW_NAMES as readonly string[]).includes(name) ||
+		name === undefined ||
 		typeof reason !== "string" ||
 		reason.trim() === "" ||
 		Object.keys(choice).some((key) => key !== "name" && key !== "reason")
 	) {
 		throw refused();
 	}
-	return { name: name as WorkflowName, reason };
+	return { name, reason };
 }
 
 /** What the owner's own `작업:` brief starts with: its workflow call is cut from the brief, the rest is the brief. */
@@ -99,7 +56,7 @@ export function triggerWorkflow(brief: string): { choice: WorkflowChoice; brief:
 	return { choice: { name: call.name, reason: "오너 직접 호출" }, brief: rest.trim() };
 }
 
-/** The workflow's ULW command (`jevify` is omp's own notice, not a command). */
+/** The workflow's SUPER command (`jevify` is omp's own notice, not a command). */
 export const isUlwWorkflow = (name: WorkflowName): boolean => name !== "jevify";
 
 /**
@@ -114,8 +71,7 @@ export function workflowLine(name: WorkflowName | undefined, brief: string | und
 
 /**
  * Whether omp's `get_available_commands` lists the workflow's extension command (exact name, `source` extension).
- * The description is not compared: omp-ulw's SUPER rebrand (c11a6e4) keeps these names only as legacy aliases
- * ("Legacy alias for /super-plan"), and its wording is not a contract.
+ * The description is not compared: its wording is not a contract.
  */
 export function advertisedWorkflow(
 	commands: ReadonlyArray<{ name?: string; source?: string; description?: string }>,

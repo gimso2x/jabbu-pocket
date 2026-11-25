@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { type AgyMcpServer, agyMcpServersOf, workerAgyOf } from "./config-agy";
+import {
+	type AgyAccountsConfig,
+	type AgyMcpServer,
+	agyAccountsOf,
+	agyExecutableOf,
+	agyMcpServersOf,
+	type WorkerAgyConfig,
+	workerAgyOf,
+} from "./config-agy";
 import { SLACK_KEYS } from "./config-removed-keys";
 import {
 	asRecord,
@@ -21,6 +29,7 @@ import {
 	optionalString,
 	requiredString,
 } from "./config-validate";
+import { parseWebChannel, WEB_OWNER_USER_ID, type WebChannelConfig } from "./config-web";
 import { validAllowedHosts } from "./dashboard/host-guard";
 import type { LaneModelTiers } from "./model-tiers";
 import type { LaneReviewConfident } from "./tasks/auto-land-policy";
@@ -28,6 +37,7 @@ import { TASK_RISKS, type TaskRisk } from "./tasks/docs";
 import { hostTimezone, isTimezone } from "./time";
 
 export { ConfigError } from "./config-validate";
+export { WEB_OWNER_USER_ID, type WebChannelConfig };
 /** Which child process powers a conversation: omp's RPC child (default) or the Antigravity CLI (`agy`). */
 export type AgentKind = "omp" | "agy";
 
@@ -42,6 +52,8 @@ export interface DiscordChannelConfig {
 	guildIds?: string[];
 	/** Channel ids where the owner's root messages are answered without a mention. */
 	mentionFreeChannels?: string[];
+	/** Server channels where the owner's root messages get a reply in the channel body (no thread) unless a thread is asked for. */
+	inlineReplyChannels?: string[];
 	/** In a server channel only a mention addresses the bot. Default false. */
 	requireMention?: boolean;
 	/** Server text channel where lanes asked for from the Discord DM open (a DM has no threads); absent: no DM lanes. */
@@ -70,17 +82,15 @@ export interface DiscordChannelConfig {
 	peerBots?: Array<{ userId: string; name: string }>;
 }
 
-/** Per-platform chat settings: who the owner is on the platform the bot talks on. Discord is the only one. */
+/** Per-platform chat settings: Discord and/or web. */
 export interface ChannelsConfig {
 	discord?: DiscordChannelConfig;
+	web?: WebChannelConfig;
 }
 
-/**
- * The owner id core-authored mentions use when no platform is implied: the Discord owner. A loaded config always has
- * it (`config_invalid field=channels` otherwise).
- */
+/** The owner id core-authored mentions use when no platform is implied. */
 export function primaryOwnerUserId(channels: ChannelsConfig): string {
-	const owner = channels.discord?.ownerUserId;
+	const owner = channels.discord?.ownerUserId ?? (channels.web?.enabled ? WEB_OWNER_USER_ID : undefined);
 	if (owner === undefined) throw new Error("no chat channel is configured");
 	return owner;
 }
@@ -111,6 +121,7 @@ const ROOT_KEYS = new Set([
 	"workspaceDir",
 	"agent",
 	"agyExecutable",
+	"agyAccounts",
 	"agyMcpServers",
 	"model",
 	"thinking",
@@ -172,9 +183,7 @@ export interface DispatchHostConfig {
 	recordsDir?: string;
 }
 
-export interface WorkerAgyConfig {
-	model: string;
-}
+export type { AgyAccountsConfig, WorkerAgyConfig };
 
 export interface JabbuConfig {
 	schemaVersion: 1;
@@ -209,54 +218,34 @@ export interface JabbuConfig {
 	agent?: AgentKind;
 	/** Absolute agy CLI path for `agent: "agy"`; default resolves `agy` on the child PATH. */
 	agyExecutable?: string;
+	/** Account pool for `agent: "agy"` (`order` + token files + `--app-data-dir` isolation). */
+	agyAccounts?: AgyAccountsConfig;
 	/** stdio MCP servers each agy conversation gets on `session/new|resume` (`config-agy.ts`); absent = none. */
 	agyMcpServers?: AgyMcpServer[];
 	model?: string;
 	thinking?: string;
 	sessionRetentionDays?: number;
-	/**
-	 * Combined size ceiling of the backup bundle sources (sessions + config.json) in bytes; `jabbu-pocket backup
-	 * --max-bundle-bytes` overrides it per run. A positive integer; unset means the 512MB default.
-	 */
+	/** Combined size ceiling of backup bundle sources in bytes; unset means 512MB default. */
 	maxBundleBytes?: number;
-	/**
-	 * Off-site copy of the newest backup + bundle (`jabbu-pocket backup` runs it after a good local backup; running
-	 * `jabbu-pocket backup` again retries it). `ssh` is an ssh alias or `user@host` (BatchMode, key auth); `remoteDir` an
-	 * absolute path or `~/…` on that host; `keep` the days of daily files per kind kept there - every file of the
-	 * uploaded day, the latest of each other day (default 14). Unset → no off-site copy.
-	 */
+	/** Off-site copy of newest backup + bundle (`ssh`, `remoteDir`, `keep` days default 14). */
 	offsite?: { ssh: string; remoteDir: string; keep?: number };
 	/** Minutes after which an idle omp child becomes a candidate to stop (the session stays); 0 disables. Default 30. */
 	idleTimeoutMinutes?: number;
-	/**
-	 * A conversation child past `idleTimeoutMinutes` stays unless its context use is 50% or more, the omp executable
-	 * changed, or the host is under session/memory pressure; `false` stops it at the idle time as before. Default true.
-	 */
+	/** Keeps idle conversation children resident until 50% context, binary change, or pressure (default true). */
 	idleKeepResident?: boolean;
 	/** Owner DM turns between background skill reviews; 0 disables. Default 10 (each review costs tokens). */
 	skillReviewTurns?: number;
-	/** Minutes a reversible owner question (lane `reversible`+`recommend`, TASK `fallback_ok: yes`+`recommend`) waits before the recommendation goes ahead; 0 disables. Default 30. */
+	/** Minutes a reversible owner question waits before recommendation goes ahead; 0 disables. Default 30. */
 	ownerSilenceFallbackMinutes?: number;
 	/** Peer input cap per thread: more than `turns` peer messages within `windowMinutes` are dropped. Default 3 per 30. */
 	peerHopLimit?: { turns: number; windowMinutes: number };
-	/** Host-wide ceiling of running omp RPC sessions (`omp --mode rpc`·`rpc-ui`, all users): a lane or [TASK] start refuses at or above it (`force` passes). Default 8; 0 disables. Applies from the next daemon boot. */
+	/** Host-wide ceiling of running omp RPC sessions (all users); default 8, 0 disables. Applies from next boot. */
 	hostSessionCeiling?: number;
-	/**
-	 * Peer silence alert: a confirmed post in a Discord thread that mentions a `channels.discord.peerBots` entry, left
-	 * without any post of that peer in the thread for `minutes`, gets one owner-mentioning notice there. 0 disables
-	 * (no call is recorded). Default {@link PEER_SILENCE_DEFAULT_MINUTES}.
-	 */
+	/** Peer silence alert timeout in minutes (0 disables, default PEER_SILENCE_DEFAULT_MINUTES). */
 	peerSilenceAlert?: { minutes: number };
-	/**
-	 * Cost ceiling in dollars as omp prices it (`usage.cost.total`, not the real bill): a turn that reaches `turnUsd`
-	 * gets a thread warning and one that reaches 3x is stopped; a day (in `timezone`) whose session-file total passes
-	 * `dailyUsd` only opens the `cost_cap` gate (an owner notice, nothing stops). Each key off when absent or not positive.
-	 */
+	/** Cost ceiling in dollars as omp prices it (`turnUsd` warns/3x stops, `dailyUsd` opens `cost_cap` gate). */
 	costCap?: { turnUsd?: number; dailyUsd?: number };
-	/**
-	 * herdr switch: present (`{}`) → `jabbu_dispatch` offers herdr/taskSpec and the [TASK] sweep runs; absent → simple
-	 * dispatch only. `bin` is the absolute path of the local herdr (default: `herdr` on PATH).
-	 */
+	/** herdr switch: `{}` enables herdr/taskSpec and [TASK] sweep (`bin` overrides path). */
 	herdr?: { bin?: string };
 	/**
 	 * Extra arguments for the local herdr worker omp (`herdr agent start … -- <args>`), e.g. `["--prewalk"]`. Not
@@ -405,22 +394,22 @@ export const LANE_REVIEW_TIMEOUT_MS = 600_000;
 
 export function defaultHomeDir(env: Record<string, string | undefined> = process.env): string {
 	// An empty value is "unset", never "" (which `resolve` would turn into the current directory).
-	return env.JABBU_HOME || join(homedir(), ".jabbu");
+	const raw = env.JABBU_HOME;
+	if (!raw) return join(homedir(), ".jabbu");
+	return raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
 }
 
 function modeString(mode: number): string {
 	return `0${(mode & 0o777).toString(8)}`;
 }
 
-/**
- * `channels`: only `discord` is accepted (a leftover `channels.slack`, top-level Slack key or `channels.teams` is
- * refused with the removal note), and it must be there.
- */
+/** `channels`: `discord` and/or `web` (leftover `slack` or `teams` is refused with the removal note); at least one active. */
 function parseChannels(configPath: string, root: Record<string, unknown>, home: string): ChannelsConfig {
 	for (const key of SLACK_KEYS) {
 		if (root[key] !== undefined) slackRemoved(configPath, key === "slack" ? "channels.slack" : key);
 	}
 	let discord: DiscordChannelConfig | undefined;
+	let web: WebChannelConfig | undefined;
 	if (root.channels !== undefined) {
 		const channels = asRecord(root.channels);
 		if (channels === undefined) invalid(configPath, "channels");
@@ -429,12 +418,13 @@ function parseChannels(configPath: string, root: Record<string, unknown>, home: 
 			if (key === "teams") {
 				throw new ConfigError("config_invalid", configPath, "field=channels.teams (Teams 채널은 제거됨: discord만)");
 			}
-			if (key !== "discord") invalid(configPath, `channels.${key}`);
+			if (key !== "discord" && key !== "web") invalid(configPath, `channels.${key}`);
 		}
 		if (channels.discord !== undefined) discord = parseDiscordChannel(configPath, channels.discord, home);
+		if (channels.web !== undefined) web = parseWebChannel(configPath, channels.web);
 	}
-	if (discord === undefined) invalid(configPath, "channels");
-	return { discord };
+	if (discord === undefined && web?.enabled !== true) invalid(configPath, "channels");
+	return { ...(discord === undefined ? {} : { discord }), ...(web === undefined ? {} : { web }) };
 }
 
 /** A Discord id (snowflake): 17–20 digits. */
@@ -445,6 +435,7 @@ const DISCORD_KEYS: Record<string, true> = {
 	applicationId: true,
 	guildIds: true,
 	mentionFreeChannels: true,
+	inlineReplyChannels: true,
 	requireMention: true,
 	laneChannelId: true,
 	logChannelId: true,
@@ -481,6 +472,7 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 	const applicationId = snowflake("applicationId");
 	const guildIds = snowflakes("guildIds");
 	const mentionFreeChannels = snowflakes("mentionFreeChannels");
+	const inlineReplyChannels = snowflakes("inlineReplyChannels");
 	const laneChannelId = record.laneChannelId === undefined ? undefined : snowflake("laneChannelId");
 	const logChannelId = record.logChannelId === undefined ? undefined : snowflake("logChannelId");
 	const escalationChannelId = record.escalationChannelId === undefined ? undefined : snowflake("escalationChannelId");
@@ -492,7 +484,8 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 		(logChannelId === escalationChannelId ||
 			logChannelId === alertChannelId ||
 			logChannelId === laneChannelId ||
-			mentionFreeChannels?.includes(logChannelId) === true)
+			mentionFreeChannels?.includes(logChannelId) === true ||
+			inlineReplyChannels?.includes(logChannelId) === true)
 	) {
 		invalid(configPath, "channels.discord.logChannelId");
 	}
@@ -536,6 +529,7 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
 		applicationId,
 		...(guildIds === undefined ? {} : { guildIds }),
 		...(mentionFreeChannels === undefined ? {} : { mentionFreeChannels }),
+		...(inlineReplyChannels === undefined ? {} : { inlineReplyChannels }),
 		...(requireMention === undefined ? {} : { requireMention }),
 		...(laneChannelId === undefined ? {} : { laneChannelId }),
 		...(logChannelId === undefined ? {} : { logChannelId }),
@@ -550,15 +544,20 @@ function parseDiscordChannel(configPath: string, value: unknown, home: string): 
  * The realpath of `path`, or of its deepest existing ancestor with the missing rest appended (it may not exist yet).
  * `undefined` when a symlink loop (ELOOP) makes it unresolvable: such a path can never be created or used.
  */
-function realOrPending(path: string): string | undefined {
+function realOrPending(path: string, depth = 0): string | undefined {
+	if (depth >= 40) return undefined;
 	const absolute = resolve(path);
 	try {
 		return realpathSync(absolute);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ELOOP") return undefined;
+		try {
+			if (lstatSync(absolute).isSymbolicLink())
+				return realOrPending(resolve(dirname(absolute), readlinkSync(absolute)), depth + 1);
+		} catch {}
 		const parent = dirname(absolute);
 		if (parent === absolute) return absolute;
-		const resolved = realOrPending(parent);
+		const resolved = realOrPending(parent, depth);
 		return resolved === undefined ? undefined : join(resolved, basename(absolute));
 	}
 }
@@ -743,8 +742,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (agent !== undefined && agent !== "omp" && agent !== "agy") {
 		throw new ConfigError("config_invalid", configPath, "field=agent (omp·agy만; claude 에이전트는 제거됨)");
 	}
-	const agyExecutable = optionalString(configPath, root, "agyExecutable");
-	if (agyExecutable !== undefined && !isAbsolute(agyExecutable)) invalid(configPath, "agyExecutable");
+	const agyExecutable = agyExecutableOf(configPath, root);
+	const agyAccounts = agyAccountsOf(configPath, root.agyAccounts);
 
 	const timezoneRaw = optionalString(configPath, root, "timezone");
 	if (timezoneRaw !== undefined && !isTimezone(timezoneRaw)) invalid(configPath, "timezone");
@@ -1250,6 +1249,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (thinking !== undefined) config.thinking = thinking;
 	if (agent !== undefined) config.agent = agent;
 	if (agyExecutable !== undefined) config.agyExecutable = agyExecutable;
+	if (agyAccounts !== undefined) config.agyAccounts = agyAccounts;
 	if (agyMcpServers !== undefined) config.agyMcpServers = agyMcpServers;
 	if (ompProfile !== undefined) config.ompProfile = ompProfile;
 	if (ompConfigOverlay !== undefined) config.ompConfigOverlay = ompConfigOverlay;

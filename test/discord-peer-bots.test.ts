@@ -15,6 +15,7 @@ import { writeFreeze } from "../src/ops/freeze";
 import { redact } from "../src/redact";
 import { type FloorsSurface, spawnSystemPrompt } from "../src/safety/prompt";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const PEER = "200000000000000001";
 const STRANGER = "200000000000000009";
@@ -64,10 +65,13 @@ async function boot(config: JabbuConfig, discord: WaitingDiscordTransport, hold 
 	const sessions = new FakeSessionStore();
 	const discordConfig = config.channels.discord;
 	const channels: ChannelBinding[] = [
-		new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER, peerBots: discordConfig?.peerBots })),
+		new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER, peerBots: discordConfig?.peerBots }), {
+			peerPartWaitMs: 0,
+		}),
 	];
 	const clock = { now: () => Date.now() };
 	const started = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels,
 		clock,

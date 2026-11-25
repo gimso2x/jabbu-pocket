@@ -26,13 +26,12 @@ import { byteLength, redact } from "../redact";
 import { injectionWarning, scanForInjection } from "../safety/injection";
 import { peerTouchedTurnNotice } from "../safety/prompt";
 import type { InboundRow, OriginRow } from "../store/db-rows";
-import type { UncertainReason } from "../store/transitions";
 import { typicalTurnDuration } from "../store/turn-duration";
 import { classifyFailure } from "./failure-kind";
 import { type IdleKeepDeps, IdleKeeper, type IdleSweepContext } from "./idle-keep";
-import type { LiveView } from "./live-turn";
 import { newActiveTurn } from "./mailbox-active-turn";
 import { askBtw, commandReply, startBrief, waitingRows } from "./mailbox-commands";
+import { ContextMemory, type LiveViewWithContext } from "./mailbox-context";
 import { judgeTurnCost, recordDailyCost, refreshSubAgentCost } from "./mailbox-cost";
 import { toolActivityText } from "./mailbox-helpers";
 import {
@@ -45,7 +44,9 @@ import {
 	STEER_BEFORE_ANSWER_SEEN_NOTE,
 	turnPeerOf,
 } from "./mailbox-notices";
+import { markOrPark, parkUncertain } from "./mailbox-park";
 import { purposeBlockOf, runPurposeCommand, setHome } from "./mailbox-purpose";
+import { beginSend, parkInterruptedSends, REFUSED_OP_PREFIX, settleFailedSend } from "./mailbox-sending";
 import {
 	OWN_ANSWER_LINE,
 	ownerThreadRootBlock,
@@ -119,18 +120,6 @@ export type {
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
 
-/** Op ref of a discarded row whose fresh-session first prompt `launchRefusal` refused (`refused:<id>`). */
-const REFUSED_OP_PREFIX = "refused:";
-
-/** Boot recovery: a launch-refused row an older process left `dispatched` closes without a notice (it was told). */
-export function discardRefusedLaunches(store: MailboxDeps["store"], log: MailboxDeps["log"]): void {
-	for (const row of store.listInbound({ state: "dispatched" })) {
-		if (!row.opRef?.startsWith(REFUSED_OP_PREFIX)) continue;
-		store.discard(row.platformMessageId);
-		log.info("recovery_discarded_refused", { origin: row.originKey, id: row.platformMessageId });
-	}
-}
-
 /**
  * Serial actor for one origin. Every inbound message, driver final and driver exit is processed on one
  * promise chain, so the ledger writes never interleave. It talks to omp only through the injected driver and
@@ -143,6 +132,7 @@ export class OriginMailbox {
 	readonly #idleStopMs: number;
 	#tail: Promise<unknown> = Promise.resolve();
 	#driver: OmpSessionDriver | undefined;
+	readonly #context = new ContextMemory();
 	#unsubscribe: Array<() => void> = [];
 	#turn: ActiveTurn | undefined;
 	/** `#startTurn` calls in flight: the child spawn and ready wait come before `#turn` is set. */
@@ -267,12 +257,7 @@ export class OriginMailbox {
 					log.warn("pause_abort_failed", { origin: originKey, opRef: turn?.opRef, error: String(error) });
 				}
 				if (turn !== undefined && this.#turn === turn && this.#driver === driver) {
-					await this.#onFinal(driver, {
-						opRef: turn.opRef,
-						status: "aborted",
-						text: "",
-						error: "lane_paused",
-					});
+					await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: "lane_paused" });
 				}
 			}
 			const settled = this.#driver === undefined || (await this.#driver.state()).settled !== false;
@@ -282,11 +267,13 @@ export class OriginMailbox {
 
 	/**
 	 * Startup recovery: dispatch rows that are already in the ledger as `pending` (their thread comes from the row).
+	 * A `sending` row (a send cut before its outcome was recorded) is parked as `uncertain`, never sent again.
 	 * Resolves when the drain has finished.
 	 */
 	resumePending(): Promise<void> {
 		return this.#serial(() => {
 			this.#deps.store.ensureOrigin(this.#deps.originKey, this.#deps.sessionDirFor(this.#deps.originKey, 1));
+			parkInterruptedSends(this.#deps.store, this.#deps.log, this.#deps.originKey);
 			this.#lastActivityAt = this.#deps.clock.now();
 			this.#stopAfterTurn = false;
 			return this.#drain();
@@ -475,8 +462,9 @@ export class OriginMailbox {
 		}
 		log.info("stuck_loop_steer", { origin: originKey, opRef: turn.opRef, tool: hit.toolName, count: hit.count });
 		this.#background("stuck_steer_failed", async () => {
-			// Real omp starts a run when steered while idle: only steer the turn that is still running.
-			if (this.#turn !== turn || !this.#driver) return;
+			// Real omp starts a run when steered while idle: only steer the turn that is still running. A turn
+			// whose final already arrived is idle too — the final's own settlement may still be queued behind us.
+			if (this.#turn !== turn || !this.#driver || turn.finalArrived) return;
 			await this.#driver.steer(stuckSteerText(hit.toolName, hit.count));
 		});
 	}
@@ -547,8 +535,8 @@ export class OriginMailbox {
 	}
 
 	/** What the running turn is writing now (dashboard `live` op); null without a turn or with nothing in flight. */
-	liveView(): LiveView | null {
-		return this.#turn?.live.view() ?? null;
+	liveView(): LiveViewWithContext | null {
+		return this.#context.attach(this.#turn?.live.view() ?? null);
 	}
 
 	/**
@@ -977,33 +965,6 @@ export class OriginMailbox {
 		return isAutonomousRow(this.#deps.originKey, row) && this.#deps.isFrozen?.() === true;
 	}
 
-	/**
-	 * The steer went out but its outcome is unknown (it threw, the turn ended around it, or the ledger write failed):
-	 * the row is parked as `uncertain` instead of replayed, so no input runs twice. Resolves true — this row is done,
-	 * later rows still go out; the owner closes or retries it with `/queue`.
-	 */
-	#parkUncertain(row: InboundRow, reason: UncertainReason, error?: unknown): boolean {
-		const { store, log, originKey } = this.#deps;
-		store.markUncertain(row.platformMessageId, reason);
-		log.warn("inbound_uncertain", {
-			origin: originKey,
-			id: row.platformMessageId,
-			reason,
-			...(error === undefined ? {} : { error: String(error) }),
-		});
-		return true;
-	}
-
-	/** Records a delivered row as dispatched; a failed ledger write parks it as `uncertain` (never re-sent): false. */
-	#markOrPark(row: InboundRow, input: { opRef: string; entryCursor: string | null }): boolean {
-		try {
-			this.#deps.store.markDispatched(row.platformMessageId, input);
-			return true;
-		} catch (error) {
-			return !this.#parkUncertain(row, "dispatch_record_failed", error);
-		}
-	}
-
 	/** Returns false when the row was left pending (nothing was sent). */
 	async #dispatch(row: InboundRow, text: string = row.textRef): Promise<boolean> {
 		const { store, log, originKey } = this.#deps;
@@ -1053,13 +1014,14 @@ export class OriginMailbox {
 				log.info("steer_turn_ended", { origin: originKey, id: row.platformMessageId, opRef: turn.opRef, late });
 				return late === "settled" ? this.#dispatch(row, text) : false;
 			}
+			if (!beginSend(this.#deps, row, entryCursor)) return false;
 			try {
-				await driver.steer(composeTurnPrompt(blocks, text));
+				await driver.steer(composeTurnPrompt(blocks, text, false));
 			} catch (error) {
-				return this.#parkUncertain(row, "steer_threw", error);
+				return parkUncertain(this.#deps, row, "steer_threw", error);
 			}
-			if (ended() !== undefined) return this.#parkUncertain(row, "turn_ended_after_steer");
-			if (!this.#markOrPark(row, { opRef: turn.opRef, entryCursor })) return true;
+			if (ended() !== undefined) return parkUncertain(this.#deps, row, "turn_ended_after_steer");
+			if (!markOrPark(this.#deps, row, { opRef: turn.opRef, entryCursor })) return true;
 			log.info("steer_delivered", {
 				origin: originKey,
 				id: row.platformMessageId,
@@ -1071,39 +1033,38 @@ export class OriginMailbox {
 			return true;
 		}
 		let failure: unknown;
-		try {
-			await this.#startTurn(row, text);
-			return true;
-		} catch (error) {
-			failure = error;
-		}
+		// A try that throws settles its write-ahead first: only an `unsent` row may be tried again (mailbox-sending.ts).
+		const attempt = async () => {
+			try {
+				return await this.#startTurn(row, text);
+			} catch (error) {
+				failure = error;
+				return settleFailedSend(this.#deps, row, error);
+			}
+		};
+		let sent = await attempt();
 		// A session restored with a model omp no longer knows fails before any driver exists (2026-10-27 사고):
 		// rewrite the session file's last model_change to the fallback and retry the same dispatch once.
-		if (this.#driver === undefined && isModelFailureSign(failureSign(failure))) {
-			if ((await this.#healSessionFile()) !== undefined) {
-				try {
-					await this.#startTurn(row, text);
-					return true;
-				} catch (retryError) {
-					failure = retryError;
-				}
-			}
+		if (sent === "unsent" && this.#driver === undefined && isModelFailureSign(failureSign(failure))) {
+			if ((await this.#healSessionFile()) !== undefined) sent = await attempt();
 		}
 		// A driver stopped under us (an unreadable stdout line stops the child right after the failing final) answers
 		// `not_started`, and a child that stopped answering requests `request_timeout`: drop it and retry the same
-		// dispatch once on a new one.
+		// dispatch once on a new one — only while nothing may have reached the child.
 		if (
+			sent === "unsent" &&
 			this.#driver !== undefined &&
 			failure instanceof OmpDriverError &&
 			(failure.code === "not_started" || failure.code === "request_timeout")
 		) {
 			await this.#stopDriver();
-			try {
-				await this.#startTurn(row, text);
-				return true;
-			} catch (retryError) {
-				failure = retryError;
-			}
+			sent = await attempt();
+		}
+		if (typeof sent === "boolean") return sent;
+		if (sent === "parked") {
+			// The child may hold the prompt: stopped, so no run goes on untracked; the owner decides with `/queue`.
+			await this.#stopDriver().catch(() => undefined);
+			return true;
 		}
 		const rawReason = failureSign(failure);
 		const code = failure instanceof OmpDriverError ? failure.code : "dispatch_error";
@@ -1216,17 +1177,20 @@ export class OriginMailbox {
 		}
 	}
 
-	/** Opens the origin's session in a driver and starts one turn for the row; nothing is recorded on failure. */
-	async #startTurn(row: InboundRow, text: string): Promise<void> {
+	/**
+	 * Opens the origin's session in a driver and starts one turn for the row; nothing is recorded on failure. False: the
+	 * `sending` write-ahead failed, so nothing was sent and the row stays pending.
+	 */
+	async #startTurn(row: InboundRow, text: string): Promise<boolean> {
 		this.#starting += 1;
 		try {
-			await this.#openTurn(row, text);
+			return await this.#openTurn(row, text);
 		} finally {
 			this.#starting -= 1;
 		}
 	}
 
-	async #openTurn(row: InboundRow, text: string): Promise<void> {
+	async #openTurn(row: InboundRow, text: string): Promise<boolean> {
 		const { store, log, originKey } = this.#deps;
 		const driver = await this.#ensureDriver(row.threadRef);
 		// A child started before a peer bot wrote here is kept: it is told once, in front of its next prompt.
@@ -1234,7 +1198,7 @@ export class OriginMailbox {
 		this.#warnColdCache(row.threadRef);
 		// Only a lane's first prompt has anything to check; every other turn goes on without an extra await.
 		const refusal = this.#freshSession ? this.#deps.launchRefusal?.(driver) : undefined;
-		if (refusal !== undefined && (await this.#refuseLaunch(row, await refusal))) return;
+		if (refusal !== undefined && (await this.#refuseLaunch(row, await refusal))) return true;
 		// Before `#firstTurnPrompt` clears the fresh flag: a continued session already has its todos.
 		if (this.#freshSession) await this.#plantTodos(driver);
 		// Read the cursor right before the prompt: extensions append entries after open.
@@ -1243,18 +1207,24 @@ export class OriginMailbox {
 		const undoBefore = await this.#captureUndoBefore(originKey);
 		const headsBefore = await this.#captureHeadsBefore(originKey);
 		const board = this.#deps.boardNotice?.();
-		const opRef = await driver.prompt(await this.#firstTurnPrompt(row, text, peerNotice, board?.block));
+		const prompt = await this.#firstTurnPrompt(row, text, peerNotice, board?.block);
+		// The write-ahead: a failed write sends nothing; the stopped child reopens with the same first-prompt context.
+		if (!beginSend(this.#deps, row, entryCursor)) {
+			await this.#stopDriver().catch(() => undefined);
+			return false;
+		}
+		const opRef = await driver.prompt(prompt);
 		// Only once the prompt went through: a failed one leaves the notices for the next turn.
 		if (peerNotice) this.#skipPeerNotice = true;
 		board?.commit();
 		// The child already runs this turn: a failed ledger write stops it, so no run goes on untracked.
 		let recorded = false;
 		try {
-			recorded = this.#markOrPark(row, { opRef, entryCursor });
+			recorded = markOrPark(this.#deps, row, { opRef, entryCursor });
 		} finally {
 			if (!recorded) await this.#stopDriver().catch(() => undefined);
 		}
-		if (!recorded) return;
+		if (!recorded) return true;
 		this.#turnGeneration += 1;
 		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, undoBefore, headsBefore });
 		this.#lastEventAt = this.#deps.clock.now();
@@ -1267,6 +1237,7 @@ export class OriginMailbox {
 			this.#turn.progress.typical = typical;
 			this.#reportProgress(this.#turn);
 		}
+		return true;
 	}
 
 	/**
@@ -1506,7 +1477,7 @@ export class OriginMailbox {
 			driver.onExit((info) => this.#background("exit_failed", () => this.#onExit(driver, info))),
 			driver.onEvent((event) => this.#onDriverEvent(event)),
 		];
-		this.#driver = driver;
+		this.#driver = this.#context.watch(driver);
 		this.#idle.spawned(spawnIdentity);
 		// A child without host tools has nothing to be told about them.
 		this.#skipPeerNotice = peerTouched || this.#deps.hostTools?.() === false;

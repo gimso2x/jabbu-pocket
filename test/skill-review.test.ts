@@ -35,6 +35,7 @@ import {
 } from "../src/review/skills";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import { killSpawned, runMain } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 
 let dir: string;
 
@@ -494,6 +495,7 @@ describe("!distill (daemon)", () => {
 		const sessions = new FakeSessionStore();
 		const clock = { now: () => Date.now() };
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,

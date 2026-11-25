@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
-import type { JabbuConfig } from "../config";
+import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
@@ -22,6 +22,7 @@ import {
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
+import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseApprovalRetryActionId } from "../safety/approval";
@@ -42,7 +43,7 @@ import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { isSideOpRef } from "./restart";
-import { laneChannelOf } from "./thread-target";
+import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
 /** What the core sink needs beyond the daemon context: the boot's ledger and the state other daemon parts share. */
 export interface CoreSinkDeps {
@@ -65,10 +66,7 @@ function borrowedLaneCommand(lane: LaneRow, closedAs: ClosedLaneMessage): boolea
 	return waiting && (closedAs === "land" || closedAs === "discard" || closedAs === "pr");
 }
 
-/**
- * The inbound side of the daemon: the core sink every chat adapter feeds, and the lane and [TASK] commands, controls
- * and buttons the core settles itself instead of sending them to an omp session.
- */
+/** Inbound side of the daemon: core sink and lane/[TASK] commands settled without an omp session. */
 export class DaemonInbound {
 	readonly #ctx: DaemonContext;
 
@@ -142,7 +140,8 @@ export class DaemonInbound {
 					// `멈춰`/`계속` (the whole message) are the lane's hold and release: the core settles them itself,
 					// before any closed-lane reading — a closed lane's pause holds only its auto-merge.
 					const control = classifyLaneControl(message.text);
-					if (control !== undefined) {
+					// A resume phrase settles only when a hold exists (paused lane or closed auto-merge); in a working lane it reaches omp.
+					if (control !== undefined && (control === "pause" || lane.status === "paused" || closedAs !== undefined)) {
 						void this.#settleLaneControl(row, lane.name, control);
 						return {};
 					}
@@ -181,14 +180,17 @@ export class DaemonInbound {
 						return {};
 					}
 					const trigger = parseLaneTrigger(message.text);
-					if (trigger && ctx.router?.draining === true) {
+					if (trigger) {
 						// A drain must not create a worktree and branch mid-restart, and a pending trigger row would reach
 						// the DM's omp session after it instead of starting the lane: refuse it with a retry hint.
-						void this.#settleLaneCommand(row, trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
+						if (ctx.router?.draining === true)
+							void this.#settleLaneCommand(row, trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
+						else void this.#startLane(row, trigger);
 						return {};
 					}
-					if (trigger) {
-						void this.#startLane(row, trigger);
+					const triggerRefusal = laneTriggerRefusal(message.text);
+					if (triggerRefusal !== undefined) {
+						void this.#settleLaneCommand(row, "-", { kind: "refused", text: triggerRefusal });
 						return {};
 					}
 				}
@@ -298,10 +300,11 @@ export class DaemonInbound {
 		await this.#settleOwn("lane", "lane_start", row, async () => {
 			const channel = laneChannelOf(this.#ctx, row.originKey, parseThreadRef(row.threadRef)?.channel);
 			try {
-				if (channel === undefined && parseChatOrigin(row.originKey)?.platform === "discord") {
-					throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
-				}
+				const platform = parseChatOrigin(row.originKey)?.platform;
+				if (platform === "web") throw new LaneInputError(WEB_LANE_REFUSED);
+				if (channel === undefined && platform === "discord") throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
 				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
+				assertNoSpacedPath(trigger.cwd, trigger.brief);
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
 				// The thread the trigger was written in (a channel root's is the reply thread the adapter opened).
@@ -700,7 +703,7 @@ export function deliverySources(
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
 				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
 				// One owner notice per held delivery, into the thread the answer was headed for (Cataly noticeHeld).
-				store.noticeAmbiguous(deliveryId, config.channels.discord?.ownerUserId);
+				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
 				return true;
 			}
 			return store.failDelivery(deliveryId, error).state === "expired";

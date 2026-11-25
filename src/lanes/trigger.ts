@@ -4,7 +4,7 @@ import type { AcceptanceItem } from "../tasks/docs";
 import { withoutCheckTail } from "../tasks/signals";
 import { isGithubRepo } from "./pr";
 import type { LaneLandState } from "./status";
-import { type WorkflowName, workflowLine } from "./workflow";
+import { type WorkflowChoice, workflowLine } from "./workflow";
 
 export interface LaneTrigger {
 	title: string;
@@ -13,8 +13,8 @@ export interface LaneTrigger {
 	brief: string;
 }
 
-/** `작업: <제목> @<절대경로>` optionally followed by the task description on the same or the following lines. */
-const TRIGGER = /^작업:[ \t]*(.+?)[ \t]+@(\/\S*)(?:[ \t]+|\n|$)([\s\S]*)$/;
+/** `작업: <제목> @<절대경로>` then an optional description. The title starts at a non-blank (one split of a blank run). */
+const TRIGGER = /^작업:[ \t]*([^ \t\n].*?)[ \t]+@(\/\S*)(?:[ \t]+|\n|$)([\s\S]*)$/;
 
 export function parseLaneTrigger(text: string): LaneTrigger | undefined {
 	const match = TRIGGER.exec(text.trim());
@@ -135,7 +135,7 @@ export function buildLanePrompt(input: {
 	/** The lane's work goes out as a GitHub PR (`meta.externalPr`). */
 	externalPr?: { repo: string; base: string; bodyFile: string } | undefined;
 	/** The workflow the head chose (`meta.workflow`): its keyword line opens the prompt. */
-	workflow?: { name: WorkflowName } | undefined;
+	workflow?: Pick<WorkflowChoice, "name"> | undefined;
 }): string {
 	const brief = input.brief?.trim();
 	const keywordLine = workflowLine(input.workflow?.name, brief);

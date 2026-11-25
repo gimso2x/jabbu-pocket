@@ -19,6 +19,7 @@ import { buildFloorsPrompt, peerTouchedTurnNotice } from "../src/safety/prompt";
 import type { Store } from "../src/store/db";
 import { LANE_BOARD_TEXT_MAX } from "../src/store/db-schema";
 import { CHANNEL, discordBinding, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -101,14 +102,14 @@ describe("lane board channels and reads", () => {
 		for (const lane of [a, b]) {
 			const read = await board(lane).read();
 			expect(read).toContain(
-				`<<<quoted-${FENCE}>>>\n#1 general · main:${OWNER_DM}\n오늘은 배포 금지\n<<<end-quoted-${FENCE}>>>`,
+				`<<<quoted-${FENCE}>>>\n\`\`\`\n#1 general · main:${OWNER_DM}\n오늘은 배포 금지\n\`\`\`\n<<<end-quoted-${FENCE}>>>`,
 			);
 		}
 		await board(a).post({ text: "API 바뀜" });
 		const read = await board(OWNER_DM).read();
 		expect(ids(read)).toEqual([2]);
 		expect(read).toContain(
-			`<<<quoted-${FENCE}>>>\n#2 ${boardRepoChannel(REPO_1)} · lane-a\nAPI 바뀜\n<<<end-quoted-${FENCE}>>>`,
+			`<<<quoted-${FENCE}>>>\n\`\`\`\n#2 ${boardRepoChannel(REPO_1)} · lane-a\nAPI 바뀜\n\`\`\`\n<<<end-quoted-${FENCE}>>>`,
 		);
 	});
 
@@ -254,7 +255,7 @@ describe("lane board notice in the next turn prompt", () => {
 	const prompts = (originKey: string): string[] =>
 		(drivers.get(originKey)?.calls ?? []).filter((call) => call.startsWith("prompt:")).map((call) => call.slice(7));
 
-	const quote = (post: string): string => `<<<quoted-${FENCE}>>>\n${post}\n<<<end-quoted-${FENCE}>>>`;
+	const quote = (post: string): string => `<<<quoted-${FENCE}>>>\n\`\`\`\n${post}\n\`\`\`\n<<<end-quoted-${FENCE}>>>`;
 
 	test("AC-4: a lane's notice carries the posts' bodies as a quote, once; never the author's own, a closed lane or an idle wake", async () => {
 		const a = addLane("lane-a", REPO_1);
@@ -297,7 +298,7 @@ describe("lane board notice in the next turn prompt", () => {
 		const [first] = prompts(b);
 		expect(first).toContain("새 글 4개");
 		expect(first).not.toContain("글1 ");
-		for (const i of [2, 3, 4]) expect(first).toContain(`글${i} ${"가".repeat(200 - 3)}\n<<<end-quoted`);
+		for (const i of [2, 3, 4]) expect(first).toContain(`글${i} ${"가".repeat(200 - 3)}\n\`\`\`\n<<<end-quoted`);
 		expect(first).not.toContain("가".repeat(200));
 		expect(first).toContain("나머지 1개는 jabbu_board_read로 읽는다");
 		// The uncarried post is announced (no second notice) but nothing was marked read: a read still shows all four.
@@ -398,6 +399,7 @@ describe("daemon: who gets the board tools", () => {
 	test("AC-6: an untouched DM has them; a peer-touched one and a removed-platform origin do not, and the peer notices say so", async () => {
 		const clock = { now: () => clockNow };
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,

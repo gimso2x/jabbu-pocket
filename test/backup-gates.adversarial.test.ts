@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GatesCommandDeps, gatesCommand } from "../src/cli/index";
+import { type GatesCommandDeps, gatesCommand } from "../src/cli/gates";
 import {
 	BACKUP_FILE_PATTERN,
 	type BackupResult,
@@ -76,8 +76,14 @@ function tmpLeftovers(homeDir: string): string[] {
 
 async function cli(args: string[], homeDir: string): Promise<{ out: string; err: string; code: number }> {
 	const proc = Bun.spawn(["bun", MAIN, ...args], {
-		// Test hooks give the gates an idle host, so host_pressure never depends on this machine's load.
-		env: { ...process.env, JABBU_HOME: homeDir, JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "idle" },
+		// Test hooks give the gates an idle host and roomy disk, so gates never depend on this machine.
+		env: {
+			...process.env,
+			JABBU_HOME: homeDir,
+			JABBU_TEST_HOOKS: "1",
+			JABBU_TEST_HOST_LOAD: "idle",
+			JABBU_TEST_STATFS: "roomy",
+		},
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",

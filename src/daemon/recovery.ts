@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { type DriverFactory, discardRefusedLaunches, openOriginSession, sessionToResume } from "../core/mailbox";
+import { type DriverFactory, openOriginSession, sessionToResume } from "../core/mailbox";
+import { settleDeadProcessRows } from "../core/mailbox-sending";
 import { COMMAND_OP_REF, CONTINUE_ID_PREFIX, isTurnPromptFor, promptTextOf } from "../core/types";
 import { isClosedLaneQuestion } from "../lanes/trigger";
 import type { Logger } from "../log";
@@ -121,10 +122,8 @@ function readRestartCut(homeDir: string, now: number, log: Logger): Map<string, 
 /** The resume prompt: the fixed text, the cancelled approval card, then one line per git index lock left behind. */
 export function continuePrompt(approval: string | undefined, lockFiles: readonly string[]): string {
 	const lines = [CONTINUE_PROMPT];
-	if (approval !== undefined) {
-		const summary = approval.replace(/\s+/g, " ").trim().slice(0, 120);
-		lines.push(`직전 승인 카드(${summary})는 취소됐습니다`);
-	}
+	if (approval !== undefined)
+		lines.push(`직전 승인 카드(${approval.replace(/\s+/g, " ").trim().slice(0, 120)})는 취소됐습니다`);
 	for (const lock of lockFiles) lines.push(`잠금 파일 있음: ${lock} — 다른 git 프로세스가 없는지 확인한 뒤 처리하세요`);
 	return lines.join("\n");
 }
@@ -172,12 +171,11 @@ function finalAnswerParts(entries: readonly OmpEntry[], promptText: string, last
 
 /**
  * Startup rule (2): every `dispatched` row of the dead process either has its final answer in the omp session after
- * the row's `entry_cursor` (-> answered + delivery) or gets exactly one interrupted notice. Prompts are never resent.
- * Exception: a conversation turn the planned restart cut (its op_ref is in {@link RESTART_CUT_FILE}) gets one resume
- * row `cut-<id>` in the same thread and {@link CONTINUE_NOTICE} instead — once: a turn of a resume row, a monitor
- * origin, a command op (`COMMAND_OP_REF`), a closed [TASK]'s turn, a closed lane's work turn (its worktree is gone;
- * question turns still resume) or an op_ref not in a fresh record is interrupted. A launch-refused row (`refused:`) is discarded silently.
- * Rows that were steered into the same turn share an `op_ref` and are settled together by the first row's lookup.
+ * its `entry_cursor` (-> answered + delivery) or gets one interrupted notice; prompts are never resent. A `sending`
+ * row turns `uncertain`, a `refused:` row is discarded (`settleDeadProcessRows`). A turn a planned restart cut (op_ref
+ * in {@link RESTART_CUT_FILE}) gets one resume row `cut-<id>` and {@link CONTINUE_NOTICE} instead, once: a resume row's
+ * turn, a monitor origin, a command op (`COMMAND_OP_REF`), a closed [TASK]'s or lane work turn (lane questions resume)
+ * or an op_ref not in a fresh record is interrupted. Steered rows share an `op_ref`, settled by the first row's lookup.
  */
 export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryResult> {
 	const { store, log } = deps;
@@ -190,7 +188,7 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 		cutTurns ??= readRestartCut(homeDir, (deps.now ?? Date.now)(), log);
 		return cutTurns;
 	};
-	discardRefusedLaunches(store, log);
+	settleDeadProcessRows(store, log);
 	const byOrigin = new Map<string, Map<string, InboundRow[]>>();
 	for (const row of store.listInbound({ state: "dispatched" })) {
 		const opRef = row.opRef ?? `row:${row.platformMessageId}`;
@@ -209,9 +207,8 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 				await driver.start();
 				const check = await openOriginSession(driver, origin, sessionToResume(origin));
 				// Log only: every settled row below already gets its own answer or interrupted notice in the thread.
-				if (check.mismatch) {
+				if (check.mismatch)
 					log.warn("session_resume_mismatch", { origin: originKey, expected: check.expected, actual: check.actual });
-				}
 			} catch (error) {
 				openError = error;
 				await driver?.stop().catch(() => undefined);
@@ -280,6 +277,9 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 					log.info("recovery_answered", { origin: originKey, id: lead.platformMessageId, opRef });
 				}
 			}
+		} catch (error) {
+			// One origin's settle failure must not abort the boot: its rows stay dispatched for the next start.
+			log.warn("recovery_origin_failed", { origin: originKey, error: String(error) });
 		} finally {
 			await driver?.stop().catch(() => undefined);
 		}

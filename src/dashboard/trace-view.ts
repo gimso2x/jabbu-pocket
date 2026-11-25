@@ -260,7 +260,7 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 			: ""
 	}${rows.map(rowHtml).join("")}</div></div></div>${
 		answer.truncated ? '<p class="note-sub">호출이 많아 앞부분은 생략했어요</p>' : ""
-	}${(answer.root.children?.length ?? 0) === 0 ? '<p class="note-sub">아직 기록된 호출이 없어요</p>' : ""}<section class="tw-pop${
+	}${answer.skippedLanes === undefined ? "" : `<p class="note-sub">저장된 레인 ${answer.skippedLanes}건을 읽지 못해 위임 목록이 불완전할 수 있어요</p>`}${(answer.root.children?.length ?? 0) === 0 ? '<p class="note-sub">아직 기록된 호출이 없어요</p>' : ""}<section class="tw-pop${
 		picked === undefined ? "" : ` is-${picked.kind} is-${picked.status}`
 	}" role="dialog" aria-labelledby="tw-pop-title" data-part="html"${picked === undefined ? " hidden" : ""}>${pop}</section></div>`;
 }
@@ -367,7 +367,7 @@ export function renderFlow(answer: TurnTrace, state: TraceViewState): string {
 		"",
 		"root",
 		`is-root is-${root.status}`,
-		`<span class="fl-kicker">송박</span><span class="fl-title">${esc(root.model ?? "모델 미상")}</span><span class="fl-meta">${chip(
+		`<span class="fl-kicker">봇</span><span class="fl-title">${esc(root.model ?? "모델 미상")}</span><span class="fl-meta">${chip(
 			root.status,
 		)}${rootCost === "" ? "" : `<span class="fl-cost">${esc(rootCost)}</span>`}</span><span class="fl-doing">${esc(flowDoing(root))}</span>`,
 	);

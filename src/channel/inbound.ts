@@ -41,7 +41,7 @@ export async function guardInbound(
 
 /**
  * Addressing in a channel: a mention, a mention-free channel's root (not a thread the bot never took, e.g. a peer's) or
- * a thread the bot knows (only the mention under `requireMention`). A message meant only for a peer bot is not addressed.
+ * a thread the bot knows (under `requireMention` only in a mention-free channel). A message for a peer is not addressed.
  */
 export function isChannelMessageAddressed(
 	core: CoreSink,
@@ -54,9 +54,9 @@ export function isChannelMessageAddressed(
 	},
 ): boolean {
 	const { mentioned, threadRef } = input;
-	const audible = input.requireMention
-		? mentioned
-		: mentioned || (threadRef === undefined ? input.mentionFree : core.knowsThread?.(threadRef) === true);
+	const known =
+		threadRef !== undefined && (input.mentionFree || !input.requireMention) && core.knowsThread?.(threadRef);
+	const audible = mentioned || (threadRef === undefined ? input.mentionFree : known === true);
 	return audible && !input.forPeer;
 }
 
@@ -117,7 +117,7 @@ export async function recordPeerInbound(
 	inbound: PeerInboundMessage,
 	limit: { turns: number; windowMinutes: number },
 	drop: (reason: string) => IngestOutcome,
-	notice: () => Promise<void>,
+	notice: () => Promise<unknown>,
 ): Promise<IngestOutcome | "held" | undefined> {
 	const outcome = core.onPeerInbound?.(inbound, { turns: limit.turns, windowMs: limit.windowMinutes * 60_000 });
 	if (outcome === undefined) return drop("peer_unsupported");

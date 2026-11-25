@@ -1,15 +1,29 @@
 name: setup
-description: Bun을 설치하고 두 lockfile로 설치 캐시를 맞춘 뒤 frozen-lockfile로 의존성을 설치한다.
+description: Bun을 설치하고 main 기준 lockfile 캐시를 복원(main 푸시 시에만 저장)한 뒤 frozen-lockfile로 의존성을 설치한다.
 runs:
   using: composite
   steps:
-    # package.json의 packageManager/engines.bun과 같은 버전. test/ci-workflow.test.ts가 이 값을 검사한다.
+    # package.json의 packageManager 버전을 단일 기준으로 사용한다.
     - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       with:
-        bun-version: "1.4.4"
-    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        bun-version-file: package.json
+    # PR ref별 캐시 복제로 저장소 10 GiB 한도를 채우지 않도록 restore/save를 분리한다(저장은 main만).
+    - id: bun-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock', 'test/fixtures/omp-host/bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-root-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-bun-root-
     - shell: bash
-      run: bun install --frozen-lockfile
+      run: |
+        if ! bun install --frozen-lockfile; then
+          echo "::warning::shared bun cache install failed; retrying with a clean cache dir"
+          retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/bun-cache-retry.XXXXXX")"
+          bun install --frozen-lockfile --cache-dir="$retry_cache"
+        fi
+    - if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ steps.bun-cache.outputs.cache-primary-key }}

@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { JabbuConfig } from "../config";
@@ -24,6 +24,7 @@ import {
 } from "./host-resources";
 import { DEFAULT_HOST_SESSION_CEILING } from "./host-sessions";
 import { OFFSITE_STAMP_FILE } from "./offsite";
+import { readRegularText } from "./stamp";
 
 /** Opening a FIFO in the ledger's place blocks forever, so the ledger is opened only after this passes. */
 export function assertRegularLedger(dbPath: string): void {
@@ -167,10 +168,8 @@ export const GATE_NAMES = [
 ] as const;
 
 /**
- * `drain_orphaned`: the heartbeat says draining while `<home>/apply.lock` names an apply that no longer runs. A drain
- * the daemon holds has no expiry, and while it lasts `origin_silent` and `monitors_stalled` stay closed, so without
- * this nothing reports a bot that quietly holds every message. Only judged when there is something to judge (a
- * drain or an apply lock); a drain with no apply lock (`jabbu-pocket drain` by hand) has no holder to call dead.
+ * `drain_orphaned`: heartbeat says draining while `<home>/apply.lock` names a dead apply (draining keeps `origin_silent`
+ * and `monitors_stalled` closed, so without this a stuck drain goes unseen). Only judged when draining or locked.
  */
 function drainOrphanedGate(
 	homeDir: string,
@@ -181,9 +180,9 @@ function drainOrphanedGate(
 	const name = "drain_orphaned";
 	let lockText: string | undefined;
 	try {
-		lockText = readFileSync(join(homeDir, APPLY_LOCK_FILE), "utf8");
-	} catch {
-		lockText = undefined;
+		lockText = readRegularText(join(homeDir, APPLY_LOCK_FILE));
+	} catch (error) {
+		lockText = (error as NodeJS.ErrnoException).code === "ENOENT" ? undefined : "";
 	}
 	if (heartbeat?.draining !== true && lockText === undefined) return undefined;
 	if (heartbeat === undefined) return unknownGate(name, "stamp=missing");
@@ -527,7 +526,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 		// `updated_at` moves on every 15-minute status-message redraw, so it never ages while the daemon runs; the
 		// newest history entry (created, progress, owner_reply, claim, not_done, reopened…) is the lane's real activity.
 		const laneActivity = columnExists(db, "lanes", "history")
-			? "CASE WHEN json_type(history, '$[#-1].at') = 'integer' THEN json_extract(history, '$[#-1].at') ELSE updated_at END"
+			? "CASE WHEN json_valid(history) THEN CASE WHEN json_type(history, '$[#-1].at') = 'integer' THEN json_extract(history, '$[#-1].at') ELSE updated_at END ELSE updated_at END"
 			: "updated_at";
 		// A quiet working lane is not stuck while a turn dispatched inside the same 24h window still runs on its origin,
 		// or while it waits on the owner (a live approval card for that origin); only the rest are orphans. A turn

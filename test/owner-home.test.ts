@@ -14,6 +14,7 @@ import { redact } from "../src/redact";
 import { SKILL_REVIEW_ORIGIN } from "../src/review/skills";
 import { Store } from "../src/store/db";
 import { discordBinding, GUILD, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const DISCORD_DM = "123456789012345678"; // gitleaks:allow (fake snowflake)
 const DISCORD_CH = "111111111111111111"; // gitleaks:allow (fake snowflake)
@@ -39,6 +40,7 @@ async function boot(config: JabbuConfig): Promise<void> {
 	discord.setChannel({ id: DISCORD_CH, type: 0, guildId: GUILD });
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config,
 		channels: [discordBinding(discord)],
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),

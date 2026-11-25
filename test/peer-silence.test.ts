@@ -231,6 +231,18 @@ describe("AC-3: what is never a call", () => {
 		expect(calls()).toEqual([]);
 	});
 
+	test("a channel-body answer (channel origin, no thread) records nothing while a thread origin's answer is a call", () => {
+		const store = open();
+		answer(store, `<@${PEER}> 본문`, {
+			opRef: "body",
+			threadRef: `${CONV}:${THREAD}`,
+			originKey: `discord/ch/${CONV}`,
+		});
+		expect(calls()).toEqual([]);
+		answer(store, `<@${PEER}> 스레드`, { opRef: "thread", threadRef: `${CONV}:${THREAD}` });
+		expect(calls().map((c) => [c.thread_ref, c.peer_user_id])).toEqual([[`${CONV}:${THREAD}`, PEER]]);
+	});
+
 	test("a completion report's #log copy records nothing while its thread answer is a call", () => {
 		const store = open();
 		store.setLogChannel({ discord: LOG });

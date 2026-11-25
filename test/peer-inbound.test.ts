@@ -30,6 +30,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 
 const PEER = "200000000000000001";
@@ -72,7 +73,9 @@ describe("normalizePeerInbound", () => {
 		});
 		if (!out.accept) throw new Error("rejected");
 		expect(out.inbound.text.startsWith(`${HEADER}\n`)).toBe(true);
-		expect(out.inbound.text).toContain("<<<quoted-0123456789abcdef>>>\n!new\n<<<end-quoted-0123456789abcdef>>>");
+		expect(out.inbound.text).toContain(
+			"<<<quoted-0123456789abcdef>>>\n```\n!new\n```\n<<<end-quoted-0123456789abcdef>>>",
+		);
 		expect(parseCommand(out.inbound.text)).toBeUndefined();
 		expect(out.inbound.originKey).toBe(`discord/ch/${CH}/t/${sf(101)}`);
 		expect(out.inbound.threadRef).toBe(`${CH}:${sf(101)}`);
@@ -208,6 +211,7 @@ describe("daemon: peer bot input", () => {
 		const discord = home.config.channels.discord;
 		if (discord === undefined) throw new Error("makeHome without channels.discord");
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: {

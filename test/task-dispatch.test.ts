@@ -9,7 +9,7 @@ import type { HerdrBoardConfig } from "../src/dispatch/board";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { buildDispatchTool } from "../src/dispatch/tool";
 import type { LaneModelTiers } from "../src/model-tiers";
-import { type HostLoadReader, IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { diskHeadroom, type HostLoadReader, IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import type { ApprovalDetail, ApprovalResult } from "../src/safety/approval";
 import type { HostToolDef } from "../src/safety/host-tools";
 import type { HerdrPromptInput } from "../src/store/db-rows";
@@ -23,6 +23,7 @@ import { agySecretsDirs, agySettings, resolveWorkerTier } from "../src/tasks/wor
 import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { ROOMY_STATFS } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { fakeMailbox } from "./helpers/local-task";
 
@@ -261,15 +262,14 @@ function harness(
 						...(options.headless === undefined ? {} : { headless: options.headless }),
 						...(options.recordsRepo === undefined ? {} : { recordsRepo: options.recordsRepo }),
 						hostLoad: options.hostLoad ?? IDLE_HOST_LOAD,
-						...(options.disk === undefined
-							? {}
-							: {
-									diskHeadroom: (path: string) => {
+						diskHeadroom:
+							options.disk === undefined
+								? (path: string) => diskHeadroom(path, ROOMY_STATFS)
+								: (path: string) => {
 										const disk = options.disk as NonNullable<typeof options.disk>;
 										disk.asked.push(path);
 										return { path, freeBytes: disk.freeBytes, totalBytes: disk.totalBytes };
 									},
-								}),
 					},
 				}),
 	});

@@ -8,6 +8,7 @@ import type { PrTools } from "../lanes/pr";
 import type { PrLandSeams } from "../lanes/pr-land-steps";
 import type { ClaimEvidence, VerifyResult } from "../lanes/verify";
 import type { Logger } from "../log";
+import type { AgyAccountsStatus } from "../omp/agy-account-pool";
 import type { BackupOptions, BackupResult } from "../ops/backup";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
 import type { TaskLandDeps, TaskLandResult } from "../tasks/land";
@@ -55,10 +56,7 @@ export interface DaemonOptions {
 	approvalTimeoutMs?: number;
 	/** Concurrent work lanes (default 4). */
 	maxLanes?: number;
-	/**
-	 * How long stop() waits for running turns to settle before stopping the omp children (default
-	 * {@link STOP_DRAIN_MS}); 0 stops the children immediately.
-	 */
+	/** How long stop() waits for running turns to settle before stopping children (default STOP_DRAIN_MS). */
 	stopDrainMs?: number;
 	/** Test seam: how long a turn waits for the thread read of its context (default 10s in the mailbox). */
 	threadContextTimeoutMs?: number;
@@ -79,13 +77,12 @@ export interface DaemonOptions {
 	pidAlive?: (pid: number) => boolean;
 	/** Test seam for the [TASK] sweep's herdr calls (remind, agent status, board pane); default runs the real herdr. */
 	herdrRun?: ProcessRunner;
-	/**
-	 * Test seam for `!restart`: its git, systemctl and systemd-run runner, bun lookup and lock-holder check; default
-	 * the real ones on this machine.
-	 */
+	/** Test seam for `!restart`: git/systemctl/systemd-run runner, bun lookup and lock-holder check. */
 	restart?: Partial<Pick<RestartLauncherDeps, "run" | "isAlive" | "isExecutable" | "pathEnv" | "repoDir">>;
 	/** Test seam for `!brief`'s chromium capture; default runs the real chromium. */
 	briefingRun?: ProcessRunner;
+	/** Live `agy` account pool status when `agent: "agy"` uses an account pool. */
+	agyStatus?: () => AgyAccountsStatus | undefined;
 }
 
 export interface InjectRequest {

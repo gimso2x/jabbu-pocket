@@ -11,6 +11,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { INJECTION_WARNING_HEAD } from "../src/safety/injection";
 import { discordBinding, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const BOT = "500000000000000000";
 const GUILD = "300000000000000001";
@@ -38,6 +39,7 @@ async function boot(threadContextTimeoutMs?: number): Promise<void> {
 	const sessions = new FakeSessionStore();
 	const clock = { now: () => Date.now() };
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: { ...home.config, channels: { ...home.config.channels, discord: { ...configured, peerBots } } },
 		channels: [discordBinding(discord, { peerBots })],
 		clock,
@@ -181,9 +183,11 @@ describe("daemon: Discord thread context", () => {
 		// Every thread message is inside a quoted fence, and the context comes before the request marker.
 		const context = prompt.slice(0, prompt.indexOf("[현재 요청]"));
 		expect(context).toMatch(
-			new RegExp(`<<<quoted-[0-9a-f]{16}>>>\\n\\[${OWNER} [^\\]]+\\]\\nROOT 계획 초안 써 줘\\n<<<end-quoted-`),
+			new RegExp(
+				`<<<quoted-[0-9a-f]{16}>>>\\n\`\`\`\\n\\[${OWNER} [^\\]]+\\]\\nROOT 계획 초안 써 줘\\n\`\`\`\\n<<<end-quoted-`,
+			),
 		);
-		expect(context).toMatch(new RegExp(`<<<quoted-[0-9a-f]{16}>>>\\n\\[${HUMAN} [^\\]]+\\]\\nAFTERLAST`));
+		expect(context).toMatch(new RegExp(`<<<quoted-[0-9a-f]{16}>>>\\n\`\`\`\\n\\[${HUMAN} [^\\]]+\\]\\nAFTERLAST`));
 	});
 
 	test("a peer request that opens the thread reads nothing", async () => {

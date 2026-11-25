@@ -16,7 +16,6 @@ import type { DiscordInteraction, DiscordMessageEvent } from "../src/discord/tra
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { gcSessions } from "../src/ops/gc";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import { approvalActionId } from "../src/safety/approval";
 import type { Store } from "../src/store/db";
@@ -30,7 +29,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
-import { ROOMY_STATFS } from "./helpers/disk";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -114,6 +113,7 @@ describe("daemon: channel roots are isolated sessions", () => {
 		const discord = home.config.channels.discord;
 		if (discord === undefined) throw new Error("makeHome has no channels.discord");
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: { discord: { ...discord, mentionFreeChannels: [CH] } },
@@ -124,8 +124,6 @@ describe("daemon: channel roots are isolated sessions", () => {
 			ompVersion: "omp-test 0",
 			bootId: "boot",
 			stopDrainMs: 0,
-			statfs: ROOMY_STATFS, // the [TASK] start's disk check never depends on this machine's free space
-			hostLoad: IDLE_HOST_LOAD, // ...nor does its memory·cgroup floor
 			driverFactory: (origin, sessionDir) => {
 				const driver = new FakeOmpDriver({
 					sessionDir,

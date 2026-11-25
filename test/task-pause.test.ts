@@ -30,6 +30,7 @@ import {
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -450,6 +451,7 @@ describe("pause from the task thread and the CLI (AC-2)", () => {
 		repos = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, herdr: {} },
 			herdrRun: async (cmd) => {
 				herdrCalls.push(cmd);

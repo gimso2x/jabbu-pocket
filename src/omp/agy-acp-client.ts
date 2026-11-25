@@ -1,3 +1,7 @@
+import { accessSync, constants } from "node:fs";
+import { resolve } from "node:path";
+import type { AgyMcpServer } from "../config-agy";
+import type { Logger } from "../log";
 import { OmpDriverError, type OmpUsage } from "./driver";
 import { isRecord } from "./type-guards";
 
@@ -24,29 +28,35 @@ const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-aut
 
 const STDERR_TAIL_BYTES = 4_000;
 
-// agy retries quota failures itself and reports each attempt only as a line of agent text. Regexes copied from omp
-// (oh-my-pi eca7acfa45, MIT, `packages/ai/src/providers/antigravity-cli/host.ts` RETRY_NOTICE…NOTICE_ATTEMPT).
-const RETRY_NOTICE = /(?:^|\n)[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?API error \(attempt \d+\):[^\S\n]*([^\n]+)/;
-const QUOTA_EXHAUSTED = /\bRESOURCE_EXHAUSTED\b|\bcode 429\b/;
-const NOTICE_MARK = /^[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?/;
-const NOTICE_HEAD = "API error (attempt ";
-const NOTICE_ATTEMPT = /^\d*$|^\d+\)(?::.*)?$/;
-
-/** The quota detail of an agy retry notice in `text` ("RESOURCE_EXHAUSTED (code 429): …"), else undefined. */
-export function quotaRetryNotice(text: string): string | undefined {
-	const detail = RETRY_NOTICE.exec(text)?.[1]?.trim();
-	return detail && QUOTA_EXHAUSTED.test(detail) ? detail : undefined;
+/** The agy CLI to spawn: a path must be executable, a name is looked up on the child's PATH. */
+export function resolveAgyExecutable(given: string, env: Record<string, string>): string {
+	if (given.includes("/")) {
+		try {
+			accessSync(given, constants.X_OK);
+			return given;
+		} catch (cause) {
+			throw new OmpDriverError("agy_executable_missing", `agy executable not found or not executable: ${given}`, {
+				cause,
+			});
+		}
+	}
+	const found = Bun.which(given, { PATH: env.PATH ?? "" });
+	if (!found) throw new OmpDriverError("agy_executable_missing", `agy executable not found on PATH: ${given}`);
+	return found;
 }
 
-/** `text` minus an unfinished last line that may still turn into a retry notice (omp withholds it the same way). */
-export function shownText(text: string): string {
-	const lineStart = text.lastIndexOf("\n") + 1;
-	const rest = text.slice(lineStart).replace(NOTICE_MARK, "");
-	const pending =
-		rest.length < NOTICE_HEAD.length
-			? NOTICE_HEAD.startsWith(rest)
-			: rest.startsWith(NOTICE_HEAD) && NOTICE_ATTEMPT.test(rest.slice(NOTICE_HEAD.length));
-	return pending ? text.slice(0, lineStart) : text;
+/** `session/new|load` params: the cwd, the MCP servers (read now) and the system prompt agy appends to its own. */
+export function acpSessionParams(options: {
+	cwd: string;
+	systemPrompt?: string | undefined;
+	mcpServers?: (() => readonly AgyMcpServer[] | undefined) | undefined;
+}): Record<string, unknown> {
+	const system = options.systemPrompt;
+	return {
+		cwd: resolve(options.cwd),
+		mcpServers: (options.mcpServers?.() ?? []).map(({ name, command, args, env }) => ({ name, command, args, env })),
+		...(system === undefined || system === "" ? {} : { _meta: { antigravity: { systemPrompt: { append: system } } } }),
+	};
 }
 
 export interface AgyAcpHandlers {
@@ -62,6 +72,12 @@ export interface AgyAcpSpawnOptions {
 	executable: string;
 	cwd: string;
 	env: Record<string, string>;
+	/** Subdir under `~/.gemini/` passed as `--app-data-dir` to isolate OAuth tokens/logs per account. */
+	appDataDir?: string;
+	/** Where the answers to permission requests are logged (`agy.acp.permission`); absent → not logged. */
+	log?: Logger | undefined;
+	/** Origin the child serves; named in those log events. */
+	originKey?: string | undefined;
 }
 
 interface Pending {
@@ -76,6 +92,7 @@ export class AgyAcpClient {
 	readonly gone: Promise<void>;
 	readonly #proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
 	readonly #handlers: AgyAcpHandlers;
+	readonly #options: AgyAcpSpawnOptions;
 	readonly #pending = new Map<number, Pending>();
 	#nextId = 0;
 	#stderrTail = "";
@@ -83,7 +100,9 @@ export class AgyAcpClient {
 
 	constructor(options: AgyAcpSpawnOptions, handlers: AgyAcpHandlers) {
 		this.#handlers = handlers;
-		this.#proc = Bun.spawn([options.executable, ...AGY_ACP_ARGS], {
+		this.#options = options;
+		const args = [...AGY_ACP_ARGS, ...(options.appDataDir === undefined ? [] : ["--app-data-dir", options.appDataDir])];
+		this.#proc = Bun.spawn([options.executable, ...args], {
 			cwd: options.cwd,
 			env: { ...options.env, ...AGY_ENV },
 			stdin: "pipe",
@@ -202,7 +221,16 @@ export class AgyAcpClient {
 		this.#handlers.onRequest?.(method, params);
 		try {
 			if (method === "session/request_permission") {
-				this.#write({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
+				const outcome = permissionOutcome(params);
+				const toolCall = recordOf(params.toolCall);
+				const title = str(toolCall?.title)?.replace(/\s+/g, " ").trim().slice(0, 200);
+				this.#options.log?.info("agy.acp.permission", {
+					origin: this.#options.originKey,
+					toolCallId: str(toolCall?.toolCallId),
+					title,
+					outcome: outcome.outcome === "selected" ? `selected:${outcome.optionId}` : "cancelled",
+				});
+				this.#write({ jsonrpc: "2.0", id, result: { outcome } });
 				return;
 			}
 			this.#write({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });
@@ -255,6 +283,21 @@ export interface AcpConfigOption {
 const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === "number" ? value : undefined);
 const recordOf = (value: unknown): Record<string, unknown> | undefined => (isRecord(value) ? value : undefined);
+
+/**
+ * The answer to `session/request_permission`: its first `allow_once` option, else `cancelled`. The child runs with
+ * `--dangerously-skip-permissions`, so a request that still comes (a subagent's) is meant to pass; `allow_always` is
+ * never chosen, as agy would keep it as a lasting rule.
+ */
+function permissionOutcome(params: Record<string, unknown>):
+	| { outcome: "selected"; optionId: string }
+	| {
+			outcome: "cancelled";
+	  } {
+	const options = Array.isArray(params.options) ? params.options.filter(isRecord) : [];
+	const optionId = str(options.find((option) => option.kind === "allow_once")?.optionId);
+	return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
+}
 
 /** ACP prompt `usage` → omp `Usage`; agy reports no cost, so `cost` stays unset. */
 export function acpUsageOf(value: unknown): OmpUsage | undefined {

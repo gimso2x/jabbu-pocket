@@ -55,7 +55,7 @@ export async function boardCardLink(
 			throw new Error(`no board machine for ${host ?? "local"}`);
 		}
 		const key = machine.kind === "local" ? paneId : `${machine.id}:${paneId}`;
-		return `${board.url}${board.url.includes("?") ? "&" : "?"}card=${key}`;
+		return `${board.url}${board.url.includes("?") ? "&" : "?"}card=${encodeURIComponent(key).replaceAll("%3A", ":")}`;
 	} catch (error) {
 		options.onError?.(error instanceof Error ? error.message : String(error));
 		return board.url;

@@ -68,15 +68,13 @@ import {
 } from "./db-rows";
 import {
 	APPROVALS_DDL,
-	INBOUND_DDL,
-	INBOUND_INDEX_NAMES,
-	INBOUND_INDEXES_DDL,
 	INBOUND_THREAD_INDEX_DDL,
 	LANE_BOARD_TEXT_MAX,
 	LANES_DDL,
 	PEER_CALL_KEEP_MS,
 	SCHEMA,
 } from "./db-schema";
+import { columnsOf, migrateInbound } from "./db-sending";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
@@ -91,6 +89,7 @@ import {
 	transitionDelivery,
 	type UncertainReason,
 } from "./transitions";
+import { WebMessageStore } from "./web-messages";
 
 /** Words a placeholder answer uses when omp returned no text (mailbox writes it); a monitor treats it as a failure. */
 const EMPTY_ANSWER = "(응답 없음)";
@@ -110,9 +109,7 @@ const RECALL_WINDOW_MS = 90 * 24 * 60 * 60_000;
 /** Expired rows kept for `takeExpired` at most (a platform without an adapter never takes its rows). */
 const EXPIRED_HANDOFF_MAX = 200;
 /** Origin-key prefixes of every chat platform (`chatPlatformOf`): the turns typical durations are read from. */
-const CHAT_ORIGIN_PREFIXES = Object.keys({
-	discord: true,
-} satisfies Record<ChatPlatform, true>).map((platform) => `${platform}/%`);
+const CHAT_ORIGIN_PREFIXES = Object.keys({ discord: 1, web: 1 } satisfies Record<ChatPlatform, 1>).map((p) => `${p}/%`);
 /** First line of a chat answer that closes a task: only these are copied to the log channel. */
 const COMPLETION_MARKER = /^(?:✅|:white_check_mark:) 완료/;
 
@@ -136,6 +133,10 @@ interface AlertIncident {
 
 export type { DeliveryState, InboundState, UncertainReason } from "./transitions";
 export { StoreError } from "./transitions";
+
+/** Inbound rows per state; a `sending` row (mid-send) counts as `dispatched`, the running turn it starts or joins. */
+export const INBOUND_COUNT_SQL =
+	"SELECT CASE state WHEN 'sending' THEN 'dispatched' ELSE state END AS state, COUNT(*) AS n FROM inbound GROUP BY 1";
 
 interface StoreClock {
 	now(): number;
@@ -200,9 +201,9 @@ export interface InboundConflict {
 /** Signature parameters of an attachment URL (Discord CDN `ex`·`is`·`hm`) change on every delivery of the same file. */
 const SIGNED_URL_PARAM = /([?&](?:ex|is|hm)=)[^&\s"'<>)\]]*/g;
 
-/** The text a message id stands for: its content without the signature queries of its attachment URLs. */
+/** A message id's text without attachment URL signatures or quote fence ids (random per `normalizeInbound` wrap). */
 function inboundIdentity(text: string): string {
-	return text.replace(SIGNED_URL_PARAM, "$1");
+	return text.replace(SIGNED_URL_PARAM, "$1").replace(/^(<<<(?:end-)?quoted-)[0-9a-f]+>>>$/gm, "$1>>>");
 }
 
 const sha12 = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -237,6 +238,7 @@ export class Store {
 	readonly monitors: MonitorLedger;
 	/** [TASK] registry; shares this connection. */
 	readonly tasks: TaskLedger;
+	readonly web: WebMessageStore;
 	private logChannels: LogChannels = {};
 	private alertChannels: LogChannels = {};
 	/** Rows `sweepExpired` expired that no adapter took yet (`takeExpired`); memory only, like the statuses they end. */
@@ -296,6 +298,7 @@ export class Store {
 			canAlert: (monitorId) => this.ownerHome() !== undefined || this.noteUnroutableCheckError(monitorId),
 		});
 		this.tasks = new TaskLedger(this.db, { clock: options.clock, timezone: options.timezone });
+		this.web = new WebMessageStore(this.db, options.clock, options.redact);
 		stampSchemaVersion(this.db);
 		this.recoveredInflight = this.db
 			.query("UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'inflight'")
@@ -681,10 +684,10 @@ export class Store {
 		return rows.map(toInbound);
 	}
 
-	/** Per-state inbound row counts (`GROUP BY`); lets /status count without loading every row. */
+	/** Per-state inbound row counts (`GROUP BY`, `sending` counted as dispatched); /status counts without loading rows. */
 	countInboundByState(): Partial<Record<InboundState, number>> {
 		const counts: Partial<Record<InboundState, number>> = {};
-		for (const row of this.db.query("SELECT state, COUNT(*) AS n FROM inbound GROUP BY state").all() as Array<{
+		for (const row of this.db.query(INBOUND_COUNT_SQL).all() as Array<{
 			state: InboundState;
 			n: number;
 		}>) {
@@ -716,7 +719,22 @@ export class Store {
 		return this.requireInbound(platformMessageId);
 	}
 
-	/** pending -> uncertain: the input may already have reached the omp child, so nothing replays it until the owner decides. */
+	/** pending -> sending: the write-ahead right before a prompt or steer, with the leafId cursor taken before it. */
+	markSending(platformMessageId: string, entryCursor: string | null): InboundRow {
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "sending");
+		this.db
+			.query("UPDATE inbound SET state = 'sending', entry_cursor = ? WHERE platform_message_id = ?")
+			.run(entryCursor, platformMessageId);
+		return this.requireInbound(platformMessageId);
+	}
+
+	/** Every `sending` row (of one origin, or all) -> uncertain: a send that never got its outcome is never repeated. */
+	parkSending(originKey?: string): InboundRow[] {
+		const rows = this.listInbound({ originKey, state: "sending" });
+		return rows.map((row) => this.markUncertain(row.platformMessageId, "send_interrupted"));
+	}
+
+	/** pending|sending -> uncertain: the input may already have reached the omp child, so nothing replays it until the owner decides. */
 	markUncertain(platformMessageId: string, reason: UncertainReason): InboundRow {
 		const current = this.requireInbound(platformMessageId);
 		assertInboundTransition(current.state, "uncertain");
@@ -730,8 +748,17 @@ export class Store {
 
 	/** uncertain -> pending: the owner's explicit retry; the next drain sends it from scratch. */
 	retryUncertain(platformMessageId: string): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "pending");
+		return this.backToPending(platformMessageId, "uncertain");
+	}
+
+	/** sending -> pending: the omp child certainly never got the input (`not_started`), so it may be sent again. */
+	releaseSending(platformMessageId: string): InboundRow {
+		return this.backToPending(platformMessageId, "sending");
+	}
+
+	private backToPending(platformMessageId: string, from: "uncertain" | "sending"): InboundRow {
+		const { state } = this.requireInbound(platformMessageId);
+		if (state !== from) throw new StoreError("invalid_transition", `inbound ${state} -> pending (expected ${from})`);
 		this.db.query("UPDATE inbound SET state = 'pending' WHERE platform_message_id = ?").run(platformMessageId);
 		return this.requireInbound(platformMessageId);
 	}
@@ -977,7 +1004,7 @@ export class Store {
 		body: string,
 	): void {
 		if (threads.length === 0) return;
-		const first = (body.split("\n").find((line) => line.trim() !== "") ?? "").trim().slice(0, 200);
+		const first = cutCodePointSafe((body.split("\n").find((line) => line.trim() !== "") ?? "").trim(), 200);
 		const answered = parseThreadRef(input.threadRef);
 		const link =
 			answered === undefined || answered.threadTs === TOP_LEVEL_TS
@@ -1150,7 +1177,7 @@ export class Store {
 		// Owner rows only (a peer bot's request carries its user id); monitor and lane origins are not conversations.
 		const spoken = this.db
 			.query(
-				`SELECT origin_key FROM inbound WHERE peer_user_id IS NULL AND origin_key LIKE 'discord/%'
+				`SELECT origin_key FROM inbound WHERE peer_user_id IS NULL AND (origin_key LIKE 'discord/%' OR origin_key LIKE 'web/%')
 				 ORDER BY inbound_id DESC LIMIT 50`,
 			)
 			.all() as Array<{ origin_key: string }>;
@@ -1445,33 +1472,37 @@ export class Store {
 	 * by that bound come back as `pruned` so the caller can delete their refs.
 	 */
 	recordTurnSnapshot(input: TurnSnapshotInput): { id: number; pruned: TurnSnapshotRow[] } {
-		const inserted = this.db
-			.query(
-				`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
+		// One transaction: a failure while pruning must not leave the new row behind, or the caller (which deletes the
+		// refs of `pruned` only on success) would keep a ledger that no longer matches its refs.
+		return this.db.transaction(() => {
+			const inserted = this.db
+				.query(
+					`INSERT INTO turn_snapshots (origin_key, op_ref, repo, head_before, tree_before, head_after, tree_after, started_at, ended_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				input.originKey,
-				input.opRef,
-				input.repo,
-				input.headBefore,
-				input.treeBefore,
-				input.headAfter,
-				input.treeAfter,
-				input.startedAt,
-				input.endedAt,
-			);
-		const id = Number(inserted.lastInsertRowid);
-		const overflow = this.db
-			.query(
-				`SELECT * FROM turn_snapshots WHERE origin_key = ?
+				)
+				.run(
+					input.originKey,
+					input.opRef,
+					input.repo,
+					input.headBefore,
+					input.treeBefore,
+					input.headAfter,
+					input.treeAfter,
+					input.startedAt,
+					input.endedAt,
+				);
+			const id = Number(inserted.lastInsertRowid);
+			const overflow = this.db
+				.query(
+					`SELECT * FROM turn_snapshots WHERE origin_key = ?
 				 ORDER BY id DESC LIMIT -1 OFFSET ?`,
-			)
-			.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
-		const pruned = overflow.map(toTurnSnapshot);
-		const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
-		for (const row of pruned) drop.run(row.id);
-		return { id, pruned };
+				)
+				.all(input.originKey, TURN_SNAPSHOT_ROWS_KEPT) as TurnSnapshotSql[];
+			const pruned = overflow.map(toTurnSnapshot);
+			const drop = this.db.query("DELETE FROM turn_snapshots WHERE id = ?");
+			for (const row of pruned) drop.run(row.id);
+			return { id, pruned };
+		})();
 	}
 
 	/** Rows newest first; every filter is optional and compared literally. */
@@ -1806,7 +1837,7 @@ export class Store {
 	}
 
 	/**
-	 * A confirmed Discord thread post (not a channel root, DM, #log or board post, log copy or peer failure notice)
+	 * A confirmed Discord thread post (not a channel root, DM, channel-body answer, #log or board post, log copy or peer failure notice)
 	 * that mentions a policy peer (`<@id>`, `<@!id>` or the core's mention token) is one pending call per peer.
 	 */
 	private recordPeerCalls(row: DeliveryRow, now: number): void {
@@ -1815,7 +1846,8 @@ export class Store {
 		const thread = parseThreadRef(row.threadRef);
 		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) return;
 		if (platformOfThreadRef(row.threadRef) !== "discord" || policy.skipConversations.includes(thread.channel)) return;
-		if (parseChatOrigin(row.originKey)?.kind === "dm") return;
+		const origin = parseChatOrigin(row.originKey);
+		if (origin !== undefined && origin.threadId === undefined) return;
 		const insert = this.db.query(
 			"INSERT INTO peer_calls (thread_ref, peer_user_id, delivery_id, called_at) VALUES (?, ?, ?, ?) ON CONFLICT(delivery_id, peer_user_id) DO NOTHING",
 		);
@@ -2215,7 +2247,7 @@ export class Store {
 		for (const { name } of teamsTables) this.db.run(`DROP TABLE IF EXISTS "${name}"`);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);
-		this.migrateInbound();
+		migrateInbound(this.db);
 		this.migrateApprovals();
 		this.migrateLanes();
 		// After the rebuild (which already creates the dashboard columns): a 'replied'-era table lacks them, and every
@@ -2233,44 +2265,8 @@ export class Store {
 	}
 
 	/**
-	 * The `uncertain` state widens a CHECK constraint, which SQLite cannot ALTER: an inbound table without it is rebuilt
-	 * (rename, create, copy, drop) in one transaction. A RENAME keeps the old table's indexes under their names, so they
-	 * are dropped first and all seven recreated on the new table. `inbound_id` is copied as is, so the AUTOINCREMENT
-	 * sequence carries on; the new columns stay NULL. `inbound.origin_key` references `origins`, and a long-lived ledger
-	 * holds rows whose origin is gone (2026-11-20: 522 answered rows of removed Slack threads), so the copy runs with
-	 * `foreign_keys` off, as SQLite's table-rebuild procedure prescribes; the pragma is a no-op inside a transaction, so
-	 * it is switched around it. The rows keep exactly the references they had.
-	 */
-	private migrateInbound(): void {
-		const current = this.db.query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'inbound'").get() as {
-			sql: string;
-		} | null;
-		if (current === null || current.sql.includes("'uncertain'")) return;
-		this.db.run("PRAGMA foreign_keys = OFF");
-		try {
-			this.rebuildInbound();
-		} finally {
-			this.db.run("PRAGMA foreign_keys = ON");
-		}
-	}
-
-	private rebuildInbound(): void {
-		this.db.transaction(() => {
-			this.db.run("ALTER TABLE inbound RENAME TO inbound_old");
-			for (const name of INBOUND_INDEX_NAMES) this.db.run(`DROP INDEX IF EXISTS ${name}`);
-			this.db.run(INBOUND_DDL);
-			this.db.run(
-				"INSERT INTO inbound (inbound_id, platform_message_id, origin_key, epoch, text_ref, state, created_at, dispatched_at, op_ref, entry_cursor, thread_ref, last_event_at, peer_user_id, injected) SELECT inbound_id, platform_message_id, origin_key, epoch, text_ref, state, created_at, dispatched_at, op_ref, entry_cursor, thread_ref, last_event_at, peer_user_id, injected FROM inbound_old",
-			);
-			this.db.run("DROP TABLE inbound_old");
-			this.db.run(INBOUND_INDEXES_DDL);
-			this.db.run(INBOUND_THREAD_INDEX_DDL);
-		})();
-	}
-
-	/**
 	 * The `replied` status widens a CHECK constraint, which SQLite cannot ALTER: an approvals table without it is
-	 * rebuilt (rename, create, copy, drop) in one transaction. Old rows keep their data; the new columns are NULL.
+	 * rebuilt (rename, create, copy, drop) in one transaction, copying every shared column and leaving new ones NULL.
 	 */
 	private migrateApprovals(): void {
 		const current = this.db
@@ -2282,9 +2278,9 @@ export class Store {
 		this.db.transaction(() => {
 			this.db.run("ALTER TABLE approvals RENAME TO approvals_old");
 			this.db.run(APPROVALS_DDL);
-			this.db.run(
-				"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at) SELECT approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at FROM approvals_old",
-			);
+			const fresh = new Set(columnsOf(this.db, "approvals"));
+			const kept = columnsOf(this.db, "approvals_old").filter((name) => fresh.has(name));
+			this.db.run(`INSERT INTO approvals (${kept}) SELECT ${kept} FROM approvals_old`);
 			this.db.run("DROP TABLE approvals_old");
 		})();
 	}
@@ -2450,7 +2446,11 @@ export class DeliveryLedger {
 	}
 
 	resolveAmbiguous(deliveryId: number, how: "ack" | "resend"): DeliveryRow {
-		return this.#db.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))();
+		// IMMEDIATE: the resolve reads the row, then writes it. A deferred transaction that reads first fails at once with
+		// SQLITE_BUSY (busy_timeout never applies) when the daemon commits in between; this one waits for the lock.
+		return this.#db
+			.transaction(() => resolveAmbiguousDelivery(this.#db, this.#clock.now(), deliveryId, how))
+			.immediate();
 	}
 
 	close(): void {

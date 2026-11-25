@@ -3,7 +3,8 @@
 import { randomBytes } from "node:crypto";
 import { injectionWarning, scanForInjection } from "../safety/injection";
 import { type ChatPlatform, chatOriginKey, parseChatOrigin, platformOfConversationId } from "./origin-key";
-import { parseCommand, parsePurposeCommand, TAKES_ARG } from "./types";
+import { fenced } from "./turn-prompt-guard";
+import { isHomeCommand, parseCommand, parsePurposeCommand, TAKES_ARG } from "./types";
 
 export interface NormalizeInput {
 	userId: string | undefined;
@@ -67,7 +68,7 @@ export function originKeyForMessage(
 ): string {
 	if (channelType === undefined || channelType === "im") return originKeyForChannel(channel, channelType, platform);
 	const root = threadTs === undefined || threadTs === "" || threadTs === ts;
-	if (root && (parseCommand(text) !== undefined || parsePurposeCommand(text) !== undefined))
+	if (root && (parseCommand(text) !== undefined || parsePurposeCommand(text) !== undefined || isHomeCommand(text)))
 		return originKeyForChannel(channel, channelType, platform);
 	return `${originKeyForChannel(channel, channelType, platform)}/t/${root ? ts : threadTs}`;
 }
@@ -105,8 +106,7 @@ export function platformOfThreadRef(threadRef: string): ChatPlatform | undefined
 	return ref === undefined ? undefined : platformOfConversationId(ref.channel);
 }
 
-// Anything shaped like one of our fences, whatever its id. Removed from quoted content in a loop so that
-// pieces that only become a fence after one pass (`<<<quo<<<quoted-x>>>ted-..>>>`) are removed as well.
+// Anything shaped like one of our fences, whatever its id; stripped in a loop so pieces that become one after a pass go too.
 const FENCE_LOOKALIKE = /<<<\s*(?:end-)?quoted-[^>\n]*>>>/gi;
 
 export function stripFenceLookalikes(content: string): string {
@@ -119,13 +119,13 @@ export function stripFenceLookalikes(content: string): string {
 }
 
 /**
- * Quoted material under the header. With `scanAs` (the source the warning names) an instruction-like passage puts a
- * warning line above the header; without it (monitor payloads) the output is the plain fenced block.
+ * Quoted material under the header, each part also in a backtick fence (keywords inside stay inert to omp). With `scanAs`
+ * (the source the warning names) an instruction-like passage puts a warning line above the header.
  */
 export function wrapQuoted(quoted: readonly string[], fenceId: string, scanAs?: string): string {
 	const contents = quoted.map((q) => stripFenceLookalikes(q).trim()).filter((q) => q.length > 0);
 	if (contents.length === 0) return "";
-	const blocks = contents.map((q) => `<<<quoted-${fenceId}>>>\n${q}\n<<<end-quoted-${fenceId}>>>`);
+	const blocks = contents.map((q) => `<<<quoted-${fenceId}>>>\n${fenced(q)}\n<<<end-quoted-${fenceId}>>>`);
 	const warning = scanAs === undefined ? null : injectionWarning(scanForInjection(contents.join("\n"), scanAs));
 	return `${warning === null ? "" : `${warning}\n`}${QUOTED_HEADER}\n${blocks.join("\n")}`;
 }

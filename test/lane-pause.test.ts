@@ -26,6 +26,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { LANE_START, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -146,6 +147,7 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 		options: { hold?: boolean; pendingRetryMs?: number; clock?: { now(): number } } = {},
 	): Promise<Daemon> {
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },
@@ -218,6 +220,19 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 		expect(answer?.body).toContain("멈췄습니다");
 		expect(answer?.body).toContain("확인");
 		expect(answer?.body).toContain("paused");
+	});
+
+	test("`계속해` in a working lane is the owner's answer: it reaches omp and is not settled as a control", async () => {
+		const daemon = await startDaemon({ hold: true });
+		const { lane, rootId } = await heldLane("answer-it", daemon);
+
+		await ownerMessage("계속해", "7100000000000000150", rootId);
+		const row = daemon.store.getInbound(`${CHANNEL}:7100000000000000150`);
+		expect(row?.opRef ?? "").not.toStartWith("lane:");
+		expect(row?.state).not.toBe("answered");
+		expect(daemon.store.getLane("answer-it")?.status).toBe("working");
+		expect(drivers.get(lane.originKey)?.calls.filter((call) => call === "abort")).toHaveLength(0);
+		expect(transport.posts((text) => text.includes("재개했습니다"))).toHaveLength(0);
 	});
 
 	test("a held lane's owner messages stay pending with exactly one notice, and survive a daemon restart (AC-4, AC-5)", async () => {

@@ -120,7 +120,7 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | --- | --- | --- |
 | `schemaVersion` | 예 | 항상 `1` |
 | `channels.slack`, 최상위 `slack`·`mentionFreeChannels`·`peerBots`·`requireMention`·`escalationChannel`·`logChannel` | 거부됨 | Slack 채널은 제거됐습니다(Discord만). 이 키가 설정에 남아 있으면 `config_invalid`로 기동하지 않습니다. 같은 이름의 Discord 키는 `channels.discord.*`에 있습니다(`mentionFreeChannels`·`peerBots`·`requireMention`, 승인·완료 사본 채널은 `escalationChannelId`·`logChannelId`) |
-| `channels.discord` | 아니요 | Discord 켜기 `{"ownerUserId", "botTokenFile", "applicationId", "guildIds"?, "mentionFreeChannels"?, "peerBots"?, "requireMention"?, "laneChannelId"?, "logChannelId"?, "escalationChannelId"?, "alertChannelId"?, "displayName"?}`. 없으면 Discord 꺼짐. 키 설명은 [Discord](#discord선택), 봇 만들기는 [Discord 봇 만들기](discord.md) |
+| `channels.discord` | 아니요 | Discord 켜기 `{"ownerUserId", "botTokenFile", "applicationId", "guildIds"?, "mentionFreeChannels"?, "inlineReplyChannels"?, "peerBots"?, "requireMention"?, "laneChannelId"?, "logChannelId"?, "escalationChannelId"?, "alertChannelId"?, "displayName"?}`. 없으면 Discord 꺼짐. 키 설명은 [Discord](#discord선택), 봇 만들기는 [Discord 봇 만들기](discord.md) |
 | `ompExecutable` | 예 | 절대경로(`command -v omp`, 전역 omp). omp를 올린 뒤에는 `jabbu-pocket omp trial`로 이 경로를 시험합니다([봇 전용 omp](#봇-전용-omp-프로필과-업데이트-시험) 참고) |
 | `ompProfile` | 아니요 | 봇 omp 자식(대화·레인·모니터 턴, 레인 리뷰, `jabbu_dispatch` 단순 위임, `doctor`의 모델 점검)에 줄 `OMP_PROFILE` 이름. 에이전트 폴더가 `~/.omp/profiles/<이름>/agent`로 바뀌고, 물려받은 `PI_CODING_AGENT_DIR`는 뺍니다. omp 규칙 `^[a-z0-9][a-z0-9._-]{0,63}$`을 어기면 `config_invalid field=ompProfile`. 비우면 지금처럼 사람 omp와 같은 `~/.omp/agent`를 씁니다. 재시작해야 반영됩니다 |
 | `ompConfigOverlay` | 아니요 | 이 설치본의 omp 자식(대화·레인·모니터 턴, `jabbu_dispatch` 단순 위임)에 `--config`로 붙일 omp 설정 파일(홈 기준 상대경로 또는 절대경로). 파일이 없으면 `config_invalid field=ompConfigOverlay`. omp `task` 하위 에이전트도 같은 값을 봅니다. 파일 내용은 새 omp 자식부터 반영되고, 키 자체를 바꾸면 재시작해야 합니다. 비우면 `--config`를 붙이지 않습니다. 홈에 둔 `<이름>.omp.yml`은 이 키로 연결하지 않으면 아무 효과가 없습니다 |
@@ -351,7 +351,7 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 - **홉 상한**: 같은 스레드에서 `windowMinutes` 안의 피어 글이 `turns`를 넘으면 버리고(`peer_hop_cap`) 그 스레드에 "피어 대화 상한에 닿았습니다. 이어 가려면 오너가 말해 주세요."를 한 번만 올립니다(다른 봇 멘션 없음). 오너 메시지가 들어오면 그 스레드의 카운트가 초기화됩니다. 상한은 봇마다 따로 세므로 두 봇이 맞서면 최악의 경우 스레드당 `windowMinutes`마다 봇마다 `turns`턴입니다.
 - **주소 규칙(오너 글)**: 채널에서 오너가 피어 봇만 멘션하고 이 봇은 멘션하지 않으면 이 봇에게 온 글이 아니라 `not_addressed`로 버립니다. 둘 다 멘션하면 받습니다.
 - **재시작 없이 반영**: `peerHopLimit`는 `jabbu-pocket reload`로 다음 메시지부터 바뀝니다(`channels.discord.*`는 재시작해야 반영됩니다). 목록에서 뺀 봇의 지난 피어 글이 만든 "권한 없음" 표시는 장부에 남아 그 스레드에서 계속 적용됩니다.
-- **백필의 한계**: [놓친 메시지 백필](#놓친-메시지-백필)은 봇 글을 건너뛰므로, Gateway가 끊긴 동안 온 피어 호출은 복구되지 않습니다. 피어가 다시 멘션해야 합니다.
+- **백필 동작**: [놓친 메시지 백필](#놓친-메시지-백필)은 허용된 피어 봇의 멘션 글도 복구하지만, 분할 답장 대기(8초)는 건너뛰고 각 글을 바로 기록합니다.
 - **설정**: 목록은 `channels.discord.peerBots`(snowflake, 재시작 필요)에 두고, 상한은 같은 `peerHopLimit`을 씁니다. 피어 봇이 프롬프트에 `이 대화의 피어 봇: <name> = <멘션>` 줄로 들어갑니다. 설정은 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket)을 봅니다.
 
 ### agy 에이전트
@@ -394,7 +394,8 @@ Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다 (`init 
   | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버) |
   | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택) |
   | `peerBots` | 피어 봇 목록(선택): `[{"userId": "<snowflake>", "name": "<1~32자>"}]`. 이 봇을 멘션한 그 봇의 서버 채널 글을 요청으로 받습니다(오너 id는 안 됨, 재시작 필요). [피어 봇](#피어-봇)과 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket) 참고 |
-  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false) |
+  | `inlineReplyChannels` | 스레드 없이 채널 본문에 답장으로 답할 서버 채널 ID 목록(선택). `이건 따로 빼줘` 같은 요청이면 스레드를 엽니다. `logChannelId`와 같으면 `config_invalid`. 자세한 동작은 [Discord](discord.md) |
+  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다 |
   | `laneChannelId` | Discord DM에서 요청한 작업 레인을 열 서버 텍스트 채널 ID(선택). 없으면 DM에서는 레인을 열지 않고 그 이유를 답합니다(서버 채널·스레드에서 요청한 레인은 그 채널에 열림) |
   | `logChannelId` | Discord #log 장부로 쓸 서버 텍스트 채널 ID(선택). Discord 대화·레인의 `✅ 완료` 답 사본이 올라가고, 이 채널과 그 스레드의 글은 턴이 되지 않습니다. `escalationChannelId`·`laneChannelId`·`mentionFreeChannels`와 같으면 `config_invalid` |
   | `escalationChannelId` | Discord 요청의 승인 카드를 받을 서버 텍스트 채널 ID(선택). 없으면 요청한 대화에 카드가 뜹니다 |
@@ -644,7 +645,7 @@ bun src/main.ts monitors apply --dir <디렉터리> [--prune] [--dry-run]  # 내
 ```sh
 bun src/main.ts status [--json]   # 데몬이 꺼져 있으면 DB를 직접 읽습니다
 bun src/main.ts doctor            # home·secrets·omp·bun·Discord 점검·백업 번들 점검, herdr 켜짐이면 herdr --version과 herdr omp 통합, 이어서 dispatchHosts마다 ssh 도달과 herdr omp 통합(`ok`/`fail <사유>`, 통합·호스트 줄은 실패해도 종료 코드는 그대로)
-bun src/main.ts gates [--json] [--strict]   # 읽기 전용 건강 판정 — 게이트 하나라도 열리면 exit 1, --strict는 판정불가(unknown)도 exit 1
+bun src/main.ts gates [--json] [--strict] [--ko]   # 읽기 전용 건강 판정 — 게이트 하나라도 열리면 exit 1, --strict는 판정불가(unknown)도 exit 1, --ko는 마지막 줄을 한국어로
 bun src/main.ts gc [--dry-run]    # 보존 기간이 지난 이전 대화 세션, 오래 쉰 채널 스레드 세션, 삭제된 모니터의 세션, 7일 지난 `!undo` 턴 스냅샷 정리
 bun src/main.ts backup [--keep N] [--max-bundle-bytes N]
 bun src/main.ts drain [--wait] [--timeout <분>] # 재시작 전 대기(--wait 없으면 걸기만 하고 바로 끝남)
@@ -670,7 +671,7 @@ bun src/main.ts dashboard [--port N] [--bind 127.0.0.1|::1]   # 읽기 전용 �
 journalctl --user -u jabbu -f
 ```
 
-**DB 스키마 버전**: `jabbu.db`는 `PRAGMA user_version`에 스키마 세대를 기록합니다(코드의 `SCHEMA_VERSION`, 지금은 10). 데몬이 열 때 이행이 끝나면 옛 DB(0)가 현재 버전으로 올라갑니다. 버전 10은 `tasks.runtime` 열(`herdr`·`headless`)을 더하므로, 그 이전 코드로 되돌릴 때는 되돌리기 전 백업 복원이 필요합니다. 코드보다 새 버전의 DB는 쓰기 열기(데몬·`gc`·CLI 쓰기)가 `newer_schema`로 거부하고 파일을 건드리지 않습니다. 읽기 전용 열기(`status`·대시보드 등)는 그대로 됩니다. `apply`가 코드를 되돌린 뒤 데몬이 안 뜨면 `journalctl --user -u jabbu -n 50`에서 `daemon_fatal`의 `newer_schema`(DB 버전·코드 버전)를 확인하고, 데몬이 꺼진 상태에서 그 코드가 만든 백업으로 `bun src/main.ts restore <백업 db 경로> --yes`를 실행합니다. `apply` 결과 자체에는 이 오류가 나오지 않습니다.
+**DB 스키마 버전**: `jabbu.db`는 `PRAGMA user_version`에 스키마 세대를 기록합니다(코드의 `SCHEMA_VERSION`, 지금은 11). 데몬이 열 때 이행이 끝나면 옛 DB(0)가 현재 버전으로 올라갑니다. 버전 10은 `tasks.runtime` 열(`herdr`·`headless`)을, 버전 11은 `inbound.state`가 `sending` 값을 받게 하는 변경을 더하므로, 그 이전 코드로 되돌릴 때는 되돌리기 전 백업 복원이 필요합니다. 코드보다 새 버전의 DB는 쓰기 열기(데몬·`gc`·CLI 쓰기)가 `newer_schema`로 거부하고 파일을 건드리지 않습니다. 읽기 전용 열기(`status`·대시보드 등)는 그대로 됩니다. `apply`가 코드를 되돌린 뒤 데몬이 안 뜨면 `journalctl --user -u jabbu -n 50`에서 `daemon_fatal`의 `newer_schema`(DB 버전·코드 버전)를 확인하고, 데몬이 꺼진 상태에서 그 코드가 만든 백업으로 `bun src/main.ts restore <백업 db 경로> --yes`를 실행합니다. `apply` 결과 자체에는 이 오류가 나오지 않습니다.
 
 - **CLI 입력 오류**: 모든 CLI 명령은 모르는 옵션·값 없는 옵션·`--days -1`처럼 `-`로 시작하는 값을 `<명령>: <사유> (jabbu-pocket --help)` 한 줄과 종료 코드 2로 거부합니다(음수를 값으로 주려면 `--days=-1`). `reload`는 데몬이 없으면 `reload: daemon not reachable (…)`와 종료 코드 1입니다. `inject --text`가 비었거나 공백뿐이면 종료 코드 2입니다. `drain --timeout`은 숫자여야 합니다(빈 값 거부).
 - **데몬 없을 때 `status`**: 토큰 파일을 읽지 않고 DB로 답하며, config.json이 없는 홈에서는 omp 버전을 `unknown`으로 보입니다. `jabbu.db`가 0바이트·손상·테이블 누락이면 원시 SQLiteError 대신 집계 0과 `자가진단 게이트 … ledger_unreadable error=…` 줄을 내고, `--json`도 같은 리포트를 JSON으로 냅니다(`jabbu-pocket gates`와 같은 게이트 이름).
@@ -855,9 +856,9 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 봇이 꺼져 있거나 Gateway 연결이 끊어진 동안 오너가 보낸 메시지는 이벤트로 오지 않습니다. 데몬은 시작 때, Gateway가 새 세션으로 다시 붙을 때(resume이면 Discord가 다시 보내 줌), 받은 메시지 처리가 실패했을 때 Discord 대화가 있던 DM·채널·스레드의 놓친 메시지를 `dc:<채널 ID>` 기준점 뒤로 읽어 와 처리합니다. 놓친 메시지도 살아있는 메시지처럼 자기 대화방에서 처리되고 자기 스레드에 답합니다.
 
 - 대화마다 워터마크(`dc:<채널 ID>` 키)를 두고, 처음 패스는 최대 24시간까지만 거슬러 올라갑니다. 페이지당 100건, 패스당 최대 10페이지. 워터마크는 공용 키·값 테이블 `slack_cursors`에 있습니다(이름은 옛 이름 그대로입니다).
-- 워터마크는 "끝까지 처리한 지점"만 넘습니다. 페이지 한도에 걸리면 이어가기 표식(`cont:` 커서)만 남겨 다음 패스에서 그 아래를 이어 봅니다. 살아있는 트래픽은 워터마크를 올리지 않습니다.
+- 워터마크는 처리가 끝난 최신 메시지 ID로 전진합니다. 패스당 페이지 한도에 걸리면 멈춘 지점의 워터마크가 그대로 남아 다음 패스에서 그 뒤부터 이어 읽습니다. 살아있는 트래픽은 워터마크를 올리지 않습니다.
 - 중복은 `inbound`의 `<채널>:<메시지 ID>` UNIQUE가 최종 방어선이라 백필과 실시간이 겹쳐도 한 번만 처리됩니다. 새로 기록된 메시지가 있으면 그 방에 `⏬ 봇이 응답하지 못한 동안 도착한 메시지 N건을 처리합니다` 알림을 한 번 올립니다.
-- 메시지별로 일시적이지 않은 오류가 나면 어떤 오류든 3번 패스 뒤 dead-letter로 넘깁니다(로그 `backfill_dead_letter`; ledger의 busy·locked·full·io 오류는 예외로 예산을 소모하지 않습니다). 읽을 수 없는 채널(Unknown Channel·Missing Access)은 격리 시각을 장부(`bfq:dc:<채널 ID>` 키)에 남겨 재시작 뒤에도 건너뛰고, 하루에 한 번만 다시 읽어 봅니다(로그 `backfill_quarantined`).
+- 메시지별로 일시적이지 않은 오류가 나면 어떤 오류든 3번 패스 뒤 dead-letter로 넘깁니다(시도 횟수는 `bfa:dc:<채널 ID>:<메시지 ID>` 커서로 저장돼 재시작 뒤에도 이어지며, 로그는 `backfill_dead_letter`, ledger의 busy·locked·full·io 오류는 예산을 소모하지 않습니다). 읽을 수 없는 채널(Unknown Channel·Missing Access)은 격리 시각을 장부(`bfq:dc:<채널 ID>` 키)에 남겨 재시작 뒤에도 건너뛰고, 하루에 한 번만 다시 읽어 봅니다(로그 `backfill_quarantined`).
 - 백필 메시지는 살아있는 메시지와 같은 경로(steer/큐)로 들어가므로 같은 대화방의 여러 건은 한 턴에 모입니다. 평시 한 줄 로그: `discord_backfill …`.
 
 ### 건강 게이트와 자가 보고
@@ -866,9 +867,9 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 - **열림**(`open`): 아래 표의 조건에 걸림. 하나라도 있으면 exit 1입니다.
 - **닫힘**(`closed`): 판정했고 문제없음.
-- **판정불가**(`unknown`): 판정할 근거가 없음 — 하트비트 스탬프(`~/.jabbu/sweep-heartbeat`)가 없으면 `sweep_stalled`·`monitors_stalled`(detail `stamp=missing`), `jabbu.db`가 없으면 원장 게이트 8개(`inbound_starved`·`origin_silent`·`deliveries_overdue`·`deliveries_ambiguous_stuck`·`lanes_stuck`·`monitors_failed`·`monitors_stalled`·`turns_failing`, detail `db=missing`). 데몬이 한 번도 돌지 않은 새 설치가 이 상태입니다. 기본은 exit 코드에 영향이 없고, `--strict`를 주면 판정불가가 하나라도 있을 때도 exit 1입니다.
+- **판정불가**(`unknown`): 판정할 근거가 없음 — 하트비트 스탬프(`~/.jabbu/sweep-heartbeat`)가 없으면 `sweep_stalled`·`monitors_stalled`(detail `stamp=missing`), `jabbu.db`가 없으면 원장 게이트 8개(`inbound_starved`·`origin_silent`·`deliveries_overdue`·`deliveries_ambiguous_stuck`·`lanes_stuck`·`monitors_failed`·`monitors_stalled`·`turns_failing`, detail `db=missing`)과, `costCap.dailyUsd`가 설정돼 있으면 `cost_cap`(같은 detail `db=missing`). 데몬이 한 번도 돌지 않은 새 설치가 이 상태입니다. 기본은 exit 코드에 영향이 없고, `--strict`를 주면 판정불가가 하나라도 있을 때도 exit 1입니다.
 
-자동화가 아픈 봇을 "건강"으로 오판하지 못하게 하는 계약은 판정할 수 있는 게이트에만 걸립니다. 데몬이 실제로 떠 있는지까지 확인하려면 `--strict`를 씁니다. 마지막 줄은 `gates_done open=N unknown=M total=T`이고 열린 게이트가 있으면 ` opened=이름(detail),…`, 판정불가가 있으면 ` unknown_gates=이름,…`이 붙습니다. `--json`은 `{ open, unknown, gates }`입니다. `herdr_unreachable`의 오래된 스탬프(`stamp=stale`)도 닫힘, 백업 도장이 없으면 `backup_age`는 열림, DB가 손상되면 `ledger_unreadable`이 열림입니다.
+자동화가 아픈 봇을 "건강"으로 오판하지 못하게 하는 계약은 판정할 수 있는 게이트에만 걸립니다. 데몬이 실제로 떠 있는지까지 확인하려면 `--strict`를 씁니다. 마지막 줄은 `gates_done open=N unknown=M total=T`이고 열린 게이트가 있으면 ` opened=이름(detail),…`, 판정불가가 있으면 ` unknown_gates=이름,…`이 붙습니다. 사람이 읽는 경보에는 `--ko`를 붙이면 마지막 줄이 현황판과 같은 한국어 이름으로 바뀝니다(`게이트 1/19개 열림 — 레인이 24시간 넘게 멈춤·머지 대기(…) · 할 일: …`, 모두 닫히면 `게이트 N개 모두 정상`). 종료 코드는 같습니다. `--json`은 `{ open, unknown, gates }`입니다. `herdr_unreachable`의 오래된 스탬프(`stamp=stale`)도 닫힘, 백업 도장이 없으면 `backup_age`는 열림, DB가 손상되면 `ledger_unreadable`이 열림입니다.
 
 | 게이트 | 열리는 조건 |
 | --- | --- |

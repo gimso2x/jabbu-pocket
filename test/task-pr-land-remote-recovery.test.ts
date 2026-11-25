@@ -16,6 +16,7 @@ import { createTaskHostOps, type TaskHostOps } from "../src/tasks/host";
 import { removeRemoteWorktree, syncRemoteBase } from "../src/tasks/host-sync";
 import { landTask } from "../src/tasks/land";
 import { discordBinding, GUILD, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { FakeGh } from "./helpers/fake-gh";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
@@ -201,6 +202,7 @@ async function build(): Promise<World> {
 			return { code, stdout, stderr, timedOut: false };
 		};
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels: [discordBinding(transport)],
 			clock,
@@ -592,7 +594,7 @@ describe("AC-11e TaskHostOps.removeWorktree 불변", () => {
 		>();
 	});
 
-	test("removeWorktree는 여전히 best-effort다: worktree remove·branch -D 두 명령을 돌리고 실패해도 던지지 않는다", async () => {
+	test("removeWorktree는 여전히 best-effort다: 쓰기 권한 복구·worktree remove·branch -D를 돌리고 실패해도 던지지 않는다", async () => {
 		const seen: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
 			seen.push(cmd.slice(7, -1));
@@ -602,6 +604,7 @@ describe("AC-11e TaskHostOps.removeWorktree 불변", () => {
 		const input = { repo: "/home/u/work/app", worktree: "/home/u/work/app-t-1", branch: "task/T-20261124-13" };
 		expect(await ops.removeWorktree(input)).toBeUndefined();
 		expect(seen).toEqual([
+			["chmod", "-R", "u+w", "--", input.worktree],
 			["git", "-C", input.repo, "worktree", "remove", "--force", input.worktree],
 			["git", "-C", input.repo, "branch", "-D", input.branch],
 		]);

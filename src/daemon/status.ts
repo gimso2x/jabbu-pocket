@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
 import { dirname } from "node:path";
 import { type MonitorRow, type MonitorSql, nextFireOf, toMonitor } from "../monitors/ledger";
+import type { AgyAccountsStatus } from "../omp/agy-account-pool";
 import { type FreezeState, readFreeze } from "../ops/freeze";
 import { assertRegularLedger, type ConfigGateOptions, collectGates } from "../ops/gates";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
 import { type HostSessionsInfo, hostSessionsInfo } from "../ops/host-sessions";
-import type { DeliveryState, InboundState, Store } from "../store/db";
+import { type DeliveryState, INBOUND_COUNT_SQL, type InboundState, type Store } from "../store/db";
 
 export { renderStatusText } from "./status-render";
 
@@ -19,13 +20,12 @@ export interface OriginStatus {
 
 export interface StatusReport {
 	ompVersion: string;
-	/** The bot's zone (`config.timezone`): the text output shows the next monitor fire in it. */
+	/** The bot's zone (`config.timezone`) and whether the report came from the running daemon. */
 	timezone: string;
-	/** True when the report came from the running daemon; false when read from the database file only. */
 	daemonRunning: boolean;
 	origins: OriginStatus[];
 	ledger: { pending: number; inflight: number; confirmed: number; ambiguous: number; expired: number };
-	inbound: Record<InboundState, number>;
+	inbound: Record<Exclude<InboundState, "sending">, number>; // a `sending` row counts as dispatched (running)
 	monitors: MonitorsStatus;
 	/** Open health gates (the same projection as `jabbu-pocket gates`); empty when every gate is closed. */
 	openGates: OpenGateSummary[];
@@ -33,8 +33,10 @@ export interface StatusReport {
 	frozen?: FreezeState;
 	/** Present while `jabbu-pocket drain` holds new work back for a restart: what is still unfinished. */
 	drain?: DrainCounts;
-	/** Running omp RPC sessions on this host and the ceiling a lane/[TASK] start is judged against (0 = off). */
+	/** Running omp RPC sessions on this host and ceiling (0 = off). */
 	hostSessions?: HostSessionsInfo;
+	/** Active and blocked aliases of the `agy` account pool, when enabled. */
+	agyAccounts?: AgyAccountsStatus;
 }
 
 /** Unfinished work a restart drain waits for; the drain completes when all three are 0. */
@@ -64,7 +66,7 @@ export function summarizeMonitors(rows: MonitorRow[]): MonitorsStatus {
 	return { count: rows.length, next: next === null ? null : { name: next.name, at: new Date(next.at).toISOString() } };
 }
 
-const emptyInbound = (): Record<InboundState, number> => ({
+const emptyInbound = (): StatusReport["inbound"] => ({
 	pending: 0,
 	dispatched: 0,
 	answered: 0,
@@ -125,7 +127,7 @@ export function buildStatus(
 ): StatusReport {
 	const counts = store.countInboundByState();
 	const inbound = emptyInbound();
-	for (const state of Object.keys(inbound) as InboundState[]) inbound[state] = counts[state] ?? 0;
+	for (const state of Object.keys(inbound) as Array<keyof typeof inbound>) inbound[state] = counts[state] ?? 0;
 	const deliveryCounts = store.countDeliveriesByState();
 	const origins: OriginStatus[] = [];
 	for (const originKey of store.distinctInboundOrigins()) {
@@ -151,8 +153,9 @@ export function readStatusFromDb(
 	timezone: string,
 	gateOptions: ConfigGateOptions = {},
 	hostLoad?: Partial<HostLoadReader>,
+	statfs?: StatfsReader,
 ): StatusReport {
-	const openGates = (): OpenGateSummary[] => openGateSummary(dbPath, Date.now(), gateOptions, hostLoad);
+	const openGates = (): OpenGateSummary[] => openGateSummary(dbPath, Date.now(), gateOptions, hostLoad, statfs);
 	let db: Database | undefined;
 	let counts: Pick<StatusReport, "inbound" | "ledger" | "origins" | "monitors">;
 	try {
@@ -160,8 +163,7 @@ export function readStatusFromDb(
 		db = new Database(dbPath, { readonly: true, strict: true });
 		counts = readCoreCounts(db);
 	} catch (error) {
-		// A 0-byte, corrupt or table-less ledger: the report still comes out (as JSON with --json), naming the gate the
-		// `gates` command opens for the same file, instead of a raw SQLiteError and an empty stdout.
+		// A 0-byte, corrupt or table-less ledger still emits a report naming the open `ledger_unreadable` gate.
 		const reason = error instanceof Error ? error.message : String(error);
 		const gates = openGates();
 		return {
@@ -186,28 +188,21 @@ export function readStatusFromDb(
 		daemonRunning: false,
 		...counts,
 		openGates: openGates(),
-		...hostSessionsInfo(gateOptions.hostSessionCeiling),
+		hostSessions: hostSessionsInfo(gateOptions.hostSessionCeiling),
 		...frozenField(dirname(dbPath)),
 	};
 }
+
+type StateCount<S extends string> = { state: S; n: number };
 
 /** Inbound and delivery counts, origins and monitors of a read-only handle; throws on an unreadable ledger. */
 function readCoreCounts(db: Database): Pick<StatusReport, "inbound" | "ledger" | "origins" | "monitors"> {
 	// No prototype: a stored state named `__proto__` is counted like any other, not swallowed by the setter (qa-l #11).
 	const inbound = Object.assign(Object.create(null) as Record<InboundState, number>, emptyInbound());
-	for (const row of db.query("SELECT state, COUNT(*) AS n FROM inbound GROUP BY state").all() as Array<{
-		state: InboundState;
-		n: number;
-	}>) {
-		inbound[row.state] = row.n;
-	}
+	for (const row of db.query(INBOUND_COUNT_SQL).all() as StateCount<InboundState>[]) inbound[row.state] = row.n;
 	const deliveryCounts: Partial<Record<DeliveryState, number>> = {};
-	for (const row of db.query("SELECT state, COUNT(*) AS n FROM deliveries GROUP BY state").all() as Array<{
-		state: DeliveryState;
-		n: number;
-	}>) {
-		deliveryCounts[row.state] = row.n;
-	}
+	const deliverySql = "SELECT state, COUNT(*) AS n FROM deliveries GROUP BY state";
+	for (const row of db.query(deliverySql).all() as StateCount<DeliveryState>[]) deliveryCounts[row.state] = row.n;
 	const origins = (
 		db.query("SELECT origin_key, epoch FROM origins ORDER BY origin_key").all() as Array<{
 			origin_key: string;
@@ -221,8 +216,7 @@ function readCoreCounts(db: Database): Pick<StatusReport, "inbound" | "ledger" |
 function readMonitorsStatus(db: Database): MonitorsStatus {
 	try {
 		const rows = db.query("SELECT * FROM monitors ORDER BY created_at, id").all() as MonitorSql[];
-		// A row that does not parse still counts as a monitor but has no next fire: `gates` skips such a row the same
-		// way, so one bad row must not blank every count of the report nor open a gate `gates` does not.
+		// A bad row still counts as a monitor without next fire, matching `gates`.
 		const readable: MonitorRow[] = [];
 		for (const raw of rows) {
 			try {

@@ -1,3 +1,5 @@
+import { guardedBlocks } from "./turn-prompt-guard";
+
 /** Already-normalized inbound message handed to the core (the channel adapters and `jabbu-pocket inject` produce the same shape). */
 export interface InboundRecord {
 	platformMessageId: string;
@@ -34,9 +36,8 @@ export type CommandKind =
 /**
  * Slash command name of each kind (`-jabbu` suffix: several bots share the workspace). `distill` and `btw` are typed
  * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `undo` restores the newest
- * conversation turn's files, so its slash name is registered. `stop`
- * is typed as `!stop` only too, so it works without re-applying the manifests. `restart`
- * is typed as `!restart` only as well: the daemon restarts without a model turn.
+ * conversation turn's files, so its slash name is registered. `stop` is typed as `!stop` only too, so it works without
+ * re-applying the manifests. `restart` is typed as `!restart` only as well: the daemon restarts without a model turn.
  */
 export const COMMAND_TEXT: Record<CommandKind, string> = {
 	new: "/new-jabbu",
@@ -63,10 +64,7 @@ export const COMMAND_TEXT: Record<CommandKind, string> = {
  */
 export const COMMAND_ALIAS: Readonly<Partial<Record<CommandKind, string>>> = { brief: "!브리핑" };
 
-/**
- * First half of a peer failure notice (`failedNotice` in the mailbox): a peer turn opened by it never mentions back,
- * and a post carrying it is never recorded as a call the peer must answer (`peer_calls`).
- */
+/** First half of a peer failure notice (`failedNotice`): a peer turn opened by it never mentions back, and it is no recorded `peer_calls` call. */
 export const PEER_FAILURE_MARK = "응답 실패(";
 
 /** Ledger op refs of chat commands, bookkeeping answers and refused launches: not a prompt that reached omp. */
@@ -86,8 +84,8 @@ export function isHomeCommand(text: string): boolean {
 
 /**
  * `!용도 <글>` sets the purpose memo of the channel (or, typed inside a thread, of that thread), `!용도` shows it,
- * `!용도 지우기` clears it. Typed text only, like `!home`; a memo is background for
- * new turns, never an instruction, and answered without a model turn.
+ * `!용도 지우기` clears it. Typed text only, like `!home`; a memo is background for new turns, never an instruction, and
+ * answered without a model turn.
  */
 export const PURPOSE_COMMAND = "!용도";
 export const PURPOSE_CLEAR_ARG = "지우기";
@@ -125,8 +123,8 @@ export interface ParsedCommand {
 }
 
 /**
- * A message is a command when it starts with `/<name>-jabbu` or `!<name>` (`!model` works typed
- * as text in a DM or channel without a registered slash command).
+ * A message is a command when it starts with `/<name>-jabbu` or `!<name>` (`!model` works typed as text in a DM or
+ * channel without a registered slash command).
  */
 export function parseCommand(text: string): ParsedCommand | undefined {
 	const trimmed = text.trim();
@@ -154,9 +152,9 @@ export function promptTextOf(text: string): string {
 /** Where the request itself starts in a turn prompt that carries context blocks (thread context, recall). */
 export const CURRENT_REQUEST_MARKER = "[현재 요청]";
 
-/** A new turn's prompt: the context blocks, then the marker and the request; the request as is without blocks. */
-export function composeTurnPrompt(blocks: readonly string[], text: string): string {
-	return blocks.length === 0 ? text : `${blocks.join("\n\n")}\n\n${CURRENT_REQUEST_MARKER}\n${text}`;
+/** A new turn's prompt: the guarded context blocks (see `guardedBlocks`), then the marker and the request; the request as is without blocks. */
+export function composeTurnPrompt(blocks: readonly string[], text: string, lift = true): string {
+	return blocks.length === 0 ? text : `${guardedBlocks(blocks, text, lift)}\n\n${CURRENT_REQUEST_MARKER}\n${text}`;
 }
 
 /** Whether a session's user entry is the prompt `composeTurnPrompt` built for `promptText`, with or without blocks. */

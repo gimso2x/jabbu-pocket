@@ -3,11 +3,11 @@ import { dirname, join } from "node:path";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { type OmpCompactResult, OmpDriverError } from "../omp/driver";
 import type { InboundRow } from "../store/db-rows";
-import type { UncertainReason } from "../store/transitions";
 /** Injected so tests use `FakeOmpDriver`; production builds an `RpcOmpDriver` for (origin, sessionDir). */
 import { chargeSessionWindow } from "./mailbox-cost";
 import { briefingReason, pickOption } from "./mailbox-helpers";
 import { failedNotice } from "./mailbox-notices";
+import { UNCERTAIN_REASON_TEXT } from "./mailbox-sending";
 import { MAX_LISTED, type MailboxDeps, type MailboxHost, minutes, preview } from "./mailbox-types";
 import { platformOfThreadRef } from "./normalize";
 import { listSavedSessions, pickSession } from "./sessions";
@@ -75,7 +75,7 @@ export async function restartCommand(host: MailboxHost, threadRef: string): Prom
 	const { originKey, restartProvider } = host.deps;
 	if (host.deps.isDraining?.()) return RESTART_DRAINING_TEXT;
 	const platform = platformOfThreadRef(threadRef);
-	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform !== "discord") return RESTART_REFUSED_TEXT;
+	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform === undefined) return RESTART_REFUSED_TEXT;
 	if (restartProvider === undefined) return "재시작이 연결되지 않았습니다";
 	return await restartProvider(originKey, threadRef);
 }
@@ -311,12 +311,6 @@ export function resolveUncertain(
 	return `🔁 전달 불확실 ${number}번을 다시 보냅니다: ${shown}\n이미 처리됐다면 답이 두 번 나올 수 있습니다.`;
 }
 
-const UNCERTAIN_REASON_TEXT: Record<UncertainReason, string> = {
-	steer_threw: "끼워넣기 전송 오류",
-	turn_ended_after_steer: "전송 직후 턴 종료",
-	dispatch_record_failed: "전송 후 장부 기록 실패",
-};
-
 /**
  * Records a side question's outcome when it settles. Deliberately NOT on the serial chain (`#serial`,
  * `#background`): the wait can last minutes, and inbound messages, `#onFinal` and `#onExit` must not queue behind
@@ -369,15 +363,20 @@ export function startBrief(deps: MailboxDeps, platformMessageId: string, opRef: 
 		return;
 	}
 	const startedAt = Date.now();
+	// Like `askBtw`: a `!new` during the render discards this row — nothing of the old epoch is delivered,
+	// and discarding an already-discarded row would throw only to be logged as a settle failure.
+	const discarded = (): boolean => store.getInbound(platformMessageId)?.state === "discarded";
 	provider(originKey, threadRef)
 		.then(
 			() => {
+				if (discarded()) return;
 				store.discard(platformMessageId, opRef);
 				log.info("briefing_rendered", { origin: originKey, ms: Date.now() - startedAt });
 			},
 			(error: unknown) => {
 				const reason = briefingReason(error);
 				log.warn("briefing_failed", { origin: originKey, error: reason });
+				if (discarded()) return;
 				store.recordAnswer({
 					originKey,
 					opRef,

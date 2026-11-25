@@ -2,7 +2,7 @@
 // channel — root in the parent, a thread started from it, status and cards inside — and the owner drives it with the
 // same words and buttons as everywhere else. Everything git-related stays on this machine; Discord is a fake transport.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
@@ -18,6 +18,7 @@ import { redact } from "../src/redact";
 import { floorsSystemPrompt } from "../src/safety/prompt";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -70,6 +71,7 @@ async function boot(discord: WaitingDiscordTransport, laneChannelId?: string): P
 	const discordConfig = config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 	const sessions = new FakeSessionStore();
 	const daemon = new Daemon({
+		...daemonTestOptions(),
 		config: {
 			...config,
 			channels: {
@@ -395,6 +397,52 @@ describe("lanes asked for from a Discord DM", () => {
 		expect(reply?.content).toContain("작업 레인을 시작하지 못했습니다");
 		expect(daemon.store.getLane("no-lane")).toBeUndefined();
 		expect(creates(discord, (call) => call.content === "🔄 no-lane")).toHaveLength(0);
+	});
+
+	test("작업: with ~ or a relative path replies with the format hint and starts no lane", async () => {
+		const discord = discordTransport();
+		const daemon = await boot(discord, LANE_CH);
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: "작업: 정리 @~/x",
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("형식은 `작업: <제목> @<절대경로>`"));
+		const reply = creates(discord, (call) => (call.content ?? "").includes("형식은"))[0];
+		expect(reply?.channelId).toBe(DM);
+		expect(reply?.content).not.toContain("공백이 든 경로");
+		expect(daemon.store.listLanes()).toHaveLength(0);
+	});
+});
+
+describe("a path with a space", () => {
+	test("a lane is not started in the prefix repository when the longer path is a directory", async () => {
+		const discord = discordTransport();
+		const daemon = await boot(discord, LANE_CH);
+		const outer = makeRepo(repos, "jabbu-spc-");
+		const spaced = `${outer} proj`;
+		mkdirSync(spaced);
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: `작업: 고쳐줘 @${spaced}`,
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("공백이 있는 경로는 쓸 수 없으니"));
+		expect(daemon.store.listLanes()).toHaveLength(0);
+		// The same words after a path whose longer form is no directory still start the lane.
+		await discord.emitMessage({
+			id: nextId(),
+			channel_id: DM,
+			author: { id: OWNER },
+			content: `작업: 고쳐줘 @${outer} proj2 부분만`,
+			type: 0,
+		});
+		await discord.waitForPosts((text) => text.includes("작업 레인 `고쳐줘`을 시작했습니다"));
+		expect(daemon.store.listLanes().map((lane) => lane.meta.requestedCwd)).toEqual([outer]);
 	});
 });
 

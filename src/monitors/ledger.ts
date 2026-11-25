@@ -115,7 +115,7 @@ export interface MonitorEventRow {
 
 export type ClaimResult =
 	| { status: "admitted" | "skipped_overlap"; event: MonitorEventRow }
-	| { status: "duplicate" | "missing" };
+	| { status: "duplicate" | "missing" | "disabled" };
 
 export const MONITOR_SCHEMA = `
 CREATE TABLE IF NOT EXISTS monitors (
@@ -195,12 +195,9 @@ export function migrateMonitorSchema(db: Database): void {
 	if (!columns.some((column) => column.name === "last_output_hash")) {
 		db.run("ALTER TABLE monitors ADD COLUMN last_output_hash TEXT");
 	}
-	if (!columns.some((column) => column.name === "channel")) {
-		db.run("ALTER TABLE monitors ADD COLUMN channel TEXT");
-	}
-	if (!columns.some((column) => column.name === "copy_channel")) {
+	if (!columns.some((column) => column.name === "channel")) db.run("ALTER TABLE monitors ADD COLUMN channel TEXT");
+	if (!columns.some((column) => column.name === "copy_channel"))
 		db.run("ALTER TABLE monitors ADD COLUMN copy_channel TEXT");
-	}
 	if (!columns.some((column) => column.name === "model")) {
 		db.run("ALTER TABLE monitors ADD COLUMN model TEXT");
 	}
@@ -311,6 +308,8 @@ const toEvent = (r: EventSql): MonitorEventRow => ({
 
 /** Events that still owe an authoring turn: a new fire behind them is queued (or skipped, per `overlap`). */
 const OWING = "('admitted','dispatched','failed')";
+const PENDING_COUNT_SQL =
+	"SELECT COUNT(*) AS n FROM monitor_events WHERE monitor_id = ? AND stage IN ('admitted','dispatched','authored','failed')";
 
 /** The next time `row` can fire, or `null` (disabled, finished one-shot, no match, past the `Date` range). */
 export function nextFireOf(row: MonitorRow): number | null {
@@ -431,11 +430,8 @@ export class MonitorLedger {
 	}
 
 	cron(schedule: string): CronSchedule {
-		let parsed = this.#cronCache.get(schedule);
-		if (!parsed) {
-			parsed = parseCron(schedule);
-			this.#cronCache.set(schedule, parsed);
-		}
+		const parsed = this.#cronCache.get(schedule) ?? parseCron(schedule);
+		this.#cronCache.set(schedule, parsed);
 		return parsed;
 	}
 
@@ -581,9 +577,16 @@ export class MonitorLedger {
 
 	// ---- slots ----
 
+	/** Events of one monitor that are not finished yet (waiting, running, being written up, or retrying). */
+	pendingEventCount(monitorId: string): number {
+		return (this.#db.query(PENDING_COUNT_SQL).get(monitorId) as { n: number }).n;
+	}
+
 	/**
 	 * Claims `(monitorId, slotAt)` exactly once. The slot row, its event and the overlap decision are one
 	 * transaction; the UNIQUE slot key makes a second claim (a rewound cursor, a second process) a `duplicate`.
+	 * The row is re-read here: a monitor disabled since the caller's snapshot answers `disabled` (a manual
+	 * claim is an explicit act and still goes through).
 	 */
 	claimSlot(input: {
 		monitorId: string;
@@ -596,6 +599,7 @@ export class MonitorLedger {
 		const eventId = this.#db.transaction((): ClaimResult | number => {
 			const monitor = this.getMonitor(input.monitorId);
 			if (!monitor) return { status: "missing" };
+			if (!monitor.enabled && input.manual !== true) return { status: "disabled" };
 			const now = this.#clock.now();
 			const inserted = this.#db
 				.query(

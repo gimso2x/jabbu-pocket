@@ -12,6 +12,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import type { InboundRow } from "../src/store/db-rows";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 
@@ -138,6 +139,7 @@ async function boot(options: { holdTurns?: boolean; briefingRun?: ProcessRunner 
 	const made = new SignalingDriver({ sessionDir: join(home.dir, "s"), store: sessions, holdTurns: options.holdTurns });
 	driver = made;
 	const d = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		clock,
@@ -244,6 +246,48 @@ describe("AC-4: !brief", () => {
 		await transport.waitForUploads();
 		// Only the first capture uploaded; the rejected one wrote nothing.
 		expect(uploads()).toHaveLength(1);
+	});
+
+	test("a capture that succeeds after !new settles quietly: no settle-failure log, no briefing delivery", async () => {
+		const held = heldChromium();
+		const d = await boot({ briefingRun: held.run });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "!brief" });
+		await held.started;
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "!new" });
+		expect((await waitForRow(d, "!brief", "discarded"))?.state).toBe("discarded");
+		held.release();
+		await transport.waitForUploads();
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(lines.some((line) => line.includes("briefing_settle_failed"))).toBe(false);
+		expect(failurePosts()).toHaveLength(0);
+		expect(
+			d.store.listDeliveries({ originKey: ORIGIN }).filter((delivery) => delivery.body.includes("브리핑")),
+		).toHaveLength(0);
+	});
+
+	test("a capture that fails after !new posts no failure line in the new epoch", async () => {
+		const gate = Promise.withResolvers<void>();
+		const seen = Promise.withResolvers<void>();
+		const run: ProcessRunner = async () => {
+			seen.resolve();
+			await gate.promise;
+			return { code: 1, stdout: "", stderr: "late boom\n", timedOut: false };
+		};
+		const d = await boot({ briefingRun: run });
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "!brief" });
+		await seen.promise;
+		await d.inject({ origin: ORIGIN, asOwner: true, text: "!new" });
+		expect((await waitForRow(d, "!brief", "discarded"))?.state).toBe("discarded");
+		gate.resolve();
+		// The failure handler runs off the provider promise: its log line is the settle signal.
+		for (let hop = 0; hop < 200 && !lines.some((line) => line.includes("briefing_failed")); hop += 1)
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(lines.some((line) => line.includes("briefing_failed"))).toBe(true);
+		for (let hop = 0; hop < 20; hop += 1) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(failurePosts()).toHaveLength(0);
+		expect(
+			d.store.listDeliveries({ originKey: ORIGIN }).filter((delivery) => delivery.body.includes("브리핑")),
+		).toHaveLength(0);
 	});
 
 	test("a normal message of the same origin starts a turn while the capture runs", async () => {
