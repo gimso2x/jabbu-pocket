@@ -5,15 +5,54 @@ import { LaneInputError } from "./manager-constants";
 const LANE_TRIGGER_FORMAT_TEXT =
 	"레인으로 열지 못했습니다 — 형식은 `작업: <제목> @<절대경로>`입니다 (상대경로·`~`는 쓸 수 없습니다).";
 
-const MALFORMED_PATH_TRIGGER = /^작업:[ \t]*\S.*[ \t]+@(?:~|\.\.?\/)/;
+/** Splits trimmed `text` at line 1 and skips `작업:[ \t]*` to the title start (O(n), no backtracking regex). */
+function laneHeaderLine(text: string): { s: string; titleStart: number; lineEnd: number } | undefined {
+	const s = text.trim();
+	if (!s.startsWith("작업:")) return undefined;
+	const nl = s.indexOf("\n");
+	const lineEnd = nl === -1 ? s.length : nl;
+	let titleStart = 3;
+	while (titleStart < lineEnd && (s[titleStart] === " " || s[titleStart] === "\t")) titleStart += 1;
+	if (titleStart >= lineEnd) return undefined;
+	return { s, titleStart, lineEnd };
+}
+
+/** Parses `작업: <제목> @<절대경로>[ 브리프]` in O(n) via linear `@/` scanning. */
+export function scanLaneTrigger(text: string): { title: string; cwd: string; brief: string } | undefined {
+	const header = laneHeaderLine(text);
+	if (header === undefined) return undefined;
+	const { s, titleStart, lineEnd } = header;
+	for (let at = s.indexOf("@/", titleStart + 1); at !== -1 && at < lineEnd; at = s.indexOf("@/", at + 1)) {
+		const prev = s[at - 1];
+		if (prev !== " " && prev !== "\t") continue;
+		let pathEnd = at + 1;
+		while (pathEnd < lineEnd && !/\s/.test(s[pathEnd] as string)) pathEnd += 1;
+		const next = s[pathEnd];
+		if (pathEnd < lineEnd && next !== " " && next !== "\t") continue;
+		const title = s.slice(titleStart, at).trim();
+		if (title === "") continue;
+		return { title, cwd: s.slice(at + 1, pathEnd), brief: s.slice(pathEnd).trim() };
+	}
+	return undefined;
+}
 
 /**
- * Detects a `작업:` message whose first line tried a `~` or relative (`./`, `../`) path after `@`.
+ * Detects a `작업:` message whose first line tried a `~` or relative (`./`, `../`) path after `@` in O(n) time.
  * Mentions (`<@…>`, `@이름`), emails (`a@b`), scoped packages (`@types/bun`), and `@` on later lines return undefined.
  */
 export function laneTriggerRefusal(text: string): string | undefined {
-	const firstLine = text.trim().split("\n", 1)[0] ?? "";
-	return MALFORMED_PATH_TRIGGER.test(firstLine) ? LANE_TRIGGER_FORMAT_TEXT : undefined;
+	const header = laneHeaderLine(text);
+	if (header === undefined) return undefined;
+	const { s, titleStart, lineEnd } = header;
+	if (/\s/.test(s[titleStart] as string)) return undefined;
+	for (let at = s.indexOf("@", titleStart + 1); at !== -1 && at < lineEnd; at = s.indexOf("@", at + 1)) {
+		const prev = s[at - 1];
+		if (prev !== " " && prev !== "\t") continue;
+		if (s[at + 1] === "~" || s.startsWith("./", at + 1) || s.startsWith("../", at + 1)) {
+			return LANE_TRIGGER_FORMAT_TEXT;
+		}
+	}
+	return undefined;
 }
 
 const SPACED_PATH_WORDS = 8;

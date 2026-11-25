@@ -813,12 +813,12 @@ export class TaskSweeper {
 		const pausedAt = taskPausedAt(fresh);
 		// One herdr question per working task per sweep, shared by the LOST check and the reminder below.
 		const agent = known ?? (await this.#agentStatus(row));
-		// The owner may close the task while this sweep awaits (a check, herdr, a post): a closed task's thread gets no
-		// more notices or prompts. Read again after every await below.
+		// Re-check closed()/paused() after awaits: an owner close or pause holds further prompts and notices.
 		const closed = (): boolean => {
 			const { status: current } = ledger.require(row.taskId);
 			return current === "done" || current === "cancelled";
 		};
+		const paused = (): boolean => taskPausedAt(ledger.require(row.taskId)) !== undefined;
 		if (closed()) return;
 		this.#sweepAgents.set(row.taskId, agent);
 		const status = agent.ok ? agent.status : undefined;
@@ -830,8 +830,7 @@ export class TaskSweeper {
 			await this.#post(row, buildLostCard(row, this.#deps.ownerUserId, await this.#boardLink(row)));
 			actions.push("LOST notice");
 		}
-		// A waiting agent refuses new prompts, so only the owner can unblock it: told once per wait, frozen or not
-		// (like LOST). An unanswered lookup says nothing about the wait, so it neither starts nor ends one.
+		// A waiting agent refuses new prompts, so only the owner can unblock it (told once per wait, frozen or not).
 		if (status === "blocked") {
 			const since = this.#waitingSince.get(row.taskId) ?? now;
 			this.#waitingSince.set(row.taskId, since);
@@ -844,8 +843,7 @@ export class TaskSweeper {
 		} else if (agent.ok) {
 			this.#waitingSince.delete(row.taskId);
 		}
-		// The worker of a paused task is herdr-working: the Esc did not hold (or it started again). Told once per pause,
-		// and not while the pause's own Esc may still be waiting for the agent to stop.
+		// Paused task worker is herdr-working past interrupt grace: told once per pause.
 		if (
 			pausedAt !== undefined &&
 			now - pausedAt > HERDR_INTERRUPT_WAIT_MS &&
@@ -858,8 +856,7 @@ export class TaskSweeper {
 			);
 			actions.push("working-while-paused notice");
 		}
-		// A worker that ended its turn on a question in prose waits for the owner, not for a prompt: the owner hears it
-		// once per question (frozen or paused alike), recorded only after the card went out.
+		// Question in prose waits for owner once per question (even frozen/paused), recorded only after posting.
 		const question = status === "idle" || status === "done" ? await this.#question(row, agent) : undefined;
 		if (question !== undefined) {
 			this.#sweepQuestions.set(row.taskId, question);
@@ -887,8 +884,7 @@ export class TaskSweeper {
 			this.#pauseLogged.add(`${row.taskId}:${pausedAt}`);
 			this.#deps.log.info("task_remind_paused", { task: row.taskId, pausedAt });
 		}
-		// An agent that ended its turn short of the outcome hears why at once, once per distinct set of unmet conditions.
-		// It takes the place of the 30-minute reminder in that sweep: at most one prompt per sweep reaches the agent.
+		// Idle/done worker short of outcome gets one unmet nudge per set instead of the 30m reminder.
 		const unmetKey = `unmet:${digest(judgement.problems)}`;
 		const unmetPending =
 			(status === "idle" || status === "done") && judgement.problems.length > 0 && !(unmetKey in fresh.notices);
@@ -903,10 +899,9 @@ export class TaskSweeper {
 			);
 			actions.push("nudge limit notice");
 		}
-		// Read again after the awaits above (herdr, board link, posts): an owner pause or freeze that came in meanwhile
-		// holds the prompt below, and nothing is marked reminded.
+		// Re-read after awaits: a concurrent pause or freeze holds prompts without marking reminded.
 		if (closed()) return;
-		const held = this.#deps.frozen?.() !== undefined || taskPausedAt(ledger.require(row.taskId)) !== undefined;
+		const held = this.#deps.frozen?.() !== undefined || paused();
 		const due = !held && stale;
 		const nudge = !held && wantsNudge && !capped;
 		if (nudge) {
@@ -936,29 +931,28 @@ export class TaskSweeper {
 			}
 		}
 		if (closed()) return;
+		const silentKey = `silent45:${base}`;
 		if (
-			pausedAt === undefined &&
+			!paused() &&
 			status === "working" &&
 			age >= WORKING_SILENT_NOTICE_MS &&
 			age < STALE_NOTICE_MS &&
-			ledger.recordNotice(row.taskId, `silent45:${base}`)
+			!(silentKey in ledger.require(row.taskId).notices)
 		) {
 			const screen = await this.#readAgent(row);
-			if (closed()) return;
-			await this.#post(
-				row,
-				formatWorkingSilentNotice(row, Math.floor(age / 60_000), screen, await this.#boardLink(row), noEvidence),
-			);
+			if (closed() || paused()) return;
+			const link = await this.#boardLink(row);
+			if (closed() || paused() || !ledger.recordNotice(row.taskId, silentKey)) return;
+			await this.#post(row, formatWorkingSilentNotice(row, Math.floor(age / 60_000), screen, link, noEvidence));
 			actions.push("working silent notice");
 		}
 		if (closed()) return;
-		if (pausedAt === undefined && age >= STALE_NOTICE_MS && ledger.recordNotice(row.taskId, `stale2h:${base}`)) {
-			// A question left unanswered must not sink with the stale notice: the owner is mentioned then.
+		const staleKey = `stale2h:${base}`;
+		if (!paused() && age >= STALE_NOTICE_MS && !(staleKey in ledger.require(row.taskId).notices)) {
+			const link = await this.#boardLink(row);
+			if (closed() || paused() || !ledger.recordNotice(row.taskId, staleKey)) return;
 			const asked = question === undefined ? undefined : this.#deps.ownerUserId;
-			await this.#post(
-				row,
-				formatStaleNotice(row, Math.floor(age / 60_000), await this.#boardLink(row), asked, noEvidence),
-			);
+			await this.#post(row, formatStaleNotice(row, Math.floor(age / 60_000), link, asked, noEvidence));
 			actions.push("stale notice");
 		}
 	}

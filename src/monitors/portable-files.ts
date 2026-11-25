@@ -1,6 +1,70 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SPEC_KEYS } from "./spec";
+
+export const SCRIPTS_PLACEHOLDER = "@SCRIPTS@";
+export const WORKSPACE_PLACEHOLDER = "@WORKSPACE@";
+
+export interface PlaceholderRoot {
+	root: string;
+	placeholder: string;
+}
+
+/** Placeholder roots, longest first; when `includeReal` is set, adds `realpathSync` aliases for symlinked roots. */
+export function placeholderRootsOf(scriptsRoot: string, workspaceDir: string, includeReal = true): PlaceholderRoot[] {
+	const out: PlaceholderRoot[] = [];
+	for (const [raw, placeholder] of [
+		[scriptsRoot, SCRIPTS_PLACEHOLDER],
+		[workspaceDir, WORKSPACE_PLACEHOLDER],
+	] as const) {
+		const spelled = resolve(raw);
+		out.push({ root: spelled, placeholder });
+		if (!includeReal) continue;
+		try {
+			const real = realpathSync(raw);
+			if (real !== spelled) out.push({ root: real, placeholder });
+		} catch {
+			// Root may not exist yet.
+		}
+	}
+	return out.sort((a, b) => b.root.length - a.root.length);
+}
+
+/** A `relative()` result that leaves its base: `..` first, or absolute (another drive). */
+export function isOutside(rest: string): boolean {
+	return rest === ".." || rest.startsWith(`..${sep}`) || isAbsolute(rest);
+}
+
+/** An absolute path inside a placeholder root as `{root, placeholder, rest}` after `..`/`.` resolution. */
+export function underRoot(
+	path: string,
+	roots: readonly PlaceholderRoot[],
+): (PlaceholderRoot & { rest: string }) | undefined {
+	const normal = resolve(path);
+	for (const { root, placeholder } of roots) {
+		const rest = relative(root, normal);
+		if (!isOutside(rest)) return { root, placeholder, rest };
+	}
+	return undefined;
+}
+
+/**
+ * Verifies `<dir>/files`, `<dir>/files/scripts`, and `<dir>/files/workspace` before `--with-files` writes or removes
+ * anything: symlinks or non-directories raise `PortableUsageError` cleanly instead of following links or crashing ENOTDIR.
+ */
+export function assertSafeFilesLayout(dir: string): void {
+	const filesDir = join(dir, "files");
+	const check = (path: string): boolean => {
+		const stat = lstatSync(path, { throwIfNoEntry: false });
+		if (stat === undefined) return false;
+		if (stat.isSymbolicLink()) throw new PortableUsageError(`--with-files refused: ${path} is a symbolic link`);
+		if (!stat.isDirectory()) throw new PortableUsageError(`--with-files refused: ${path} is not a directory`);
+		return true;
+	};
+	if (!check(filesDir)) return;
+	for (const sub of ["scripts", "workspace"]) check(join(filesDir, sub));
+}
 
 /** `--out=` / `-o=`: an option glued to its value, whose value is the path part. */
 const OPTION_PREFIX = /^(--?[A-Za-z][\w-]*=)(.*)$/s;

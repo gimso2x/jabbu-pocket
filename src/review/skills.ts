@@ -1,21 +1,11 @@
-import {
-	chmodSync,
-	copyFileSync,
-	existsSync,
-	lstatSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "../log";
 import type { OmpFinal, OmpSessionDriver } from "../omp/driver";
 import { redact } from "../redact";
+import { assertSafeSkillPath, stageTempPath, writeAtomicNoFollow, writeExclusiveNoFollow } from "./skill-io";
 
 export interface SkillCheck {
 	/** A case where the skill should — or should not — fire, stated so a later session can replay it. */
@@ -469,15 +459,22 @@ export function skillDirOf(name: string, userHome: string = homedir()): string {
  */
 export function backupSkillRevision(dir: string, now: number): string | undefined {
 	const current = join(dir, "SKILL.md");
-	if (!existsSync(current)) return undefined;
+	assertSafeSkillPath(dir, "backup", { requireDir: true });
+	if (!assertSafeSkillPath(current, "backup", { requireFile: true, checkHardLink: true })) return undefined;
 	const revisions = join(dir, SKILL_REVISIONS_DIR);
+	assertSafeSkillPath(revisions, "backup", { requireDir: true });
 	mkdirSync(revisions, { recursive: true, mode: 0o700 });
+	const content = readFileSync(current);
 	const stamp = new Date(now).toISOString().replace(/[:.]/g, "-");
-	let path = join(revisions, `${stamp}.md`);
-	for (let n = 2; existsSync(path); n += 1) path = join(revisions, `${stamp}-${n}.md`);
-	copyFileSync(current, path);
-	chmodSync(path, 0o600);
-	return path;
+	for (let n = 1; ; n += 1) {
+		const path = join(revisions, n === 1 ? `${stamp}.md` : `${stamp}-${n}.md`);
+		try {
+			writeExclusiveNoFollow(path, content, 0o600);
+			return path;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+	}
 }
 
 /**
@@ -487,13 +484,16 @@ export function backupSkillRevision(dir: string, now: number): string | undefine
  * path (`undefined` on a first install); throws when the action does not match what is on disk.
  */
 export function installSkill(dir: string, proposal: SkillProposal, now: number): string | undefined {
-	const exists = existsSync(join(dir, "SKILL.md"));
+	const current = join(dir, "SKILL.md");
+	assertSafeSkillPath(dir, "install", { requireDir: true });
+	assertSafeSkillPath(join(dir, SKILL_REVISIONS_DIR), "install", { requireDir: true });
+	const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
 	if (proposal.action === "create" && exists)
 		throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
 	if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const revision = backupSkillRevision(dir, now);
-	writeFileSync(join(dir, "SKILL.md"), renderSkillFile(proposal), { mode: 0o600 });
+	writeAtomicNoFollow(current, renderSkillFile(proposal), 0o600);
 	return revision;
 }
 
@@ -525,26 +525,24 @@ export function listSkillRevisions(dir: string): string[] {
  */
 export function rollbackSkill(dir: string): string {
 	const current = join(dir, "SKILL.md");
-	if (!existsSync(current)) throw new Error(`skill not installed: ${dir}`);
+	const revisions = join(dir, SKILL_REVISIONS_DIR);
+	assertSafeSkillPath(dir, "rollback", { requireDir: true });
+	if (!assertSafeSkillPath(current, "rollback", { requireFile: true, checkHardLink: true }))
+		throw new Error(`skill not installed: ${dir}`);
+	assertSafeSkillPath(revisions, "rollback", { requireDir: true });
 	const newest = listSkillRevisions(dir)[0];
 	if (newest === undefined) throw new Error(`no saved revision for ${dir}`);
-	// The swap writes both files, so a link there would carry the write (or the read) outside the skill directory.
-	for (const path of [dir, join(dir, SKILL_REVISIONS_DIR), current, newest]) {
-		if (lstatSync(path).isSymbolicLink()) throw new Error(`rollback refused: ${path} is a symbolic link`);
-	}
-	for (const path of [current, newest]) {
-		if (lstatSync(path).nlink > 1) throw new Error(`rollback refused: ${path} has more than one hard link`);
-	}
+	assertSafeSkillPath(newest, "rollback", { requireFile: true, checkHardLink: true });
 	const outgoing = readFileSync(current);
 	const previous = readFileSync(newest);
 	const currentMode = lstatSync(current).mode & 0o777;
 	const slotMode = lstatSync(newest).mode & 0o777;
-	// Both new contents land in temp files first: a failed write (full disk, read-only slot) leaves SKILL.md as it was.
-	const stagedSlot = `${newest}.rollback-tmp`;
-	const stagedCurrent = `${current}.rollback-tmp`;
+	// Random exclusive temp files prevent pre-planted symlinks or concurrent writes from redirecting I/O outside `dir`.
+	const stagedSlot = stageTempPath(newest, "rollback-tmp");
+	const stagedCurrent = stageTempPath(current, "rollback-tmp");
 	try {
-		writeFileSync(stagedSlot, outgoing, { mode: slotMode });
-		writeFileSync(stagedCurrent, previous, { mode: currentMode });
+		writeExclusiveNoFollow(stagedSlot, outgoing, slotMode);
+		writeExclusiveNoFollow(stagedCurrent, previous, currentMode);
 		renameSync(stagedSlot, newest);
 	} catch (error) {
 		rmSync(stagedSlot, { force: true });
@@ -554,8 +552,8 @@ export function rollbackSkill(dir: string): string {
 	try {
 		renameSync(stagedCurrent, current);
 	} catch (error) {
-		// The slot already holds today's content: put the old revision back so nothing is lost.
-		writeFileSync(newest, previous, { mode: slotMode });
+		// The slot already holds today's content: put the old revision back atomically so nothing is lost.
+		writeAtomicNoFollow(newest, previous, slotMode);
 		rmSync(stagedCurrent, { force: true });
 		throw error;
 	}
