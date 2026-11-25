@@ -28,36 +28,6 @@ const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-aut
 
 const STDERR_TAIL_BYTES = 4_000;
 
-// agy retries quota failures itself and reports each attempt only as a line of agent text. Regexes copied from omp
-// (oh-my-pi eca7acfa45, MIT, `packages/ai/src/providers/antigravity-cli/host.ts` RETRY_NOTICE…NOTICE_ATTEMPT).
-const RETRY_NOTICE = /(?:^|\n)[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?API error \(attempt \d+\):[^\S\n]*([^\n]+)/;
-const QUOTA_EXHAUSTED = /\bRESOURCE_EXHAUSTED\b|\bcode 429\b/;
-const NOTICE_MARK = /^[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?/;
-const NOTICE_HEAD = "API error (attempt ";
-const NOTICE_ATTEMPT = /^\d*$|^\d+\)(?::.*)?$/;
-
-/** The quota detail of an agy retry notice in `text` ("RESOURCE_EXHAUSTED (code 429): …"), else undefined. */
-export function quotaRetryNotice(text: string): string | undefined {
-	const detail = RETRY_NOTICE.exec(text)?.[1]?.trim();
-	return detail && QUOTA_EXHAUSTED.test(detail) ? detail : undefined;
-}
-
-/** True when an agy error/text directly indicates a 429 / RESOURCE_EXHAUSTED quota failure. */
-export function isQuotaErrorText(text: string): boolean {
-	return QUOTA_EXHAUSTED.test(text);
-}
-
-/** `text` minus an unfinished last line that may still turn into a retry notice (omp withholds it the same way). */
-export function shownText(text: string): string {
-	const lineStart = text.lastIndexOf("\n") + 1;
-	const rest = text.slice(lineStart).replace(NOTICE_MARK, "");
-	const pending =
-		rest.length < NOTICE_HEAD.length
-			? NOTICE_HEAD.startsWith(rest)
-			: rest.startsWith(NOTICE_HEAD) && NOTICE_ATTEMPT.test(rest.slice(NOTICE_HEAD.length));
-	return pending ? text.slice(0, lineStart) : text;
-}
-
 /** The agy CLI to spawn: a path must be executable, a name is looked up on the child's PATH. */
 export function resolveAgyExecutable(given: string, env: Record<string, string>): string {
 	if (given.includes("/")) {
