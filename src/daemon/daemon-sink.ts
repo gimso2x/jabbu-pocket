@@ -41,6 +41,7 @@ import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
+import { withControlSource } from "./daemon-task-web";
 import { isSideOpRef } from "./restart";
 import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
@@ -454,7 +455,7 @@ export class DaemonInbound {
 			if (tasks.isPaused(after)) return { ok: false, text: `⚠️ ${taskId} 재개를 확인하지 못했습니다.` };
 			// A headless task's rows the pause held go in now (a herdr task's worker is never prompted here).
 			if (row.runtime === "headless") await taskMailboxPort(this.#ctx).resumePending(taskOriginKey(row.agent));
-			this.#ctx.log.info("task_resumed", { task: taskId });
+			this.#ctx.log.info("task_resumed", withControlSource({ task: taskId }));
 			return {
 				ok: true,
 				text: `▶ ${taskId} 재개했습니다 — 스윕 재촉·stale 알림·자동 머지 보류를 풀었습니다. 워커에 재개 프롬프트는 보내지 않았습니다(필요하면 jabbu_dispatch로 보냅니다).`,
@@ -465,18 +466,17 @@ export class DaemonInbound {
 		}
 		const after = tasks.pauseTask(taskId);
 		if (!tasks.isPaused(after)) return { ok: false, text: `⚠️ ${taskId} 멈춤을 기록하지 못했습니다.` };
-		this.#ctx.log.info("task_paused", { task: taskId });
+		this.#ctx.log.info("task_paused", withControlSource({ task: taskId }));
 		let worker: string;
 		let stopped = false;
 		if (row.runtime === "herdr" && this.#ctx.options.config.herdr === undefined) {
 			worker = "herdr가 꺼져 있어 Esc를 보내지 않았습니다";
 		} else {
 			const interrupted = await taskRuntimeOf(this.#ctx, row).interrupt(row);
-			this.#ctx.log.info("task_interrupt", {
-				task: taskId,
-				confirmed: interrupted.confirmed,
-				status: interrupted.status,
-			});
+			this.#ctx.log.info(
+				"task_interrupt",
+				withControlSource({ task: taskId, confirmed: interrupted.confirmed, status: interrupted.status }),
+			);
 			worker = interrupted.text;
 			stopped = interrupted.confirmed;
 		}

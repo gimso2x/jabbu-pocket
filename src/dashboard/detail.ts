@@ -3,6 +3,7 @@ import type { BoardCard } from "./board";
 import type { MonitorDetailRun, MonitorProcedure } from "./monitor-detail";
 import { monitorModelDetail } from "./monitor-model";
 import type { DashboardSnapshot, FlowChainInfo, TaskInfo } from "./snapshot";
+import { renderTaskWork } from "./task-work-client";
 import {
 	APPROVAL_OUTCOMES,
 	alertText,
@@ -283,9 +284,8 @@ export function renderFlowChain(chain: FlowChainInfo, focus: string, panel: bool
 }
 
 /**
- * The detail panel of `?task=<ID>`: the TASK's title, status and {@link renderTaskFacts}, with a way to its agent's
- * card when the board has one. An ID not in the snapshot gets the "지금 목록에 없는 TASK" notice. Self-contained apart
- * from {@link renderTaskFacts}, which ships beside it.
+ * `?task=<ID>`'s detail: title, status, {@link renderTaskFacts}, its agent's card link and a headless TASK's 작업 내역
+ * ({@link renderTaskWork}); an unknown ID gets the "지금 목록에 없는 TASK" notice. Both helpers ship beside it.
  */
 export function renderTaskDetail(
 	taskId: string,
@@ -319,7 +319,7 @@ export function renderTaskDetail(
 		task.title,
 	)}</h2>${actions}<p class="lead">${leadText}</p>${renderTaskFacts(task)}${card}${
 		chain === undefined ? "" : renderFlowChain(chain, task.taskId, true)
-	}`;
+	}${renderTaskWork(task)}`;
 }
 
 /**
@@ -601,7 +601,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 			}${
 				task === undefined
 					? ""
-					: `<section class="detail-task" aria-label="TASK 진행"><h3 class="h3">진행</h3>${renderTaskFacts(task)}</section>`
+					: `<section class="detail-task" aria-label="TASK 진행"><h3 class="h3">진행</h3>${renderTaskFacts(task)}</section>${renderTaskWork(task)}`
 			}`;
 		}
 	}

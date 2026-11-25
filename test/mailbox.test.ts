@@ -29,7 +29,7 @@ import {
 	OWNER_STOPPED_TEXT,
 	STEER_BEFORE_ANSWER_SEEN_NOTE,
 } from "../src/core/mailbox-notices";
-import type { MailboxDeps } from "../src/core/mailbox-types";
+import type { MailboxDeps, TurnHeadsDeps } from "../src/core/mailbox-types";
 import { OriginRouter, openBotStore, sessionDirFor } from "../src/core/origin";
 import {
 	COMMAND_OP_REF,
@@ -62,6 +62,7 @@ import {
 	type FakeTurnMessage,
 } from "../src/omp/fake-driver";
 import { healSessionModelFile } from "../src/omp/session-heal";
+import type { GitRunner } from "../src/ops/turn-heads";
 import { redact } from "../src/redact";
 import { ApprovalBroker } from "../src/safety/approval";
 import { answerDialog } from "../src/safety/choice";
@@ -323,6 +324,8 @@ let sessionBackupsRoot: string | undefined;
 let threadBot: { id: string | undefined } | undefined;
 /** Set: the router's `hostTools` answer (false = an agy child without host tools). */
 let hostTools: boolean | undefined;
+/** Set: the router reads turn HEADs through it (the wiki turn notes). */
+let turnHeads: TurnHeadsDeps | undefined;
 
 /** Fresh router over the current test knobs; `defaultModel` is only readable here, so stale-model tests rebuild the router. */
 function buildRouter(): OriginRouter {
@@ -335,6 +338,7 @@ function buildRouter(): OriginRouter {
 		...(escalateAfter === undefined ? {} : { escalateAfter }),
 		...(hostTools === undefined ? {} : { hostTools: () => hostTools ?? true }),
 		...(sessionBackupsRoot === undefined ? {} : { sessionBackupsRoot }),
+		...(turnHeads === undefined ? {} : { turnHeads }),
 		...(threadBot === undefined
 			? {}
 			: {
@@ -400,6 +404,7 @@ beforeEach(() => {
 	sessionBackupsRoot = undefined;
 	threadBot = undefined;
 	hostTools = undefined;
+	turnHeads = undefined;
 	router = buildRouter();
 });
 
@@ -667,6 +672,62 @@ describe("mailbox: prompt vs steer", () => {
 		expect((drivers[0] as SteerFailingDriver).calls.filter((c) => c.startsWith("prompt:"))).toHaveLength(1);
 		expect(store.listInbound({ originKey: ORIGIN })).toHaveLength(1);
 		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(1);
+	});
+});
+
+describe("mailbox: turn HEADs", () => {
+	/** A scripted git: `rev-parse HEAD` answers `heads[repo]`; every call is recorded. */
+	function scriptedGit(heads: Record<string, string>) {
+		const calls: string[][] = [];
+		const run: GitRunner = async (repo, args) => {
+			calls.push([repo, ...args]);
+			return { code: 0, stdout: `${heads[repo] ?? ""}\n`, stderr: "" };
+		};
+		return { calls, run };
+	}
+
+	test("a conversation turn that moved a repository's HEAD reaches onCommitted as one {repo, headBefore, headAfter} row", async () => {
+		const heads: Record<string, string> = { "/r/a": "aaa1", "/r/b": "bbb1" };
+		const git = scriptedGit(heads);
+		const committed: Array<{ opRef: string; threadRef: string; rows: readonly unknown[] }> = [];
+		turnHeads = {
+			headRepos: () => ["/r/a", "/r/b"],
+			run: git.run,
+			onCommitted: async (turn) => {
+				committed.push({ opRef: turn.opRef, threadRef: turn.threadRef, rows: turn.rows });
+			},
+		};
+		driverOptions = {
+			respond: () => {
+				heads["/r/a"] = "aaa2";
+				return "커밋했습니다";
+			},
+		};
+		await router.close();
+		router = buildRouter();
+		await router.route(msg("커밋해줘"));
+		await router.mailbox(ORIGIN).sweepIdle();
+		expect(committed).toHaveLength(1);
+		expect(committed[0]?.rows).toEqual([{ repo: "/r/a", headBefore: "aaa1", headAfter: "aaa2", endedAt: clock.now() }]);
+		expect(git.calls.every((call) => call.slice(1).join(" ") === "rev-parse HEAD")).toBe(true);
+	});
+
+	test("no repository listed: git is never run and onCommitted is not called", async () => {
+		const git = scriptedGit({});
+		let heard = 0;
+		turnHeads = {
+			headRepos: () => [],
+			run: git.run,
+			onCommitted: async () => {
+				heard += 1;
+			},
+		};
+		await router.close();
+		router = buildRouter();
+		await router.route(msg("hello"));
+		await router.mailbox(ORIGIN).sweepIdle();
+		expect(git.calls).toEqual([]);
+		expect(heard).toBe(0);
 	});
 });
 

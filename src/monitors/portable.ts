@@ -25,8 +25,7 @@ import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext 
 /**
  * Host-independent monitor files (`jabbu-pocket monitors export|apply`): one JSON file per monitor holding only the spec
  * fields, with paths under the scripts root and the workspace written as `@SCRIPTS@/…` and `@WORKSPACE@/…`, so the
- * same file applies on a home with other paths. Webhook triggers carry no id or token; ids, cursors, state and
- * timestamps stay in the database.
+ * same file applies on a home with other paths. Ids, cursors, state and timestamps stay in the database.
  */
 const SCRIPTS_PLACEHOLDER = "@SCRIPTS@";
 const WORKSPACE_PLACEHOLDER = "@WORKSPACE@";
@@ -35,11 +34,10 @@ const PLACEHOLDER_LIKE = /^(@+)((?:SCRIPTS|WORKSPACE)@(?:\/.*)?)$/s;
 /** The spec context of one home; export and apply need the workspace to map paths against. */
 export type PortableContext = SpecContext & { workspaceDir: string };
 
-/** The stored spec of a row, in the shape `parseMonitorSpec` returns. */
-export function specOfRow(row: MonitorRow): MonitorSpec {
+/** The stored spec of a row without its trigger; a row whose trigger kind is no longer supported has only this. */
+export function specBaseOfRow(row: MonitorRow): Omit<MonitorSpec, "trigger"> {
 	return {
 		name: row.name,
-		trigger: row.trigger,
 		instruction: row.instruction,
 		overlap: row.overlap,
 		enabled: row.enabled,
@@ -50,6 +48,12 @@ export function specOfRow(row: MonitorRow): MonitorSpec {
 		...(row.deliver === "turn" ? {} : { deliver: row.deliver }),
 		...(row.procedureFiles.length === 0 ? {} : { procedureFiles: row.procedureFiles }),
 	};
+}
+
+/** The stored spec of a row, in the shape `parseMonitorSpec` returns; a row of an unsupported trigger kind has none. */
+export function specOfRow(row: MonitorRow): MonitorSpec {
+	if (row.trigger.kind === "unsupported") throw new Error(`monitor ${row.id} has an unsupported trigger`);
+	return { ...specBaseOfRow(row), trigger: row.trigger };
 }
 
 interface PlaceholderRoot {
@@ -130,7 +134,7 @@ function portableSpec(
 		};
 	} else if (trigger.kind === "at") {
 		portableTrigger = { kind: "at", at: trigger.at };
-	} else if (trigger.kind === "script") {
+	} else {
 		// Rows stored before fire/once/suppressUnchanged existed read as their defaults.
 		portableTrigger = {
 			kind: "script",
@@ -140,10 +144,6 @@ function portableSpec(
 			once: trigger.once ?? false,
 			suppressUnchanged: trigger.suppressUnchanged ?? false,
 		};
-	} else if (trigger.kind === "watcher") {
-		portableTrigger = { kind: "watcher", root: toPortable(trigger.root), debounceMs: trigger.debounceMs };
-	} else {
-		portableTrigger = { kind: "webhook" };
 	}
 	return {
 		name: spec.name,
@@ -198,6 +198,10 @@ export function exportMonitors(
 	// Sorted by name so a stem collision gets the same suffix on every host whatever the creation order.
 	const rows = ledger.listMonitors().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 	for (const row of rows) {
+		if (row.trigger.kind === "unsupported") {
+			warnings.push(`${row.name}: trigger kind "${row.trigger.was}" is no longer supported, not exported`);
+			continue;
+		}
 		const spec = specOfRow(row);
 		const portable = portableSpec(spec, ctx, (path) =>
 			warnings.push(`${row.name}: path outside the scripts dir and the workspace kept as is: ${path}`),
@@ -338,7 +342,6 @@ function resolvePlaceholders(input: Record<string, unknown>, ctx: PortableContex
 		const t = { ...(trigger as Record<string, unknown>) };
 		if (Array.isArray(t.command)) t.command = t.command.map(toLocal);
 		else if (t.command !== undefined) t.command = toLocal(t.command);
-		if (t.root !== undefined) t.root = toLocal(t.root);
 		out.trigger = t;
 	}
 	if (Array.isArray(input.procedureFiles)) out.procedureFiles = input.procedureFiles.map(toLocal);
@@ -401,14 +404,11 @@ export function applyMonitors(
 				adds.push(parsed);
 				continue;
 			}
-			// Like `mergeMonitorSpec`, an edit keeps the webhook id and token the caller already hooked up.
-			const spec =
-				parsed.trigger.kind === "webhook" && current.trigger.kind === "webhook"
-					? { ...parsed, trigger: current.trigger }
-					: parsed;
-			const same = JSON.stringify(portableSpec(spec, ctx)) === JSON.stringify(portableSpec(specOfRow(current), ctx));
+			const same =
+				current.trigger.kind !== "unsupported" &&
+				JSON.stringify(portableSpec(parsed, ctx)) === JSON.stringify(portableSpec(specOfRow(current), ctx));
 			if (same) unchanged++;
-			else updates.push({ id: current.id, spec });
+			else updates.push({ id: current.id, spec: parsed });
 		} catch (error) {
 			if (!(error instanceof MonitorSpecError)) throw error;
 			problems.push(`${file}: ${error.message}`);

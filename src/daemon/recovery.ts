@@ -137,7 +137,7 @@ export interface RecoveryDeps {
 	/** Home holding {@link RESTART_CUT_FILE}; absent, no turn is resumed (every unfinished one is interrupted). */
 	homeDir?: string;
 	now?: () => number;
-	/** Repositories whose `.git/index.lock` a resumed turn of this origin is told about (turnSnapshot repos, its cwd). */
+	/** Repositories whose `.git/index.lock` a resumed turn of this origin is told about (its cwd). */
 	lockRepos?: (originKey: string) => readonly string[];
 }
 

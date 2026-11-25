@@ -877,10 +877,9 @@ describe("host tools", () => {
 		});
 	});
 
-	test("checkUploadable protects the hub, git credentials, netrc and gh config, and token-shaped GitHub content", () => {
+	test("checkUploadable protects git credentials, netrc and gh config, and token-shaped GitHub content", () => {
 		const deps = { homeDir, workspaceDir, userHome };
 		const files = [
-			join(userHome, ".gajaeway-hub", "state.json"),
 			join(userHome, ".git-credentials"),
 			join(userHome, ".netrc"),
 			join(userHome, ".config", "gh", "hosts.yml"),
@@ -892,6 +891,37 @@ describe("host tools", () => {
 		}
 		writeFileSync(join(workspaceDir, "gh.txt"), `token ghp_${"A".repeat(36)}\n`);
 		expect(() => checkUploadable(join(workspaceDir, "gh.txt"), deps)).toThrow(/token-like secret/);
+	});
+
+	test("checkUploadable: ~/.gajaeway-hub is no longer protected by default", () => {
+		const file = join(userHome, ".gajaeway-hub", "f.txt");
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, "harmless\n");
+		expect(checkUploadable(file, { homeDir, workspaceDir, userHome })).toBe(file);
+	});
+
+	test("checkUploadable refuses hostTools.extraForbiddenPaths: a ~/… entry, a symlink to it, and an absolute entry", () => {
+		const hub = join(userHome, "private-hub");
+		mkdirSync(hub, { recursive: true });
+		writeFileSync(join(hub, "f.txt"), "harmless\n");
+		const deps = { homeDir, workspaceDir, userHome, extraForbiddenPaths: () => ["~/private-hub"] };
+		expect(() => checkUploadable(join(hub, "f.txt"), deps)).toThrow(/protected directory/);
+		const link = join(workspaceDir, "hub-link.txt");
+		symlinkSync(join(hub, "f.txt"), link);
+		expect(() => checkUploadable(link, deps)).toThrow(/protected directory/);
+
+		const abs = join(tmpdir(), `jabbu-extra-forbidden-${process.pid}-${Date.now()}`);
+		mkdirSync(abs, { recursive: true });
+		try {
+			writeFileSync(join(abs, "g.txt"), "harmless\n");
+			expect(() => checkUploadable(join(abs, "g.txt"), { ...deps, extraForbiddenPaths: () => [abs] })).toThrow(
+				/protected directory/,
+			);
+			// Without the entry the same file uploads: the refusal comes from the setting alone.
+			expect(checkUploadable(join(abs, "g.txt"), { homeDir, workspaceDir, userHome })).toBe(join(abs, "g.txt"));
+		} finally {
+			rmSync(abs, { recursive: true, force: true });
+		}
 	});
 
 	test("checkUploadable scans files past 3MB: a token at the head or only at the tail is refused", () => {

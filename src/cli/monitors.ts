@@ -16,22 +16,22 @@ import {
 	exportMonitors,
 	PortableApplyError,
 	type PortableContext,
+	specBaseOfRow,
 	specOfRow,
 } from "../monitors/portable";
 import { PortableUsageError } from "../monitors/portable-files";
 import { runScript } from "../monitors/script";
 import { MonitorSpecError, mergeMonitorSpec, parseMonitorSpec } from "../monitors/spec";
-import { webhookUrl } from "../monitors/webhook";
 import { readFreeze } from "../ops/freeze";
 import { formatLocal, hostTimezone } from "../time";
 
-export const MONITORS_USAGE = `  monitors add --json <spec>     create a monitor ({name, trigger (cron|at|script|watcher|webhook; a cron with command [+timeoutMs] runs that script per slot and needs deliver "verbatim"), instruction, overlap?, enabled?, channel?, copyChannel?, model?, thinking?, deliver?, procedureFiles? (<=5 files in the workspace or scripts dir, re-read on every fire)}; trigger webhook needs "webhook" in config.json
+export const MONITORS_USAGE = `  monitors add --json <spec>     create a monitor ({name, trigger (cron|at|script; a cron with command [+timeoutMs] runs that script per slot and needs deliver "verbatim"), instruction, overlap?, enabled?, channel?, copyChannel?, model?, thinking?, deliver?, procedureFiles? (<=5 files in the workspace or scripts dir, re-read on every fire)}
   monitors list [--json]         monitors with effective time zone and next fire
   monitors update <id|name> --json <patch>   change fields (a new trigger restarts its schedule)
-  monitors show <id|name>        one monitor as JSON; a webhook monitor also prints its URL and bearer token
+  monitors show <id|name>        one monitor as JSON
   monitors remove <id|name>      delete a monitor with its slots and events
-  monitors test <id|name>        fire once now (a script monitor runs its check first; a watcher monitor fires with no payload)
-  monitors export --dir <d> [--with-files]   write one portable <name>.json per monitor (paths as @SCRIPTS@/ and @WORKSPACE@/, no ids or webhook tokens) and delete stale *.json there; --with-files also copies the referenced scripts and procedure files to <d>/files/
+  monitors test <id|name>        fire once now (a script monitor runs its check first)
+  monitors export --dir <d> [--with-files]   write one portable <name>.json per monitor (paths as @SCRIPTS@/ and @WORKSPACE@/, no ids) and delete stale *.json there; --with-files also copies the referenced scripts and procedure files to <d>/files/
   monitors apply --dir <d> [--prune] [--dry-run]   add or update monitors from <d>/*.json by name (equal ones untouched); --prune removes monitors without a file; any invalid file changes nothing (exit 2)
 `;
 
@@ -62,7 +62,7 @@ function describe(row: MonitorRow, schedule: Schedule): string {
 		schedule.nextFireAt === null
 			? "-"
 			: `${formatLocal(Date.parse(schedule.nextFireAt), schedule.effectiveTimezone)} ${schedule.effectiveTimezone}`;
-	// The last script check or watch error, with how many came in a row (cleared by the next good check).
+	// The last script check error, with how many came in a row (cleared by the next good check).
 	const checkError =
 		row.lastCheckError === null || row.lastCheckErrorAt === null
 			? ""
@@ -70,11 +70,6 @@ function describe(row: MonitorRow, schedule: Schedule): string {
 	// The CLI keeps an `at` trigger's stored ISO string raw and separates fields with two spaces; the trigger text and
 	// option suffixes come from the shared ledger helpers (the host tool uses the same rules with its own parameters).
 	return `${row.id}  ${row.enabled ? "on " : "off"}  ${row.name}  [${describeMonitorTrigger(row, (at) => at)}]  overlap=${row.overlap}${monitorOptionSuffixes(row, "  ")}${row.deliver === "verbatim" ? "  deliver=verbatim" : ""}  next=${next}${checkError}`;
-}
-
-/** A row for output without the webhook bearer token (only `add` and `show` print it). */
-function masked(row: MonitorRow): MonitorRow {
-	return row.trigger.kind === "webhook" ? { ...row, trigger: { ...row.trigger, token: "***" } } : row;
 }
 
 function need(ledger: MonitorLedger, idOrName: string | undefined): MonitorRow {
@@ -157,9 +152,7 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 	const workspaceDir = config?.workspaceDir ?? homeDir;
 	const ctx = {
 		scriptsRoot,
-		watcherRoots: config?.watcherRoots,
 		workspaceDir,
-		webhook: config?.webhook,
 		// A home without a usable config takes the zone a config without `timezone` gets.
 		defaultTimezone: config?.timezone ?? hostTimezone(),
 	};
@@ -202,28 +195,24 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		if (sub === "list") {
 			const monitors = ledger.listMonitors();
 			const schedules = Object.fromEntries(monitors.map((row) => [row.id, scheduleOf(row, ctx.defaultTimezone)]));
-			if (listJson) out({ monitors: monitors.map(masked), schedules });
+			if (listJson) out({ monitors: monitors, schedules });
 			else if (monitors.length === 0) process.stdout.write("no monitors\n");
 			else for (const row of monitors) process.stdout.write(`${describe(row, schedules[row.id] as Schedule)}\n`);
 			return 0;
 		}
 		const row = need(ledger, positionals[0]);
 		if (sub === "show") {
-			const { trigger } = row;
-			out({
-				monitor: row,
-				schedule: scheduleOf(row, ctx.defaultTimezone),
-				...(trigger.kind === "webhook"
-					? { webhook: { url: webhookUrl(config?.webhook, trigger.id), token: trigger.token } }
-					: {}),
-			});
+			out({ monitor: row, schedule: scheduleOf(row, ctx.defaultTimezone) });
 			return 0;
 		}
 		if (sub === "update") {
-			const current = { ...specOfRow(row), deliver: row.deliver };
+			const current = {
+				...(row.trigger.kind === "unsupported" ? specBaseOfRow(row) : specOfRow(row)),
+				deliver: row.deliver,
+			};
 			const next = mergeMonitorSpec(current, parseJson(values.json, "monitors update"), ctx);
 			const updated = ledger.updateMonitor(row.id, next);
-			out({ monitor: masked(updated), schedule: scheduleOf(updated, ctx.defaultTimezone) });
+			out({ monitor: updated, schedule: scheduleOf(updated, ctx.defaultTimezone) });
 			return 0;
 		}
 		if (sub === "remove") {

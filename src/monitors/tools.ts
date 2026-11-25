@@ -10,7 +10,6 @@ import {
 	nextFireOf,
 } from "./ledger";
 import { MonitorSpecError, parseMonitorSpec } from "./spec";
-import { webhookUrl } from "./webhook";
 
 /** Only the owner-DM persona session registers monitors; monitor and lane sessions never get these tools. */
 export const isPersonaOrigin = (originKey: string): boolean => {
@@ -23,12 +22,8 @@ export interface MonitorToolDeps {
 	ledger: MonitorLedger;
 	/** `<home>/scripts`: the only place a script trigger may point to. */
 	scriptsRoot: string;
-	/** `config.watcherRoots`: where a watcher trigger's root may point. */
-	watcherRoots?: readonly string[] | undefined;
 	/** `config.workspaceDir`: besides the scripts dir, procedure files may live here. */
 	workspaceDir?: string | undefined;
-	/** `config.webhook`: without it webhook triggers are refused. */
-	webhook?: { port: number; bind?: string } | undefined;
 	/** `config.timezone`: the default zone of `at`/cron triggers and of every time the tools show. */
 	timezone: string;
 	/** Test seam: the clock that picks the zone offset the tool descriptions quote (default `Date.now`). */
@@ -72,23 +67,23 @@ function withDefaultChannel(params: Record<string, unknown>, originKey: string):
 /** `jabbu_monitor_add/list/remove`; empty for any origin that is not an owner-DM persona session. */
 export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 	if (!isPersonaOrigin(deps.originKey)) return [];
-	const { ledger, scriptsRoot, watcherRoots, workspaceDir, webhook, timezone, log, originKey } = deps;
+	const { ledger, scriptsRoot, workspaceDir, timezone, log, originKey } = deps;
 	// Computed when the tools are registered (session start): the offset in force then.
 	const offset = offsetLabel((deps.now ?? Date.now)(), timezone);
 	return [
 		{
 			name: "jabbu_monitor_add",
 			label: "Add monitor",
-			description: `Register a monitor: at the given time(s) the bot runs \`instruction\` in its own session and posts the result to the owner DM as a top-level message starting with ⏰. trigger is one of {kind:'at', at:<ISO time, ${timezone} (now ${offset}) unless an offset is given>} (once), {kind:'cron', schedule:<5 fields>, timezone?:<default ${timezone}>, command?:<as script>} (recurring; with command, deliver:'verbatim' posts stdout), {kind:'script', command:[<absolute path under the bot scripts dir>, ...args], intervalMs:60000..31622400000, fire?:'edge'|'every', once?:boolean} (the script exits 0 while the condition holds; its stdout is passed to the run), {kind:'webhook'} (runs when an external system POSTs to the loopback URL returned on creation with the returned bearer token; the request body, cut to 16 KiB, is passed to the run as untrusted outside input; needs webhook in the bot config), {kind:'watcher', root:<absolute directory inside the configured watcherRoots>, debounceMs?:100-60000, default 1000} (runs when files under root changed and stayed quiet for debounceMs; the changed paths are passed to the run; .git is ignored; needs watcherRoots in the bot config). For a script trigger, by default (fire:'edge') it fires once when the condition turns true and re-arms only after the script has failed again; fire:'every' fires on every check that passes. Set once:true for a one-off watch so the monitor turns itself off after its first fire. Compute \`at\` from the current time in ${timezone} (check with \`date\`). Returns the monitor id and the next fire time (${timezone}).`,
+			description: `Register a monitor: at the given time(s) the bot runs \`instruction\` in its own session and posts the result to the owner DM as a top-level message starting with ⏰. trigger is one of {kind:'at', at:<ISO time, ${timezone} (now ${offset}) unless an offset is given>} (once), {kind:'cron', schedule:<5 fields>, timezone?:<default ${timezone}>, command?:<as script>} (recurring; with command, deliver:'verbatim' posts stdout), {kind:'script', command:[<absolute path under the bot scripts dir>, ...args], intervalMs:60000..31622400000, fire?:'edge'|'every', once?:boolean} (the script exits 0 while the condition holds; its stdout is passed to the run). For a script trigger, by default (fire:'edge') it fires once when the condition turns true and re-arms only after the script has failed again; fire:'every' fires on every check that passes. Set once:true for a one-off watch so the monitor turns itself off after its first fire. Compute \`at\` from the current time in ${timezone} (check with \`date\`). Returns the monitor id and the next fire time (${timezone}).`,
 			parameters: {
 				type: "object",
 				properties: {
 					name: { type: "string", description: "Unique short name" },
 					trigger: {
 						type: "object",
-						description: "{kind:'at'|'cron'|'script'|'watcher'|'webhook', ...} as described",
+						description: "{kind:'at'|'cron'|'script', ...} as described",
 						properties: {
-							kind: { type: "string", enum: ["at", "cron", "script", "watcher", "webhook"] },
+							kind: { type: "string", enum: ["at", "cron", "script"] },
 							at: { type: "string", description: `kind=at: ISO time, e.g. 2026-10-19T15:04:00${offset}` },
 							schedule: { type: "string", description: "kind=cron: 5-field cron, e.g. 0 9 * * *" },
 							timezone: { type: "string", description: `IANA zone; default ${timezone}` },
@@ -110,15 +105,6 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 								enum: ["edge", "every"],
 								description:
 									"kind=script: edge (default) fires once when the check turns met (exit 0) and re-arms after it fails; every fires on every met check",
-							},
-							root: {
-								type: "string",
-								description:
-									"kind=watcher: absolute directory to watch recursively (.git ignored); must be inside the configured watcherRoots",
-							},
-							debounceMs: {
-								type: "number",
-								description: "kind=watcher: quiet time after the last change before the run, 100-60000; default 1000",
 							},
 							once: {
 								type: "boolean",
@@ -177,9 +163,7 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 			async execute(params) {
 				const parsed = parseMonitorSpec(withDefaultChannel(spec(params), originKey), {
 					scriptsRoot,
-					watcherRoots,
 					workspaceDir,
-					webhook,
 					defaultTimezone: timezone,
 				});
 				let row: MonitorRow;
@@ -192,11 +176,6 @@ export function buildMonitorTools(deps: MonitorToolDeps): HostToolDef[] {
 					throw error;
 				}
 				log.info("monitor_added", { origin: originKey, id: row.id, name: row.name, kind: row.trigger.kind });
-				if (row.trigger.kind === "webhook") {
-					// The only time the token is shown to the model; the list tool never repeats it.
-					const url = webhookUrl(webhook, row.trigger.id);
-					return `monitor ${row.id} "${row.name}" created; POST ${url} with header "Authorization: Bearer ${row.trigger.token}" (token is shown only now; owner can read it with \`jabbu-pocket monitors show\`)`;
-				}
 				return `monitor ${row.id} "${row.name}" created; next fire ${describeNext(row, timezone)}`;
 			},
 		},

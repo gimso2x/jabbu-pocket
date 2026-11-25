@@ -1,19 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { describe, expect, test } from "bun:test";
 import { boardCardLink } from "../src/dispatch/board";
 import { buildDispatchTool } from "../src/dispatch/tool";
 import { guardCode } from "../src/lanes/guard-code";
-import { captureTree, type GitRunner, planUndo, type TurnSnapshotRow, undoPlanNotes } from "../src/ops/turn-snapshot";
 import { checkSignalsOf, parseChecks, SignalSyntaxError, withoutCheckTail } from "../src/tasks/signals";
-import { makeRepo } from "./helpers/git-fixtures";
 import { fakeMailbox, localTask } from "./helpers/local-task";
-
-const repos: string[] = [];
-
-afterAll(() => {
-	for (const repo of repos) rmSync(repo, { recursive: true, force: true });
-});
 
 describe("qa-ab dispatch·ops·lanes·tasks 수정", () => {
 	test("#18: boardCardLink URL-encodes card parts while preserving colons", async () => {
@@ -37,45 +27,6 @@ describe("qa-ab dispatch·ops·lanes·tasks 수정", () => {
 		} finally {
 			server.stop(true);
 		}
-	});
-
-	test("#24/#25: planUndo returns missing plan when .git directory or snapshot objects are unreadable", async () => {
-		const repo = makeRepo(repos);
-		const before = await captureTree(repo);
-		writeFileSync(join(repo, "a.txt"), "one\n");
-		const after = await captureTree(repo);
-		const row: TurnSnapshotRow = {
-			id: 1,
-			originKey: "discord/dm/200000000000000001",
-			opRef: "op-1",
-			repo,
-			headBefore: before.head,
-			treeBefore: before.tree,
-			headAfter: after.head,
-			treeAfter: after.tree,
-			startedAt: 1000,
-			endedAt: 2000,
-			revertedAt: null,
-		};
-
-		const failGit: GitRunner = async () => ({ code: 128, stdout: "", stderr: "fatal: bad object" });
-		const badObjectPlan = await planUndo({ row, run: failGit });
-		expect(badObjectPlan).toEqual({ repo, source: before.tree, missing: true, files: [] });
-		expect(undoPlanNotes(badObjectPlan)).toEqual([`저장소를 찾을 수 없음: ${repo}`]);
-
-		rmSync(join(repo, ".git"), { recursive: true, force: true });
-		const missingGitPlan = await planUndo({ row });
-		expect(missingGitPlan).toEqual({ repo, source: before.tree, missing: true, files: [] });
-
-		const noIndexGit: GitRunner = async () => ({
-			code: 128,
-			stdout: "",
-			stderr: `error: Could not access '${before.tree}'`,
-		});
-		expect(await planUndo({ row, run: noIndexGit })).toEqual({ repo, source: before.tree, missing: true, files: [] });
-
-		const timeoutGit: GitRunner = async () => ({ code: 124, stdout: "", stderr: "git diff timed out after 10000ms" });
-		await expect(planUndo({ row, run: timeoutGit })).rejects.toThrow("timed out");
 	});
 
 	test("#36: jabbu_dispatch worker follow-up rejects done and cancelled tasks", async () => {

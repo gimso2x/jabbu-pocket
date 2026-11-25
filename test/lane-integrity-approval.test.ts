@@ -289,39 +289,6 @@ describe("the card over the refusal cap (T-20261125-05 AC-4)", () => {
 		h.close();
 	});
 
-	test("9 TODOs merged with a commit identity refusal: the identity line survives", async () => {
-		const repo = makeRepo(repos);
-		const answers = cards("denied");
-		const h = harness({
-			integrity: () => todos(9),
-			approvals: answers.approvals,
-			autoLandPolicy: () => ({ repos: [repo], maxRisk: "L2", commitEmails: { [repo]: ["owner@example.com"] } }),
-		});
-		const lane = await h.manager.start({ title: "identity", cwd: repo, channel: CHANNEL, acceptance: [], risk: "L2" });
-		await h.settle();
-		writeFileSync(join(lane.cwd, "a.txt"), "a\n");
-		git(lane.cwd, "add", "--", "a.txt");
-		git(
-			lane.cwd,
-			"-c",
-			"user.email=owner@example.com",
-			"-c",
-			"user.name=t",
-			"commit",
-			"-q",
-			"--author",
-			"t <x@other.example>",
-			"-m",
-			"a",
-		);
-		await claim(h, lane);
-		await h.settle();
-		const card = answers.asked[0] ?? "";
-		expect(card).toContain("commit_identity_mismatch");
-		expect(card.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(8);
-		h.close();
-	});
-
 	test("3 TODOs: no notice line", async () => {
 		const answers = cards("denied");
 		const h = harness({ integrity: () => todos(3), approvals: answers.approvals });
@@ -341,7 +308,6 @@ describe("integrityRefusalsOf over the cap (T-20261125-05 AC-5)", () => {
 		const readers: IntegrityReaders = {
 			collectDiff: () => Promise.reject(new LaneDiffUnavailable("no base")),
 			integrity: () => Array.from({ length: 9 }, (_, i) => refusalOf(`a.txt: TODO ${i}`)),
-			allowedEmails: () => Promise.resolve(undefined),
 			plansRoot: () => undefined,
 			warn: () => {},
 		};
