@@ -63,6 +63,7 @@ import { repoMatchesTask } from "../tasks/land-remote";
 import type { TaskRow } from "../tasks/ledger";
 import { TASK_SWEEP_MS, type TaskSweeper } from "../tasks/sweeper";
 import { localIso } from "../time";
+import { notifyWebOwnerTurn } from "../web/notify";
 import { turnNoteRepos, WikiNotes } from "../wiki/notes";
 import { readBotUsageSummary } from "./bot-driver";
 import { DIALOG_AMBIGUOUS_NOTICE, MEDIA_SWEEP_INTERVAL_MS, STOP_DRAIN_MS, WIKI_FLUSH_MS } from "./daemon-constants";
@@ -368,6 +369,7 @@ export class Daemon {
 			timezone: config.timezone,
 			onOwnerAnswered: ({ originKey, threadRef: ref }) =>
 				this.#router?.mailbox(originKey).state.busy && adapterOfThread(this.#ctx, ref)?.resumeTyping?.(ref),
+			onOwnerTurn: (info) => notifyWebOwnerTurn(this.#ctx, info),
 			...(this.#options.approvalTimeoutMs === undefined ? {} : { timeoutMs: this.#options.approvalTimeoutMs }),
 		});
 		const requeued = store.requeueAmbiguous();

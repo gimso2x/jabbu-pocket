@@ -326,7 +326,7 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 			expect(await res.json()).toEqual({ error: "csrf_mismatch" });
 		}
 
-		// Valid POST /api/web/upload returns 501 (W2 placeholder) after auth+CSRF pass
+		// Valid POST /api/web/upload succeeds after auth+CSRF pass
 		const uploadRes = await fetch(`${baseUrl}/api/web/upload`, {
 			method: "POST",
 			headers: {
@@ -334,11 +334,13 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 				"sec-fetch-site": "same-origin",
 				cookie: `jabbu_csrf=${csrfToken}`,
 				"x-jabbu-csrf": csrfToken,
+				"content-type": "text/plain",
+				"x-filename": "csrf-ok.txt",
 			},
-			body: "ignored",
+			body: "ok-payload",
 		});
-		expect(uploadRes.status).toBe(501);
-		expect(await uploadRes.json()).toEqual({ error: "upload_not_implemented" });
+		expect(uploadRes.status).toBe(200);
+		expect(await uploadRes.json()).toMatchObject({ ok: true, path: expect.stringContaining("/media/inbound/web/") });
 
 		// Valid POST /api/web/new forwards to callDaemon for both local token and Access JWT
 		const newRes = await fetch(`${baseUrl}/api/web/new`, {

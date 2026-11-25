@@ -42,6 +42,7 @@ export interface WebConversationSummary {
 	lastRole: WebMessageRole;
 	updatedAt: number;
 	openApprovals: number;
+	inProgress: boolean;
 }
 
 interface WebMessageSql {
@@ -231,6 +232,17 @@ function listWebConversationsDb(db: Database, limit = 50): WebConversationSummar
 						.get(entry.conversation) as { n: number }
 				).n
 			: 0;
+		const statusRow = db
+			.query("SELECT card_json FROM web_messages WHERE conversation = ? AND role = 'status' ORDER BY id DESC LIMIT 1")
+			.get(entry.conversation) as { card_json: string | null } | null;
+		let inProgress = false;
+		if (statusRow?.card_json !== null && statusRow?.card_json !== undefined) {
+			try {
+				inProgress = (JSON.parse(statusRow.card_json) as { deleted?: unknown }).deleted === false;
+			} catch {
+				inProgress = false;
+			}
+		}
 		return {
 			conversation: entry.conversation,
 			title: titleOfConversation(rows),
@@ -239,6 +251,7 @@ function listWebConversationsDb(db: Database, limit = 50): WebConversationSummar
 			lastRole: last?.role ?? "system",
 			updatedAt: entry.updated_at,
 			openApprovals,
+			inProgress,
 		};
 	});
 }

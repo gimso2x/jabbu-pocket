@@ -5,6 +5,7 @@ import { type ChatPlatform, parseChatOrigin, platformOfConversationId } from "..
 import type { Logger } from "../log";
 import { redact } from "../redact";
 import type { CardAnswerStore } from "../store/card-answers";
+import { ownerTurnInfo, type WebOwnerTurnInfo } from "../web/notify";
 import { type AnswerLedgerContext, answerSeen, recordAnswer } from "./answer-ledger";
 import { deadlineNote, mirrorNote } from "./approval-notes";
 import type { ChoiceCard, ChoiceCardHandle, ChoicePending, ChoiceResult, ChoiceSource } from "./choice-types";
@@ -260,6 +261,8 @@ export interface ApprovalBrokerOptions {
 	timers?: ApprovalTimers;
 	/** An owner's answer (button, reply, form; no timeout, cancel or abort) closed a card of this thread. */
 	onOwnerAnswered?: ((origin: { originKey: string; threadRef: string }) => void) | undefined;
+	/** Called when an approval or choice card is posted and waiting on the owner. */
+	onOwnerTurn?: ((info: WebOwnerTurnInfo) => void) | undefined;
 }
 
 interface Pending {
@@ -276,10 +279,7 @@ interface Pending {
 	cards: () => MessageRef[];
 }
 
-/**
- * Choice-card ledger rows expire this long after the card's own deadline: the card's timer settles it first and
- * writes the real outcome, so the approval sweeper never races it to an approval-worded card.
- */
+/** Choice-card ledger rows expire this long after the card deadline so approval sweepers never race them. */
 const CHOICE_LEDGER_GRACE_MS = 60_000;
 /** First characters of every choice card body (choice.ts): how a ledger row tells a choice card from an approval. */
 const CHOICE_HEADS = ["❓", "🔒"];
@@ -308,11 +308,7 @@ const ABORTED_TEXT = "⌛ 기다리던 작업이 중단돼 만료됨(데몬 재�
 /** The longest delay `setTimeout` keeps (2^31-1 ms, about 24.8 days); a longer one fires at once. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
-/**
- * Posts approve/deny buttons in the owner's DM and resolves when the owner clicks. Only the owner's click counts; any
- * other user, an unknown message or a repeated click is ignored. No click within `timeoutMs` resolves as `timeout`
- * (callers treat it as denied).
- */
+/** Posts approve/deny buttons in the owner's DM and resolves on owner click (timeout counts as denied). */
 export class ApprovalBroker {
 	readonly #options: ApprovalBrokerOptions;
 	readonly #timers: ApprovalTimers;
@@ -548,6 +544,7 @@ export class ApprovalBroker {
 				buttonsNote: deadlineNote(now + timeoutMs, timeoutMs, this.#deadline),
 			});
 			log.info("approval_requested", { channel, ts: card.messageId });
+			this.#options.onOwnerTurn?.(ownerTurnInfo("approval", channel, card.messageId, shown, origin?.originKey));
 			if (escalated) {
 				mirror =
 					origin.threadTs === undefined
@@ -746,6 +743,8 @@ export class ApprovalBroker {
 			log.warn("choice_buttons_failed", { channel, ts, error: String(error) });
 		}
 		log.info("choice_requested", { channel, ts, origin: origin.originKey, buttons: card.buttons.length });
+		const turnSummary = cutCodePointSafe(body, SUMMARY_LIMIT);
+		this.#options.onOwnerTurn?.(ownerTurnInfo("choice", channel, ts, turnSummary, origin.originKey));
 		if (signal?.aborted) onAbort();
 		return {
 			next: async () => {

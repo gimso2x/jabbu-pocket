@@ -11,6 +11,11 @@ import {
 	type WebAuthConfig,
 	type WebAuthState,
 } from "./auth";
+import { renderWebMessageHtml } from "./card-html";
+import { renderWebChatPage, serveWebChatAsset } from "./chat-page";
+import { saveWebUpload } from "./upload";
+
+export { serveWebChatAsset };
 
 export interface WebDashboardOptions {
 	homeDir: string;
@@ -98,17 +103,54 @@ function nonNegInt(raw: string | null): number | undefined {
 	return Number(raw);
 }
 
-/** Authenticates `?view=chat` page loads and supplies the CSRF cookie header. */
-export async function webChatPageGate(
+/** Compact router bundle used by the dashboard HTTP server to keep route wiring minimal. */
+export function webDashboardRouter(
+	options: WebDashboardOptions | undefined,
+	commonHeaders: Record<string, string>,
+	eventStream: EventStreamFn,
+) {
+	const ctx = createWebRouterContext(options);
+	return {
+		api: (request: Request, pathname: string, url: URL) =>
+			handleWebRequest(request, pathname, url, ctx, commonHeaders, eventStream),
+		asset: (request: Request, pathname: string) =>
+			serveWebChatAsset(request, pathname, ctx !== undefined, commonHeaders),
+		page: (request: Request, url: URL, head: boolean, csp: string) =>
+			webChatPageResponse(request, url, ctx, head, commonHeaders, csp),
+	};
+}
+
+/** Authenticates and server-renders `?view=chat` (with SSR messages/cards and CSRF cookie). */
+export async function webChatPageResponse(
 	request: Request,
+	url: URL,
 	ctx: WebRouterContext | undefined,
 	head: boolean,
 	commonHeaders: Record<string, string>,
-): Promise<{ response: Response } | { setCookie: string }> {
-	if (ctx === undefined) return { response: jsonReply({ error: "web_disabled" }, 404, head, commonHeaders) };
+	csp: string,
+): Promise<Response> {
+	if (ctx === undefined) return jsonReply({ error: "web_disabled" }, 404, head, commonHeaders);
 	const auth = await authenticateWebRequest(request, ctx.auth);
-	if (!auth.ok) return { response: jsonReply({ error: auth.error }, auth.status, head, commonHeaders) };
-	return { setCookie: issueCsrfCookie(request, ctx.auth).cookie };
+	if (!auth.ok) return jsonReply({ error: auth.error }, auth.status, head, commonHeaders);
+	const csrf = issueCsrfCookie(request, ctx.auth);
+	const conversations = readWebConversations(ctx.options.homeDir);
+	const requestedConv = url.searchParams.get("c") ?? "";
+	const activeConversation =
+		GRAMMAR.web.conversation.test(requestedConv) && conversations.some((c) => c.conversation === requestedConv)
+			? requestedConv
+			: (conversations[0]?.conversation ?? "");
+	const messages = activeConversation ? readWebMessages(ctx.options.homeDir, activeConversation) : [];
+	const themeParam = url.searchParams.get("theme");
+	const theme = themeParam === "dark" || themeParam === "light" ? themeParam : undefined;
+	const html = renderWebChatPage({ conversations, activeConversation, messages, csrfToken: csrf.token, theme });
+	return new Response(head ? null : html, {
+		headers: {
+			...commonHeaders,
+			"content-type": "text/html; charset=utf-8",
+			"content-security-policy": csp,
+			"set-cookie": csrf.cookie,
+		},
+	});
 }
 
 function handleStream(
@@ -165,7 +207,10 @@ function handleStream(
 						if (tail.editedAt !== null) lastEditedAt = Math.max(lastEditedAt, tail.editedAt);
 					}
 				}
-				if (changes.length > 0) send(`event: messages\ndata: ${JSON.stringify({ messages: changes })}\n\n`);
+				if (changes.length > 0) {
+					const enriched = changes.map((row) => ({ ...row, html: renderWebMessageHtml(row) }));
+					send(`event: messages\ndata: ${JSON.stringify({ messages: enriched })}\n\n`);
+				}
 			}
 			if (open) cancel = schedule(poll, pollMs);
 		};
@@ -225,8 +270,12 @@ export async function handleWebRequest(
 	if (request.method === "POST") {
 		const csrf = verifyWebCsrf(request, ctx.auth);
 		if (!csrf.ok) return jsonReply({ error: csrf.error }, 403, false, commonHeaders);
-		if (route.WEB_UPLOAD.test(pathname))
-			return jsonReply({ error: "upload_not_implemented" }, 501, false, commonHeaders);
+		if (route.WEB_UPLOAD.test(pathname)) {
+			const uploaded = await saveWebUpload(request, ctx.options.homeDir);
+			return uploaded.ok
+				? jsonReply(uploaded, 200, false, commonHeaders)
+				: jsonReply({ error: uploaded.error }, uploaded.status, false, commonHeaders);
+		}
 		const body = await readJsonBody(request);
 		if (!body.ok) return jsonReply({ error: "invalid_json" }, 400, false, commonHeaders);
 
@@ -293,7 +342,12 @@ export async function handleWebRequest(
 		if (after === undefined) return jsonReply({ error: "invalid_cursor" }, 400, head, commonHeaders);
 		const csrf = issueCsrfCookie(request, ctx.auth);
 		return jsonReply(
-			{ messages: readWebMessages(ctx.options.homeDir, conversation, { thread, after }) },
+			{
+				messages: readWebMessages(ctx.options.homeDir, conversation, { thread, after }).map((row) => ({
+					...row,
+					html: renderWebMessageHtml(row),
+				})),
+			},
 			200,
 			head,
 			commonHeaders,

@@ -1,6 +1,8 @@
+import { MAX_INBOUND_FILES } from "../channel/attachments";
 import { GRAMMAR } from "../core/origin-key";
 import type { DaemonContext } from "../daemon/daemon-context";
 import { WebAdapter } from "./adapter";
+import { validateWebAttachmentPath } from "./upload";
 
 const CONTROL_CHARS = /\p{Cc}/u;
 const TITLE_MAX_LEN = 200;
@@ -30,14 +32,23 @@ export async function handleWebIpc(ctx: DaemonContext, request: Record<string, u
 			return { ok: false, error: "invalid_thread" };
 		}
 		if (typeof text !== "string") return { ok: false, error: "invalid_text" };
-		if (
-			files !== undefined &&
-			(!Array.isArray(files) ||
-				!files.every((file): file is string => typeof file === "string" && file !== "" && !CONTROL_CHARS.test(file)))
-		) {
-			return { ok: false, error: "invalid_files" };
+		let verifiedFiles: string[] | undefined;
+		if (files !== undefined) {
+			if (
+				!Array.isArray(files) ||
+				!files.every((file): file is string => typeof file === "string" && file !== "" && !CONTROL_CHARS.test(file))
+			) {
+				return { ok: false, error: "invalid_files" };
+			}
+			if (files.length > MAX_INBOUND_FILES) return { ok: false, error: "too_many_files" };
+			verifiedFiles = [];
+			for (const file of files) {
+				const check = validateWebAttachmentPath(file, ctx.options.config.homeDir);
+				if (!check.ok) return { ok: false, error: check.error };
+				verifiedFiles.push(check.path);
+			}
 		}
-		return await adapter.sendFromWeb({ conversation, thread, text, files });
+		return await adapter.sendFromWeb({ conversation, thread, text, files: verifiedFiles });
 	}
 
 	if (request.op === "web_action") {
