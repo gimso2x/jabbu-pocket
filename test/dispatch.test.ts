@@ -87,14 +87,17 @@ describe("realProcessRunner signal", () => {
 				signal: abort.signal,
 			});
 			await within(ready, 4_000, "the grandchild pid file");
-			// A blank pid file means the shell never got the `sleep` started (fork refused under load): that is the
-			// environment, not the runner, so say so — `alive(0)` would read as a kill failure and mislead the next look.
+			// A sub-second failure here is the environment, never the runner's kill: a blank pid file means the shell
+			// never got the `sleep` started (a refused fork, …), and a pid already gone means it died before the abort.
+			// Both otherwise read as "the runner did not kill", so name them for what they are.
 			const pidText = readFileSync(join(dir, "pid"), "utf8").trim();
 			if (!/^\d+$/.test(pidText)) {
-				throw new Error(`the grandchild never started (pid file holds ${JSON.stringify(pidText)}): fork refused`);
+				throw new Error(`the grandchild never started (pid file holds ${JSON.stringify(pidText)}): the environment, not the runner`);
 			}
 			grandchild = Number(pidText);
-			expect(alive(grandchild)).toBe(true);
+			if (!alive(grandchild)) {
+				throw new Error(`the grandchild ${grandchild} was already gone before the abort: the environment, not the runner`);
+			}
 			abort.abort();
 			const result = await within(run, 4_000, "the aborted run returning");
 			expect(result.timedOut).toBe(false);
