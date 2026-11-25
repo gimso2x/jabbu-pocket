@@ -14,10 +14,15 @@ import type { DiscordMessageEvent } from "./transport";
  */
 export const PEER_PART_WAIT_MS = 8_000;
 
+interface WaitingPeerPost {
+	parts: DiscordMessageEvent[];
+	close: () => void;
+}
+
 /** The waits of mentioned peer posts for their later parts, keyed `<channel>:<peer>`. */
 export class PeerParts {
 	readonly #waitMs: number;
-	readonly #waiting = new Map<string, DiscordMessageEvent[]>();
+	readonly #waiting = new Map<string, WaitingPeerPost>();
 
 	constructor(waitMs: number) {
 		this.#waitMs = waitMs;
@@ -25,26 +30,35 @@ export class PeerParts {
 
 	/** Takes an unmentioned peer post as a later part when its mentioned post is waiting; false: no wait is open. */
 	join(key: string, event: DiscordMessageEvent, log: Logger): boolean {
-		const parts = this.#waiting.get(key);
-		if (parts === undefined) return false;
-		parts.push(event);
+		const entry = this.#waiting.get(key);
+		if (entry === undefined) return false;
+		entry.parts.push(event);
 		log.info("peer_part_merged", { channel: event.channel_id, id: event.id, key });
 		return true;
 	}
 
 	/**
-	 * The mentioned post's content with every later part that came during the wait, in post order. The wait opens
-	 * before the first await, so a part handled meanwhile finds it; a second mentioned post of the same key does not wait.
+	 * The mentioned post's content with every later part that came during the wait, in post order. When a newer
+	 * mentioned post of the same key arrives while one is waiting, the earlier wait closes at once so following
+	 * unmentioned parts attach to the latest mention.
 	 */
 	async gather(key: string, content: string): Promise<string> {
-		if (this.#waitMs <= 0 || this.#waiting.has(key)) return content;
+		if (this.#waitMs <= 0) return content;
+		this.#waiting.get(key)?.close();
 		const parts: DiscordMessageEvent[] = [];
-		this.#waiting.set(key, parts);
 		const waited = Promise.withResolvers<void>();
-		setTimeout(waited.resolve, this.#waitMs);
+		const entry: WaitingPeerPost = {
+			parts,
+			close: () => {
+				clearTimeout(timer);
+				if (this.#waiting.get(key) === entry) this.#waiting.delete(key);
+				waited.resolve();
+			},
+		};
+		const timer = setTimeout(entry.close, this.#waitMs);
+		this.#waiting.set(key, entry);
 		await waited.promise;
-		this.#waiting.delete(key);
-		parts.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+		parts.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0));
 		return [content, ...parts.map((part) => part.content)].join("\n");
 	}
 }

@@ -7,11 +7,10 @@ import {
 	acpSessionParams,
 	acpUsageOf,
 	configOptionsOf,
-	quotaRetryNotice,
 	resolveAgyExecutable,
-	shownText,
 } from "./agy-acp-client";
 import { promptImageBlocks } from "./agy-images";
+import { appendTurnChunk, resetTurnText } from "./agy-notice";
 import {
 	allAccountsExhaustedError,
 	clearAgyPointer,
@@ -651,16 +650,17 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				const turn = this.#turn;
 				const client = this.#client;
 				if (!turn || turn.cancelling || !client || content?.type !== "text" || typeof content.text !== "string") return;
-				turn.text += content.text;
 				// agy retrying a quota failure: stop its retry loop and switch or end as a 429.
-				const quota = quotaRetryNotice(turn.text);
+				const { quota, shown } = appendTurnChunk(turn, content.text);
 				if (quota !== undefined) {
 					setQuotaNotice(turn, quota);
 					void this.#cancel(turn, client);
 					return;
 				}
-				const text = shownText(turn.text);
-				this.#emit({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text }] } });
+				this.#emit({
+					type: "message_update",
+					message: { role: "assistant", content: [{ type: "text", text: shown }] },
+				});
 				return;
 			}
 			case "tool_call":
@@ -721,7 +721,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	}
 
 	#request(client: AgyAcpClient, turn: PendingTurn, prompt: Array<Record<string, unknown>>): void {
-		turn.text = "";
+		resetTurnText(turn);
 		turn.promptReplied = Promise.withResolvers<void>();
 		client.request("session/prompt", { sessionId: this.#sessionId, prompt }).then(
 			(result) => this.#onPromptReply(client, turn, prompt, result, undefined),

@@ -12,24 +12,10 @@ import {
 	splitRowCells,
 	tableEndAt,
 } from "../channel/text";
+import { maxBacktickRun, outsideCode } from "./code-spans";
 import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
-/**
- * Fenced blocks and inline code: copied untouched by both conversions. A backtick after a backslash is a literal one
- * (`escapeDiscordMarkdown`), so it opens no span: escaped owner text is converted like any plain text.
- */
-const CODE = /(?<!\\)```[\s\S]*?```|(?<!\\)`[^`\n]*`/g;
-
-/** Applies `convert` to the text between code spans only. */
-export function outsideCode(text: string, convert: (plain: string) => string): string {
-	let out = "";
-	let last = 0;
-	for (const match of text.matchAll(CODE)) {
-		out += convert(text.slice(last, match.index)) + match[0];
-		last = match.index + match[0].length;
-	}
-	return out + convert(text.slice(last));
-}
+export { outsideCode };
 
 function convertPlain(text: string): string {
 	return (
@@ -116,10 +102,12 @@ function fenceTables(text: string): { text: string; spans: Array<[number, number
 		});
 		// The delimiter row's `:` markers pick the padding side; the markers themselves never reach the output.
 		const align = delimiterAligns(lines[i + 1] ?? "");
+		const ascii = tableToAscii({ headers, rows }, { rule: true, align });
+		const fence = "`".repeat(Math.max(3, maxBacktickRun(ascii) + 1));
 		const start = offset;
-		push("```");
-		for (const row of tableToAscii({ headers, rows }, { rule: true, align }).split("\n")) push(row);
-		push("```");
+		push(fence);
+		for (const row of ascii.split("\n")) push(row);
+		push(fence);
 		spans.push([start, offset - 1]);
 		i = end - 1;
 	}

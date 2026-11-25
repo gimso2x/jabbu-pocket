@@ -12,7 +12,7 @@ import { INJECTION_WARNING_HEAD, injectionWarning, scanForInjection } from "../s
 import type { Store } from "../store/db";
 import { formatLocal } from "../time";
 import type { AgyAccountPool, AgyBlockedAccount } from "./agy-account-pool";
-import { isQuotaErrorText, quotaRetryNotice } from "./agy-acp-client";
+import { isQuotaErrorText, quotaRetryNotice } from "./agy-notice";
 import { OmpDriverError } from "./driver";
 import { isRecord } from "./type-guards";
 

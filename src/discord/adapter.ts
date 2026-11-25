@@ -277,14 +277,20 @@ export class DiscordAdapter implements ChannelAdapter {
 						locate: async (channelId) => {
 							const info = await this.#port.channelInfo(channelId);
 							if (info === undefined) return undefined;
-							if (info.guildId === undefined) return { dm: true };
-							return { dm: false, guildId: info.guildId };
+							return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
 						},
 						ingest: async (event) => {
 							let opened = false;
-							const outcome = await this.#processMessage(event, [], false, () => {
-								opened = true;
-							});
+							const outcome = await this.#processMessage(
+								event,
+								[],
+								false,
+								() => {
+									opened = true;
+								},
+								undefined,
+								true,
+							);
 							if (opened && outcome === "recorded") this.#recoveredThreads.add(event.id);
 							return outcome;
 						},
@@ -589,11 +595,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		return "dropped";
 	}
 
-	/**
-	 * The prompt's context line for a reply: `답장 대상(<author>): <first 300 characters>`, fenced with the other quoted
-	 * material. Only a post of this bot, the owner or a peer bot is quoted; a deleted post, one without its author or
-	 * text, and anyone else's post give none. No extra Discord call: what the event carries is all there is.
-	 */
+	/** Prompt context line for a reply (`답장 대상(<author>): …`); only bot/owner/peer posts, no extra API call. */
 	#replyContext(ref: DiscordMessageEvent["referenced_message"], botUserId: string): string | undefined {
 		const author = ref?.author?.id;
 		const content = ref?.content?.replace(/\s+/g, " ").trim() ?? "";
@@ -618,6 +620,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		injected = false,
 		onThread?: () => void,
 		editedAt?: string,
+		fromBackfill = false,
 	): Promise<IngestOutcome> {
 		if (!READ_TYPES.has(event.type)) return this.#drop(event, "subtype");
 		const botUserId = await this.#ready;
@@ -625,7 +628,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		if (event.author.id === botUserId) return this.#drop(event, "bot_message");
 		// A peer is told by its id, whatever the bot flag says.
 		const peer = this.#peerBots.find((p) => p.userId === event.author.id);
-		if (peer !== undefined) return this.#processPeerMessage(event, botUserId, peer);
+		if (peer !== undefined) return this.#processPeerMessage(event, botUserId, peer, fromBackfill);
 		if (event.author.bot === true) return this.#drop(event, "bot_message");
 		// The owner gate comes before any lookup, so a stranger's message costs no API call.
 		if (!isOwner(event.author.id, this.#owner)) return this.#drop(event, "not_owner");
@@ -818,17 +821,12 @@ export class DiscordAdapter implements ChannelAdapter {
 		);
 	}
 
-	/**
-	 * A message of an allowlisted peer bot, the peer rules on Discord's shapes: a server channel or thread only, a read
-	 * type, this bot mentioned (whatever the channel policy), no muted thread. It never takes an owner path — no card
-	 * reply, no attachment download, no command parsing (the text goes to the core fenced) — and is capped per thread
-	 * by the core. A channel root's thread is opened only once the core recorded the message, so a dropped peer
-	 * message leaves no empty thread.
-	 */
+	/** Allowlisted peer bot post: server channel/thread only, this bot mentioned, no owner path, capped per thread. */
 	async #processPeerMessage(
 		event: DiscordMessageEvent,
 		botUserId: string,
 		peer: { userId: string; name: string },
+		fromBackfill = false,
 	): Promise<IngestOutcome> {
 		const drop = (reason: string): IngestOutcome => this.#drop(event, reason, peer.userId);
 		if (event.guild_id === undefined) return drop("peer_dm");
@@ -836,13 +834,13 @@ export class DiscordAdapter implements ChannelAdapter {
 		const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
 		const partKey = `${event.channel_id}:${peer.userId}`;
 		if (!tokens.some((token) => event.content.includes(token))) {
-			if (this.#peerParts.join(partKey, event, this.#log)) return "recorded";
+			if (!fromBackfill && this.#peerParts.join(partKey, event, this.#log)) return "recorded";
 			const seen = { core: this.#core, log: this.#log, logChannel: this.#logChannel };
 			await notePeerSeen({ ...seen, place: (e) => this.#serverPlace(e) }, event, peer.userId);
 			return drop("peer_not_mentioned");
 		}
 		if (this.#core.onPeerInbound === undefined) return drop("peer_unsupported");
-		const content = await this.#peerParts.gather(partKey, event.content);
+		const content = fromBackfill ? event.content : await this.#peerParts.gather(partKey, event.content);
 		const { conversationId, threadId } = await this.#serverPlace(event);
 		if (conversationId === this.#logChannel) return drop("log_channel");
 		// A root's keys are those of the thread the owner path would open from it (Discord: thread id = message id).
