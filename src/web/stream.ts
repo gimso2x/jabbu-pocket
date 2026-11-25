@@ -68,21 +68,21 @@ export function handleWebStream(
 			if (!open) return;
 			const mark = readWebWatermark(target.homeDir, conversation);
 			if (mark.maxId > lastId || mark.maxEditedAt > lastEditedAt) {
-				const changes = readWebChanges(target.homeDir, lastId, lastEditedAt, conversation, 200);
-				if (changes.length < 200) {
-					lastId = mark.maxId;
-					lastEditedAt = mark.maxEditedAt;
-				} else {
-					const tail = changes.at(-1);
-					if (tail !== undefined) {
-						lastId = Math.max(lastId, tail.id);
-						if (tail.editedAt !== null) lastEditedAt = Math.max(lastEditedAt, tail.editedAt);
+				// Page through every row changed since the cursors by id, so edits to older rows
+				// cannot make a full page repeat forever and starve the rows behind it.
+				let pageAfterId = 0;
+				while (open) {
+					const changes = readWebChanges(target.homeDir, lastId, lastEditedAt, conversation, 200, pageAfterId);
+					if (changes.length > 0) {
+						const enriched = changes.map((row) => ({ ...row, html: renderWebMessageHtml(row, { botId: target.id }) }));
+						send(`event: messages\ndata: ${JSON.stringify({ messages: enriched })}\n\n`);
 					}
+					const tail = changes.at(-1);
+					if (changes.length < 200 || tail === undefined) break;
+					pageAfterId = tail.id;
 				}
-				if (changes.length > 0) {
-					const enriched = changes.map((row) => ({ ...row, html: renderWebMessageHtml(row, { botId: target.id }) }));
-					send(`event: messages\ndata: ${JSON.stringify({ messages: enriched })}\n\n`);
-				}
+				lastId = Math.max(lastId, mark.maxId);
+				lastEditedAt = Math.max(lastEditedAt, mark.maxEditedAt);
 			}
 			if (open) cancel = schedule(poll, pollMs);
 		};
