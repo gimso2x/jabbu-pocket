@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
 import { callDaemon } from "../src/daemon/ipc";
 import { CONTINUE_PROMPT } from "../src/daemon/recovery";
+import { DiscordCallError } from "../src/discord/transport";
 import { isTaskOrigin, taskOriginKey } from "../src/lanes/status";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
@@ -563,5 +564,173 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 		expect(rig.daemon.store.listDeliveries({ originKey: origin })).toEqual([]);
 		expect(rig.transport.posts((text) => text.includes("[turn failed]"))).toEqual([]);
 		expect(rig.herdrCalls).toEqual([]);
+	});
+
+	describe("dashboard 작업 내역 (IPC task_followup · tasks_pause/resume source web)", () => {
+		type Answer = { ok: boolean; text?: string; error?: string };
+		const ipc = (rig: Rig, request: Record<string, unknown>) =>
+			callDaemon(rig.daemon.socketPath, request) as Promise<Answer>;
+		/** The newest kept prompt preview of `agent` (`herdr_prompts`, what the dashboard's 마지막 지시 shows). */
+		const lastPreview = (agent: string): string | undefined => {
+			const db = new Database(join(home.dir, "jabbu.db"), { readonly: true });
+			try {
+				return db
+					.query<{ preview: string }, [string]>(
+						"SELECT preview FROM herdr_prompts WHERE agent = ? ORDER BY id DESC LIMIT 1",
+					)
+					.get(agent)?.preview;
+			} finally {
+				db.close();
+			}
+		};
+
+		test("AC-2·AC-4: a web follow-up mid-turn steers the child through followupTask; the record preview starts '[웹] ' and the thread gets the redacted first 80 characters", async () => {
+			const rig = await boot({ hold: true });
+			const row = await rig.register();
+			const origin = taskOriginKey(row.agent);
+			await rig.until(() => received(rig, origin).length === 1);
+			const text = `토큰 xoxb-TEST-0 은 빼고\n${"가".repeat(100)}`;
+			const answer = await ipc(rig, { op: "task_followup", id: row.taskId, text });
+			expect(answer.ok).toBe(true);
+			expect(answer.text).toContain(`후속 지시를 ${row.agent}에 전달했습니다`);
+			await rig.until(() => received(rig, origin).length === 2);
+			expect(received(rig, origin)[1]).toStartWith("steer:토큰");
+			expect(inboundOf(rig, origin).map((r) => r.platformMessageId.split(":")[2])).toEqual(["start", "followup"]);
+			expect(sweepLines(rig, "dispatch_prompted").at(-1)).toContain("source=web");
+			expect(lastPreview(row.agent)).toStartWith("[웹] ");
+			const lead = `🌐 웹에서 ${row.taskId} 지시 넣음: `;
+			await rig.transport.waitForPosts((t) => t.startsWith(lead));
+			const [notice] = rig.transport.posts((t) => t.startsWith(lead));
+			const quoted = (notice?.content ?? "").slice(lead.length);
+			expect(quoted).toBe(redact(text).replace(/\s+/g, " ").trim().slice(0, 80));
+			expect(quoted).not.toContain("xoxb-TEST-0");
+			expect(rig.herdrCalls).toEqual([]);
+		});
+
+		test("AC-2·AC-3·AC-4: a web pause holds the task (source=web logged, thread told); a web follow-up then lifts the hold and goes in", async () => {
+			const rig = await boot({ hold: true });
+			const row = await rig.register();
+			const origin = taskOriginKey(row.agent);
+			await rig.until(() => received(rig, origin).length === 1);
+			const paused = await ipc(rig, { op: "tasks_pause", id: row.taskId, source: "web" });
+			expect(paused.ok).toBe(true);
+			expect(paused.text).toStartWith(`⏸ ${row.taskId} 멈췄습니다`);
+			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(true);
+			expect(sweepLines(rig, "task_paused")[0]).toContain("source=web");
+			expect(sweepLines(rig, "task_interrupt")[0]).toContain("confirmed=true");
+			expect(sweepLines(rig, "task_interrupt")[0]).toContain("source=web");
+			await rig.transport.waitForPosts((t) => t === `🌐 웹에서 ${row.taskId} 멈춤`);
+			const sent = await ipc(rig, { op: "task_followup", id: row.taskId, text: "멈춘 뒤 이어서 해" });
+			expect(sent.ok).toBe(true);
+			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(false);
+			await rig.until(() => received(rig, origin).some((c) => c.includes("멈춘 뒤 이어서 해")));
+		});
+
+		test("AC-3·AC-4: a web resume goes through controlTask (hold lifted, source=web, thread told); a chat pause logs no source", async () => {
+			const rig = await boot({ respond: () => "받았습니다" });
+			const row = await rig.register();
+			const origin = taskOriginKey(row.agent);
+			await startTurnEnded(rig, origin);
+			// The idle worker: the pause's answer still says the turn was stopped (nothing ran), not a bare sweep hold.
+			const paused = await ipc(rig, { op: "tasks_pause", id: row.taskId });
+			expect(paused.text).toStartWith(`⏸ ${row.taskId} 멈췄습니다`);
+			expect(paused.text).toContain("턴을 멈췄습니다(헤드리스)");
+			expect(sweepLines(rig, "task_paused")[0]).not.toContain("source=");
+			const resumed = await ipc(rig, { op: "tasks_resume", id: row.taskId, source: "web" });
+			expect(resumed).toMatchObject({ ok: true });
+			expect(resumed.text).toStartWith(`▶ ${row.taskId} 재개했습니다`);
+			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(false);
+			expect(sweepLines(rig, "task_resumed")[0]).toContain("source=web");
+			await rig.transport.waitForPosts((t) => t === `🌐 웹에서 ${row.taskId} 재개`);
+			// A second resume changes nothing: answered, but the thread is not told again.
+			expect((await ipc(rig, { op: "tasks_resume", id: row.taskId, source: "web" })).text).toContain(
+				"멈춘 상태가 아닙니다",
+			);
+			expect(rig.transport.posts((t) => t === `🌐 웹에서 ${row.taskId} 재개`)).toHaveLength(1);
+		});
+
+		test("AC-3: a web pause of a task that is not working or blocked is refused; nothing is held or told", async () => {
+			const rig = await boot({ respond: () => "받았습니다" });
+			const row = await rig.register();
+			await startTurnEnded(rig, taskOriginKey(row.agent));
+			rig.daemon.store.tasks.transition(row.taskId, "review", "bot");
+			const answer = await ipc(rig, { op: "tasks_pause", id: row.taskId, source: "web" });
+			expect(answer).toMatchObject({ ok: false, error: "task_control_refused" });
+			expect(answer.text).toContain("working·blocked만 멈춥니다");
+			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(false);
+			expect(rig.transport.posts((t) => t.startsWith("🌐"))).toEqual([]);
+		});
+
+		test("AC-2: empty, blank, control-character, over-64KB, unknown, closed and herdr follow-ups are refused before any row", async () => {
+			const rig = await boot({ respond: () => "받았습니다" });
+			const row = await rig.register();
+			const origin = taskOriginKey(row.agent);
+			await startTurnEnded(rig, origin);
+			const refuse = async (request: Record<string, unknown>, error: string) =>
+				expect(await ipc(rig, { op: "task_followup", ...request })).toMatchObject({ ok: false, error });
+			await refuse({ id: row.taskId, text: "" }, "empty_text");
+			await refuse({ id: row.taskId, text: " \n\t " }, "empty_text");
+			await refuse({ id: row.taskId }, "empty_text");
+			await refuse({ id: row.taskId, text: "하나\u0007둘" }, "control_chars");
+			await refuse({ id: row.taskId, text: "하나\r\n둘" }, "control_chars");
+			await refuse({ id: row.taskId, text: "x".repeat(64 * 1024 + 1) }, "text_too_long");
+			await refuse({ id: "T-20990101-01", text: "이어서" }, "task_not_found");
+			const herdr = rig.daemon.store.tasks.register({
+				title: "herdr 작업",
+				risk: "L1",
+				originKey: DM,
+				threadRef: THREAD,
+				host: null,
+				repo: rig.repo,
+				acceptance: [],
+			});
+			await refuse({ id: herdr.taskId, text: "이어서" }, "herdr_task");
+			expect(await ipc(rig, { op: "tasks_pause", id: herdr.taskId, source: "web" })).toMatchObject({
+				ok: false,
+				error: "herdr_task",
+			});
+			rig.daemon.store.tasks.transition(row.taskId, "done", "human", "close");
+			await refuse({ id: row.taskId, text: "이어서" }, "task_closed");
+			expect(inboundOf(rig, origin)).toHaveLength(1);
+			expect(rig.transport.posts((t) => t.startsWith("🌐"))).toEqual([]);
+			expect(rig.herdrCalls).toEqual([]);
+		});
+
+		test("AC-4: a failed thread notice changes neither the answer nor the follow-up", async () => {
+			const rig = await boot({ hold: true });
+			const row = await rig.register();
+			const origin = taskOriginKey(row.agent);
+			await rig.until(() => received(rig, origin).length === 1);
+			rig.transport.failNext.createMessage = [new DiscordCallError("definitive", "discord_http_403", 403, 50001)];
+			const answer = await ipc(rig, { op: "task_followup", id: row.taskId, text: "알림 실패여도 넣어" });
+			expect(answer.ok).toBe(true);
+			expect(answer.text).toContain(`후속 지시를 ${row.agent}에 전달했습니다`);
+			await rig.until(() => sweepLines(rig, "task_web_notice_failed").length === 1);
+			await rig.until(() => received(rig, origin).length === 2);
+			expect(received(rig, origin)[1]).toBe("steer:알림 실패여도 넣어");
+		});
+
+		test("AC-2: while frozen a web follow-up is kept pending and the answer says it waits", async () => {
+			const realNow = Date.now;
+			let probeNow = realNow();
+			Date.now = () => probeNow; // the freeze probe captures Date.now at construction: a fake crosses its cache window
+			try {
+				const rig = await boot({ respond: () => "받았습니다" });
+				const row = await rig.register();
+				const origin = taskOriginKey(row.agent);
+				await startTurnEnded(rig, origin);
+				writeFreeze(home.dir, { reason: "hold", by: "cli", now: probeNow });
+				probeNow += 3_000;
+				const answer = await ipc(rig, { op: "task_followup", id: row.taskId, text: "동결 중 지시" });
+				expect(answer.ok).toBe(true);
+				expect(answer.text).toContain("동결 중이라 대기합니다");
+				const followup = inboundOf(rig, origin).find((r) => r.platformMessageId.includes(":followup:"));
+				expect(followup?.state).toBe("pending");
+				expect(received(rig, origin)).toHaveLength(1);
+				clearFreeze(home.dir);
+			} finally {
+				Date.now = realNow;
+			}
+		});
 	});
 });
