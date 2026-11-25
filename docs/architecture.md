@@ -41,6 +41,7 @@ Discord ──▶ channel adapter ──▶ CoreSink(daemon-sink) ──▶ stor
 | `src/ops/` | apply·백업·복구·gc·건강 게이트·동결·비용 상한 | `apply.ts`, `gates.ts`, `freeze.ts` |
 | `src/dashboard/` | 루프백 전용 **읽기 전용** 현황판 | `server.ts`, `snapshot.ts` |
 | `src/review/`, `src/wiki/` | 스킬 리뷰·개선 후보, 위키 노트 outbox | — |
+| `src/release/` | 공개로 나가는 변경의 누출 검사(denylist·gitleaks·죽은 링크·외부 코드 표지) | `leak-check.ts` |
 | `src/config*.ts` | 설정 읽기·검증·옛 키 거부 | `config.ts`, `config-validate.ts` |
 | `src/dev/`, `scripts/` | 저장소 게이트(LOC 래칫·시험 sleep·TLA+ 덮인 파일) | `check-loc.ts`, `test-sleeps.ts`, `scripts/tla-covered.ts` |
 
@@ -51,18 +52,18 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 | # | 불변식 | 지키는 곳 | 게이트 |
 | --- | --- | --- | --- |
 | I1 | inbound 행 하나는 omp 턴에 많아야 한 번 들어간다. 닿았을 수 있는 행은 `uncertain`으로 남고 자동으로 다시 보내지 않는다(오너의 `/queue retry`만) | `core/mailbox-sending.ts`(write-ahead `sending`), `daemon/recovery.ts` | TLA+ `DispatchAtMostOnce`, 테스트 |
-| I2 | pending 행은 결국 pending을 벗어난다(재시작 drain 중에 들어온 행 포함) | `core/mailbox.ts` `#drain`, `recovery.ts` `resumePending` | TLA+ `NoLostRow` |
+| I2 | pending 행은 결국 pending을 벗어난다(재시작 drain 중에 들어온 행 포함) | `core/mailbox.ts` `#drain`·`resumePending` | TLA+ `NoLostRow` |
 | I3 | 한 origin의 새 턴은 받은 순서대로 시작하고, 한 origin에는 동시에 턴이 하나뿐이다 | `Mailbox`의 단일 promise 체인 | TLA+ `OriginFifo`, `SingleTurnPerOrigin` |
 | I4 | 전달 하나는 많아야 한 번 `confirmed`. `failed_ambiguous`는 자동 사건으로 움직이지 않고 오너(`ack`·`resend`)만 옮긴다. 429는 시도 횟수를 올리지 않는다 | `store/transitions.ts` `transitionDelivery`, `channel/pump.ts` | TLA+ `DeliveryAtMostOnce`, 테스트 |
 | I5 | 장부 상태는 정해진 전이표로만 바뀐다(`INBOUND_TRANSITIONS`, `transitionDelivery`). 새 상태·전이는 표와 TLA+ 모델을 같이 고친다 | `store/transitions.ts` | `assertInboundTransition`, 테스트, `tla-covered` |
 | I6 | 스키마(표·컬럼·인덱스)를 바꾸면 `SCHEMA_VERSION`을 1 올리고, 더 새 스키마 DB는 쓰기 열기에서 `newer_schema`로 거부한다 | `store/schema-version.ts`, `store/db-schema.ts` | `test/schema-version.test.ts` |
-| I7 | omp를 포크·패치·import하지 않는다. 공개 stdio RPC로만 말한다 | `omp/rpc-client.ts` | `test/omp-rpc.contract.test.ts`, CI `e2e-omp-mock` |
-| I8 | 오너 한 명만 받는다. 오너가 아닌 사용자의 메시지·버튼·파일은 무시하거나 거절한다 | 어댑터의 오너 판정(`discord/adapter.ts`) | 테스트 |
-| I9 | 비밀값은 로그·DB·채팅 전송 어디에도 원문으로 나가지 않는다. 마스킹은 끄는 스위치가 없다 | `redact.ts`, `safety/secret-index.ts`, `safety/host-tools.ts` `checkUploadable` | 테스트, CI gitleaks |
-| I10 | 루프백 밖으로 여는 HTTP는 없다. 현황판은 읽기 전용이다 | `dashboard/server.ts`, `dashboard/host-guard.ts` | 테스트 |
+| I7 | omp를 포크·패치·import하지 않는다. 공개 stdio RPC로만 말한다 | `omp/rpc-client.ts` | CI `e2e-omp-mock`(`test/omp-mock.e2e.test.ts`, 진짜 omp + 가짜 모델). `test/omp-rpc.contract.test.ts`는 `JABBU_E2E_OMP=1`(`bun run smoke-omp`, 모델 비용)일 때만 돌고 CI에서는 skip |
+| I8 | 사람은 오너 한 명만 받는다. 오너가 아닌 사용자의 메시지·버튼·파일은 무시하거나 거절한다. 예외는 설정한 피어 봇(`channels.discord.peerBots`)의 서버 채널 멘션뿐이고, 피어 봇이 쓴 대화의 자식은 줄어든 호스트 도구만 받는다 | `discord/adapter.ts`(오너·`peerBots` 판정), `daemon/daemon-host-tools.ts` `peerTouched`·`hostToolsFor` | 테스트 |
+| I9 | 비밀값은 로그·DB·채팅 전송 어디에도 원문으로 나가지 않는다. 마스킹은 끄는 스위치가 없다. 공개로 나가는 diff는 누출 검사(denylist·gitleaks·죽은 링크)를 거친다 | `redact.ts`, `safety/secret-index.ts`, `safety/host-tools.ts` `checkUploadable`, `release/leak-check.ts`(PR 착지의 머지 직전 검사) | 테스트(CI는 gitleaks를 누출 검사기 *시험용*으로만 설치하고 PR diff 자체를 gitleaks로 훑지는 않는다) |
+| I10 | 루프백 밖으로 여는 HTTP는 없다. 현황판(읽기 전용)과 webhook 모니터 리스너 둘뿐이고 `bind`는 `127.0.0.1`·`::1`만 허용한다. 데몬 IPC는 `0600` 유닉스 소켓, 데몬은 홈마다 하나(잠금) | `dashboard/server.ts`·`host-guard.ts`, `monitors/webhook.ts`, `config.ts`(`bind` 검증), `daemon/ipc.ts`, `daemon/lock.ts` | 테스트 |
 | I11 | 되돌릴 수 없거나 밖으로 나가는 일은 승인 카드를 거친다. 승인 장부는 영속이다 | `safety/approval.ts`, `safety/answer-ledger.ts` | 테스트 |
 | I12 | 새 설정 키는 `LIVE_FIELDS`·`RESTART_FIELDS`·`CLI_FIELDS` 중 하나에 넣는다. 지운 키는 조용히 무시하지 않고 거부한다 | `daemon/reload-fields.ts`, `config-removed-keys.ts` | 컴파일 타임 가드(`daemon/reload.ts` `UnclassifiedField`) |
-| I13 | 모듈 사이 import 순환 0건, `src` 파일 줄 수는 기준선 이하(새 파일 400줄) | `biome.json`, `src/dev/check-loc.ts` | `bun run check` |
+| I13 | 모듈 사이 import 순환 0건, `src` 파일 줄 수는 기준선 이하(새 파일 400줄), 쓰이지 않는 export 없음(`@public` 제외) | `biome.json`, `src/dev/check-loc.ts`, `knip.json` | `bun run check`, `bun run knip` |
 | I14 | 시험은 시간 운에 기대지 않는다(고정 sleep 금지) | `src/dev/test-sleeps.ts` | `bun run check` |
 
 ## 4. 보호 구역
@@ -71,8 +72,10 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 
 | 파일 | 함께 할 일 |
 | --- | --- |
-| `scripts/tla-covered.ts`의 `COVERED` 목록(`core/mailbox*.ts` 일부, `store/transitions.ts`, `store/db.ts`, `daemon/recovery.ts`, `channel/pump.ts`) | `Mailbox.tla`가 바뀐 동작을 여전히 모델링하는지 보고, `bun scripts/tla-check.ts --strict`가 통과한 뒤에만 `bun scripts/tla-covered.ts --record`. 모델이 실패하면 기록하지 않는다 |
-| `store/db-schema.ts`, `store/legacy-ddl.ts`, `store/rename-migration.ts` | I6의 버전 올림과 이전 시험 |
+| `scripts/tla-covered.ts`의 `COVERED` 목록(`core/mailbox.ts`·`mailbox-active-turn.ts`·`mailbox-types.ts`·`mailbox-commands.ts`·`mailbox-sending.ts`, `store/transitions.ts`·`db.ts`, `daemon/recovery.ts`, `channel/pump.ts`) | `Mailbox.tla`가 바뀐 동작을 여전히 모델링하는지 보고, `bun scripts/tla-check.ts --strict`가 통과한 뒤에만 `bun scripts/tla-covered.ts --record`. 모델이 실패하면 기록하지 않는다. 모델이 다루는 소스 파일을 새로 만들거나 쪼개면 `COVERED`에도 넣는다 |
+| 스키마를 정의하는 파일(`CREATE TABLE`이 있는 곳): `store/db-schema.ts`·`legacy-ddl.ts`·`card-answers.ts`, `tasks/ledger-schema.ts`, `monitors/ledger.ts`, 그리고 `store/db-sending.ts`·`rename-migration.ts` | I6의 버전 올림과 이전 시험 |
+| `release/leak-check.ts` | 누출 검사를 느슨하게 하는 변경(패턴 삭제·건너뛰기 조건 추가)은 그 이유와 대체 검사를 PR 본문에 적는다 |
+| `dashboard/server.ts`·`host-guard.ts`, `monitors/webhook.ts`, `daemon/ipc.ts`, `daemon/lock.ts` | I10. 바인드 주소·권한·Host 검사·잠금을 느슨하게 하지 않는다. 바꾸면 거부되는 경우의 시험을 같이 넣는다 |
 | `omp/rpc-client.ts`, `omp/rpc-driver.ts`, `omp/driver.ts` | `bun run test:omp-mock`(토큰 비용 없음)으로 실제 omp RPC 계약 확인 |
 | `redact.ts`, `safety/*` | 비밀이 새는 경로·승인을 우회하는 경로가 생기지 않는지 적대 시험 추가 |
 | `channel/adapter.ts`, `channel/port.ts`, `channel/types.ts` | 어댑터 계약이므로 Discord 어댑터와 테스트 전송(`discord/test-transport.ts`)을 같은 PR에서 맞춘다 |
@@ -99,12 +102,13 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 | 자리 | 충돌 때 할 일 |
 | --- | --- |
 | `SCHEMA_VERSION`(`store/schema-version.ts`) | 스키마 PR은 한 번에 하나만 연다. 먼저 머지된 PR이 번호를 가지고, 뒤 PR은 최신 `main` 위에서 다시 1 올리고 주석의 버전 목록도 이어 쓴다. 두 PR이 같은 번호를 쓰면 안 된다 |
-| `src/dev/loc-baseline.json` | 손으로 합치지 않는다. 최신 `main`을 합친 뒤 `bun src/dev/check-loc.ts`를 돌린다. 기준선은 내려가기만 하고, 넘으면 파일을 나눈다 |
-| `spec/tla/mailbox/covered.blobs` | 손으로 합치지 않는다. 합친 트리에서 `bun scripts/tla-check.ts --strict` 통과 → `bun scripts/tla-covered.ts --record` |
+| `src/dev/loc-baseline.json` | 손으로 합치지 않는다(충돌 표지가 남으면 `check-loc`이 JSON을 못 읽고 실패한다). `git checkout origin/main -- src/dev/loc-baseline.json`으로 main 본을 받은 뒤 `bun src/dev/check-loc.ts --update`로 줄어든 파일만 내리고 `bun src/dev/check-loc.ts`가 0으로 끝나는지 본다. 기준선은 내려가기만 하고, 넘으면 파일을 나눈다 |
+| `spec/tla/mailbox/covered.blobs` | 손으로 합치지 않는다. 같은 식으로 main 본을 받은 뒤, 합친 트리에서 `bun scripts/tla-check.ts --strict` 통과 → `bun scripts/tla-covered.ts --record` |
 | `CHANGELOG.md` `Unreleased` | 줄을 더하기만 한다. 충돌 나면 양쪽 줄을 모두 남긴다 |
 | `docs/guide.md` 설정·명령 표 | 양쪽 행을 모두 남기고 표 순서를 맞춘다 |
 
 4. **같은 결함을 두 PR이 고치면** 먼저 머지된 쪽을 기준으로 뒤 PR을 닫거나 남은 차이만 남긴다. 같은 함수를 두 가지 방식으로 고친 채 둘 다 머지하지 않는다.
+5. **코어 자동 착지의 한계.** `[TASK]` PR 착지(`tasks/pr-land-task.ts`)는 기준 브랜치가 앞서 있으면 task 브랜치에 merge하고, 충돌이 없을 때만 TLA+ 모델 통과 뒤 `covered.blobs`를 자동으로 다시 기록한다(`tasks/land-tla-covered.ts`). merge 충돌(`covered.blobs` 충돌 포함)은 워커에게 되돌린다. 원격 호스트 TASK(`tasks/land-remote.ts`)와 작업 레인 PR 착지(`lanes/pr-land.ts`)는 이 자동 재기록을 하지 않는다. 레인 착지는 `gh pr merge`가 실패하면 재시도하지 않고 `held`로 멈춘다. 그래서 main 보호의 "최신 기준이어야 머지"(`strict`)는 착지가 기준 뒤처짐을 되돌림(`rework`)으로 처리하게 바뀌기 전까지 켜지 않는다. 그동안은 위 1번을 사람이 지킨다.
 
 ## 7. 알려진 구조 부채
 

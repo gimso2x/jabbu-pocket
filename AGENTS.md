@@ -26,6 +26,6 @@ jabbu-pocket 저장소에서 일하는 에이전트가 지킬 규칙이다. 개�
 - 시험 임시 파일은 `tmpdir()` 밑에 두고 실행이 끝나면 통째로 지운다.
 - 스키마(표·컬럼·인덱스)를 바꾸는 커밋은 `src/store/schema-version.ts`의 `SCHEMA_VERSION`을 1 올린다. 더 새 스키마 DB는 쓰기 열기에서 `newer_schema`로 거부된다.
 - 새 export는 쓰이거나 `@public`이어야 한다(`bun run knip`).
-- PR 하나에 한 가지 일만 담는다. 머지 직전에 최신 `main`을 합치고(rebase·force push 아님) CI가 다시 초록인지 본다. `loc-baseline.json`·`covered.blobs`는 손으로 합치지 않고 다시 생성한다(`docs/architecture.md` §6).
+- PR 하나에 한 가지 일만 담는다. 머지 직전에 최신 `main`을 합치고(rebase·force push 아님) CI가 다시 초록인지 본다. `loc-baseline.json`·`covered.blobs`는 손으로 합치지 않는다. `git checkout origin/main -- <파일>`로 main 본을 받은 뒤 `bun src/dev/check-loc.ts --update`, `bun scripts/tla-check.ts --strict` 통과 뒤 `bun scripts/tla-covered.ts --record`로 다시 만든다(`docs/architecture.md` §6).
 - `docs/architecture.md` §3 불변식을 바꾸는 변경은 같은 PR에서 그 문서와 게이트(테스트·TLA+ 모델)를 함께 고친다.
 - 오너 승인 없이 push·npm publish·외부 배포를 하지 않는다.
