@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { REDELIVERED_PREFIX } from "../src/channel/text";
 import { openBotStore } from "../src/core/origin";
@@ -684,6 +684,51 @@ async function untilLog(lines: string[], needle: string, count = 1): Promise<voi
 		await new Promise<void>((resolve) => setTimeout(resolve, 5));
 	}
 }
+
+describe("media sweep on the injected clock", () => {
+	const HOUR = 60 * 60_000;
+
+	test("the age cutoff and the hourly gate follow DaemonOptions.clock, not the wall clock", async () => {
+		const clock = new FakeClock();
+		clock.t = Date.now() + 30 * 24 * HOUR; // far from the wall clock: only the injected time can judge these files
+		const daemon = new Daemon({
+			config: home.config,
+			channels: [discordBinding(new WaitingDiscordTransport())],
+			clock,
+			log: createLogger({ sink: () => undefined, clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: BOOT_ID,
+			sweepMs: 3_600_000, // sweeps are driven by the test
+			gateSweepMs: 0,
+			taskSweepMs: 0,
+			driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+		});
+		daemons.push(daemon);
+		await daemon.start();
+		const dir = join(home.dir, "media", "inbound", "1");
+		mkdirSync(dir, { recursive: true });
+		const stale = join(dir, "stale.bin");
+		const fresh = join(dir, "fresh.bin");
+		for (const [path, ageMs] of [
+			[stale, 25 * HOUR],
+			[fresh, HOUR],
+		] as const) {
+			writeFileSync(path, "x");
+			const at = new Date(clock.t - ageMs);
+			utimesSync(path, at, at);
+		}
+		await daemon.sweep();
+		expect(existsSync(stale)).toBe(false);
+		expect(existsSync(fresh)).toBe(true);
+		// Within the hour the gate holds; an hour of injected time later the file is 24h+ old and goes.
+		clock.advance(30 * 60_000);
+		await daemon.sweep();
+		expect(existsSync(fresh)).toBe(true);
+		clock.advance(24 * HOUR);
+		await daemon.sweep();
+		expect(existsSync(fresh)).toBe(false);
+	});
+});
 
 describe("sweep retry for stranded pending rows (dispatch_pending_failed follow-up)", () => {
 	let clock: FakeClock;
