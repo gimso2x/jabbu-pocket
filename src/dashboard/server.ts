@@ -1,5 +1,6 @@
 import type { Server } from "bun";
 import type { LiveView } from "../core/live-turn";
+import { createWebRouterContext, handleWebRequest, type WebDashboardOptions, webChatPageGate } from "../web/routes";
 import { appAssets, PAGE_CSS, serveAsset, WEB_MANIFEST, withGzip } from "./assets";
 import {
 	type BoardCard,
@@ -80,6 +81,7 @@ export interface DashboardServerOptions {
 	liveSchedule?: (fn: () => void, ms: number) => () => void;
 	/** Hears an origin's live subscriber count after every change (subscribe or the server handling a disconnect). */
 	onLiveSubscribers?: (originKey: string, count: number) => void;
+	web?: WebDashboardOptions | undefined;
 	now?: () => number;
 }
 
@@ -312,6 +314,7 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 	const boardPanel = (): BoardPanel => panel() ?? { ok: false, error: "board_disabled" };
 	const fanout = board === undefined ? undefined : boardFanout(board, boardPanel);
 	const live = options.live === undefined ? undefined : liveFanout(options.live, options);
+	const webCtx = createWebRouterContext(options.web);
 	const heard = (kind: string, detail?: string): void => {
 		try {
 			options.onRequest?.(kind, detail);
@@ -324,6 +327,10 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 		const head = request.method === "HEAD";
 		const refused = guardRequest(request, allowedHosts, COMMON_HEADERS);
 		if (refused !== undefined) return refused;
+		const url = new URL(request.url);
+		const { pathname } = url;
+		if (route.WEB_ANY.test(pathname))
+			return handleWebRequest(request, pathname, url, webCtx, COMMON_HEADERS, eventStream);
 		if (request.method !== "GET" && !head) {
 			return new Response("method not allowed\n", {
 				status: 405,
@@ -334,8 +341,6 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			new Response(head ? null : body, {
 				headers: { ...COMMON_HEADERS, ...extra, "content-type": contentType },
 			});
-		const url = new URL(request.url);
-		const { pathname } = url;
 		if (route.HEALTH.test(pathname)) return reply("ok", "text/plain; charset=utf-8");
 		if (route.MANIFEST.test(pathname)) return reply(WEB_MANIFEST, "application/manifest+json; charset=utf-8");
 		const served = serveAsset(request, pathname, assets, COMMON_HEADERS);
@@ -517,6 +522,12 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			"layout",
 			"stale",
 		].map(param);
+		let chatCookie: string | undefined;
+		if (isPage && view === "chat") {
+			const gate = await webChatPageGate(request, webCtx, head, COMMON_HEADERS);
+			if ("response" in gate) return gate.response;
+			chatCookie = gate.setCookie;
+		}
 		return isPage
 			? reply(
 					renderDashboardPage(snapshot, {
@@ -530,7 +541,7 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 						...(stale === undefined ? {} : { stale }),
 					}),
 					"text/html; charset=utf-8",
-					{ "content-security-policy": PAGE_CSP },
+					{ "content-security-policy": PAGE_CSP, ...(chatCookie === undefined ? {} : { "set-cookie": chatCookie }) },
 				)
 			: reply(JSON.stringify(snapshot), "application/json; charset=utf-8");
 	};

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
 import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
-import { type JabbuConfig, loadConfig, primaryOwnerUserId } from "../config";
+import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import type { ThreadSource } from "../core/mailbox-thread-context";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
@@ -359,6 +359,7 @@ export class Daemon {
 			ownerUserId: primaryOwnerUserId(config.channels),
 			platformOwners: {
 				...(config.channels.discord === undefined ? {} : { discord: config.channels.discord.ownerUserId }),
+				...(config.channels.web?.enabled === true ? { web: WEB_OWNER_USER_ID } : {}),
 			},
 			escalationChannel: { discord: config.channels.discord?.escalationChannelId },
 			log,
@@ -582,7 +583,12 @@ export class Daemon {
 			autoLandPolicy: () => autoLandPolicy(this.#ctx),
 			autoLandHold: () => readAutoLandHold(config.homeDir),
 			// Cards mention the owner on the platform of the lane's thread.
-			ownerUserId: (platform) => (platform === "discord" ? config.channels.discord?.ownerUserId : undefined),
+			ownerUserId: (platform) =>
+				platform === "discord"
+					? config.channels.discord?.ownerUserId
+					: platform === "web"
+						? WEB_OWNER_USER_ID
+						: undefined,
 			laneBusy: (originKey) => this.#router?.mailbox(originKey).state.busy ?? false,
 			laneModels: () => this.#options.config.lanes?.models,
 			ownerSilenceConfig: () => this.#options.config,
@@ -728,6 +734,7 @@ export class Daemon {
 			driver: config.agent ?? "omp",
 			herdr: config.herdr === undefined ? "off" : "on",
 			discord: this.#adapters.has("discord") ? "on" : "off",
+			web: this.#adapters.has("web") ? "on" : "off",
 		});
 		if (bootConfigText === undefined) log.warn("last_good_config_skipped", { reason: "config_unreadable" });
 		else if (readConfigText(config.homeDir) === bootConfigText)

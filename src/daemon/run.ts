@@ -17,6 +17,7 @@ import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
 import { NewerSchemaError, SCHEMA_VERSION } from "../store/schema-version";
+import { WebBinding } from "../web/binding";
 import { createBotDriverFactory } from "./bot-driver";
 import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
@@ -75,13 +76,13 @@ function discordBindings(config: JabbuConfig, env: Record<string, string | undef
 	];
 }
 
-/** The chat bindings: Discord, the only platform, when `channels.discord` is set. */
+/** The chat bindings for the configured platforms (`channels.discord` and enabled `channels.web`). */
 export function channelBindings(
 	config: JabbuConfig,
 	env: Record<string, string | undefined>,
 	log: Logger,
 ): ChannelBinding[] {
-	return discordBindings(config, env, log);
+	return [...discordBindings(config, env, log), ...(config.channels.web?.enabled === true ? [new WebBinding()] : [])];
 }
 
 /** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */

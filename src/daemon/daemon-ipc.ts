@@ -1,4 +1,5 @@
 import { STAMP_PATTERN } from "../ops/apply-lock";
+import { handleWebIpc } from "../web/ipc";
 import type { DaemonContext } from "./daemon-context";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import type { InjectRequest, InjectResult } from "./daemon-types";
@@ -22,11 +23,7 @@ export interface DaemonIpcHost {
 	controlTask(taskId: string, control: "pause" | "resume"): Promise<{ ok: boolean; text: string }>;
 }
 
-/**
- * `jabbu-pocket lanes attach`: `lane_attach {lane, pid, wait?, keepPaused?}` hands the lane's session to the CLI's terminal
- * omp and answers the file to resume; `lane_detach {lane, sessionFile, newFiles}` gives it back. The request is the
- * signal — nothing is read from marker files or mtimes.
- */
+/** `jabbu-pocket lanes attach`: hand a lane session to terminal omp (`lane_attach`) and back (`lane_detach`). */
 async function laneAttachIpc(ctx: DaemonContext, request: Record<string, unknown>): Promise<unknown> {
 	const lanes = ctx.lanes;
 	if (lanes === undefined) return { ok: false, error: "lanes are not running" };
@@ -72,6 +69,9 @@ export async function handleIpc(
 		return { ok: true, sessionFile: (await ctx.router?.openSessionFile(origin)) ?? null };
 	}
 	if (request.op === "lane_attach" || request.op === "lane_detach") return laneAttachIpc(ctx, request);
+	if (request.op === "web_send" || request.op === "web_action" || request.op === "web_new") {
+		return handleWebIpc(ctx, request as Record<string, unknown>);
+	}
 	if (request.op === "reload") return daemon.reloadConfig("ipc");
 	if (request.op === "drain" || request.op === "drain_status" || request.op === "drain_cancel") {
 		if (request.op !== "drain_status") daemon.setDraining(request.op === "drain");
@@ -120,12 +120,10 @@ export async function handleIpc(
 	if (request.op === "tasks_check" || request.op === "tasks_sync") {
 		const id = "id" in request ? request.id : undefined;
 		const row = typeof id === "string" ? ctx.store?.tasks.get(id) : undefined;
-		// `tasks close --as done` changed the ledger in the CLI process: this is where the daemon learns of it.
 		if (request.op === "tasks_sync" && row !== undefined) await ctx.wikiNotes?.taskDone(row.taskId);
 		if (row === undefined || ctx.taskSweeper === undefined) return { ok: false, error: "task not found" };
 		if (request.op === "tasks_sync") {
 			const ok = await ctx.taskSweeper.syncReaction(row.taskId);
-			// A task closed in the CLI (a remote task's landing, a cancel) ends its worker here too.
 			const status = ctx.store?.tasks.get(row.taskId)?.status;
 			if (status === "done" || status === "cancelled") await landing.closeTaskAgent(row);
 			return { ok };
