@@ -21,6 +21,7 @@ import {
 } from "../src/tasks/notify";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const GUILD = "300000000000000001";
 const CH = "111111111111111111";
@@ -44,6 +45,7 @@ beforeEach(async () => {
 	const sessions = new FakeSessionStore();
 	const channels: ChannelBinding[] = [new DiscordBinding(port)];
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels,
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),

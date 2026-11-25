@@ -22,6 +22,7 @@ import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
 import { migrateTaskSchema } from "../src/tasks/ledger-schema";
 import { autoLandBlockers, buildReachedCard, holdingIntegrityWarnings } from "../src/tasks/notify";
 import { discordBinding, GUILD, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = "111111111111111111";
 const THREAD = "222222222222222222";
@@ -63,6 +64,7 @@ beforeEach(async () => {
 	transport = threadTransport();
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
@@ -207,6 +209,7 @@ describe("daemon autoLand: core landing seam (task-core-land)", () => {
 		entered = Promise.withResolvers<void>();
 		const sessions = new FakeSessionStore();
 		gated = new Daemon({
+			...daemonTestOptions(),
 			config: gatedHome.config,
 			channels: [discordBinding(gatedTransport)],
 			log: createLogger({ sink: () => {}, clock, redact }),
@@ -416,6 +419,7 @@ describe("[TASK] review·QA gate (task-review-qa-gate)", () => {
 			return answers.qa;
 		};
 		gd = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...gh.config,
 				taskAutoLand: {
@@ -727,6 +731,7 @@ describe("원격 pr 직접 autoLand·오너 머지 버튼(AC-11f)", () => {
 		gitCalls = [];
 		gateCalls = [];
 		rd = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...rh.config,
 				dispatchHosts: { wsl: { ssh: "wsl-ssh", workDir: "/w" } },

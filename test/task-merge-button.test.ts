@@ -19,6 +19,7 @@ import {
 } from "../src/tasks/notify";
 import { GUILD, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = "111111111111111111";
 const THREAD = "222222222222222222";
@@ -48,6 +49,7 @@ beforeEach(async () => {
 	port = new DiscordChannel(transport, { ownerUserId: OWNER });
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [new DiscordBinding(port)],
 		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),

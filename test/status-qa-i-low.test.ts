@@ -27,7 +27,8 @@ describe("status (qa-i low)", () => {
 		const result = await runBounded(
 			`const { readStatusFromDb } = await import(${JSON.stringify(join(src, "daemon", "status"))});
 			 const { IDLE_HOST_LOAD } = await import(${JSON.stringify(join(src, "ops", "host-resources"))});
-			 const report = readStatusFromDb(${JSON.stringify(db)}, "v", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+			 const { ROOMY_STATFS } = await import(${JSON.stringify(join(src, "ops", "test-host-hooks"))});
+			 const report = readStatusFromDb(${JSON.stringify(db)}, "v", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS);
 			 console.log(JSON.stringify(report.openGates.map((g) => g.name)));`,
 		);
 		expect(result.timedOut).toBe(false);

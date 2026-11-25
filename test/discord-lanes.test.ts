@@ -18,6 +18,7 @@ import { redact } from "../src/redact";
 import { floorsSystemPrompt } from "../src/safety/prompt";
 import { makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -68,6 +69,7 @@ async function boot(discord: WaitingDiscordTransport, laneChannelId?: string): P
 	const discordConfig = config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 	const sessions = new FakeSessionStore();
 	const daemon = new Daemon({
+		...daemonTestOptions(),
 		config: {
 			...config,
 			channels: {

@@ -24,6 +24,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { removeRepoAndWorktrees } from "./helpers/lane-harness";
 import { isRoot } from "./helpers/privileges";
@@ -56,6 +57,7 @@ async function startDaemon(): Promise<Daemon> {
 	const clock = { now: () => Date.now() };
 	transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		log: createLogger({ sink: (line) => logLines.push(line), clock, redact }),

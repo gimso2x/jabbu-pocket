@@ -27,6 +27,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const BUN = "/h/.bun/bin/bun";
 const PATH_ENV = "/h/.bun/bin:/usr/bin";
@@ -267,6 +268,7 @@ describe("!restart through the daemon", () => {
 	async function boot(holdTurns = false): Promise<Daemon> {
 		discord = new WaitingDiscordTransport();
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(discord)],
 			log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact }),

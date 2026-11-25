@@ -23,6 +23,7 @@ import {
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const NOW = Date.parse("2026-10-19T06:00:00Z");
 let home: TestHome;
@@ -442,6 +443,7 @@ describe("daemon with a webhook monitor", () => {
 		const sessions = new FakeSessionStore();
 		const prompts: string[] = [];
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, webhook: { port } },
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact }),
@@ -492,6 +494,7 @@ describe("daemon with a webhook monitor", () => {
 	test("a taken port does not stop the daemon", async () => {
 		const blocker = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, webhook: { port: blocker.port as number } },
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			log: log(),

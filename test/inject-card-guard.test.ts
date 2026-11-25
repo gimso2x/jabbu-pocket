@@ -20,6 +20,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const CHANNEL = OWNER_DM;
 const ORIGIN = `discord/dm/${CHANNEL}`;
@@ -40,6 +41,7 @@ beforeEach(async () => {
 	clickSeq = 0;
 	const sessions = new FakeSessionStore();
 	daemon = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		clock: { now: () => Date.now() },
