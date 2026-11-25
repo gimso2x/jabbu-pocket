@@ -1,9 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctorCommand } from "../src/cli/index";
 import { initCommand } from "../src/cli/init";
+import { unitsCommand } from "../src/cli/units";
 import { defaultHomeDir, workspaceOverlapsHome } from "../src/config";
 import { SweepHeartbeatWriter } from "../src/daemon/heartbeat";
 import { RestartLauncher } from "../src/daemon/restart";
@@ -188,5 +199,14 @@ describe("qa-ab CLI·홈·ops 수정", () => {
 		expect(state.reason.length).toBe(200);
 		expect(frozenMessage(state)).toContain("가".repeat(200));
 		expect(frozenMessage(state).length).toBeLessThan(350);
+	});
+
+	test("#3: units render expands ~/ JABBU_HOME instead of resolving it under cwd", () => {
+		const out = join(tempRoot, "units-out");
+		const code = unitsCommand(["render", "--out", out], { JABBU_HOME: "~/bot-units-test", HOME: homedir() });
+		expect(code).toBe(0);
+		const service = readFileSync(join(out, "jabbu.service"), "utf8");
+		expect(service).toContain(`Environment=JABBU_HOME=${join(homedir(), "bot-units-test")}`);
+		expect(service).not.toContain("/~/");
 	});
 });
