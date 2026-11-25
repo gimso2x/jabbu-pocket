@@ -658,7 +658,7 @@ describe("run QA after the review", () => {
 		expect(after.meta.land?.state).toBe("landed");
 		const cards = cardPosts(h.transport, lane);
 		expect(cards).toHaveLength(1);
-		expect(cards[0]?.content).toContain("🧪 실행 QA(뚱기 · test-qa): PASS");
+		expect(cards[0]?.content).toContain("🧪 실행 QA(test-qa): PASS");
 		// AC-6: the copy is gone, from disk and from git's worktree list.
 		expect(leftCopies()).toEqual([]);
 		expect(worktreeList(repo)).not.toContain(copy);
