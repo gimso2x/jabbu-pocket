@@ -447,7 +447,7 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-const MISSING_GIT = /not a git repository|bad object|not a valid object|invalid object name/i;
+const MISSING_GIT = /not a git repository|bad object|(?:not a |in)valid object|could not access '[0-9a-f]+'/i;
 /** What `!undo` would do to one row's repository. Never writes: the card and the re-check both read this. */
 export async function planUndo(options: {
 	row: TurnSnapshotRow;

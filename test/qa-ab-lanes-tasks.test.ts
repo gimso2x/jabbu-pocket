@@ -67,6 +67,13 @@ describe("qa-ab dispatch·ops·lanes·tasks 수정", () => {
 		const missingGitPlan = await planUndo({ row });
 		expect(missingGitPlan).toEqual({ repo, source: before.tree, missing: true, files: [] });
 
+		const noIndexGit: GitRunner = async () => ({
+			code: 128,
+			stdout: "",
+			stderr: `error: Could not access '${before.tree}'`,
+		});
+		expect(await planUndo({ row, run: noIndexGit })).toEqual({ repo, source: before.tree, missing: true, files: [] });
+
 		const timeoutGit: GitRunner = async () => ({ code: 124, stdout: "", stderr: "git diff timed out after 10000ms" });
 		await expect(planUndo({ row, run: timeoutGit })).rejects.toThrow("timed out");
 	});
