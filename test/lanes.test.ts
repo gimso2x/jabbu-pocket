@@ -212,7 +212,15 @@ describe("lane trigger parsing", () => {
 	});
 
 	test("a missed trigger gets the format refusal; mentions, emails, packages and second-line @ are not attempts", () => {
-		for (const sample of ["작업: x @~/repo", "작업: x @~", "작업: x @./repo", "작업: x @../repo"]) {
+		for (const sample of [
+			"작업: x @~/repo",
+			"작업: x @~",
+			"작업: x @./repo",
+			"작업: x @../repo",
+			"작업:제목 @~/repo",
+			"작업:제목 @./repo",
+			"작업:제목 @../repo",
+		]) {
 			const refusal = laneTriggerRefusal(sample);
 			expect(refusal).toContain("형식은 `작업: <제목> @<절대경로>`");
 			expect(refusal).not.toContain("공백이 든 경로");
@@ -226,6 +234,9 @@ describe("lane trigger parsing", () => {
 		expect(laneTriggerRefusal("작업: 검토\n참고 @./repo")).toBeUndefined();
 		expect(laneTriggerRefusal("작업: 경로 없음")).toBeUndefined();
 		expect(laneTriggerRefusal("일반 메시지 @./repo")).toBeUndefined();
+		// No space after the colon is a valid trigger with an absolute path, so it is not a refusal either.
+		expect(laneTriggerRefusal("작업:제목 @/tmp/x")).toBeUndefined();
+		expect(parseLaneTrigger("작업:제목 @/tmp/x")).toBeDefined();
 	});
 
 	test("the lane prompt names the claim tool and starts with the task when no workflow is chosen", () => {

@@ -5,7 +5,7 @@ import { LaneInputError } from "./manager-constants";
 const LANE_TRIGGER_FORMAT_TEXT =
 	"레인으로 열지 못했습니다 — 형식은 `작업: <제목> @<절대경로>`입니다 (상대경로·`~`는 쓸 수 없습니다).";
 
-const MALFORMED_PATH_TRIGGER = /^작업:[ \t]+\S.*[ \t]+@(?:~|\.\.?\/)/;
+const MALFORMED_PATH_TRIGGER = /^작업:[ \t]*\S.*[ \t]+@(?:~|\.\.?\/)/;
 
 /**
  * Detects a `작업:` message whose first line tried a `~` or relative (`./`, `../`) path after `@`.
