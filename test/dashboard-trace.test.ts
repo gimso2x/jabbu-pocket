@@ -388,22 +388,46 @@ describe("delegated workers in the turn trace", () => {
 });
 
 describe("a damaged lanes row in the turn trace", () => {
-	test("damaged meta or history on one lane does not fail the trace; the intact lane still shows (defensive hardening of hand-damaged rows)", () => {
+	const damage = (name: string, column: "meta" | "history", value: string): void => {
+		addLane(name, 5000, { parent: ORIGIN });
+		withDb((db) => db.run(`UPDATE lanes SET ${column} = ? WHERE name = ?`, [value, name]));
+	};
+	const view = (): TraceViewState => ({ now: NOW, fold: {}, focus: null, open: null, title: "t" });
+	const workerIds = (trace: Extract<TurnTrace, { ok: true }>): string[] =>
+		(trace.root.children ?? []).filter((span) => span.kind === "subagent").map((span) => span.id);
+
+	test("not-JSON and wrong-shaped meta or history on some lanes do not fail the trace; the intact lane shows and the skipped count is reported (defensive hardening of hand-damaged rows)", () => {
 		seed("answered", 20_000);
 		addLane("lane-ok", 4000, { parent: ORIGIN, closed: 12_000 });
-		for (const [name, column, value] of [
-			["lane-bad-meta", "meta", "{not json"],
-			["lane-null-meta", "meta", "null"],
-			["lane-bad-history", "history", "[oops"],
-			["lane-obj-history", "history", "{}"],
-		] as const) {
-			addLane(name, 5000, { parent: ORIGIN });
-			withDb((db) => db.run(`UPDATE lanes SET ${column} = ? WHERE name = ?`, [value, name]));
-		}
+		damage("lane-bad-meta", "meta", "{not json");
+		damage("lane-null-meta", "meta", "null");
+		damage("lane-array-meta", "meta", "[]");
+		damage("lane-bad-history", "history", "[oops");
+		damage("lane-obj-history", "history", "{}");
+		damage("lane-null-element", "history", "[null]");
+		damage("lane-string-at", "history", '[{"at":"x","event":"closed"}]');
+		damage("lane-number-reason", "meta", '{"parentOrigin":"' + ORIGIN + '","tierReason":5}');
 		const trace = traceOf();
-		expect((trace.root.children ?? []).filter((span) => span.kind === "subagent").map((span) => span.id)).toEqual([
-			"L-lane-ok",
-		]);
+		expect(workerIds(trace)).toEqual(["L-lane-ok"]);
+		expect(trace.skippedLanes).toBe(8);
+		expect(renderTrace(trace, view())).toContain("저장된 레인 8건을 읽지 못해");
+	});
+
+	test("an intact trace carries no skipped count and no note; valid history elements with extra fields still count as intact", () => {
+		seed("answered", 20_000);
+		addLane("lane-ok", 4000, { parent: ORIGIN, closed: 12_000 });
+		withDb((db) =>
+			db.run("UPDATE lanes SET history = ? WHERE name = 'lane-ok'", [
+				JSON.stringify([
+					{ at: T0 + 4000, event: "created", detail: "d" },
+					{ at: T0 + 12_000, event: "closed", sha: "abc" },
+				]),
+			]),
+		);
+		const trace = traceOf();
+		expect(workerIds(trace)).toEqual(["L-lane-ok"]);
+		expect(trace.skippedLanes).toBeUndefined();
+		expect(renderTrace(trace, view())).not.toContain("읽지 못해");
 	});
 });
 
