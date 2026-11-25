@@ -11,6 +11,7 @@ export class WebBinding implements ChannelBinding {
 		return new WebAdapter({
 			channel: this.port,
 			webStore: deps.store.web,
+			homeDir: deps.config.homeDir,
 			core: deps.core,
 			deliveries: deps.deliveries,
 			clock: deps.clock,

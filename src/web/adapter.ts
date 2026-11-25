@@ -25,6 +25,7 @@ import type { Logger } from "../log";
 import { scanForInjection } from "../safety/injection";
 import type { WebMessageStore } from "../store/web-messages";
 import type { WebChannel } from "./channel";
+import { retireStaleWebStatus } from "./stale-status";
 
 const TEXT_ATTACHMENT_EXT = /\.(?:txt|md|csv|json|log|yaml|yml|html|xml)$/i;
 const MAX_SCANNED_TEXT_BYTES = 1024 * 1024;
@@ -45,6 +46,8 @@ function webAttachmentNote(filePath: string): string {
 export interface WebAdapterDeps {
 	channel: WebChannel;
 	webStore: WebMessageStore;
+	/** Bot home (`jabbu.db`): the status rows a previous process left running are closed on construction. */
+	homeDir?: string | undefined;
 	core: CoreSink;
 	deliveries: DeliverySource;
 	clock: AdapterClock;
@@ -82,6 +85,8 @@ export class WebAdapter implements ChannelAdapter {
 		this.#core = deps.core;
 		this.#clock = deps.clock;
 		this.#log = deps.log;
+		// The status tracker is in memory: a row a dead process left running would spin for good.
+		if (deps.homeDir !== undefined) retireStaleWebStatus(deps.webStore, deps.homeDir);
 		this.#status = new StatusTracker({
 			clock: deps.clock,
 			intervalMs: STATUS_MIN_INTERVAL_MS,
