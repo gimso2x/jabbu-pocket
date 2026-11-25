@@ -1,6 +1,5 @@
 // Discord Gateway v10 client on Bun's global WebSocket (JSON encoding, one shard, no compression).
-// The reconnect skeleton is shared (src/channel/socket-base.ts); what stays here is Discord's protocol: op codes,
-// heartbeat with ACK tracking, session resume and the fatal close codes.
+// The reconnect skeleton is shared (src/channel/socket-base.ts); here: op codes, heartbeat ACKs, resume, fatal closes.
 
 import { SocketBase, type SocketTimers } from "../channel/socket-base";
 import {
@@ -373,6 +372,7 @@ export class DiscordGateway extends SocketBase<{ botUserId: string; applicationI
 				}
 				return;
 			case "CHANNEL_UPDATE":
+			case "THREAD_CREATE":
 			case "THREAD_UPDATE": {
 				const info = parseChannelInfo(data);
 				if (info !== undefined) this.#run(() => handlers.channel?.(info));

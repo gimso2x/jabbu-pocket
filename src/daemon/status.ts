@@ -188,7 +188,7 @@ export function readStatusFromDb(
 		daemonRunning: false,
 		...counts,
 		openGates: openGates(),
-		...hostSessionsInfo(gateOptions.hostSessionCeiling),
+		hostSessions: hostSessionsInfo(gateOptions.hostSessionCeiling),
 		...frozenField(dirname(dbPath)),
 	};
 }

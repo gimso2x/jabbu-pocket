@@ -13,7 +13,13 @@ import {
 	mergeMonitorSpec,
 	parseMonitorSpec,
 } from "../src/monitors/spec";
-import { WEBHOOK_MAX_BODY_BYTES, WEBHOOK_MAX_PAYLOAD_BYTES, WebhookServer, webhookUrl } from "../src/monitors/webhook";
+import {
+	WEBHOOK_MAX_BODY_BYTES,
+	WEBHOOK_MAX_PAYLOAD_BYTES,
+	WEBHOOK_MAX_PENDING,
+	WebhookServer,
+	webhookUrl,
+} from "../src/monitors/webhook";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
@@ -168,6 +174,46 @@ describe("WebhookServer", () => {
 		const again = (await (await post(row, "second")).json()) as { eventId: number };
 		expect(again.eventId).not.toBe(eventId);
 		expect(ledger.listEvents({ monitorId: row.id })).toHaveLength(2);
+	});
+
+	test("a full pending backlog answers 429 backlog_full and admits nothing more", async () => {
+		const row = addWebhook();
+		// Seed the backlog straight in the ledger (100 HTTP posts would be slow); the cap itself is answered over HTTP.
+		for (let i = 0; i < WEBHOOK_MAX_PENDING; i += 1) {
+			const claim = ledger.claimSlot({ monitorId: row.id, slotAt: now + i, payload: `hook ${i}` });
+			expect(claim.status).toBe("admitted");
+		}
+		const over = await post(row, "one too many");
+		expect(over.status).toBe(429);
+		expect(await over.json()).toEqual({ error: "backlog_full" });
+		expect(ledger.listEvents({ monitorId: row.id })).toHaveLength(WEBHOOK_MAX_PENDING);
+	});
+
+	test("while frozen the backlog cap does not apply: a post over the cap is still recorded as skipped", async () => {
+		const row = addWebhook();
+		for (let i = 0; i < WEBHOOK_MAX_PENDING; i += 1) {
+			ledger.claimSlot({ monitorId: row.id, slotAt: now + i, payload: `hook ${i}` });
+		}
+		const held = new WebhookServer({
+			ledger,
+			log: log(),
+			clock: { now: () => now },
+			config: { port: 0 },
+			frozen: () => ({ since: "x" }),
+		});
+		expect(held.start()).toBe(true);
+		try {
+			const response = await fetch(`http://127.0.0.1:${held.port}/hook/${idOf(row)}`, {
+				method: "POST",
+				body: "while frozen",
+				headers: { Authorization: `Bearer ${tokenOf(row)}` },
+			});
+			expect(response.status).toBe(202);
+			const { eventId } = (await response.json()) as { eventId: number };
+			expect(ledger.getEvent(eventId)).toMatchObject({ stage: "skipped" });
+		} finally {
+			held.stop();
+		}
 	});
 
 	test("while frozen a post is answered 202 but recorded as skipped, so unfreeze replays nothing", async () => {
