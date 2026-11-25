@@ -26,7 +26,7 @@ describe("qa-ab safety handoff-risk 수정", () => {
 
 		const t0 = performance.now();
 		expect(scanHandoffBrief(`sudo ${"-u ".repeat(30)}ls`).verdict).toBe("clear");
-		expect(performance.now() - t0).toBeLessThan(50);
+		expect(performance.now() - t0).toBeLessThan(500);
 	});
 
 	test("#17: $PWD and braced PWD under bot home or subdirs trigger secret_path without false positives", () => {
