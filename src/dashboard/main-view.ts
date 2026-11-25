@@ -24,7 +24,7 @@ import {
 	openTurnsText,
 	TURN_LABELS,
 } from "./text";
-import { resetIn, usageLevel } from "./usage-limits";
+import { resetIn, trendHtml, usageLevel } from "./usage-forecast";
 
 /** What the page is showing besides the data: the chosen view, the search text, the list order, the open entry and theme. */
 export interface DashboardUi {
@@ -1503,7 +1503,7 @@ export function renderDashboardMain(
 					group === "" ? win : `${group} ${win}`,
 				)}</span><span class="meter" role="img" aria-label="남은 ${row.remainingPct}%"><i style="width:${row.remainingPct}%"></i></span><b class="limit-pct">${row.remainingPct}%</b><span class="limit-reset"${
 					left === "" ? "" : ` title="${esc(`${left} 뒤 초기화`)}"`
-				}>${esc(left)}</span></div>`;
+				}>${esc(left)}</span>${trendHtml(row.trend, clock)}</div>`;
 			});
 			const lowest = (window: string): string => {
 				const pcts = rows.filter((r) => r.row.window === window).map((r) => r.row.remainingPct);
