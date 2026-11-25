@@ -12,6 +12,8 @@ export const LIVE_FIELDS = [
 	"workerOmpArgs",
 	// Each new [TASK] and each agy resume reads it (`DispatchToolDeps.workerAgy`).
 	"workerAgy",
+	// Account pool order/dir for `agent: "agy"`; read on each child spawn or turn-start check.
+	"agyAccounts",
 	// Each new agy session and each resume passes them (`AgyOmpDriverOptions.mcpServers`); a live conversation keeps its own.
 	"agyMcpServers",
 	"herdrBoard",
