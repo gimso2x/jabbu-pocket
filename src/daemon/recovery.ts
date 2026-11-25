@@ -122,10 +122,8 @@ function readRestartCut(homeDir: string, now: number, log: Logger): Map<string, 
 /** The resume prompt: the fixed text, the cancelled approval card, then one line per git index lock left behind. */
 export function continuePrompt(approval: string | undefined, lockFiles: readonly string[]): string {
 	const lines = [CONTINUE_PROMPT];
-	if (approval !== undefined) {
-		const summary = approval.replace(/\s+/g, " ").trim().slice(0, 120);
-		lines.push(`직전 승인 카드(${summary})는 취소됐습니다`);
-	}
+	if (approval !== undefined)
+		lines.push(`직전 승인 카드(${approval.replace(/\s+/g, " ").trim().slice(0, 120)})는 취소됐습니다`);
 	for (const lock of lockFiles) lines.push(`잠금 파일 있음: ${lock} — 다른 git 프로세스가 없는지 확인한 뒤 처리하세요`);
 	return lines.join("\n");
 }
@@ -209,9 +207,8 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 				await driver.start();
 				const check = await openOriginSession(driver, origin, sessionToResume(origin));
 				// Log only: every settled row below already gets its own answer or interrupted notice in the thread.
-				if (check.mismatch) {
+				if (check.mismatch)
 					log.warn("session_resume_mismatch", { origin: originKey, expected: check.expected, actual: check.actual });
-				}
 			} catch (error) {
 				openError = error;
 				await driver?.stop().catch(() => undefined);
@@ -280,6 +277,9 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 					log.info("recovery_answered", { origin: originKey, id: lead.platformMessageId, opRef });
 				}
 			}
+		} catch (error) {
+			// One origin's settle failure must not abort the boot: its rows stay dispatched for the next start.
+			log.warn("recovery_origin_failed", { origin: originKey, error: String(error) });
 		} finally {
 			await driver?.stop().catch(() => undefined);
 		}

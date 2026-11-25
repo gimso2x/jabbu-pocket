@@ -244,6 +244,30 @@ describe("durable approvals", () => {
 		check.close();
 	});
 
+	test("the pre-'replied' rebuild keeps the origin and reply columns the old table already had", () => {
+		const path = join(dir, "pre-replied.db");
+		const old = new Database(path);
+		old.run(
+			`CREATE TABLE approvals (approval_id TEXT PRIMARY KEY, channel TEXT NOT NULL, message_ts TEXT NOT NULL, summary TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','expired')),
+				created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, decided_at INTEGER, origin_key TEXT,
+				origin_thread_ref TEXT, reply_ts TEXT, reply_text TEXT)`,
+		);
+		old.run(
+			"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, decided_at, origin_key, origin_thread_ref, reply_ts, reply_text) VALUES ('C1:2.2','C1','2.2','settled card','approved',1000,90000,2000,'discord/dm/200000000000000001','C1:T1','3.3','네, 진행하세요')",
+		);
+		old.close();
+		const migrated = openStore({ timezone: "Asia/Seoul", path, clock: { now: () => 1_000 }, redact });
+		expect(migrated.getApproval("C1:2.2")).toMatchObject({
+			status: "approved",
+			originKey: "discord/dm/200000000000000001",
+			originThreadRef: "C1:T1",
+			replyTs: "3.3",
+			replyText: "네, 진행하세요",
+		});
+		migrated.close();
+	});
+
 	/** The raw ledger row of one card: what the dashboard reads. */
 	const rawRow = (id: string): { detail_json: string | null; card_url: string | null; origin_url: string | null } => {
 		const db = new Database(join(dir, "jabbu.db"), { readonly: true });

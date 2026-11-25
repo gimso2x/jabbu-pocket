@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
-import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { newestSessionFile } from "../omp/session-heal";
 import { isRecord } from "../omp/type-guards";
 import { usageOf } from "../ops/usage";
+import { sessionFileOf } from "./session-model";
 import type { SnapshotDeps } from "./snapshot";
 import { rows, type ThreadInfo } from "./turn-board";
 
@@ -109,12 +109,7 @@ async function loadOf(thread: ThreadInfo, db: Database, live: LiveAsk | undefine
 		key,
 	);
 	if (origin === undefined) return undefined;
-	const file =
-		origin.session_file !== null && existsSync(origin.session_file)
-			? origin.session_file
-			: existsSync(origin.session_dir)
-				? newestSessionFile(origin.session_dir)
-				: undefined;
+	const file = sessionFileOf({ sessionDir: origin.session_dir, sessionFile: origin.session_file });
 	const tokens = file === undefined ? undefined : lastUsageTokens(file);
 	return tokens === undefined ? undefined : { tokens, percent: (tokens / known.window) * 100 };
 }
