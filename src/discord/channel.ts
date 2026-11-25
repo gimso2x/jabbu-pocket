@@ -195,7 +195,7 @@ export class DiscordChannel implements ChannelPort {
 	/** The channel behind `id`, cached; `undefined` on 404 (cached too unless `remember404` is false). Other errors throw. */
 	async channelInfo(id: string, remember404 = true): Promise<DiscordChannelInfo | undefined> {
 		const known = this.#channels.get(id);
-		if (known !== undefined) return known ?? undefined;
+		if (known !== undefined && (known !== null || remember404)) return known ?? undefined;
 		try {
 			const info = await this.transport.getChannel(id);
 			this.#channels.set(id, info);

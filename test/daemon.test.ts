@@ -220,7 +220,7 @@ describe("inject", () => {
 		const marker = transport.posts((posted) => posted.startsWith(`🧪 inject ${nonce}`));
 		expect(marker).toHaveLength(1);
 		// Masked first: the cut lands inside the mask, not inside the token.
-		expect(marker[0]?.content).toContain(" [REDACTE…");
+		expect(marker[0]?.content).toContain(" \\[REDACTE…");
 		for (const post of transport.posts()) {
 			expect(post.content).not.toContain("ghp_");
 			expect(post.content).not.toContain("BBBB");

@@ -1,7 +1,4 @@
-// Discord missed-message recovery. A resumed gateway replays what it missed; a new
-// session, a restart or a failed live ingest does not, so a pass reads every Discord conversation's channel after its
-// watermark and feeds the messages through the adapter's live ingest path, where the ledger's duplicate check stops
-// anything already taken. Snowflake ids grow with time, so `after=<watermark>` is the whole window.
+// Discord missed-message recovery (live gateway + `after=<watermark>` pagination per Discord conversation).
 import {
 	BOOTSTRAP_LOOKBACK_MS,
 	countsTowardDeadLetter,
@@ -90,6 +87,8 @@ export interface DiscordBackfillDeps {
 	locate(channelId: string): Promise<{ dm: true } | { dm: false; guildId: string } | undefined>;
 	/** The live ingest path; a throw stops the target before that message (it is read again next pass). */
 	ingest(event: DiscordMessageEvent): Promise<IngestOutcome>;
+	/** Optional page transform (merges split peer replies without live waits). */
+	preparePage?(messages: readonly DiscordMessageEvent[]): Array<{ event: DiscordMessageEvent; watermarkId: string }>;
 	/**
 	 * Once per target scan that recorded messages: `recovered` are their ids, oldest first; `dm` whether the channel is a
 	 * DM. A throw is logged (`backfill_notice_failed`); the watermark has already moved.
@@ -240,7 +239,8 @@ export class DiscordBackfill extends SingleFlightBackfill {
 				cursors.deleteCursor(discordQuarantineKey(target.channelId));
 			}
 			done.scanned += messages.length;
-			for (const message of messages) {
+			const batch = this.#deps.preparePage?.(messages) ?? messages.map((event) => ({ event, watermarkId: event.id }));
+			for (const { event: message, watermarkId } of batch) {
 				const attemptKey = `bfa:dc:${target.channelId}:${message.id}`;
 				try {
 					// History rows name no server: the target's is put back, so a server message never reads as a DM.
@@ -276,7 +276,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 					cursors.deleteCursor(attemptKey);
 					log.error("backfill_dead_letter", { target: key, id: message.id, error: redact(errorText(err)) });
 				}
-				watermark = laterId(watermark, message.id);
+				watermark = laterId(watermark, watermarkId);
 			}
 			cursors.setCursor(key, watermark);
 			if (messages.length < PAGE_LIMIT) break;

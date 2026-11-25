@@ -29,22 +29,24 @@ export function graphIssues(spec: Record<string, unknown>): string[] {
 			issues.push(`element "${id}": children must be an array of element ids`);
 	// A `repeat` parent draws its child once per item under `id#n` keys, so that child may also have one plain parent;
 	// two plain parents, or two `repeat` ones (their `id#n` keys collide), would drop content. `reached`: id → via repeat.
-	const reached = new Map<string, boolean>();
+	const reached = new Map<string, { plain: boolean; repeat: boolean }>();
 	// Walked with a stack, not recursion: a card nested tens of thousands deep must not overflow the call stack.
 	const pending: Array<[id: unknown, viaRepeat: boolean]> = [[spec.root, false]];
 	while (pending.length > 0) {
 		const [id, viaRepeat] = pending.pop() ?? [];
 		if (typeof id !== "string") continue;
-		const first = reached.get(id);
-		if (first !== undefined) {
-			if (viaRepeat === first) issues.push(`element "${id}" is referenced more than once (cycle or shared child)`);
+		const seen = reached.get(id) ?? { plain: false, repeat: false };
+		if (viaRepeat ? seen.repeat : seen.plain) {
+			issues.push(`element "${id}" is referenced more than once (cycle or shared child)`);
 			continue;
 		}
-		reached.set(id, viaRepeat === true);
+		if (viaRepeat) seen.repeat = true;
+		else seen.plain = true;
+		reached.set(id, seen);
 		const element = elements[id];
 		if (!isRecord(element) || !Array.isArray(element.children)) continue;
-		for (let i = element.children.length - 1; i >= 0; i--)
-			pending.push([element.children[i], viaRepeat === true || isRecord(element.repeat)]);
+		const childViaRepeat = viaRepeat || isRecord(element.repeat);
+		for (let i = element.children.length - 1; i >= 0; i--) pending.push([element.children[i], childViaRepeat]);
 	}
 	return [...new Set(issues)];
 }
