@@ -379,7 +379,9 @@ function findWorkers(
 		.query<
 			{ name: string; status: LaneStatus; history: string; meta: string; session_dir: string; created_at: number },
 			[number, number]
-		>("SELECT name, status, history, meta, session_dir, created_at FROM lanes WHERE created_at >= ? AND created_at < ?")
+		>(
+			"SELECT name, status, history, meta, session_dir, created_at FROM lanes WHERE created_at >= ? AND created_at < ? AND CASE WHEN json_valid(meta) AND json_valid(history) THEN json_type(meta) = 'object' AND json_type(history) = 'array' ELSE 0 END",
+		)
 		.all(from, to);
 	for (const lane of lanes) {
 		const meta = JSON.parse(lane.meta) as LaneMeta;
