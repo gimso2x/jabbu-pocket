@@ -10,10 +10,10 @@ import { esc } from "./text";
 
 /**
  * The thread card's context bar: `.limit-row` colours the bar and the share (none under 80%, `is-warn` from 80%,
- * `is-danger` from 90%), `200k+` once the session passed 200k tokens. Nothing for an unknown use.
+ * `is-danger` from 90%), `200k+` once the session passed 200k tokens. Nothing for an unknown use or `done` cards.
  */
-export function contextBar(context: { percent: number; tokens: number } | undefined): string {
-	if (context === undefined) return "";
+export function contextBar(context: { percent: number; tokens: number } | undefined, column?: string): string {
+	if (context === undefined || column === "done") return "";
 	const pct = Math.round(context.percent);
 	const tone = context.percent >= 90 ? " is-danger" : context.percent >= 80 ? " is-warn" : "";
 	return `<span class="limit-row${tone}" title="컨텍스트 ${Math.round(context.tokens / 1000)}k 토큰"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></span><b class="limit-pct">${pct}%${
