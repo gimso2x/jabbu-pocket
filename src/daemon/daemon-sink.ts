@@ -122,7 +122,10 @@ export class DaemonInbound {
 					// `멈춰`/`계속` (the whole message) are the lane's hold and release: the core settles them itself,
 					// before any closed-lane reading — a closed lane's pause holds only its auto-merge.
 					const control = classifyLaneControl(message.text);
-					if (control !== undefined) {
+					// A resume phrase settles as a control only where a hold exists to release (a paused lane, or a
+					// closed lane whose auto-merge it holds); on a working lane it is an ordinary instruction the
+					// lane's session must see, so it falls through to the dispatch below instead of being swallowed.
+					if (control !== undefined && (control === "pause" || lane.status === "paused" || closedAs !== undefined)) {
 						void this.#settleLaneControl(row, lane.name, control);
 						return {};
 					}
