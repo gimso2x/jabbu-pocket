@@ -44,6 +44,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -1120,6 +1121,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 		const sessions = new FakeSessionStore();
 		const clock = { now: () => Date.now() };
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...laneConfig(),
 				taskAutoLand: { repos: [repo], review: { model: "daemon/model" } },
@@ -1170,6 +1172,7 @@ describe("through the daemon: #autoLandPolicy hands taskAutoLand.review to the l
 		const clock = { now: () => Date.now() };
 		const landed: string[] = [];
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...laneConfig(),
 				taskAutoLand: {

@@ -38,6 +38,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
+import { daemonTestOptions, ROOMY_STATFS } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -153,8 +154,9 @@ function harness(
 		},
 		sessionDirFor: (origin) => sessionDirFor(sessionsRoot, origin, 1),
 		session: router.sessionOps(),
-		// The start-capacity gate would otherwise read this machine's live memory.
+		// The start-capacity gate would otherwise read this machine's live memory and disk.
 		hostLoad: IDLE_HOST_LOAD,
+		statfs: ROOMY_STATFS,
 		...(options.maxLanes === undefined ? {} : { maxLanes: options.maxLanes }),
 		...(options.frozen === undefined ? {} : { frozen: options.frozen }),
 		...(options.verify === undefined ? {} : { verify: options.verify as never }),
@@ -1295,6 +1297,7 @@ describe("lanes inside the daemon", () => {
 	async function startDaemon(maxLanes?: number): Promise<Daemon> {
 		const clock = { now: () => Date.now() };
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			// Lanes open in the server channel; a DM conversation asks for them there.
 			config: {
 				...home.config,

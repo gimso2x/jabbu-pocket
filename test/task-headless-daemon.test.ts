@@ -9,11 +9,10 @@ import { isTaskOrigin, taskOriginKey } from "../src/lanes/status";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { clearFreeze, writeFreeze } from "../src/ops/freeze";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { redact } from "../src/redact";
 import type { TaskRow } from "../src/tasks/ledger";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
-import { ROOMY_STATFS } from "./helpers/disk";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 
 /** The owner's DM origin and the thread (starter message) the [TASK] cards land in. */
@@ -117,6 +116,7 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 		let skew = 0;
 		const clock = { now: () => Date.now() + skew };
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			herdrRun: async (cmd) => {
 				herdrCalls.push(cmd);
 				throw new Error(`herdr must not run: ${cmd.join(" ")}`);
@@ -135,8 +135,6 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 			ompVersion: "omp-test 0",
 			bootId: "boot-task-headless",
 			// The [TASK] start gate (memory·disk) never depends on this machine: CI runners refuse on their own numbers.
-			hostLoad: IDLE_HOST_LOAD,
-			statfs: ROOMY_STATFS,
 			taskSweepMs: 0,
 			gateSweepMs: 0,
 			pendingRetryMs: 1,

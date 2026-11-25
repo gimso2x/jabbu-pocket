@@ -33,6 +33,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -667,6 +668,7 @@ describe("through the daemon: `!pr` in a closed lane's thread", () => {
 		const drivers = new Map<string, FakeOmpDriver>();
 		const clock = { now: () => Date.now() };
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: laneConfig(),
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),

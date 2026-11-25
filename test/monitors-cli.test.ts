@@ -18,6 +18,7 @@ import {
 } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
 import { killSpawned, runCliCapture, runMain } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 
 const clock = { now: () => Date.now() };
 let home: TestHome;
@@ -579,6 +580,7 @@ describe("daemon with monitors", () => {
 		const transport = new WaitingDiscordTransport();
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock, redact }),

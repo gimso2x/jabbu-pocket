@@ -19,6 +19,7 @@ import { buildFloorsPrompt, peerTouchedTurnNotice } from "../src/safety/prompt";
 import type { Store } from "../src/store/db";
 import { LANE_BOARD_TEXT_MAX } from "../src/store/db-schema";
 import { CHANNEL, discordBinding, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { makeRepo } from "./helpers/git-fixtures";
 import { laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -398,6 +399,7 @@ describe("daemon: who gets the board tools", () => {
 	test("AC-6: an untouched DM has them; a peer-touched one and a removed-platform origin do not, and the peer notices say so", async () => {
 		const clock = { now: () => clockNow };
 		const started = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,

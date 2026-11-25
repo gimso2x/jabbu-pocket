@@ -45,8 +45,8 @@ export interface ChannelAdapter {
 	tick(): Promise<void>;
 	setStalled(threadRef: string, stalled: boolean): Promise<void>;
 	setProgress(threadRef: string, progress: TurnProgress): Promise<void>;
-	/** Best-effort notice (root, or a reply when `threadId` is given); never throws. */
-	postNotice(conversationId: string, text: string, threadId?: string): Promise<void>;
+	/** Best-effort notice (root, or a reply when `threadId` is given); never throws. Resolves false when it was not posted. */
+	postNotice(conversationId: string, text: string, threadId?: string): Promise<boolean>;
 	/** Takes `input` as if the owner wrote it, through the adapter's own message path. */
 	ingestOwner(input: OwnerIngest): Promise<IngestOutcome>;
 	setChannelPolicy(policy: ChannelPolicy): void;

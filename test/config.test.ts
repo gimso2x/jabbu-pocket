@@ -19,6 +19,7 @@ import { landModeOfRemote } from "../src/lanes/pr-land-remote";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
+import { daemonTestOptions } from "./helpers/disk";
 
 let home: string;
 
@@ -566,6 +567,11 @@ describe("channels.discord", () => {
 		});
 	});
 
+	test("inlineReplyChannels: a snowflake list is taken", () => {
+		writeConfig(withDiscord({ inlineReplyChannels: ["456789012345678901"] }));
+		expect(loadConfig(home).channels.discord?.inlineReplyChannels).toEqual(["456789012345678901"]);
+	});
+
 	test("logChannelId, escalationChannelId and alertChannelId: snowflakes are taken", () => {
 		writeConfig(
 			withDiscord({
@@ -603,6 +609,16 @@ describe("channels.discord", () => {
 			"logChannelId equal to alertChannelId",
 			{ logChannelId: "678901234567890123", alertChannelId: "678901234567890123" },
 			"channels.discord.logChannelId",
+		],
+		[
+			"logChannelId among inlineReplyChannels",
+			{ logChannelId: "678901234567890123", inlineReplyChannels: ["456789012345678901", "678901234567890123"] },
+			"channels.discord.logChannelId",
+		],
+		[
+			"a non-snowflake inlineReplyChannels entry",
+			{ inlineReplyChannels: ["C0ROOT01"] },
+			"channels.discord.inlineReplyChannels",
 		],
 		[
 			"logChannelId among mentionFreeChannels",
@@ -1208,6 +1224,7 @@ describe("Discord-only: no other platform configured", () => {
 
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config,
 			channels,
 			log,

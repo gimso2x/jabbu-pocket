@@ -26,6 +26,7 @@ import {
 	type TestHome,
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { LANE_START, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -146,6 +147,7 @@ describe("lanes inside the daemon: pause settles in the core (AC-2, AC-4, AC-5, 
 		options: { hold?: boolean; pendingRetryMs?: number; clock?: { now(): number } } = {},
 	): Promise<Daemon> {
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...home.config,
 				channels: { discord: { ...(home.config.channels.discord as DiscordChannelConfig), laneChannelId: CHANNEL } },

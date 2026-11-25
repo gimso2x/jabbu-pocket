@@ -14,8 +14,8 @@ import { BackupError } from "../ops/backup-error";
 import { clearFreeze, freezePath, readFreeze, writeFreeze } from "../ops/freeze";
 import { gateOptionsFromConfig } from "../ops/gates";
 import { DEFAULT_SESSION_RETENTION_DAYS, gcSessions } from "../ops/gc";
-import { type HostLoadReader, testHostLoad } from "../ops/host-resources";
 import { OffsiteError, type OffsiteResult, runOffsite } from "../ops/offsite";
+import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { APPLY_USAGE, applyCommand } from "./apply";
 import { DASHBOARD_USAGE, dashboardCommand } from "./dashboard";
 import { DELIVERIES_USAGE, deliveriesCommand } from "./deliveries";
@@ -291,13 +291,21 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 	return config?.offsite === undefined ? 0 : offsiteRun(config, homeDir, false);
 }
 
-/** The `JABBU_TEST_HOOKS=1` host readers as gates deps; none in production. */
+/** The `JABBU_TEST_HOOKS=1` host readers as gates and status deps; none in production. */
 function hostLoadDeps(env: Record<string, string | undefined>): GatesCommandDeps {
 	const hostLoad = testHostLoad(env);
-	return hostLoad === undefined ? {} : { hostLoad };
+	const statfs = testStatfs(env);
+	return {
+		...(hostLoad === undefined ? {} : { hostLoad }),
+		...(statfs === undefined ? {} : { statfs }),
+	};
 }
 
-async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial<HostLoadReader>): Promise<number> {
+async function statusCommand(
+	args: string[],
+	homeDir: string,
+	deps: Pick<GatesCommandDeps, "hostLoad" | "statfs"> = {},
+): Promise<number> {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
 	const socketPath = join(homeDir, "jabbu.sock");
 	let report: StatusReport | undefined;
@@ -335,7 +343,8 @@ async function statusCommand(args: string[], homeDir: string, hostLoad?: Partial
 			config === undefined ? "unknown" : await readVersion([config.ompExecutable, "--version"]),
 			config?.timezone ?? timezoneOfHome(homeDir),
 			gateOptionsFromConfig(config),
-			hostLoad,
+			deps.hostLoad,
+			deps.statfs,
 		);
 	}
 	process.stdout.write(`${values.json ? JSON.stringify(report) : renderStatusText(report)}\n`);
@@ -493,7 +502,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return await runDaemon(loadConfig(homeDir), env, bootConfigText);
 			}
 			case "status":
-				return await statusCommand(rest, homeDir, testHostLoad(env));
+				return await statusCommand(rest, homeDir, hostLoadDeps(env));
 			case "doctor":
 				return await doctorCommand(homeDir, (line) => process.stdout.write(`${line}\n`));
 			case "gc":

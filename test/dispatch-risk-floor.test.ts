@@ -3,12 +3,13 @@ import { describe, expect, test } from "bun:test";
 import { DiscordChannel } from "../src/discord/channel";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { buildDispatchTool } from "../src/dispatch/tool";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import { diskHeadroom, IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import type { TaskHostOps, TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
 import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { ROOMY_STATFS } from "./helpers/disk";
 
 const NOW = Date.parse("2026-11-13T06:00:00Z");
 const SPEC = {
@@ -83,6 +84,7 @@ async function intake(spec: Record<string, unknown>): Promise<{ reply: string; r
 			now: () => NOW,
 			hostOps: () => host,
 			hostLoad: IDLE_HOST_LOAD,
+			diskHeadroom: (path) => diskHeadroom(path, ROOMY_STATFS),
 		},
 	});
 	const reply = await tool.execute({ taskSpec: spec, task: "구현해" }, { signal: new AbortController().signal });
