@@ -53,6 +53,14 @@ describe("dispatch tool (qa-j)", () => {
 		expect(small.truncated).toBeUndefined();
 	});
 
+	// One read larger than the cap (a pipe can hand it over whole) is still past the cap: flagged and cut to the cap.
+	test("output past the cap in a single read is flagged as truncated and cut to the cap", async () => {
+		const one = await realProcessRunner(["sh", "-c", "printf %s xxxxxxxxxxxxxxxxxxxx"], { cwd: "/tmp", stdoutCap: 5 });
+		expect(one.code).toBe(0);
+		expect(one.truncated).toBe(true);
+		expect(one.stdout).toBe("xxxxx");
+	});
+
 	// qa-j n49/n109: a herdr failure string is masked like a success.
 	test("a herdr failure message is redacted", async () => {
 		const read = await herdrReadAgent("w", {
