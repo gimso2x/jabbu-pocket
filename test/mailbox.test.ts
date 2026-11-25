@@ -1630,8 +1630,8 @@ describe("mailbox: finished answers and wait notes reach the thread before the t
 		expect(store.getInbound(message.platformMessageId)?.state).toBe("answered");
 	});
 
-	test("AC-2: an already sent answer re-written (trim-equal or nearly the same) is left out of the turn end body", async () => {
-		const rewritten = `${FIRST.replace("새로", "다시")}  `;
+	test("AC-2: an already sent answer re-written (identical up to whitespace) is left out of the turn end body", async () => {
+		const rewritten = `${FIRST.replace(/ /g, "  ")}  `;
 		const { opRef, finish } = await heldTurn([
 			{ role: "assistant", text: FIRST, stopReason: "stop" },
 			{ role: "developer", text: "<system-reminder>" },
@@ -1658,7 +1658,7 @@ describe("mailbox: finished answers and wait notes reach the thread before the t
 			{ role: "developer", text: "<system-reminder>" },
 			{ role: "assistant", text: NOTE, stopReason: "toolUse", toolCalls: ["wait"] },
 			{ role: "toolResult", text: "ok" },
-			{ role: "assistant", text: FIRST.replace("새로", "다시"), stopReason: "stop" },
+			{ role: "assistant", text: `${FIRST}\n`, stopReason: "stop" },
 		]);
 		await finish();
 		expect(rows()).toEqual([
@@ -1669,6 +1669,66 @@ describe("mailbox: finished answers and wait notes reach the thread before the t
 		expect(INTERIM_CLOSING).not.toBe(NO_ANSWER);
 		expect(store.getInbound(message.platformMessageId)?.state).toBe("answered");
 	});
+
+	const CHANGED_FINALS: Array<[string, string, string]> = [
+		[
+			"success to failure",
+			"배포가 성공했습니다. 단계 12개 모두 확인했고 오류는 없습니다.",
+			"배포가 실패했습니다. 단계 12개 모두 확인했고 오류는 없습니다.",
+		],
+		[
+			"a changed number",
+			"백업 파일은 총 120개이고 모두 정상입니다. 점검은 끝났습니다 확인 완료.",
+			"백업 파일은 총 129개이고 모두 정상입니다. 점검은 끝났습니다 확인 완료.",
+		],
+		[
+			"a flipped negation",
+			"이 변경은 운영 서버에 영향이 있습니다. 배포 전에 반드시 확인하세요 부탁해요.",
+			"이 변경은 운영 서버에 영향이 없습니다. 배포 전에 반드시 확인하세요 부탁해요.",
+		],
+		[
+			"a sign",
+			"잔액 변동은 +120원입니다. 정산 내역을 모두 확인했고 이상 없습니다 완료.",
+			"잔액 변동은 -120원입니다. 정산 내역을 모두 확인했고 이상 없습니다 완료.",
+		],
+		[
+			"a decimal point",
+			"응답 시간은 평균 1.20초입니다. 측정은 열 번 반복했고 편차는 작았습니다 확인.",
+			"응답 시간은 평균 120초입니다. 측정은 열 번 반복했고 편차는 작았습니다 확인.",
+		],
+		[
+			"a thousands separator",
+			"처리한 건수는 1,000건입니다. 중복 건은 제외했고 모두 검증을 마쳤습니다 완료.",
+			"처리한 건수는 1.000건입니다. 중복 건은 제외했고 모두 검증을 마쳤습니다 완료.",
+		],
+		[
+			"a word boundary",
+			"파일 이름은 build out 입니다. 경로를 확인했고 권한도 모두 정상입니다 끝.",
+			"파일 이름은 buildout 입니다. 경로를 확인했고 권한도 모두 정상입니다 끝.",
+		],
+		[
+			"identifier case",
+			"환경 변수 JABBU_Token 을 설정했습니다. 재시작 후 반영되는 것도 확인했습니다 완료.",
+			"환경 변수 JABBU_TOKEN 을 설정했습니다. 재시작 후 반영되는 것도 확인했습니다 완료.",
+		],
+	];
+	for (const [label, early, changed] of CHANGED_FINALS) {
+		test(`a final that differs from an early answer by ${label} is delivered, not swallowed`, async () => {
+			const { opRef, finish } = await heldTurn([
+				{ role: "assistant", text: early, stopReason: "stop" },
+				{ role: "developer", text: "<system-reminder>" },
+				{ role: "assistant", text: NOTE, stopReason: "toolUse", toolCalls: ["wait"] },
+				{ role: "toolResult", text: "ok" },
+				{ role: "assistant", text: changed, stopReason: "stop" },
+			]);
+			await finish();
+			expect(rows()).toEqual([
+				[`${opRef}:interim:0`, early],
+				[`${opRef}:interim:1`, NOTE],
+				[opRef, changed],
+			]);
+		});
+	}
 
 	test("AC-2: a turn without interim deliveries and without an answer still sends (응답 없음)", async () => {
 		const { opRef, finish } = await heldTurn([
