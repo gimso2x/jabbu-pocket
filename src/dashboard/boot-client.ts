@@ -545,6 +545,7 @@ export const BOOT_CLIENT = `function boot() {
 	function drawDetail() {
 		syncReplyLink();
 		if (!open) {
+			syncTaskWork(null);
 			syncBarTitle();
 			return;
 		}
@@ -573,12 +574,157 @@ export const BOOT_CLIENT = `function boot() {
 			return;
 		}
 		const focused = document.activeElement && document.activeElement.id === "detail-title";
+		const typing = workTyping();
 		head.innerHTML = html;
 		drawnHead = html;
+		syncTaskWork(typing);
 		scrollToHere(head);
 		syncBarTitle();
 		const title = document.getElementById("detail-title");
 		if (focused && title) title.focus({ preventScroll: true });
+	}
+	/**
+	 * The 작업 내역 panel of a headless TASK (renderTaskWork): its slots are refilled from work after every redraw of
+	 * the detail head. The conversation and live reads are the page's own GETs; writing needs the web chat's sign-in
+	 * (api/web/conversations hands out the CSRF token), otherwise the panel stays read-only.
+	 */
+	const WORK_READ_ONLY = "개입은 웹 대화 인증이 필요합니다(디스코드로 가능)";
+	let work = null;
+	function workPanel() {
+		const panel = head.querySelector("[data-task-work]");
+		return panel && work && panel.getAttribute("data-task-work") === work.id ? panel : null;
+	}
+	/** Where the owner is typing in the panel's text box, so a redraw puts the caret back. */
+	function workTyping() {
+		const area = document.activeElement;
+		return area && area.tagName === "TEXTAREA" && area.closest("[data-task-work-form]")
+			? { start: area.selectionStart, end: area.selectionEnd }
+			: null;
+	}
+	function paintWork() {
+		const panel = workPanel();
+		if (!panel) return;
+		const conv = panel.querySelector("[data-task-work-conv]");
+		if (work.convSeq > 0 && conv.getAttribute("data-seq") !== String(work.convSeq)) {
+			conv.innerHTML = work.conv;
+			conv.setAttribute("data-seq", String(work.convSeq));
+		}
+		const live = panel.querySelector("[data-task-work-live]");
+		if (live.getAttribute("data-seq") !== String(work.liveSeq)) {
+			live.innerHTML = work.live;
+			live.setAttribute("data-seq", String(work.liveSeq));
+		}
+		const form = panel.querySelector("[data-task-work-form]");
+		if (form) {
+			form.hidden = work.writable !== true;
+			const area = form.querySelector("textarea");
+			if (area.value !== work.draft) area.value = work.draft;
+			for (const button of form.querySelectorAll("button")) button.disabled = work.busy;
+		}
+		const note = form && work.writable === false ? (work.note ? work.note + " · " : "") + WORK_READ_ONLY : work.note;
+		panel.querySelector("[data-task-work-note]").textContent = note;
+	}
+	/** Reads the TASK session's conversation (before: the page before the oldest one shown). */
+	async function loadWork(w, before) {
+		try {
+			const response = await fetch(w.url + (before ? "&before=" + encodeURIComponent(before) : ""), { cache: "no-store" });
+			if (!response.ok) throw new Error("HTTP " + response.status);
+			const body = await response.json();
+			if (work !== w) return;
+			if (Array.isArray(body.turns)) {
+				w.turns = before ? body.turns.concat(w.turns) : body.turns;
+				w.cursor = body.cursor;
+			}
+			w.conv = renderConversation(Array.isArray(body.turns) ? { turns: w.turns, cursor: w.cursor } : body, "omp", renderMarkdown, Date.now());
+		} catch (error) {
+			if (work !== w) return;
+			w.conv = '<p class="block-note">대화를 읽지 못했어요 (' + esc(error && error.message ? error.message : String(error)) + ")</p>";
+		}
+		w.convSeq += 1;
+		paintWork();
+	}
+	/** One authenticated GET of the web chat: its CSRF token makes the panel writable; 401/403/404 leave it read-only. */
+	async function authWork(w) {
+		let token = "";
+		try {
+			const response = await fetch("api/web/conversations", { cache: "no-store", credentials: "same-origin" });
+			token = response.ok ? response.headers.get("x-jabbu-csrf") || "" : "";
+		} catch {
+			token = "";
+		}
+		if (work !== w) return;
+		w.csrf = token;
+		w.writable = token !== "";
+		paintWork();
+	}
+	/** 지시 넣기 · 멈춤 · 재개: one POST to api/web/task/<id>/<action>; the daemon's answer line is shown as it is. */
+	async function sendWork(action, text) {
+		const w = work;
+		if (!w || w.busy || w.writable !== true) return;
+		w.busy = true;
+		w.note = action === "followup" ? "지시를 넣는 중이에요" : action === "pause" ? "멈추는 중이에요" : "재개하는 중이에요";
+		paintWork();
+		let status = 0;
+		let answer = {};
+		try {
+			const response = await fetch("api/web/task/" + encodeURIComponent(w.id) + "/" + action, {
+				method: "POST",
+				credentials: "same-origin",
+				headers: { "content-type": "application/json", "x-jabbu-csrf": w.csrf },
+				body: JSON.stringify(action === "followup" ? { text: text } : {}),
+			});
+			status = response.status;
+			answer = await response.json().catch(() => ({}));
+		} catch (error) {
+			answer = { error: error && error.message ? error.message : String(error) };
+		}
+		if (work !== w) return;
+		w.busy = false;
+		if (status === 401 || status === 403 || (status === 404 && answer.error === "web_disabled")) w.writable = false;
+		w.note = answer.text || answer.error || "HTTP " + status;
+		if (status === 200 && action === "followup") w.draft = "";
+		paintWork();
+		if (status === 200) loadWork(w);
+	}
+	/** After a redraw of the head: a new panel starts its reads, a running worker gets the live stream, the caret returns. */
+	function syncTaskWork(typing) {
+		const panel = head.querySelector("[data-task-work]");
+		const id = open && panel ? panel.getAttribute("data-task-work") : null;
+		if (!work || work.id !== id) {
+			if (work && work.source) work.source.close();
+			work = id
+				? { id: id, url: panel.getAttribute("data-conversation"), turns: [], cursor: undefined, conv: "", convSeq: 0, live: "", liveSeq: 0, note: "", writable: null, csrf: "", source: null, draft: "", busy: false }
+				: null;
+			if (!work) return;
+			loadWork(work);
+			authWork(work);
+		}
+		const running = panel.getAttribute("data-running") === "1";
+		if (running && !work.source) {
+			const mine = work;
+			mine.source = new EventSource(panel.getAttribute("data-live"));
+			mine.source.addEventListener("live", (event) => {
+				if (work !== mine) return;
+				const body = JSON.parse(event.data);
+				const ended = mine.live !== "" && !(body && body.live);
+				mine.live = renderLiveTurn(body && body.live ? body.live : null, renderMarkdown, { error: body && body.error ? body.error : "" });
+				mine.liveSeq += 1;
+				if (ended) loadWork(mine);
+				paintWork();
+			});
+		} else if (!running && work.source) {
+			work.source.close();
+			work.source = null;
+			work.live = "";
+			work.liveSeq += 1;
+			loadWork(work);
+		}
+		paintWork();
+		const area = typing ? panel.querySelector("[data-task-work-form] textarea") : null;
+		if (area && !area.closest("form").hidden) {
+			area.focus({ preventScroll: true });
+			area.setSelectionRange(typing.start, typing.end);
+		}
 	}
 	function setTab(name) {
 		tab = name;
@@ -1219,11 +1365,34 @@ export const BOOT_CLIENT = `function boot() {
 		}
 		const tabButton = target.closest("button[data-tab]");
 		if (tabButton) return setTab(tabButton.getAttribute("data-tab"));
+		const workControl = target.closest("button[data-task-work-control]");
+		if (workControl) {
+			const action = workControl.getAttribute("data-task-work-control");
+			// One confirmation before a pause: it cuts the worker's turn.
+			if (action === "pause" && !confirm((work ? work.id : "") + " 작업을 멈출까요?")) return;
+			return sendWork(action);
+		}
+		const workMore = target.closest("[data-task-work] button[data-before]");
+		if (workMore) {
+			workMore.disabled = true;
+			if (work) loadWork(work, workMore.getAttribute("data-before"));
+			return;
+		}
 		const more = target.closest("button[data-before]");
 		if (more) {
 			more.disabled = true;
 			loadConversation("older");
 		}
+	});
+	head.addEventListener("submit", (event) => {
+		const form = event.target.closest("[data-task-work-form]");
+		if (!form) return;
+		event.preventDefault();
+		const text = form.querySelector("textarea").value;
+		if (text.trim() !== "") sendWork("followup", text);
+	});
+	head.addEventListener("input", (event) => {
+		if (work && event.target.closest("[data-task-work-form]")) work.draft = event.target.value;
 	});
 	if (cmdInput) {
 		cmdInput.addEventListener("input", () => {

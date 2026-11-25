@@ -283,9 +283,26 @@ export function renderFlowChain(chain: FlowChainInfo, focus: string, panel: bool
 }
 
 /**
+ * The 작업 내역 panel of a headless TASK (`""` for a herdr one, which keeps its board card): its worker session's
+ * conversation (`api/thread/conversation`) and running turn (`api/thread/live/events`) on origin `jabbu/task/<agent>`,
+ * and — for an open TASK — the 지시 넣기 · 멈춤 · 재개 form the page shows only once the web chat's sign-in answered.
+ * Self-contained (shipped to the page; the boot script fills the slots).
+ */
+export function renderTaskWork(task: TaskInfo): string {
+	if (task.runtime !== "headless") return "";
+	// `taskOriginKey` of src/lanes/status.ts, spelled out: this function runs in the page too.
+	const origin = encodeURIComponent(`jabbu/task/${task.agent}`);
+	const running = task.herdr?.ok === true && task.herdr.status === "working";
+	const form = task.open
+		? `<form class="task-work-form" data-task-work-form hidden><textarea name="text" rows="3" aria-label="워커에 넣을 지시" placeholder="워커에 넣을 지시"></textarea><div class="task-work-buttons"><button type="submit" class="button">지시 넣기</button><button type="button" class="button is-ghost" data-task-work-control="pause">멈춤</button><button type="button" class="button is-ghost" data-task-work-control="resume">재개</button></div></form>`
+		: "";
+	return `<section class="task-work" aria-label="작업 내역" data-task-work="${esc(task.taskId)}" data-conversation="api/thread/conversation?origin=${origin}" data-live="api/thread/live/events?origin=${origin}" data-running="${running ? "1" : ""}"><h3 class="h3">작업 내역</h3><div class="task-work-conv" data-task-work-conv><p class="block-note">대화를 불러오는 중이에요</p></div><div class="live-slot" data-task-work-live></div><p class="task-work-note" data-task-work-note role="status"></p>${form}</section>`;
+}
+
+/**
  * The detail panel of `?task=<ID>`: the TASK's title, status and {@link renderTaskFacts}, with a way to its agent's
  * card when the board has one. An ID not in the snapshot gets the "지금 목록에 없는 TASK" notice. Self-contained apart
- * from {@link renderTaskFacts}, which ships beside it.
+ * from {@link renderTaskFacts} and {@link renderTaskWork}, which ship beside it.
  */
 export function renderTaskDetail(
 	taskId: string,
@@ -319,7 +336,7 @@ export function renderTaskDetail(
 		task.title,
 	)}</h2>${actions}<p class="lead">${leadText}</p>${renderTaskFacts(task)}${card}${
 		chain === undefined ? "" : renderFlowChain(chain, task.taskId, true)
-	}`;
+	}${renderTaskWork(task)}`;
 }
 
 /**
@@ -601,7 +618,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 			}${
 				task === undefined
 					? ""
-					: `<section class="detail-task" aria-label="TASK 진행"><h3 class="h3">진행</h3>${renderTaskFacts(task)}</section>`
+					: `<section class="detail-task" aria-label="TASK 진행"><h3 class="h3">진행</h3>${renderTaskFacts(task)}</section>${renderTaskWork(task)}`
 			}`;
 		}
 	}

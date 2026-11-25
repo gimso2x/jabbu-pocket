@@ -34,6 +34,7 @@ import {
 } from "../dispatch/omp";
 import { type FlowTransition, type TaskStage, taskFlowStatus, taskStage } from "../flow/task-flow";
 import { heavyRunPaths, readHeavyRunStates } from "../heavy-run";
+import { isTaskOrigin } from "../lanes/status";
 import { type MonitorRow, type MonitorSql, monitorOrigin, nextFireOf, toMonitor } from "../monitors/ledger";
 import type { MonitorDeliver, MonitorOverlap, MonitorTrigger } from "../monitors/spec";
 import { type AssistantTail, pendingToolCall, readLastAssistant, sessionPathOf } from "../omp/session-tail";
@@ -128,6 +129,8 @@ export interface TaskInfo extends TaskTurnFields {
 	/** `local` = the bot's own machine, otherwise the `dispatchHosts` name. */
 	host: string;
 	agent: string;
+	/** What runs the worker: a headless one's session (`jabbu/task/<agent>`) shows in the detail's 작업 내역 panel. */
+	runtime: TaskRow["runtime"];
 	branch: string;
 	open: boolean;
 	updatedAt: string;
@@ -2006,11 +2009,15 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			}),
 		}));
 
+		const turnSection = await turns;
 		return {
 			generatedAt: iso(now),
 			timezone,
 			daemon: await daemon,
-			turns: await turns,
+			// A [TASK] worker's conversation is shown in its TASK detail (작업 내역), not again as a thread of its own.
+			turns: turnSection.ok
+				? { ...turnSection, threads: turnSection.threads.filter((thread) => !isTaskOrigin(thread.originKey)) }
+				: turnSection,
 			tasks: await tasks,
 			flows: await flows,
 			lanes: await lanes,
@@ -2087,6 +2094,7 @@ function baseTask({ row, broken }: ReadTask, timezone: string): TaskInfo {
 		status: row.status,
 		host: row.host ?? "local",
 		agent: row.agent,
+		runtime: row.runtime,
 		branch: row.branch,
 		open,
 		updatedAt: localIso(row.updatedAt, timezone),

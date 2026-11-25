@@ -315,6 +315,7 @@ describe("display", () => {
 			status: "blocked",
 			host: "local",
 			agent: "w1",
+			runtime: "herdr",
 			branch: "task/T-1",
 			open: true,
 			updatedAt: "2026-11-25T11:59:00+09:00",

@@ -17,6 +17,7 @@ const task = (taskId: string, extra: Partial<TaskInfo> = {}): TaskInfo => ({
 	status: "working",
 	host: "local",
 	agent: taskId.toLowerCase(),
+	runtime: "herdr",
 	branch: `task/${taskId}`,
 	open: true,
 	updatedAt: "2026-11-25T11:00:00+09:00",
