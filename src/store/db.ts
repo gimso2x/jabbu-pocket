@@ -202,9 +202,9 @@ export interface InboundConflict {
 /** Signature parameters of an attachment URL (Discord CDN `ex`·`is`·`hm`) change on every delivery of the same file. */
 const SIGNED_URL_PARAM = /([?&](?:ex|is|hm)=)[^&\s"'<>)\]]*/g;
 
-/** The text a message id stands for: its content without the signature queries of its attachment URLs. */
+/** A message id's text without attachment URL signatures or quote fence ids (random per `normalizeInbound` wrap). */
 function inboundIdentity(text: string): string {
-	return text.replace(SIGNED_URL_PARAM, "$1");
+	return text.replace(SIGNED_URL_PARAM, "$1").replace(/^(<<<(?:end-)?quoted-)[0-9a-f]+>>>$/gm, "$1>>>");
 }
 
 const sha12 = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 12);

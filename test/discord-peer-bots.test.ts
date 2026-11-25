@@ -64,7 +64,9 @@ async function boot(config: JabbuConfig, discord: WaitingDiscordTransport, hold 
 	const sessions = new FakeSessionStore();
 	const discordConfig = config.channels.discord;
 	const channels: ChannelBinding[] = [
-		new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER, peerBots: discordConfig?.peerBots })),
+		new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER, peerBots: discordConfig?.peerBots }), {
+			peerPartWaitMs: 0,
+		}),
 	];
 	const clock = { now: () => Date.now() };
 	const started = new Daemon({
