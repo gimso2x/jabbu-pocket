@@ -907,7 +907,8 @@ function approvalStats(db: Database, now: number): ApprovalStats {
 /** `DM` for any platform's owner DM; a channel by its id, named after its platform when that is Discord (a removed `slack/` row keeps its plain label). */
 function originLabel(originKey: string | null): string | null {
 	if (originKey === null) return null;
-	if (parseChatOrigin(originKey)?.kind === "dm") return "DM";
+	const ref = parseChatOrigin(originKey);
+	if (ref?.kind === "dm") return ref.platform === "web" ? "웹 대화" : "DM";
 	const channel = /^(slack|discord)\/ch\/([^/]+)(\/t\/[^/]+)?$/.exec(originKey);
 	if (channel === null) return originKey;
 	const platform = channel[1] === "discord" ? "Discord " : "";

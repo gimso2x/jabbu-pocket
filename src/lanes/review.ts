@@ -335,7 +335,7 @@ export async function reviewSubject(input: GateReviewInput, deps: LaneReviewDeps
 		}
 		if (input.signal?.aborted === true) return inconclusive("중단됨");
 		if (result.timedOut) return inconclusive("시간 초과", result.output);
-		if (result.code !== 0) return inconclusive(`종료 코드 ${result.code ?? "없음"}`, result.output);
+		if (result.code !== 0) return inconclusive(result.failure ?? "종료 코드 없음", result.output);
 		const parsed = parseReviewVerdict(result.output);
 		if ("reason" in parsed) return inconclusive(parsed.reason, result.output);
 		const reviewed = receipt(parsed.verdict, parsed.notes);
