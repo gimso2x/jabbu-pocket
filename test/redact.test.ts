@@ -210,3 +210,18 @@ describe("HTML entity and URL-encoded secret index masking (AC-3)", () => {
 		}
 	});
 });
+
+describe("redactThenClip", () => {
+	test("clips after masking and never leaves a lone high surrogate", async () => {
+		const { redactThenClip } = await import("../src/redact");
+		expect(redactThenClip("xoxb-TEST-0 rest", 5)).toBe(REDACTED.slice(0, 5));
+		// "a"*119 + "🎉" + tail: a UTF-16 cut at 120 lands between the pair's halves.
+		const clipped = redactThenClip(`${"a".repeat(119)}🎉tail`, 120);
+		expect(clipped).toBe("a".repeat(119));
+		expect(clipped.charCodeAt(clipped.length - 1)).toBe("a".charCodeAt(0));
+		// A pair wholly inside the budget survives whole.
+		expect(redactThenClip(`${"a".repeat(118)}🎉tail`, 120)).toBe(`${"a".repeat(118)}🎉`);
+		expect(redactThenClip("abc", 0)).toBe("");
+		expect(redactThenClip("", 10)).toBe("");
+	});
+});
