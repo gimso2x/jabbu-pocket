@@ -477,12 +477,15 @@ herdr는 config로 켜는 선택 기능입니다. 원격 [TASK] (`host`, `dispat
 bun src/main.ts tasks list [--json]
 bun src/main.ts tasks show <T-…>                        # 레지스트리 행 + 상태 전이 기록(history) + 지금 판정
 bun src/main.ts tasks check <T-…>                       # 지금 판정; 실행 중인 데몬이 스윕과 같은 게시·반응을 합니다
+bun src/main.ts tasks land <T-…>                        # 판정 단계(`review`)에서 멈춘 착지를 머지 버튼과 같은 경로로 다시 시도합니다(데몬이 떠 있어야 함)
 bun src/main.ts tasks close <T-…> --as done|cancelled   # 사람 전용. 반응을 ✅/❌로 바꾸고 스윕 대상에서 뺍니다
 bun src/main.ts tasks pause <T-…>                       # 오너 멈춤: 스윕의 재촉·stale 알림·자동 머지를 보류하고 워커에 Esc를 보냅니다(스레드의 `멈춰`와 같음)
 bun src/main.ts tasks resume <T-…>                      # 멈춤을 풉니다(스윕 보류만 풀고 워커에 재개 프롬프트는 보내지 않음)
 ```
 
 `tasks check`는 데몬 답을 `[check:]` 신호 수 × 900초 + 60초까지 기다립니다. 소켓이 없거나 연결이 거부되면 "daemon not reachable — judging only, nothing posted"와 함께 로컬에서만 판정하고, 요청은 보냈는데 답이 그 안에 안 오면 "응답 지연 — 게시 여부 모름"을 알리고 로컬 재판정은 하지 않습니다(종료 코드 1).
+
+`tasks land <T-…>`는 `review` TASK만 받습니다(다른 상태는 종료 코드 2). 데몬이 머지 버튼과 같은 착지 함수를 한 번 부르고(돌던 게이트는 멈춤, 무결성 경고는 버튼과 똑같이 착지를 막으며 우회 옵션은 없음) 결과를 한 줄 JSON으로 돌려주며, 클릭한 카드가 없으므로 결과 카드를 TASK 스레드에 새로 올립니다(핸드오프면 `🔘 머지 (tasks land)` 표지와 "머지해"). 착지 중이면 `in_flight`, 재시작 대비 `draining` 중이거나 게이트를 멈추는 사이 상태가 바뀌었으면 종료 코드 2로 거절합니다. 소켓이 없으면 "데몬이 떠 있지 않음"(종료 코드 1, 아무것도 착지하지 않음), 답이 `[check:]` 신호 수 × 900초 + 660초 안에 안 오면 "응답 지연 — 착지가 아직 진행 중일 수 있음, `tasks show <ID>`로 확인"(종료 코드 1)을 냅니다.
 
 `close`는 워크트리와 브랜치를 지우지 않습니다. 리뷰·merge 뒤에 사람이 정리합니다(원격 작업이면 그 호스트에서):
 
