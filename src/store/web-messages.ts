@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -43,6 +43,31 @@ export interface WebConversationSummary {
 	updatedAt: number;
 	openApprovals: number;
 	inProgress: boolean;
+	threadCount: number;
+}
+
+export interface WebThreadSummary {
+	thread: string;
+	parentMessageId?: number;
+	replyCount: number;
+	lastText: string;
+	lastRole: WebMessageRole;
+	lastAt: number;
+	openApprovals: number;
+	inProgress: boolean;
+}
+
+/** Deterministic thread id (`GRAMMAR.web.thread` valid) rooted at root message `id`. */
+export function threadIdForMessage(messageId: number): string {
+	return `w_m${String(messageId).padStart(7, "0")}`;
+}
+
+/** Parses `w_m0000042` back to its numeric parent root message id, or `undefined` for ad-hoc thread ids. */
+export function parentMessageIdOfThread(threadId: string): number | undefined {
+	const match = /^w_m0*([1-9]\d{0,14})$/.exec(threadId);
+	if (match?.[1] === undefined) return undefined;
+	const id = Number(match[1]);
+	return Number.isSafeInteger(id) && id > 0 ? id : undefined;
 }
 
 interface WebMessageSql {
@@ -206,6 +231,20 @@ function listWebMessagesDb(
 	return rows.map(toRow);
 }
 
+function countSql(db: Database, sql: string, ...params: SQLQueryBindings[]): number {
+	return (db.query(sql).get(...params) as { n: number }).n;
+}
+
+function hasApprovalsTable(db: Database): boolean {
+	return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'approvals'").get() !== null;
+}
+
+function hasActiveStatus(db: Database, conversation: string, thread?: string): boolean {
+	const col = thread === undefined ? "conversation = ?" : "conversation = ? AND thread = ?";
+	const sql = `SELECT 1 FROM web_messages WHERE ${col} AND role = 'status' AND card_json LIKE '%"deleted":false%' LIMIT 1`;
+	return (thread === undefined ? db.query(sql).get(conversation) : db.query(sql).get(conversation, thread)) !== null;
+}
+
 function listWebConversationsDb(db: Database, limit = 50): WebConversationSummary[] {
 	const convs = db
 		.query(
@@ -213,45 +252,80 @@ function listWebConversationsDb(db: Database, limit = 50): WebConversationSummar
 			 FROM web_messages GROUP BY conversation ORDER BY updated_at DESC, max_id DESC LIMIT ?`,
 		)
 		.all(Math.max(1, Math.min(limit, 200))) as Array<{ conversation: string; max_id: number; updated_at: number }>;
-	const hasApprovals =
-		db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'approvals'").get() !== null;
+	const hasApprovals = hasApprovalsTable(db);
 	return convs.map((entry) => {
-		const rows = (
+		const rootRows = (
 			db
-				.query("SELECT * FROM web_messages WHERE conversation = ? ORDER BY id ASC LIMIT 20")
+				.query("SELECT * FROM web_messages WHERE conversation = ? AND thread IS NULL ORDER BY id ASC LIMIT 20")
 				.all(entry.conversation) as WebMessageSql[]
 		).map(toRow);
-		const lastVisible = db
+		const lastRow = db
 			.query("SELECT * FROM web_messages WHERE conversation = ? AND role != 'status' ORDER BY id DESC LIMIT 1")
 			.get(entry.conversation) as WebMessageSql | null;
-		const last = lastVisible === null ? rows.at(-1) : toRow(lastVisible);
+		const last = lastRow === null ? rootRows.at(-1) : toRow(lastRow);
 		const openApprovals = hasApprovals
-			? (
-					db
-						.query("SELECT COUNT(*) AS n FROM approvals WHERE channel = ? AND status = 'pending'")
-						.get(entry.conversation) as { n: number }
-				).n
+			? countSql(db, "SELECT COUNT(*) AS n FROM approvals WHERE channel = ? AND status = 'pending'", entry.conversation)
 			: 0;
-		const statusRow = db
-			.query("SELECT card_json FROM web_messages WHERE conversation = ? AND role = 'status' ORDER BY id DESC LIMIT 1")
-			.get(entry.conversation) as { card_json: string | null } | null;
-		let inProgress = false;
-		if (statusRow?.card_json !== null && statusRow?.card_json !== undefined) {
-			try {
-				inProgress = (JSON.parse(statusRow.card_json) as { deleted?: unknown }).deleted === false;
-			} catch {
-				inProgress = false;
-			}
-		}
+		const threadCount = countSql(
+			db,
+			"SELECT COUNT(DISTINCT thread) AS n FROM web_messages WHERE conversation = ? AND thread IS NOT NULL AND role NOT IN ('status','system')",
+			entry.conversation,
+		);
 		return {
 			conversation: entry.conversation,
-			title: titleOfConversation(rows),
+			title: titleOfConversation(rootRows) || entry.conversation,
 			lastId: entry.max_id,
 			lastText: last?.text.slice(0, 120) ?? "",
 			lastRole: last?.role ?? "system",
 			updatedAt: entry.updated_at,
 			openApprovals,
-			inProgress,
+			inProgress: hasActiveStatus(db, entry.conversation),
+			threadCount,
+		};
+	});
+}
+
+function listWebThreadsDb(db: Database, conversation: string): WebThreadSummary[] {
+	const groups = db
+		.query(
+			`SELECT thread, MAX(id) AS max_id, MAX(COALESCE(edited_at, created_at)) AS last_at
+			 FROM web_messages WHERE conversation = ? AND thread IS NOT NULL
+			 GROUP BY thread ORDER BY last_at DESC, max_id DESC LIMIT 100`,
+		)
+		.all(conversation) as Array<{ thread: string; max_id: number; last_at: number }>;
+	const hasApprovals = hasApprovalsTable(db);
+	return groups.map((g) => {
+		const replyCount = countSql(
+			db,
+			"SELECT COUNT(*) AS n FROM web_messages WHERE conversation = ? AND thread = ? AND role NOT IN ('status','system')",
+			conversation,
+			g.thread,
+		);
+		const lastVisible = db
+			.query(
+				"SELECT * FROM web_messages WHERE conversation = ? AND thread = ? AND role != 'status' ORDER BY id DESC LIMIT 1",
+			)
+			.get(conversation, g.thread) as WebMessageSql | null;
+		const openApprovals = hasApprovals
+			? countSql(
+					db,
+					`SELECT COUNT(*) AS n FROM approvals a WHERE a.channel = ? AND a.status = 'pending'
+					 AND EXISTS (SELECT 1 FROM web_messages w WHERE w.conversation = ? AND w.thread = ? AND CAST(w.id AS TEXT) = a.message_ts)`,
+					conversation,
+					conversation,
+					g.thread,
+				)
+			: 0;
+		const parentMessageId = parentMessageIdOfThread(g.thread);
+		return {
+			thread: g.thread,
+			...(parentMessageId === undefined ? {} : { parentMessageId }),
+			replyCount,
+			lastText: lastVisible?.text.slice(0, 120) ?? "",
+			lastRole: lastVisible?.role ?? "system",
+			lastAt: g.last_at,
+			openApprovals,
+			inProgress: hasActiveStatus(db, conversation, g.thread),
 		};
 	});
 }
@@ -261,40 +335,39 @@ function withReadonlyDb<T>(homeDir: string, fallback: T, read: (db: Database) =>
 	if (!existsSync(dbPath)) return fallback;
 	const db = new Database(dbPath, { readonly: true, strict: true });
 	try {
-		if (!hasWebMessagesTable(db)) return fallback;
-		return read(db);
+		return hasWebMessagesTable(db) ? read(db) : fallback;
 	} finally {
 		db.close();
 	}
 }
 
-export function readWebConversations(homeDir: string, limit = 50): WebConversationSummary[] {
-	return withReadonlyDb(homeDir, [], (db) => listWebConversationsDb(db, limit));
-}
+export const readWebConversations = (homeDir: string, limit = 50): WebConversationSummary[] =>
+	withReadonlyDb(homeDir, [], (db) => listWebConversationsDb(db, limit));
 
-export function readWebMessages(
+export const readWebMessages = (
 	homeDir: string,
 	conversation: string,
 	opts: { thread?: string; after?: number; limit?: number } = {},
-): WebMessageRow[] {
-	return withReadonlyDb(homeDir, [], (db) => listWebMessagesDb(db, conversation, opts));
-}
+): WebMessageRow[] => withReadonlyDb(homeDir, [], (db) => listWebMessagesDb(db, conversation, opts));
+
+export const readWebThreads = (homeDir: string, conversation: string): WebThreadSummary[] =>
+	withReadonlyDb(homeDir, [], (db) => listWebThreadsDb(db, conversation));
+
+export const readWebMessageById = (homeDir: string, id: number): WebMessageRow | undefined =>
+	withReadonlyDb(homeDir, undefined, (db) => {
+		const row = db.query("SELECT * FROM web_messages WHERE id = ?").get(id) as WebMessageSql | null;
+		return row === null ? undefined : toRow(row);
+	});
 
 export function readWebWatermark(homeDir: string, conversation?: string): { maxId: number; maxEditedAt: number } {
 	return withReadonlyDb(homeDir, { maxId: 0, maxEditedAt: 0 }, (db) => {
-		const row = (
-			conversation !== undefined
-				? db
-						.query(
-							"SELECT COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(COALESCE(edited_at, 0)), 0) AS max_edited FROM web_messages WHERE conversation = ?",
-						)
-						.get(conversation)
-				: db
-						.query(
-							"SELECT COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(COALESCE(edited_at, 0)), 0) AS max_edited FROM web_messages",
-						)
-						.get()
-		) as { max_id: number; max_edited: number };
+		const cond = conversation === undefined ? "" : " WHERE conversation = ?";
+		const cols = "COALESCE(MAX(id), 0) AS max_id, COALESCE(MAX(COALESCE(edited_at, 0)), 0) AS max_edited";
+		const sql = `SELECT ${cols} FROM web_messages${cond}`;
+		const row = (conversation === undefined ? db.query(sql).get() : db.query(sql).get(conversation)) as {
+			max_id: number;
+			max_edited: number;
+		};
 		return { maxId: row.max_id, maxEditedAt: row.max_edited };
 	});
 }
@@ -307,23 +380,12 @@ export function readWebChanges(
 	limit = 100,
 ): WebMessageRow[] {
 	return withReadonlyDb(homeDir, [], (db) => {
-		const rows = (
-			conversation !== undefined
-				? db
-						.query(
-							`SELECT * FROM web_messages
-							 WHERE conversation = ? AND (id > ? OR (edited_at IS NOT NULL AND edited_at > ?))
-							 ORDER BY id ASC LIMIT ?`,
-						)
-						.all(conversation, afterId, afterEditedAt, limit)
-				: db
-						.query(
-							`SELECT * FROM web_messages
-							 WHERE (id > ? OR (edited_at IS NOT NULL AND edited_at > ?))
-							 ORDER BY id ASC LIMIT ?`,
-						)
-						.all(afterId, afterEditedAt, limit)
-		) as WebMessageSql[];
-		return rows.map(toRow);
+		const pred = "(id > ? OR (edited_at IS NOT NULL AND edited_at > ?))";
+		const sql = `SELECT * FROM web_messages WHERE ${conversation === undefined ? "" : "conversation = ? AND "}${pred} ORDER BY id ASC LIMIT ?`;
+		const res =
+			conversation === undefined
+				? db.query(sql).all(afterId, afterEditedAt, limit)
+				: db.query(sql).all(conversation, afterId, afterEditedAt, limit);
+		return (res as WebMessageSql[]).map(toRow);
 	});
 }

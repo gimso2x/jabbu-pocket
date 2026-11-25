@@ -44,7 +44,7 @@ export function graphIssues(spec: Record<string, unknown>): string[] {
 		const element = elements[id];
 		if (!isRecord(element) || !Array.isArray(element.children)) continue;
 		for (let i = element.children.length - 1; i >= 0; i--)
-			pending.push([element.children[i], isRecord(element.repeat)]);
+			pending.push([element.children[i], viaRepeat === true || isRecord(element.repeat)]);
 	}
 	return [...new Set(issues)];
 }

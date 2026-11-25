@@ -1,0 +1,98 @@
+import { GRAMMAR } from "../core/origin-key";
+import { readWebChanges, readWebWatermark } from "../store/web-messages";
+import type { WebBotTarget } from "./bots";
+import { renderWebMessageHtml } from "./card-html";
+
+export type EventStreamFn = (
+	request: Request,
+	keepAliveMs: number,
+	subscribe: (send: (chunk: string) => void) => () => void,
+) => Response;
+
+export interface WebStreamConfig {
+	streamPollMs?: number | undefined;
+	streamSchedule?: ((fn: () => void, ms: number) => () => void) | undefined;
+	keepAliveMs?: number | undefined;
+}
+
+const DEFAULT_POLL_MS = 1_000;
+const DEFAULT_KEEP_ALIVE_MS = 15_000;
+
+export function nonNegInt(raw: string | null): number | undefined {
+	if (raw === null || raw === "") return 0;
+	if (!/^\d{1,15}$/.test(raw)) return undefined;
+	return Number(raw);
+}
+
+/** Handles `GET/HEAD /api/web/stream` by polling the target bot's `web_messages` watermark. */
+export function handleWebStream(
+	request: Request,
+	url: URL,
+	config: WebStreamConfig,
+	target: WebBotTarget,
+	head: boolean,
+	commonHeaders: Record<string, string>,
+	eventStream: EventStreamFn,
+): Response {
+	const err = (code: string) =>
+		new Response(head ? null : JSON.stringify({ error: code }), {
+			status: 400,
+			headers: { ...commonHeaders, "content-type": "application/json; charset=utf-8" },
+		});
+	const conversationParam = url.searchParams.get("c");
+	const conversation = conversationParam === null || conversationParam === "" ? undefined : conversationParam;
+	if (conversation !== undefined && !GRAMMAR.web.conversation.test(conversation)) return err("invalid_conversation");
+	const after = nonNegInt(url.searchParams.get("after"));
+	const afterEdited = nonNegInt(url.searchParams.get("afterEdited"));
+	if (after === undefined || afterEdited === undefined) return err("invalid_cursor");
+	if (head) {
+		return new Response(null, { headers: { ...commonHeaders, "content-type": "text/event-stream; charset=utf-8" } });
+	}
+	const schedule =
+		config.streamSchedule ??
+		((fn: () => void, ms: number) => {
+			const timer = setTimeout(fn, ms);
+			return () => clearTimeout(timer);
+		});
+	const pollMs = config.streamPollMs ?? DEFAULT_POLL_MS;
+	const keepAliveMs = config.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS;
+
+	return eventStream(request, keepAliveMs, (send) => {
+		let open = true;
+		let cancel: (() => void) | undefined;
+		let lastId = after;
+		let lastEditedAt = afterEdited;
+
+		const poll = (): void => {
+			cancel = undefined;
+			if (!open) return;
+			const mark = readWebWatermark(target.homeDir, conversation);
+			if (mark.maxId > lastId || mark.maxEditedAt > lastEditedAt) {
+				const changes = readWebChanges(target.homeDir, lastId, lastEditedAt, conversation, 200);
+				if (changes.length < 200) {
+					lastId = mark.maxId;
+					lastEditedAt = mark.maxEditedAt;
+				} else {
+					const tail = changes.at(-1);
+					if (tail !== undefined) {
+						lastId = Math.max(lastId, tail.id);
+						if (tail.editedAt !== null) lastEditedAt = Math.max(lastEditedAt, tail.editedAt);
+					}
+				}
+				if (changes.length > 0) {
+					const enriched = changes.map((row) => ({ ...row, html: renderWebMessageHtml(row, { botId: target.id }) }));
+					send(`event: messages\ndata: ${JSON.stringify({ messages: enriched })}\n\n`);
+				}
+			}
+			if (open) cancel = schedule(poll, pollMs);
+		};
+
+		send(": web\n\n");
+		cancel = schedule(poll, 0);
+		return () => {
+			open = false;
+			cancel?.();
+			cancel = undefined;
+		};
+	});
+}
