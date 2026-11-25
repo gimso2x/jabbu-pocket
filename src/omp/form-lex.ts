@@ -41,7 +41,9 @@ export function decode(text: string): string {
 	return text.replace(/&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z]+));/g, (whole, dec, hex, name) => {
 		const code = dec !== undefined ? Number(dec) : hex !== undefined ? Number.parseInt(hex, 16) : undefined;
 		if (code !== undefined)
-			return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+			return Number.isInteger(code) && code >= 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff)
+				? String.fromCodePoint(code)
+				: whole;
 		return ENTITIES[(name as string).toLowerCase()] ?? whole;
 	});
 }
