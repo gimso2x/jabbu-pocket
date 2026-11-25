@@ -4,8 +4,9 @@ import { describe, expect, test } from "bun:test";
 import { countsTowardDeadLetter, SingleFlightBackfill } from "../src/channel/backfill";
 import { cardRuns } from "../src/channel/card";
 import { isChannelMessageAddressed, recordPeerInbound, resolveThreadLinks } from "../src/channel/inbound";
+import type { PeerInboundOutcome } from "../src/channel/peer-outcome";
 import { tableEndAt } from "../src/channel/text";
-import type { CoreSink, IngestOutcome, PeerInboundOutcome } from "../src/channel/types";
+import type { CoreSink, IngestOutcome } from "../src/channel/types";
 import type { Logger } from "../src/log";
 
 function recordingLog(): Logger & { lines: Array<[string, Record<string, unknown> | undefined]> } {

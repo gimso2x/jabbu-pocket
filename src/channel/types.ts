@@ -1,6 +1,7 @@
 // What an adapter and the core say to each other, whatever the chat platform: inbound messages, the core's verdicts and
 // the delivery ledger view an adapter's pump works on.
 import type { CommandKind } from "../core/types";
+import type { PeerInboundOutcome } from "./peer-outcome";
 
 /** What the core receives for an accepted owner message. Structurally what the store's recordInbound needs, plus the thread. */
 export interface InboundMessage {
@@ -24,15 +25,6 @@ export interface PeerInboundMessage {
 	text: string;
 	threadRef: string;
 	peer: { userId: string; name: string };
-}
-
-/** The core's verdict on a peer message: recorded (empty), a redelivery, or dropped (`notice`: post the cap notice now). */
-export interface PeerInboundOutcome {
-	duplicate?: true;
-	dropped?: "peer_in_lane_thread" | "peer_hop_cap";
-	notice?: boolean;
-	/** Recorded but not dispatched (the bot is frozen): the adapter posts no ⏳ status. */
-	held?: "frozen";
 }
 
 /** The adapter's whole view of the core. Owner input arrives through `onInbound`, peer bot input through `onPeerInbound`. */
@@ -92,6 +84,8 @@ export interface CoreSink {
 	hasInbound?(platformMessageId: string): boolean;
 	/** The text the inbound row of this platform message id was recorded with (`undefined`: no such row). */
 	inboundText?(platformMessageId: string): string | undefined;
+	/** The origin the inbound row was recorded under (a lane thread's: the lane's): its status is that origin's turn. */
+	inboundOrigin?(platformMessageId: string): string | undefined;
 	/** True while a restart drain holds dispatch: a message taken now waits for the next process (no typing shown). */
 	isDraining?(): boolean;
 }

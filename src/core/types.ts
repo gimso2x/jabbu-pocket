@@ -27,7 +27,6 @@ export type CommandKind =
 	| "usage"
 	| "distill"
 	| "btw"
-	| "undo"
 	| "budget"
 	| "brief"
 	| "stop"
@@ -35,9 +34,9 @@ export type CommandKind =
 
 /**
  * Slash command name of each kind (`-jabbu` suffix: several bots share the workspace). `distill` and `btw` are typed
- * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `undo` restores the newest
- * conversation turn's files, so its slash name is registered. `stop` is typed as `!stop` only too, so it works without
- * re-applying the manifests. `restart` is typed as `!restart` only as well: the daemon restarts without a model turn.
+ * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `stop` is typed as `!stop` only
+ * too, so it works without re-applying the manifests. `restart` is typed as `!restart` only as well: the daemon
+ * restarts without a model turn.
  */
 export const COMMAND_TEXT: Record<CommandKind, string> = {
 	new: "/new-jabbu",
@@ -51,7 +50,6 @@ export const COMMAND_TEXT: Record<CommandKind, string> = {
 	usage: "/usage-jabbu",
 	distill: "/distill-jabbu",
 	btw: "/btw-jabbu",
-	undo: "/undo-jabbu",
 	budget: "/budget-jabbu",
 	brief: "/brief-jabbu",
 	stop: "/stop-jabbu",

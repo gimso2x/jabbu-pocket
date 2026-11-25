@@ -297,7 +297,7 @@ describe("finishDeliveryStatus", () => {
 			cancelThreadRefs: ["200000000000000001:700000000000000003"],
 		});
 		const finisher = {
-			finishStatus: async (threadRef: string, outcome: string, action: string) => {
+			finishStatus: async (threadRef: string, _originKey: string, outcome: string, action: string) => {
 				if (threadRef.endsWith("0002")) throw new Error("status post down");
 				finished.push(`${threadRef}:${outcome}:${action}`);
 			},

@@ -96,17 +96,6 @@ describe("qa-x #1: nested config blocks refuse unknown keys", () => {
 	});
 });
 
-describe("qa-x #2: listeners may not share a host and port", () => {
-	test("webhook and dashboard on the same address are config_invalid; different hosts or ports load", () => {
-		writeConfig(baseConfig({ webhook: { port: 8090 }, dashboard: { port: 8090 } }));
-		expect(loadError().message).toContain("field=dashboard.port");
-		writeConfig(baseConfig({ webhook: { port: 8090 }, dashboard: { port: 8090, bind: "::1" } }));
-		expect(loadConfig(home).dashboard?.port).toBe(8090);
-		writeConfig(baseConfig({ webhook: { port: 8090 }, dashboard: { port: 8091 } }));
-		expect(loadConfig(home).dashboard?.port).toBe(8091);
-	});
-});
-
 describe("qa-x #3: wikiNotes ~user paths", () => {
 	test("~other/x is config_invalid; ~ and ~/x expand to the home", () => {
 		writeConfig(baseConfig({ wikiNotes: { client: "/c", agentDir: "~other/x" } }));

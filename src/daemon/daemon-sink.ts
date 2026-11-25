@@ -5,6 +5,7 @@ import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
+import { borrowedStartReply, borrowThreadOf, inboundLane } from "../lanes/borrow-thread";
 import { type LaneAction, parseLaneActionId } from "../lanes/card";
 import { classifyLaneControl } from "../lanes/control";
 import type { LaneManager } from "../lanes/manager";
@@ -13,7 +14,6 @@ import { parseReservationActionId, type ReservationAction } from "../lanes/reser
 import { isLaneOrigin, isTaskOrigin, type LaneRow, taskOriginKey } from "../lanes/status";
 import {
 	buildClosedLaneQuestion,
-	classifyClosedLaneMessage,
 	DISCORD_LANE_CHANNEL_MISSING,
 	isOwnerAcceptText,
 	type LaneTrigger,
@@ -77,14 +77,12 @@ export class DaemonInbound {
 		const core: CoreSink = {
 			onInbound: (message) => {
 				// A message in a work lane's thread belongs to that lane's origin, not to the DM conversation.
-				const lane = store.getLaneByThread(message.threadRef);
-				const originKey = lane?.originKey ?? message.originKey;
-				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
 				// A closed lane stays closed for anything but `!reopen`: a question (or a `!followup` payload) reaches its
 				// session behind the answer-only notice; control commands stay as typed — the mailbox reads the recorded text.
 				// `머지해`/`폐기해` (the whole message, while the landing waits) are the card's buttons in words.
-				const closedAs =
-					lane?.status === "closed" ? classifyClosedLaneMessage(message.text, lane.meta.land?.state) : undefined;
+				const { lane, closedAs } = inboundLane(store.getLaneByThread(message.threadRef), message.text);
+				const originKey = lane?.originKey ?? message.originKey;
+				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
 				const { inserted, row } = store.recordInbound({
 					originKey,
 					platformMessageId: message.platformMessageId,
@@ -190,10 +188,11 @@ export class DaemonInbound {
 				return {};
 			},
 			onPeerInbound: (message, hop) => {
-				// Never the owner paths: no lane routing, no `!reopen`, no lane trigger, no command. A work lane's thread
-				// belongs to the owner and its worker; a peer there is dropped before any row exists.
+				// Never the owner paths: no lane routing, no `!reopen`, no lane trigger, no command. A peer in a work lane's own
+				// thread is dropped before any row exists; in a borrowed thread it reaches the conversation, open lane or closed.
 				if (store.getInbound(message.platformMessageId) !== undefined) return { duplicate: true };
-				if (store.getLaneByThread(message.threadRef) !== undefined) return { dropped: "peer_in_lane_thread" };
+				const lane = store.getLaneByThread(message.threadRef);
+				if (lane !== undefined && lane.meta.borrowedThread !== true) return { dropped: "peer_in_lane_thread" };
 				const resetAt = store.getCursor(`${PEER_HOP_RESET_CURSOR}${message.threadRef}`);
 				const since = Math.max(ctx.clock.now() - hop.windowMs, resetAt === undefined ? 0 : Number(resetAt) + 1);
 				if (store.countPeerInboundSince(message.threadRef, since) >= hop.turns) {
@@ -246,6 +245,7 @@ export class DaemonInbound {
 			knowsThread: (threadRef) => store.getLaneByThread(threadRef) !== undefined || store.hasInboundThread(threadRef),
 			hasInbound: (platformMessageId) => store.getInbound(platformMessageId) !== undefined,
 			inboundText: (platformMessageId) => store.getInbound(platformMessageId)?.textRef,
+			inboundOrigin: (platformMessageId) => store.getInbound(platformMessageId)?.originKey,
 			isDraining: () => ctx.router?.draining === true,
 			// The thread of an approval card is `<card channel>:<card ts>` — the ledger's approval id.
 			onCardReply: ({ threadRef, platformMessageId, text, injected }) => {
@@ -290,7 +290,9 @@ export class DaemonInbound {
 					channel,
 					parentOrigin: row.originKey,
 					reuseOpen: true,
+					...borrowThreadOf(row.originKey),
 				});
+				if (lane.meta.borrowedThread === true) return borrowedStartReply(lane, lane.reused === true ? "↪ " : "🔄 ");
 				const link = await this.#lanes.threadLink(lane);
 				if (lane.reused === true) {
 					return `↪ 같은 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다${link === undefined ? "" : `: ${link}`}`;

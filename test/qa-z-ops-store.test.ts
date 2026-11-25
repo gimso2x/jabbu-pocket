@@ -142,7 +142,6 @@ describe("qa-z monitors export", () => {
 	const ctx = () => ({
 		scriptsRoot: join(h.dir, "scripts"),
 		workspaceDir: h.config.workspaceDir,
-		webhook: { port: 1 },
 		defaultTimezone: "Asia/Seoul",
 	});
 	const ledger = () => {
@@ -223,7 +222,6 @@ describe("qa-z monitors export", () => {
 		applyMonitors(target, dir, {
 			scriptsRoot: join(other.dir, "scripts"),
 			workspaceDir: other.config.workspaceDir,
-			webhook: { port: 1 },
 			defaultTimezone: "Asia/Seoul",
 		});
 		const [row] = target.listMonitors();

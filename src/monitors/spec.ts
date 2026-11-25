@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { assertTimezone, CronError, parseCron, zonedToUtc } from "./cron";
@@ -11,9 +10,6 @@ export const MAX_SCRIPT_INTERVAL_MS = 366 * 24 * 60 * 60 * 1000;
 export const SCRIPT_TIMEOUT_MS = 60_000;
 export const MIN_COMMAND_TIMEOUT_MS = 1000;
 export const MAX_COMMAND_TIMEOUT_MS = 30 * 60_000;
-export const MIN_WATCHER_DEBOUNCE_MS = 100;
-export const MAX_WATCHER_DEBOUNCE_MS = 60_000;
-export const DEFAULT_WATCHER_DEBOUNCE_MS = 1000;
 export const MAX_PROCEDURE_FILES = 5;
 /** All procedure files of one fire together; the rest is cut and marked as truncated in the prompt. */
 export const MAX_PROCEDURE_BYTES = 64 * 1024;
@@ -43,18 +39,7 @@ export type MonitorTrigger =
 			fire?: ScriptFire;
 			once?: boolean;
 			suppressUnchanged?: boolean;
-	  }
-	/**
-	 * Fires once changes under `root` (a recursive watch; `.git/` ignored) have been quiet for `debounceMs`; the payload
-	 * lists the changed relative paths. `root` is stored as the owner wrote it and re-checked against `watcherRoots`.
-	 */
-	| { kind: "watcher"; root: string; debounceMs: number }
-	/**
-	 * Fires when something POSTs to `/hook/<id>` on the loopback webhook listener with `Authorization: Bearer <token>`;
-	 * the body becomes the event payload. `id` (128 bit) and `token` (256 bit) are generated when the monitor is
-	 * created and kept when the trigger is edited.
-	 */
-	| { kind: "webhook"; id: string; token: string };
+	  };
 
 export interface MonitorSpec {
 	name: string;
@@ -95,12 +80,8 @@ export class MonitorSpecError extends Error {
 export interface SpecContext {
 	/** `<home>/scripts`: script commands must resolve inside it. */
 	scriptsRoot: string;
-	/** `config.watcherRoots` (absolute): a watcher trigger's root must resolve inside one of them. */
-	watcherRoots?: readonly string[] | undefined;
 	/** `config.workspaceDir`: besides the scripts root, a procedure file may live here. */
 	workspaceDir?: string | undefined;
-	/** `config.webhook`: without it a webhook trigger cannot be created. */
-	webhook?: { port: number; bind?: string } | undefined;
 	/** `config.timezone`: a cron without `timezone` is stored with it, an `at` without an offset is read in it. */
 	defaultTimezone: string;
 }
@@ -220,37 +201,6 @@ export function resolveScript(command: readonly string[], scriptsRoot: string): 
 
 const under = (root: string, path: string): boolean =>
 	path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
-
-/**
- * Proves `root` is an absolute existing directory whose realpath lies inside one of `watcherRoots` (realpaths), and
- * returns that realpath. Used at spec time and again by the scheduler before every watch start.
- */
-export function resolveWatchRoot(root: string, watcherRoots: readonly string[] | undefined): string {
-	if (!isAbsolute(root)) throw new MonitorSpecError("trigger.root must be an absolute path");
-	if (watcherRoots === undefined || watcherRoots.length === 0) {
-		throw new MonitorSpecError(
-			"watcher triggers are disabled: set watcherRoots in config.json to the allowed directories",
-		);
-	}
-	let real: string;
-	try {
-		real = realpathSync(root);
-		if (!statSync(real).isDirectory()) throw new Error("not a directory");
-	} catch {
-		throw new MonitorSpecError(`trigger.root is not an existing directory: ${root}`);
-	}
-	const allowed = watcherRoots.flatMap((r) => {
-		try {
-			return [realpathSync(r)];
-		} catch {
-			return [];
-		}
-	});
-	if (!allowed.some((r) => under(r, real))) {
-		throw new MonitorSpecError(`trigger.root must live under one of watcherRoots: ${root}`);
-	}
-	return real;
-}
 
 /** The directories a procedure file may live in (realpaths of the ones that exist). */
 function procedureRoots(workspaceDir: string | undefined, scriptsRoot: string): string[] {
@@ -402,35 +352,7 @@ function parseTrigger(raw: unknown, ctx: SpecContext, base?: MonitorTrigger): Mo
 		}
 		return { kind: "script", command, intervalMs, fire, once, suppressUnchanged };
 	}
-	if (kind === "watcher") {
-		rejectUnknown(obj, ["kind", "root", "debounceMs"], "trigger");
-		const prev = base?.kind === "watcher" ? base : undefined;
-		const root = obj.root ?? prev?.root;
-		if (typeof root !== "string") throw new MonitorSpecError("trigger.root must be an absolute path string");
-		const debounceMs = obj.debounceMs ?? prev?.debounceMs ?? DEFAULT_WATCHER_DEBOUNCE_MS;
-		if (
-			typeof debounceMs !== "number" ||
-			!Number.isInteger(debounceMs) ||
-			debounceMs < MIN_WATCHER_DEBOUNCE_MS ||
-			debounceMs > MAX_WATCHER_DEBOUNCE_MS
-		) {
-			throw new MonitorSpecError(
-				`trigger.debounceMs must be an integer ${MIN_WATCHER_DEBOUNCE_MS}-${MAX_WATCHER_DEBOUNCE_MS}`,
-			);
-		}
-		resolveWatchRoot(root, ctx.watcherRoots);
-		return { kind: "watcher", root, debounceMs };
-	}
-	if (kind === "webhook") {
-		rejectUnknown(obj, ["kind"], "trigger");
-		if (ctx.webhook === undefined) {
-			throw new MonitorSpecError("webhook triggers are disabled: set webhook {port} in config.json");
-		}
-		// An edit keeps the URL and token the caller already hooked up; only a new monitor draws fresh ones.
-		if (base?.kind === "webhook") return { kind: "webhook", id: base.id, token: base.token };
-		return { kind: "webhook", id: randomBytes(16).toString("hex"), token: randomBytes(32).toString("hex") };
-	}
-	throw new MonitorSpecError('trigger.kind must be "cron", "at", "script", "watcher" or "webhook"');
+	throw new MonitorSpecError('trigger.kind must be "cron", "at" or "script"');
 }
 
 /** Validates a full spec (`monitors add`). Defaults: overlap queue, enabled true, cron timezone `ctx.defaultTimezone`. */
@@ -442,7 +364,11 @@ export function parseMonitorSpec(input: unknown, ctx: SpecContext): MonitorSpec 
  * Applies a partial spec to `current` (`monitors update`). Only supplied fields change; a supplied trigger may omit
  * `kind` and fields to inherit them from the current trigger of the same kind.
  */
-export function mergeMonitorSpec(current: MonitorSpec | undefined, patch: unknown, ctx: SpecContext): MonitorSpec {
+export function mergeMonitorSpec(
+	current: (Omit<MonitorSpec, "trigger"> & { trigger?: MonitorTrigger }) | undefined,
+	patch: unknown,
+	ctx: SpecContext,
+): MonitorSpec {
 	const obj = record(patch, "monitor spec");
 	rejectUnknown(obj, SPEC_KEYS, "monitor spec");
 	const name = obj.name ?? current?.name;
@@ -487,9 +413,9 @@ export function mergeMonitorSpec(current: MonitorSpec | undefined, patch: unknow
 	if (thinking !== undefined && !THINKING_LEVELS.includes(thinking as MonitorThinking)) {
 		throw new MonitorSpecError(`thinking must be one of ${THINKING_LEVELS.join(", ")}`);
 	}
-	if (obj.trigger === undefined && current === undefined) throw new MonitorSpecError("trigger is required");
+	if (obj.trigger === undefined && current?.trigger === undefined) throw new MonitorSpecError("trigger is required");
 	const trigger =
-		obj.trigger === undefined ? (current as MonitorSpec).trigger : parseTrigger(obj.trigger, ctx, current?.trigger);
+		obj.trigger === undefined ? (current?.trigger as MonitorTrigger) : parseTrigger(obj.trigger, ctx, current?.trigger);
 	const deliver = obj.deliver ?? current?.deliver ?? "turn";
 	if (deliver !== "turn" && deliver !== "verbatim") throw new MonitorSpecError('deliver must be "turn" or "verbatim"');
 	const cronCommand = trigger.kind === "cron" && trigger.command !== undefined;

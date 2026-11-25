@@ -79,8 +79,7 @@ export async function handleIpc(
 		return { ok: true, draining: ctx.router?.draining ?? false, ...daemon.drainCounts() };
 	}
 	if (request.op === "drain_cut") {
-		const stamp = "applyStamp" in request && typeof request.applyStamp === "string" ? request.applyStamp : "";
-		return daemon.drainCut(stamp);
+		return daemon.drainCut("applyStamp" in request && typeof request.applyStamp === "string" ? request.applyStamp : "");
 	}
 	if (request.op === "inject") {
 		const text = "text" in request ? request.text : undefined;
@@ -119,6 +118,7 @@ export async function handleIpc(
 		if (typeof id !== "string" || ctx.store?.tasks.get(id) === undefined) return { ok: false, error: "task not found" };
 		return daemon.controlTask(id, request.op === "tasks_pause" ? "pause" : "resume");
 	}
+	if (request.op === "tasks_land") return landing.landFromCli("id" in request ? String(request.id) : "");
 	if (request.op === "tasks_check" || request.op === "tasks_sync") {
 		const id = "id" in request ? request.id : undefined;
 		const row = typeof id === "string" ? ctx.store?.tasks.get(id) : undefined;

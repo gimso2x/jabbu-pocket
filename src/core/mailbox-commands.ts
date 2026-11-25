@@ -56,8 +56,6 @@ export async function commandReply(
 			return await resumeCommand(host, arg, threadRef);
 		case "new":
 			throw new Error("unreachable: /new is handled by #newEpoch");
-		case "undo":
-			throw new Error("unreachable: undo is handled by #startUndo");
 		case "brief":
 			throw new Error("unreachable: brief is handled by #startBrief");
 		case "stop":
@@ -346,7 +344,7 @@ export function askBtw(
 
 /**
  * `!brief`: the origin's one-page status picture, uploaded to this thread. Outside
- * the serial chain for the same reason as `#askBtw`/`#startUndo` — the render takes seconds and the origin's next
+ * the serial chain for the same reason as `#askBtw` — the render takes seconds and the origin's next
  * message must not wait for it; the store writes here are synchronous. The row ends `discarded` (an upload instead
  * of a text answer, no delivery), so the restart settle never reports this success as a failed turn.
  */

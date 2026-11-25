@@ -7,7 +7,7 @@ import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import type { ThreadSource } from "../core/mailbox-thread-context";
-import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
+import { TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { OriginRouter, sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin, REMOVED_PLATFORM_PREFIXES } from "../core/origin-key";
 import { COMMAND_OP_REF, type MailboxClock } from "../core/types";
@@ -25,7 +25,6 @@ import { isLaneOrigin } from "../lanes/status";
 import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { MonitorScheduler } from "../monitors/scheduler";
-import { WebhookServer } from "../monitors/webhook";
 import { latestRotationContext } from "../omp/agy-quota";
 import type { OmpDialogAnswerer, OmpSessionDriver } from "../omp/driver";
 import type { RpcOmpDriver } from "../omp/rpc-driver";
@@ -50,7 +49,7 @@ import { hostSessionsInfo } from "../ops/host-sessions";
 import { pruneMediaFiles } from "../ops/media";
 import { BRIEFING_TIMEOUT_MS, BRIEFING_WIDTH, renderPng } from "../ops/screenshot";
 import { redact } from "../redact";
-import { ApprovalBroker, type ApprovalOutcome } from "../safety/approval";
+import { ApprovalBroker } from "../safety/approval";
 import type { HostToolDef } from "../safety/host-tools";
 import { buildFloorsPrompt, type FloorsSurface } from "../safety/prompt";
 import type { Store } from "../store/db";
@@ -82,7 +81,8 @@ import { DaemonSkillReview } from "./daemon-review";
 import { DaemonInbound, deliverySources } from "./daemon-sink";
 import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
 import { GateSweep, PendingDispatchSweep } from "./daemon-sweeps";
-import { DaemonTaskLanding, ingestOwnerText } from "./daemon-task-land";
+import { DaemonTaskLanding } from "./daemon-task-land";
+import { ingestOwnerText } from "./daemon-task-land-entry";
 import { type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
@@ -120,7 +120,6 @@ export class Daemon {
 	#store: DaemonStore | undefined;
 	#router: OriginRouter | undefined;
 	#monitors: MonitorScheduler | undefined;
-	#webhook: WebhookServer | undefined;
 	readonly #adapters = new Map<ChatPlatform, ChannelAdapter>(); // one adapter per bound platform, built at start
 	#ipc: IpcServer | undefined;
 	#timer: NodeJS.Timeout | undefined;
@@ -400,13 +399,12 @@ export class Daemon {
 			homeDir: config.homeDir,
 			now: () => this.#clock.now(),
 			lockRepos: (originKey) => {
-				const repos = [...(config.turnSnapshot?.repos ?? [])];
 				try {
-					repos.push(this.cwdFor(originKey));
+					return [this.cwdFor(originKey)];
 				} catch {
 					// an open lane without its worktree: nothing there to hold a lock
+					return [];
 				}
-				return repos;
 			},
 		});
 		log.info("recovery_done", {
@@ -466,22 +464,20 @@ export class Daemon {
 					.find((binding) => binding.port.platform === "discord")
 					?.port.conversationContext?.(ref.conversationId, ref.threadId);
 			},
-			// Read on every turn and every `!undo`: a reload changes the repository list without a restart. The real git
-			// runs here: no `run` is passed, so the daemon never gains a test seam in production.
-			turnUndo: {
-				repos: () => this.#options.config.turnSnapshot?.repos ?? [],
-				// Without turnSnapshot a commit still reaches the wiki turn notes: only HEADs are read, no snapshot rows.
+			// Read on every turn: a reload changes the repository list without a restart. The real git runs here: no `run`
+			// is passed, so the daemon never gains a test seam in production.
+			turnHeads: {
 				headRepos: () => turnNoteRepos(this.#options.config),
-				approve: (info) => this.#undoApproval(info.summary, info.threadRef, info.originKey),
 				onCommitted: (turn) => wikiNotes.recordTurn(turn),
 			},
 			threadSource: this.#threadSources(),
 			idleStopMs: config.idleTimeoutMinutes === undefined ? undefined : config.idleTimeoutMinutes * 60_000,
 			idleKeep: idleKeepOptions(config, gateOptionsFromConfig(config).hostSessionCeiling, this.#options.hostLoad),
 			...(config.model === undefined ? {} : { defaultModel: config.model }),
-			onStall: (info) => void adapterOfThread(this.#ctx, info.threadRef)?.setStalled(info.threadRef, info.stalled),
-			onProgress: ({ threadRef, progress }) =>
-				void adapterOfThread(this.#ctx, threadRef)?.setProgress(threadRef, {
+			onStall: (info) =>
+				void adapterOfThread(this.#ctx, info.threadRef)?.setStalled(info.threadRef, info.originKey, info.stalled),
+			onProgress: ({ originKey, threadRef, progress }) =>
+				void adapterOfThread(this.#ctx, threadRef)?.setProgress(threadRef, originKey, {
 					...progress,
 					recentTools: progress.recentTools.map((tool) => ({ ...tool, text: redact(tool.text) })),
 					...(progress.todo?.current === undefined
@@ -619,25 +615,9 @@ export class Daemon {
 			scriptsRoot: join(config.homeDir, "scripts"),
 			workspaceDir: config.workspaceDir,
 			homeDir: config.homeDir,
-			watcherRoots: config.watcherRoots,
 			frozen: this.#frozen,
 		});
 		this.#monitors.start();
-		if (config.webhook !== undefined) {
-			// A port that cannot be bound is logged (`webhook_bind_failed`) and shown by `jabbu-pocket doctor`; it never stops the bot.
-			this.#webhook = new WebhookServer({
-				ledger: store.monitors,
-				log,
-				clock: this.#clock,
-				config: config.webhook,
-				frozen: this.#frozen,
-				// A restart drain fires no monitor: the admitted event waits in the ledger for the next process.
-				onFired: () => {
-					if (this.#router?.draining !== true) this.#monitors?.kick();
-				},
-			});
-			this.#webhook.start();
-		}
 
 		const core = this.#inbound.coreSink({
 			store,
@@ -909,19 +889,6 @@ export class Daemon {
 		if (alerts === 0) return;
 		this.#log.info("peer_silence_alerted", { count: alerts });
 		this.#nudgePump();
-	}
-
-	/**
-	 * The `!undo` card: an approval request in the conversation's own thread, so the owner answers where they asked. A
-	 * free-text reply on the card is not an approval (the undo writes files): it counts as denied.
-	 */
-	async #undoApproval(summary: string, threadRef: string, originKey: string): Promise<ApprovalOutcome> {
-		const parsed = parseThreadRef(threadRef);
-		if (parsed === undefined) return "denied";
-		const result = await this.#approval.ask(parsed.channel, summary, {
-			origin: { originKey, channel: parsed.channel, threadTs: parsed.threadTs },
-		});
-		return typeof result === "string" ? result : "denied";
 	}
 
 	/**
@@ -1370,7 +1337,6 @@ export class Daemon {
 		this.#heartbeat = undefined;
 		installProcessAudit(undefined);
 		this.#ipc?.stop();
-		this.#webhook?.stop();
 		for (const adapter of this.#adapters.values()) await adapter.stop();
 		await this.#pumping;
 		await this.#monitors?.idle();

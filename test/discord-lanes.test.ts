@@ -29,6 +29,8 @@ const ASK_THREAD = "222222222222222222";
 const LANE_CH = "333333333333333333";
 const DM = "123456789012345678";
 const THREAD_ORIGIN = `discord/ch/${CH}/t/${ASK_THREAD}`;
+/** A channel command's origin (no thread of its own): its lanes open their own thread, never borrow one. */
+const CHANNEL_ORIGIN = `discord/ch/${CH}`;
 const DM_ORIGIN = `discord/dm/${DM}`;
 const signal = new AbortController().signal;
 
@@ -112,14 +114,14 @@ async function workStart(daemon: Daemon, origin: string, title: string, repo: st
 	return tool.execute({ title, cwd: repo }, { signal });
 }
 
-/** Starts a lane from the owner's server thread and waits for its first turn's answer in the lane thread. */
+/** Starts a lane from the owner's server channel (its own thread) and waits for its first turn's answer there. */
 async function startLane(
 	daemon: Daemon,
 	discord: WaitingDiscordTransport,
 	title: string,
 ): Promise<{ lane: LaneRow; root: Create; result: unknown }> {
 	const repo = makeRepo(repos);
-	const result = await workStart(daemon, THREAD_ORIGIN, title, repo);
+	const result = await workStart(daemon, CHANNEL_ORIGIN, title, repo);
 	const root = creates(discord, (call) => call.content === `🔄 ${title}`)[0];
 	if (root === undefined) throw new Error("no lane root posted");
 	await discord.waitForPosts((text) => text.includes("ECHO 작업:"));
@@ -169,7 +171,7 @@ async function claim(daemon: Daemon, discord: WaitingDiscordTransport, lane: Lan
 	return card;
 }
 
-describe("a lane started from a Discord server thread", () => {
+describe("a lane started from a Discord server channel", () => {
 	test("root in the parent channel, a thread started from it, status with ⏸ inside; threadRef is <parent>:<root>", async () => {
 		const discord = discordTransport();
 		const daemon = await boot(discord);
@@ -452,7 +454,7 @@ describe("a thread Discord refuses", () => {
 		discord.failNext.startThread = [
 			new DiscordCallError("definitive", "discord_http_403:50001 Missing Access", 403, 50001),
 		];
-		await expect(workStart(daemon, THREAD_ORIGIN, "f-lane", repo)).rejects.toThrow("Missing Access");
+		await expect(workStart(daemon, CHANNEL_ORIGIN, "f-lane", repo)).rejects.toThrow("Missing Access");
 		const root = creates(discord, (call) => call.content === "🔄 f-lane")[0];
 		expect(edits(discord, (call) => call.messageId === root?.id).map((call) => [call.channelId, call.content])).toEqual(
 			[[CH, "❌ f-lane"]],
