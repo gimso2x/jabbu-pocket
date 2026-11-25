@@ -1948,6 +1948,28 @@ describe("jabbu-pocket gc", () => {
 		}
 	});
 
+	test("gc prunes inbound_conflicts past the ledger retention window and keeps fresh ones", () => {
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
+		store.close();
+		const now = Date.now();
+		const db = new Database(join(home.dir, "jabbu.db"));
+		const insert = db.query(
+			"INSERT INTO inbound_conflicts (platform_message_id, origin_key, created_at) VALUES (?, ?, ?)",
+		);
+		insert.run("m-old", "origin-a", now - 100 * DAY_MS);
+		insert.run("m-edge", "origin-a", now - 91 * DAY_MS);
+		insert.run("m-fresh", "origin-a", now - DAY_MS);
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now });
+		expect(result.ledgerRemoved.inboundConflicts).toBe(2);
+		const after = new Database(join(home.dir, "jabbu.db"), { readonly: true });
+		try {
+			expect(after.query("SELECT COUNT(*) AS n FROM inbound_conflicts").get()).toEqual({ n: 1 });
+		} finally {
+			after.close();
+		}
+	});
+
 	test("a resumed older epoch stays live when the home is reached through a symlink", () => {
 		const link = join(home.dir, "..", `${basename(home.dir)}-link`);
 		symlinkSync(home.dir, link);
@@ -2507,7 +2529,15 @@ describe("jabbu-pocket gc: ledger retention", () => {
 
 	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
 	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
-	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0, monitorSlots: 0, webMessages: 0 };
+	const EXPECTED = {
+		inbound: 4,
+		deliveries: 3,
+		deliveryPosts: 3,
+		monitorEvents: 0,
+		monitorSlots: 0,
+		webMessages: 0,
+		inboundConflicts: 0,
+	};
 
 	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
@@ -2527,6 +2557,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			monitorEvents: 0,
 			monitorSlots: 0,
 			webMessages: 0,
+			inboundConflicts: 0,
 		});
 	});
 
@@ -2550,6 +2581,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			monitorEvents: 0,
 			monitorSlots: 0,
 			webMessages: 0,
+			inboundConflicts: 0,
 		});
 		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
@@ -2559,7 +2591,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
 		expect(dry.stdout).toMatch(
-			/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+ monitor_slots=\d+\n/,
+			/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+ monitor_slots=\d+ inbound_conflicts=\d+\n/,
 		);
 		expect(names("inbound")).toHaveLength(8);
 	});
