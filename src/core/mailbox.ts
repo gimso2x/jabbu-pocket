@@ -1055,7 +1055,7 @@ export class OriginMailbox {
 				return late === "settled" ? this.#dispatch(row, text) : false;
 			}
 			try {
-				await driver.steer(composeTurnPrompt(blocks, text));
+				await driver.steer(composeTurnPrompt(blocks, text, false));
 			} catch (error) {
 				return this.#parkUncertain(row, "steer_threw", error);
 			}
