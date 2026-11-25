@@ -30,9 +30,9 @@ import type { UncertainReason } from "../store/transitions";
 import { typicalTurnDuration } from "../store/turn-duration";
 import { classifyFailure } from "./failure-kind";
 import { type IdleKeepDeps, IdleKeeper, type IdleSweepContext } from "./idle-keep";
-import type { LiveView } from "./live-turn";
 import { newActiveTurn } from "./mailbox-active-turn";
 import { askBtw, commandReply, startBrief, waitingRows } from "./mailbox-commands";
+import { ContextMemory, type LiveViewWithContext } from "./mailbox-context";
 import { judgeTurnCost, recordDailyCost, refreshSubAgentCost } from "./mailbox-cost";
 import { toolActivityText } from "./mailbox-helpers";
 import {
@@ -143,6 +143,7 @@ export class OriginMailbox {
 	readonly #idleStopMs: number;
 	#tail: Promise<unknown> = Promise.resolve();
 	#driver: OmpSessionDriver | undefined;
+	readonly #context = new ContextMemory();
 	#unsubscribe: Array<() => void> = [];
 	#turn: ActiveTurn | undefined;
 	/** `#startTurn` calls in flight: the child spawn and ready wait come before `#turn` is set. */
@@ -547,8 +548,8 @@ export class OriginMailbox {
 	}
 
 	/** What the running turn is writing now (dashboard `live` op); null without a turn or with nothing in flight. */
-	liveView(): LiveView | null {
-		return this.#turn?.live.view() ?? null;
+	liveView(): LiveViewWithContext | null {
+		return this.#context.attach(this.#turn?.live.view() ?? null);
 	}
 
 	/**
@@ -1506,7 +1507,7 @@ export class OriginMailbox {
 			driver.onExit((info) => this.#background("exit_failed", () => this.#onExit(driver, info))),
 			driver.onEvent((event) => this.#onDriverEvent(event)),
 		];
-		this.#driver = driver;
+		this.#driver = this.#context.watch(driver);
 		this.#idle.spawned(spawnIdentity);
 		// A child without host tools has nothing to be told about them.
 		this.#skipPeerNotice = peerTouched || this.#deps.hostTools?.() === false;

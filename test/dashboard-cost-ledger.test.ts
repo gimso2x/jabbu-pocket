@@ -10,6 +10,9 @@ import {
 	readCostLedger,
 	updateCostLedger,
 } from "../src/dashboard/cost-ledger";
+import { SCRIPT } from "../src/dashboard/html";
+import { renderDashboardMain } from "../src/dashboard/main-view";
+import { buildSnapshot, type DashboardSnapshot, type SnapshotDeps } from "../src/dashboard/snapshot";
 
 /** 2026-11-25 12:00 KST. */
 const NOW = Date.parse("2026-11-25T03:00:00Z");
@@ -103,5 +106,59 @@ describe("AC-5: the card", () => {
 		expect(await readCostLedger(home, () => NOW + COST_LEDGER_TTL_MS - 1, TZ)).toBe(first);
 		const later = await readCostLedger(home, () => NOW + COST_LEDGER_TTL_MS, TZ);
 		expect(later.ok && later.total).toBeCloseTo(2);
+	});
+});
+
+describe("the system view's 7일 비용 card", () => {
+	const snapshotOf = (usageLimits: boolean): Promise<DashboardSnapshot> => {
+		const deps: SnapshotDeps = {
+			homeDir: home,
+			repoDir: "/srv/jabbu",
+			timezone: TZ,
+			config: undefined,
+			now: () => NOW,
+			...(usageLimits ? { usageLimits } : {}),
+			callDaemon: async () => {
+				throw new Error("no daemon");
+			},
+			run: async () => ({ code: 1, stdout: "", timedOut: false }),
+			ompVersion: async () => "omp-stub 0.0.0",
+			hostOps: () => {
+				throw new Error("no hosts");
+			},
+			collectGates: () => [],
+		};
+		return buildSnapshot(deps);
+	};
+	const cardOf = (html: string): string =>
+		/<section class="sys-card[^"]*" data-card="cost"[\s\S]*?<\/section>/.exec(html)?.[0] ?? "";
+
+	test("a day bar per day, the top sessions with their kind and the cache-write share; the client draws the same", async () => {
+		writeFileSync(session("discord/ch/1/t/2"), user("배포 점검") + call(NOW - DAY, 4, 2) + call(NOW, 1));
+		writeFileSync(session("jabbu/work/ui-fix"), call(NOW, 3, 1));
+		const snapshot = await snapshotOf(true);
+		const server = renderDashboardMain(snapshot, undefined, NOW, { view: "system" });
+		const card = cardOf(server);
+		expect(card.match(/<div class="limit-row" data-day=/g)).toHaveLength(7);
+		expect(card).toContain('data-day="11-24"><span class="limit-name">11-24</span>');
+		expect(card).toContain('<b class="limit-pct">$4.00</b>');
+		expect(card).toContain(
+			'<span class="gate-word">대화</span><span class="gate-label">배포 점검</span><code class="gate-detail">$5.00</code>',
+		);
+		expect(card).toContain('<span class="gate-word">레인</span><span class="gate-label">ui-fix</span>');
+		expect(card).toContain("7일 합계 $8.00 · 캐시 쓰기 38%");
+		const client = new Function("document", "setInterval", `${SCRIPT}\nreturn renderDashboardMain;`)(
+			{ getElementById: () => ({}) },
+			() => 0,
+		) as typeof renderDashboardMain;
+		expect(client(snapshot, undefined, NOW, { view: "system" })).toBe(server);
+	});
+
+	test("a failed read is the card's note; without the dashboard flag there is no card and no ledger file", async () => {
+		const snapshot = await snapshotOf(false);
+		expect(snapshot.costLedger).toBeUndefined();
+		expect(cardOf(renderDashboardMain(snapshot, undefined, NOW, { view: "system" }))).toBe("");
+		const failed = { ...snapshot, costLedger: { ok: false as const, error: "boom" } };
+		expect(cardOf(renderDashboardMain(failed, undefined, NOW, { view: "system" }))).toContain("읽지 못했어요: boom");
 	});
 });

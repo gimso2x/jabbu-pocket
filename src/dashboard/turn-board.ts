@@ -6,6 +6,7 @@ import { COMMAND_TEXT, parseCommand } from "../core/types";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { INBOUND_STARVATION_MS } from "../ops/gates";
 import { redact } from "../redact";
+import type { ContextLoad } from "./context-load";
 import type { PeerInstall } from "./peers";
 import { previewLine } from "./preview-line";
 import type { SessionModel } from "./session-model";
@@ -100,6 +101,8 @@ export interface ThreadInfo {
 	jobs?: string[];
 	/** The model and thinking its omp session runs with ({@link SessionModel}); absent when unknown (no chip). */
 	model?: SessionModel;
+	/** Its session's context use ({@link ContextLoad}); absent when unknown (no bar). */
+	context?: ContextLoad;
 	/** Peer install name (`dashboard.peerHomes`); absent for the dashboard's own threads. */
 	install?: string;
 }

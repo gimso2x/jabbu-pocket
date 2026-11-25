@@ -11,6 +11,7 @@ import {
 	inboxNextReason,
 	isStale,
 } from "./inbox";
+import { contextBar, costCardBody } from "./load-view";
 import type { DashboardSnapshot, JobInfo, MonitorInfo, TaskInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -701,7 +702,7 @@ export function renderDashboardMain(
 					thread,
 				)}</span><span class="card-time">${ago(msOf(thread.updatedAt))}</span><span class="card-meta">${meta
 					.map((part) => `<span>${esc(part)}</span>`)
-					.join("")}${modelChip(thread.model)}</span></div></article>`;
+					.join("")}${modelChip(thread.model)}${contextBar(thread.context)}</span></div></article>`;
 			};
 			const lead = `${banners.join("")}${drainLine}${threads.length === 0 ? nothing : ""}`;
 			if (ui.layout === "list") {
@@ -1214,6 +1215,8 @@ export function renderDashboardMain(
 			);
 		}
 
+		if (s.costLedger) pushCard("cost", "7일 비용", s.costLedger.ok ? "ok" : "warn", costCardBody(s.costLedger));
+
 		const gates = s.gates;
 		if (!gates.ok) pushCard("gates", "게이트", "bad", note(`게이트를 읽지 못했어요: ${gates.error}`), true);
 		else {
@@ -1526,11 +1529,7 @@ export function renderDashboardMain(
 		// The narrowest desktop bars show one summary instead of the chips: a dot per source and the least share overall.
 		const leasts = parts.flatMap((part) => (part.least === undefined ? [] : [part.least]));
 		const tones = parts.map((part) => part.tone);
-		const sumTone = tones.includes("danger")
-			? "danger"
-			: tones.includes("warn") || tones.includes("muted")
-				? "warn"
-				: "ok";
+		const sumTone = tones.includes("danger") ? "danger" : tones.some((tone) => tone !== "ok") ? "warn" : "ok";
 		const summary = `<span class="limit-sum limit-chip is-${sumTone}">${tones
 			.map((tone) => `<i class="dot is-${tone}" aria-hidden="true"></i>`)
 			.join("")}${leasts.length === 0 ? "?" : `${roll("lim:sum", Math.min(...leasts), "down")}%`}</span>`;

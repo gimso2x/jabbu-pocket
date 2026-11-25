@@ -41,6 +41,7 @@ import {
 	unreadIds,
 	unreadReady,
 } from "./inbox";
+import { contextBar, costCardBody } from "./load-view";
 import { renderDashboardMain } from "./main-view";
 import { renderMarkdown } from "./markdown";
 import {
@@ -114,8 +115,7 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()};
 const repoCountsText = ${repoCountsText.toString()};
-const usageLevel = ${usageLevel.toString()};
-const resetIn = ${resetIn.toString()}, trendHtml = ${trendHtml.toString()};
+const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, trendHtml = ${trendHtml.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()};
 const renderFlowChain = ${renderFlowChain.toString()};

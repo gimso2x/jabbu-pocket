@@ -53,6 +53,8 @@ import { type ReadTask, readTaskSql, type TaskRow, type TaskSql, type TaskStatus
 import { headlessStatusFromLedger } from "../tasks/runtime";
 import { formatLocal, localIso } from "../time";
 import { type BoardPromptRef, type BoardState, type BoardSummary, type BoardTaskRef, summarizeBoard } from "./board";
+import { withContextLoad } from "./context-load";
+import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
 import { discordThreadHref } from "./detail";
 import { type OverlapView, readEditOverlaps } from "./edit-overlap";
 import { type HostChecksInfo, readHostChecks } from "./host-checks";
@@ -663,8 +665,9 @@ export interface DashboardSnapshot {
 	hostChecks?: Section<HostChecksInfo>;
 	/** Config `dashboard.opsStatus.url`: the card head links it. */
 	hostChecksUrl?: string;
-	/** The "모델 한도" card: only with `SnapshotDeps.usageLimits` and config `dashboard.usageLimits` (absent otherwise). */
+	/** "모델 한도" (also needs config `dashboard.usageLimits`) and "7일 비용" cards: only with `SnapshotDeps.usageLimits`. */
 	usageLimits?: Section<UsageLimitsInfo>;
+	costLedger?: Section<CostLedgerInfo>;
 	/** 겹침 marks ({@link OverlapView}); absent when nothing overlaps and no agy session exists. */
 	overlaps?: OverlapView;
 }
@@ -727,7 +730,7 @@ export interface SnapshotDeps {
 	isAlive?: (pid: number) => boolean;
 	/** User home for allowed job roots (`$HOME/work`, `$HOME/.jabbu-*`); defaults to `process.env.HOME ?? homedir()`. */
 	userHome?: string;
-	/** Read the model limit commands (default false): the dashboard server only; the daemon's `!brief` never runs them. */
+	/** Dashboard server only (default false), never the daemon's `!brief`: the model limit commands, the cost ledger, live context. */
 	usageLimits?: boolean;
 }
 
@@ -1470,14 +1473,10 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const listingOf = (host: string): Promise<HerdrListing> | undefined => {
 			const target = targets.find((candidate) => candidate.host === host);
 			if (target === undefined) return undefined;
-			let listing = listings.get(host);
-			if (listing === undefined) {
-				listing = listHerdrAgents(target, run).catch((error: unknown) => ({
-					ok: false as const,
-					error: message(error),
-				}));
-				listings.set(host, listing);
-			}
+			const listing =
+				listings.get(host) ??
+				listHerdrAgents(target, run).catch((error: unknown) => ({ ok: false as const, error: message(error) }));
+			listings.set(host, listing);
 			return listing;
 		};
 
@@ -1541,7 +1540,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			// A failed daemon section leaves drain and freeze unknown: the other wait reasons still apply.
 			const status = await daemon;
 			const jobSection = await jobs;
-			return buildTurnsSection(handle, {
+			const built = buildTurnsSection(handle, {
 				now,
 				iso,
 				draining: status.ok && (status.drain !== undefined || status.heartbeat?.draining === true),
@@ -1560,6 +1559,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				...(deps.peers === undefined ? {} : { peers: deps.peers }),
 				sessionModel: sharedSessionModel,
 			});
+			return withContextLoad(built, handle, deps);
 		});
 		const editOverlaps = turns.then((t) =>
 			readEditOverlaps({ db, now, peers: deps.peers ?? [], threads: t.ok ? t.threads : [], listing: listingOf }),
@@ -2029,6 +2029,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			...(hostChecks === undefined ? {} : { hostChecks: await hostChecks }),
 			...(opsStatus?.url === undefined ? {} : { hostChecksUrl: opsStatus.url }),
 			...(usageLimits === undefined ? {} : { usageLimits: await usageLimits }),
+			...(deps.usageLimits === true ? { costLedger: await readCostLedger(deps.homeDir, deps.now, timezone) } : {}),
 			...(await editOverlaps),
 		};
 	} finally {
