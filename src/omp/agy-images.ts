@@ -1,14 +1,15 @@
 import { open, realpath, stat } from "node:fs/promises";
 import { sniffImageMime } from "../channel/attachments";
+import { fenceCloseRun, fenceOpenRun } from "../channel/text";
 import type { Logger } from "../log";
 import { isInside } from "../safety/inside";
 
 /*
  * Inbound image attachments as ACP `image` prompt blocks. The adapters save a chat attachment under
  * `<homeDir>/media/inbound/<message>/` and append a note line `[첨부: <path> (<mimetype>)]` to the text
- * (`src/channel/attachments.ts`). Only such a note standing alone on a line, outside a ``` fence and outside a
- * `<<<quoted-…>>>` block, is a candidate, and only a regular image file inside the inbound root is read: other
- * `media` files (bot-made briefings), quoted or recalled notes and paths a sender typed never reach the model as bytes.
+ * (`src/channel/attachments.ts`). Any standalone line of that shape outside a code fence and outside a
+ * `<<<quoted-…>>>` block is checked, and only a regular image file inside the inbound root is read: other
+ * `media` files (bot-made briefings), quoted or recalled notes and thread-context lines never reach the model as bytes.
  */
 
 /** At most this many images go with one prompt (the first ones). */
@@ -32,7 +33,7 @@ const MAGIC_HEAD_BYTES = 12;
 /** Paths of the image notes that stand alone on a line outside fences and quoted blocks, in order. */
 function notedImagePaths(text: string): string[] {
 	const paths: string[] = [];
-	let fenced = false;
+	let fence = 0;
 	let quoteEnd: string | undefined;
 	for (const line of text.split("\n")) {
 		const trimmed = line.trim();
@@ -40,11 +41,15 @@ function notedImagePaths(text: string): string[] {
 			if (trimmed === quoteEnd) quoteEnd = undefined;
 			continue;
 		}
-		if (trimmed.startsWith("```")) {
-			fenced = !fenced;
+		if (fence > 0) {
+			if ((fenceCloseRun(line) ?? 0) >= fence) fence = 0;
 			continue;
 		}
-		if (fenced) continue;
+		const open = fenceOpenRun(line);
+		if (open !== undefined) {
+			fence = open;
+			continue;
+		}
 		const quote = QUOTE_OPEN.exec(trimmed);
 		if (quote !== null) {
 			// An open marker without its end hides the rest of the text.
