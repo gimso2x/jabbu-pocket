@@ -136,12 +136,12 @@ export class WebChannel implements ChannelPort {
 	}
 
 	/** Status tracker helper: updates or soft-deletes a `status` row (soft delete bumps `edited_at` for SSE). */
-	editStatus(messageId: string, text: string, deleted: boolean): void {
+	editStatus(messageId: string, text: string, deleted: boolean, final = false): void {
 		const id = Number(messageId);
 		if (!Number.isInteger(id) || id <= 0) return;
 		this.#requireStore().edit(id, {
 			text,
-			cardJson: JSON.stringify({ kind: "status", deleted }),
+			cardJson: JSON.stringify({ kind: "status", deleted, ...(final ? { final: true } : {}) }),
 		});
 	}
 }

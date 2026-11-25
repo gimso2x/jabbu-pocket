@@ -57,6 +57,7 @@ export const CHAT_UI_CSS = `
 .wc-msg-system { align-self: center; font-size: 12px; color: var(--c-text-3); padding: 4px 12px; margin: 6px 0; border-radius: 999px; background: var(--c-surface); border: 1px solid var(--c-line); }
 .wc-msg-status { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; margin: 6px 0 6px 56px; font-size: 12.5px; color: var(--c-run); padding: 5px 11px; border-radius: 999px; background: var(--c-run-bg); }
 .wc-msg-status.is-deleted { display: none; }
+.wc-msg-status.is-final .wc-spin { display: none; }
 .wc-md { font-size: 14px; line-height: 1.56; color: var(--c-text-1); max-width: 82ch; }
 .wc-md p + p, .wc-md ul, .wc-md ol, .wc-md pre, .wc-md blockquote, .wc-md .md-table { margin-top: 8px; }
 .wc-md ul, .wc-md ol { padding-left: 20px; }
