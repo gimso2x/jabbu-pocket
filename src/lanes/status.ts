@@ -3,6 +3,7 @@ import { StoreError } from "../store/transitions";
 import type { TaskCheck } from "../tasks/checker";
 import type { AcceptanceItem, TaskRisk } from "../tasks/docs";
 import type { LanePrLand } from "./pr-land-types";
+import type { LaneProgressEvidence } from "./progress-evidence-types";
 import type { WorkflowChoice } from "./workflow";
 
 /** Work lane states: `closed` only via a verified done claim; `paused` is the owner's hold (turn aborted, autonomous actions wait). */
@@ -225,22 +226,6 @@ export interface LanePrWatch {
 	closedAt?: string;
 }
 
-/** Evidence of a lane's progress report: a worktree file and its content hash (`preserved`: copied to the artifacts). */
-export interface LaneFileEvidence {
-	file: string;
-	sha256: string;
-	preserved?: boolean;
-}
-
-/** Evidence of a progress report: a successful tool call of the lane session and the hash of its result text. */
-export interface LaneToolEvidence {
-	toolCallId: string;
-	tool: string;
-	sha256: string;
-}
-
-export type LaneProgressEvidence = LaneFileEvidence | LaneToolEvidence;
-
 /** Runtime facts of a lane that are not registry columns (kept as one JSON column). */
 export interface LaneMeta {
 	/** `⏳ title · mm:ss` message in the lane thread. */
@@ -264,8 +249,13 @@ export interface LaneMeta {
 	integrityApproval?: { sha: string; fingerprint: string; at: number };
 	/** Full sha recorded when the claim was verified and the lane closed. */
 	sha?: string;
-	/** What the root / status messages currently show (reconciled on every tick). */
+	/** What the root / status messages currently show (reconciled on every tick); a borrowed thread has no root. */
 	renderedRoot?: string;
+	/**
+	 * The lane runs in the conversation thread it was started from (`threadRef` is that thread): no root message of its
+	 * own, the thread is never archived, and once closed the thread goes back to the conversation.
+	 */
+	borrowedThread?: true;
 	renderedStatus?: string;
 	/** Counter for synthetic inbound ids of messages the core steers into the lane. */
 	steerSeq: number;

@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { copyFile, lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findToolCallResult } from "../omp/session-tail";
-import type { LaneFileEvidence, LaneProgressEvidence } from "./status";
+import type { LaneFileEvidence, LaneProgressEvidence } from "./progress-evidence-types";
 
 export type ProgressEvidenceResult = { ok: true; value: LaneProgressEvidence } | { ok: false; reason: string };
 

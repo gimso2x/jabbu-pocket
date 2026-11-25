@@ -1,6 +1,7 @@
 import { LANE_MODEL_TIERS } from "../model-tiers";
 import type { HostToolDef } from "../safety/host-tools";
 import { TASK_RISKS } from "../tasks/docs";
+import { borrowThreadOf, startToolReply } from "./borrow-thread";
 import type { LaneManager } from "./manager";
 import { LaneInputError } from "./manager-constants";
 import { RESERVATION_AFTER_MAX } from "./reservations";
@@ -13,7 +14,7 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 		name: "jabbu_work_start",
 		label: "Start work lane",
 		description:
-			"Start a long task as its own work lane: a new chat thread and a separate omp session working in its own git worktree and branch (`lane/L-YYYYMMDD-NN`) of the repository that contains `cwd`. Use it for tasks that take long or touch another project. Returns the lane name.",
+			"Start a long task as its own work lane: a chat thread (this conversation's thread for its first lane, else a new one) and a separate omp session working in its own git worktree and branch (`lane/L-YYYYMMDD-NN`) of the repository that contains `cwd`. Use it for tasks that take long or touch another project. Returns the lane name.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -132,19 +133,17 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 				});
 				return `예약됨 #${reservation.id}: ${reservation.after.join(", ")} 착지 뒤 시작 가능 카드를 올립니다 (24시간 안에 시작하지 않으면 만료). tell the owner the reservation is waiting; no lane was started.`;
 			}
+			// The first lane of a conversation thread runs in that thread; a reservation (above) always opens its own.
+			const borrow = borrowThreadOf(originKey);
 			const lane = await manager
-				.start({ ...args, parentOrigin: originKey, force: params.force === true, reuseOpen: true })
+				.start({ ...args, ...borrow, parentOrigin: originKey, force: params.force === true, reuseOpen: true })
 				.catch((error: unknown) => {
 					// The capacity refusal carries the measured numbers; the force hint is this surface's, not the manager's.
 					if (error instanceof LaneInputError && error.message.startsWith("시작 거부: "))
 						throw new LaneInputError(`${error.message} — 오너가 강행한다고 명시하면 force: true로 다시 시작하세요`);
 					throw error;
 				});
-			const link = await manager.threadLink(lane);
-			const state = lane.reused === true ? "already open for this request" : "started";
-			const started = `lane ${lane.name} ${state} (thread ${lane.threadRef}, origin ${lane.originKey})`;
-			const reply = link === undefined ? started : `${started}; tell the owner the lane thread link: ${link}`;
-			return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+			return startToolReply(lane, lane.meta.borrowedThread === true ? undefined : await manager.threadLink(lane));
 		},
 	};
 }

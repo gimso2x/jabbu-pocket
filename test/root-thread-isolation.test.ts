@@ -322,7 +322,8 @@ describe("daemon: channel roots are isolated sessions", () => {
 		try {
 			const lane = channelMessage(tsAt(20), `작업: 루트 격리 레인 @${repo}`);
 			await transport.emitMessage(lane);
-			await transport.waitForPosts((text) => text.startsWith("🔄 작업 레인"));
+			// The root's reply thread is the first lane's: the lane borrows it.
+			await transport.waitForPosts((text) => text.startsWith("🔄 이 스레드에서 레인"));
 			const row = daemon.store.getInbound(ref(lane.id));
 			expect(row?.opRef).toBe(`lane:${ref(lane.id)}`);
 			expect(

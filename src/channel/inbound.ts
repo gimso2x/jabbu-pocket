@@ -84,7 +84,7 @@ export async function settleCardReply(
 		ownerVerified: true,
 	});
 	if (outcome?.duplicate) return duplicate(log, platformMessageId);
-	await begin(result.originKey);
+	await begin(core.inboundOrigin?.(platformMessageId) ?? result.originKey);
 	return "recorded";
 }
 
@@ -93,14 +93,14 @@ export async function recordInbound(
 	core: CoreSink,
 	log: Logger,
 	inbound: InboundMessage,
-	begin: (thread: { channel: string; threadTs: string }, showStatus: boolean) => Promise<void>,
+	begin: (thread: { channel: string; threadTs: string }, showStatus: boolean, originKey: string) => Promise<void>,
 ): Promise<IngestOutcome> {
 	const outcome = await core.onInbound(inbound);
 	if (outcome?.duplicate) return duplicate(log, inbound.platformMessageId);
 	const parsed = parseThreadRef(inbound.threadRef);
 	if (parsed !== undefined) {
-		const command = parseCommand(inbound.text);
-		await begin(parsed, command === undefined || command.kind === "followup");
+		const originKey = core.inboundOrigin?.(inbound.platformMessageId) ?? inbound.originKey;
+		await begin(parsed, (parseCommand(inbound.text)?.kind ?? "followup") === "followup", originKey);
 	}
 	return "recorded";
 }

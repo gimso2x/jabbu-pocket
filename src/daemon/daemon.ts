@@ -479,9 +479,10 @@ export class Daemon {
 			idleStopMs: config.idleTimeoutMinutes === undefined ? undefined : config.idleTimeoutMinutes * 60_000,
 			idleKeep: idleKeepOptions(config, gateOptionsFromConfig(config).hostSessionCeiling, this.#options.hostLoad),
 			...(config.model === undefined ? {} : { defaultModel: config.model }),
-			onStall: (info) => void adapterOfThread(this.#ctx, info.threadRef)?.setStalled(info.threadRef, info.stalled),
-			onProgress: ({ threadRef, progress }) =>
-				void adapterOfThread(this.#ctx, threadRef)?.setProgress(threadRef, {
+			onStall: (info) =>
+				void adapterOfThread(this.#ctx, info.threadRef)?.setStalled(info.threadRef, info.originKey, info.stalled),
+			onProgress: ({ originKey, threadRef, progress }) =>
+				void adapterOfThread(this.#ctx, threadRef)?.setProgress(threadRef, originKey, {
 					...progress,
 					recentTools: progress.recentTools.map((tool) => ({ ...tool, text: redact(tool.text) })),
 					...(progress.todo?.current === undefined
