@@ -70,7 +70,7 @@ async function goneWithin(pid: number, ms: number): Promise<void> {
 	const deadline = Date.now() + ms;
 	while (alive(pid)) {
 		if (Date.now() > deadline) throw new Error(`process ${pid} still alive after ${ms} ms`);
-		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		await Bun.sleep(5); // sleep-ok: /proc에서 사라지기까지의 찰나를 5ms씩만 기다리는 유한 폴
 	}
 }
 
@@ -87,16 +87,15 @@ describe("realProcessRunner signal", () => {
 				signal: abort.signal,
 			});
 			await within(ready, 4_000, "the grandchild pid file");
-			// A sub-second failure here is the environment, never the runner's kill: a blank pid file means the shell
-			// never got the `sleep` started (a refused fork, …), and a pid already gone means it died before the abort.
-			// Both otherwise read as "the runner did not kill", so name them for what they are.
+			// A sub-second failure here names only what was observed; its cause (a refused fork, an early kill, …) is a
+			// hypothesis for the log, nothing this test can prove.
 			const pidText = readFileSync(join(dir, "pid"), "utf8").trim();
 			if (!/^\d+$/.test(pidText)) {
-				throw new Error(`the grandchild never started (pid file holds ${JSON.stringify(pidText)}): the environment, not the runner`);
+				throw new Error(`no grandchild pid recorded before the abort (pid file holds ${JSON.stringify(pidText)})`);
 			}
 			grandchild = Number(pidText);
 			if (!alive(grandchild)) {
-				throw new Error(`the grandchild ${grandchild} was already gone before the abort: the environment, not the runner`);
+				throw new Error(`grandchild ${grandchild} was not alive before the abort`);
 			}
 			abort.abort();
 			const result = await within(run, 4_000, "the aborted run returning");
