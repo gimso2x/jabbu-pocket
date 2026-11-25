@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # Every main push keeps its own run (its result is the record for that commit); a new PR push
 # replaces the PR's previous run.
 concurrency:
@@ -23,6 +26,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
       # The release leak scanner tests run the real gitleaks; without it they skip.
       - name: Install gitleaks 8.28.0
@@ -31,19 +36,28 @@ jobs:
           echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
       - run: bun run check
       - run: bun run knip
+      - run: bun scripts/check-repo-hygiene.ts
       - run: bun test --parallel=3
       # Mailbox TLA+ model (spec/tla/mailbox): --strict fails instead of skipping when Java is missing. Only the
-      # pinned tla2tools.jar is cached; the script checks its sha256 either way.
+      # pinned tla2tools.jar is cached (saved only on main); the script checks its sha256 either way.
       - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "21"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: tla-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/jabbu-pocket/tla2tools-v1.7.4.jar
           key: tla2tools-v1.7.4-936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
       - name: TLA+ mailbox model
         run: bun scripts/tla-check.ts --strict
+      - if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main' && steps.tla-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/jabbu-pocket/tla2tools-v1.7.4.jar
+          key: ${{ steps.tla-cache.outputs.cache-primary-key }}
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
 
   # The test job's steps without the TLA+ model check, on the arm64 image the daemon runs on (OCI aarch64).
   # Not a required check.
@@ -52,6 +66,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
       # The release leak scanner tests run the real gitleaks; without it they skip.
       - name: Install gitleaks 8.28.0
@@ -60,7 +76,10 @@ jobs:
           echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
       - run: bun run check
       - run: bun run knip
+      - run: bun scripts/check-repo-hygiene.ts
       - run: bun test --parallel=3
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
 
   # Real `omp --mode rpc` answered by the scripted mock model: an omp release that breaks the RPC
   # contract fails here. The prerequisite check fails the job instead of letting the e2e skip.
@@ -69,18 +88,54 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
       - name: Install gitleaks 8.28.0
         run: |
           bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
           echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+      - id: omp-host-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/jabbu-omp-host-bun
+          key: ${{ runner.os }}-${{ runner.arch }}-omp-host-${{ hashFiles('test/fixtures/omp-host/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-omp-host-
       - name: Install pinned omp test host
         run: |
-          cd test/fixtures/omp-host && bun install --frozen-lockfile
+          cd test/fixtures/omp-host
+          if ! bun install --frozen-lockfile --cache-dir="$HOME/.cache/jabbu-omp-host-bun"; then
+            echo "::warning::omp-host cache install failed; retrying with a clean cache dir"
+            retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/omp-host-retry.XXXXXX")"
+            bun install --frozen-lockfile --cache-dir="$retry_cache"
+          fi
           echo "JABBU_OMP_EXECUTABLE=$GITHUB_WORKSPACE/test/fixtures/omp-host/node_modules/.bin/omp" >> "$GITHUB_ENV"
+      - if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main' && steps.omp-host-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/jabbu-omp-host-bun
+          key: ${{ steps.omp-host-cache.outputs.cache-primary-key }}
       - name: Check test fixtures
         run: bun src/dev/check-test-fixtures.ts
       - name: omp mock e2e
         env:
           JABBU_E2E_OMP_MOCK: "1"
         run: bun test test/omp-mock.e2e.test.ts test/omp-rpc.contract.test.ts
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  # 필수 체크 집계 게이트: 브랜치 보호에서 하위 잡 대신 이 단일 이름만 요구할 수 있다.
+  ci-required:
+    name: ci-required
+    if: ${{ always() }}
+    needs: [test, e2e-omp-mock]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require essential CI jobs to succeed
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          E2E_RESULT: ${{ needs.e2e-omp-mock.result }}
+        run: |
+          test "$TEST_RESULT" = success && test "$E2E_RESULT" = success
