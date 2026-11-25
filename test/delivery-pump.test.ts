@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DeliveryPump, type DeliverySender, type DeliverySendResult } from "../src/channel/pump";
+import { DeliveryPump, type DeliverySender, type DeliverySendResult, finishDeliveryStatus } from "../src/channel/pump";
 import type { DeliveryItem, DeliveryRetry, DeliverySource } from "../src/channel/types";
 import { createLogger } from "../src/log";
 import { redact } from "../src/redact";
@@ -285,6 +285,27 @@ describe("DeliveryPump", () => {
 			"send:9",
 			`defer:9:ratelimited:${JSON.stringify(retry)}`,
 			`defer:10:chat.postMessage:${JSON.stringify({ at: NOW + 30_000, sentParts: 0 })}`,
+		]);
+	});
+});
+
+describe("finishDeliveryStatus", () => {
+	test("one thread's failed finish does not abandon the delivery's other threads; the first error still surfaces", async () => {
+		const finished: string[] = [];
+		const delivery = item(9, {
+			finishThreadRefs: ["200000000000000001:700000000000000002", "200000000000000001:700000000000000003"],
+			cancelThreadRefs: ["200000000000000001:700000000000000003"],
+		});
+		const finisher = {
+			finishStatus: async (threadRef: string, outcome: string, action: string) => {
+				if (threadRef.endsWith("0002")) throw new Error("status post down");
+				finished.push(`${threadRef}:${outcome}:${action}`);
+			},
+		};
+		await expect(finishDeliveryStatus(delivery, "sent", finisher)).rejects.toThrow("status post down");
+		expect(finished).toEqual([
+			"200000000000000001:700000000000000001:done:delete",
+			"200000000000000001:700000000000000003:cancelled:update",
 		]);
 	});
 });

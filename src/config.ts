@@ -29,6 +29,7 @@ import {
 	optionalString,
 	requiredString,
 } from "./config-validate";
+import { parseWebChannel, WEB_OWNER_USER_ID, type WebChannelConfig } from "./config-web";
 import { validAllowedHosts } from "./dashboard/host-guard";
 import type { LaneModelTiers } from "./model-tiers";
 import type { LaneReviewConfident } from "./tasks/auto-land-policy";
@@ -36,6 +37,7 @@ import { TASK_RISKS, type TaskRisk } from "./tasks/docs";
 import { hostTimezone, isTimezone } from "./time";
 
 export { ConfigError } from "./config-validate";
+export { WEB_OWNER_USER_ID, type WebChannelConfig };
 /** Which child process powers a conversation: omp's RPC child (default) or the Antigravity CLI (`agy`). */
 export type AgentKind = "omp" | "agy";
 
@@ -80,17 +82,15 @@ export interface DiscordChannelConfig {
 	peerBots?: Array<{ userId: string; name: string }>;
 }
 
-/** Per-platform chat settings: who the owner is on the platform the bot talks on. Discord is the only one. */
+/** Per-platform chat settings: Discord and/or web. */
 export interface ChannelsConfig {
 	discord?: DiscordChannelConfig;
+	web?: WebChannelConfig;
 }
 
-/**
- * The owner id core-authored mentions use when no platform is implied: the Discord owner. A loaded config always has
- * it (`config_invalid field=channels` otherwise).
- */
+/** The owner id core-authored mentions use when no platform is implied. */
 export function primaryOwnerUserId(channels: ChannelsConfig): string {
-	const owner = channels.discord?.ownerUserId;
+	const owner = channels.discord?.ownerUserId ?? (channels.web?.enabled ? WEB_OWNER_USER_ID : undefined);
 	if (owner === undefined) throw new Error("no chat channel is configured");
 	return owner;
 }
@@ -401,15 +401,13 @@ function modeString(mode: number): string {
 	return `0${(mode & 0o777).toString(8)}`;
 }
 
-/**
- * `channels`: only `discord` is accepted (a leftover `channels.slack`, top-level Slack key or `channels.teams` is
- * refused with the removal note), and it must be there.
- */
+/** `channels`: `discord` and/or `web` (leftover `slack` or `teams` is refused with the removal note); at least one active. */
 function parseChannels(configPath: string, root: Record<string, unknown>, home: string): ChannelsConfig {
 	for (const key of SLACK_KEYS) {
 		if (root[key] !== undefined) slackRemoved(configPath, key === "slack" ? "channels.slack" : key);
 	}
 	let discord: DiscordChannelConfig | undefined;
+	let web: WebChannelConfig | undefined;
 	if (root.channels !== undefined) {
 		const channels = asRecord(root.channels);
 		if (channels === undefined) invalid(configPath, "channels");
@@ -418,12 +416,13 @@ function parseChannels(configPath: string, root: Record<string, unknown>, home: 
 			if (key === "teams") {
 				throw new ConfigError("config_invalid", configPath, "field=channels.teams (Teams 채널은 제거됨: discord만)");
 			}
-			if (key !== "discord") invalid(configPath, `channels.${key}`);
+			if (key !== "discord" && key !== "web") invalid(configPath, `channels.${key}`);
 		}
 		if (channels.discord !== undefined) discord = parseDiscordChannel(configPath, channels.discord, home);
+		if (channels.web !== undefined) web = parseWebChannel(configPath, channels.web);
 	}
-	if (discord === undefined) invalid(configPath, "channels");
-	return { discord };
+	if (discord === undefined && web?.enabled !== true) invalid(configPath, "channels");
+	return { ...(discord === undefined ? {} : { discord }), ...(web === undefined ? {} : { web }) };
 }
 
 /** A Discord id (snowflake): 17–20 digits. */
