@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
 import { type JabbuConfig, primaryOwnerUserId } from "../config";
@@ -25,12 +24,11 @@ import {
 import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
-import { redact } from "../redact";
 import { parseApprovalRetryActionId } from "../safety/approval";
 import { AMBIGUOUS_NOTICE_OP_PREFIX, INTERIM_INFIX, LOG_COPY_SUFFIX, PEER_SILENCE_OP_PREFIX } from "../store/db";
 import type { DeliveryRow, InboundRow } from "../store/db-rows";
 import type { TaskRow } from "../tasks/ledger";
-import { parseTaskMergeActionId, parseTaskRecommendActionId, postToThread } from "../tasks/notify";
+import { parseTaskMergeActionId, parseTaskRecommendActionId } from "../tasks/notify";
 import type { CrashPoint } from "./crash";
 import {
 	DRAIN_DEFERRED_COMMAND_TEXT,
@@ -43,6 +41,7 @@ import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
+import { withControlSource } from "./daemon-task-web";
 import { isSideOpRef } from "./restart";
 import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
@@ -55,44 +54,6 @@ export interface CoreSinkDeps {
 	pending: PendingDispatchSweep;
 	landing: DaemonTaskLanding;
 	statusText: (originKey: string) => Promise<string>;
-}
-
-/** Where an owner's [TASK] intervention came from when it was not a chat: the dashboard's 작업 내역 panel. */
-export type TaskControlSource = "web";
-
-/** The source of the `controlTask` call in progress: `Daemon.controlTask` keeps its two arguments, the IPC sets this. */
-const controlSource = new AsyncLocalStorage<TaskControlSource>();
-
-/** Runs `control` (a `controlTask` call) with its pause/resume log lines marked `source`. */
-export function controlTaskFrom<T>(source: TaskControlSource, control: () => Promise<T>): Promise<T> {
-	return controlSource.run(source, control);
-}
-
-/** How much of a dashboard follow-up the thread notice quotes (redacted first, then cut). */
-const WEB_NOTICE_QUOTE_CHARS = 80;
-
-/**
- * One line in the [TASK]'s report thread for an intervention made on the dashboard: sent without waiting (the HTTP
- * answer never waits for it), a failure only logged as `task_web_notice_failed`.
- */
-export function noticeWebIntervention(
-	ctx: DaemonContext,
-	row: TaskRow,
-	what: { kind: "followup"; text: string } | { kind: "pause" | "resume" },
-): void {
-	const line =
-		what.kind === "followup"
-			? `🌐 웹에서 ${row.taskId} 지시 넣음: ${redact(what.text).replace(/\s+/g, " ").trim().slice(0, WEB_NOTICE_QUOTE_CHARS)}`
-			: `🌐 웹에서 ${row.taskId} ${what.kind === "pause" ? "멈춤" : "재개"}`;
-	const failed = (error?: unknown): void =>
-		ctx.log.warn("task_web_notice_failed", {
-			task: row.taskId,
-			kind: what.kind,
-			...(error === undefined ? {} : { error: String(error) }),
-		});
-	void postToThread(ctx.channels, ctx.log, row.threadRef, line).then((posted) => {
-		if (!posted) failed();
-	}, failed);
 }
 
 /** Inbound side of the daemon: core sink and lane/[TASK] commands settled without an omp session. */
@@ -486,15 +447,13 @@ export class DaemonInbound {
 		const tasks = startedStore(this.#ctx).tasks;
 		const row = tasks.get(taskId);
 		if (row === undefined) return { ok: false, text: `TASK를 찾지 못했습니다: ${taskId}` };
-		const source = controlSource.getStore();
-		const from = source === undefined ? {} : { source };
 		if (control === "resume") {
 			if (!tasks.isPaused(row)) return { ok: true, text: `${taskId}는 멈춘 상태가 아닙니다.` };
 			const after = tasks.unpauseTask(taskId);
 			if (tasks.isPaused(after)) return { ok: false, text: `⚠️ ${taskId} 재개를 확인하지 못했습니다.` };
 			// A headless task's rows the pause held go in now (a herdr task's worker is never prompted here).
 			if (row.runtime === "headless") await taskMailboxPort(this.#ctx).resumePending(taskOriginKey(row.agent));
-			this.#ctx.log.info("task_resumed", { task: taskId, ...from });
+			this.#ctx.log.info("task_resumed", withControlSource({ task: taskId }));
 			return {
 				ok: true,
 				text: `▶ ${taskId} 재개했습니다 — 스윕 재촉·stale 알림·자동 머지 보류를 풀었습니다. 워커에 재개 프롬프트는 보내지 않았습니다(필요하면 jabbu_dispatch로 보냅니다).`,
@@ -505,19 +464,17 @@ export class DaemonInbound {
 		}
 		const after = tasks.pauseTask(taskId);
 		if (!tasks.isPaused(after)) return { ok: false, text: `⚠️ ${taskId} 멈춤을 기록하지 못했습니다.` };
-		this.#ctx.log.info("task_paused", { task: taskId, ...from });
+		this.#ctx.log.info("task_paused", withControlSource({ task: taskId }));
 		let worker: string;
 		let stopped = false;
 		if (row.runtime === "herdr" && this.#ctx.options.config.herdr === undefined) {
 			worker = "herdr가 꺼져 있어 Esc를 보내지 않았습니다";
 		} else {
 			const interrupted = await taskRuntimeOf(this.#ctx, row).interrupt(row);
-			this.#ctx.log.info("task_interrupt", {
-				task: taskId,
-				confirmed: interrupted.confirmed,
-				status: interrupted.status,
-				...from,
-			});
+			this.#ctx.log.info(
+				"task_interrupt",
+				withControlSource({ task: taskId, confirmed: interrupted.confirmed, status: interrupted.status }),
+			);
 			worker = interrupted.text;
 			stopped = interrupted.confirmed;
 		}

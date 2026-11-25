@@ -34,7 +34,6 @@ import {
 } from "../dispatch/omp";
 import { type FlowTransition, type TaskStage, taskFlowStatus, taskStage } from "../flow/task-flow";
 import { heavyRunPaths, readHeavyRunStates } from "../heavy-run";
-import { isTaskOrigin } from "../lanes/status";
 import { type MonitorRow, type MonitorSql, monitorOrigin, nextFireOf, toMonitor } from "../monitors/ledger";
 import type { MonitorDeliver, MonitorOverlap, MonitorTrigger } from "../monitors/spec";
 import { type AssistantTail, pendingToolCall, readLastAssistant, sessionPathOf } from "../omp/session-tail";
@@ -63,6 +62,7 @@ import type { PeerInstall } from "./peers";
 import { previewLine } from "./preview-line";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
+import { type TaskRuntimeField, withoutTaskThreads } from "./task-work-client";
 import { type TaskTurnFields, taskTurnFields } from "./turn";
 import { buildTurnsSection, type PeerTurnError, rows, type ThreadInfo, type TurnInfo } from "./turn-board";
 import { readUsageLimits, type UsageLimitsInfo } from "./usage-limits";
@@ -121,7 +121,7 @@ export type { PeerTurnError, ThreadInfo, TurnInfo, TurnKind, TurnWaitReason } fr
 
 type HerdrState = { ok: true; status: HerdrAgentStatus } | { ok: false; error: string };
 
-export interface TaskInfo extends TaskTurnFields {
+export interface TaskInfo extends TaskTurnFields, TaskRuntimeField {
 	taskId: string;
 	title: string;
 	risk: TaskRisk;
@@ -129,8 +129,6 @@ export interface TaskInfo extends TaskTurnFields {
 	/** `local` = the bot's own machine, otherwise the `dispatchHosts` name. */
 	host: string;
 	agent: string;
-	/** What runs the worker: a headless one's session (`jabbu/task/<agent>`) shows in the detail's 작업 내역 panel. */
-	runtime: TaskRow["runtime"];
 	branch: string;
 	open: boolean;
 	updatedAt: string;
@@ -528,9 +526,7 @@ function monitorFiles(row: MonitorRow): MonitorFile[] {
 	return files.slice(0, MONITOR_FILES);
 }
 
-/**
- * A channel as the owner knows it: the DM, the config's Discord log, escalation or alert channel, else its id.
- */
+/** A channel as the owner knows it: the DM, the config's Discord log, escalation or alert channel, else its id. */
 function channelName(channel: string | null, config: DashboardConfig | undefined): string {
 	if (channel === null) return "오너 DM";
 	if (channel === config?.channels?.discord?.logChannelId) return "로그 채널";
@@ -2009,15 +2005,11 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			}),
 		}));
 
-		const turnSection = await turns;
 		return {
 			generatedAt: iso(now),
 			timezone,
 			daemon: await daemon,
-			// A [TASK] worker's conversation is shown in its TASK detail (작업 내역), not again as a thread of its own.
-			turns: turnSection.ok
-				? { ...turnSection, threads: turnSection.threads.filter((thread) => !isTaskOrigin(thread.originKey)) }
-				: turnSection,
+			turns: withoutTaskThreads(await turns),
 			tasks: await tasks,
 			flows: await flows,
 			lanes: await lanes,

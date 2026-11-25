@@ -10,7 +10,6 @@ import { buildFloorsPrompt } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
 import {
 	agyOccupant,
-	followupTask,
 	notePrompt,
 	resumeTask,
 	startTask,
@@ -18,6 +17,7 @@ import {
 	taskSummaryLine,
 } from "../tasks/dispatch";
 import { parseTaskSpecInput, TASK_ID_PATTERN } from "../tasks/docs";
+import { followupTask } from "../tasks/followup";
 import type { TaskRow } from "../tasks/ledger";
 import { applyRiskFloor } from "../tasks/risk-floor";
 import { runtimeFor } from "../tasks/runtime";

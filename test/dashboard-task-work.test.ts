@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderItemDetail, renderTaskDetail, renderTaskWork } from "../src/dashboard/detail";
+import { renderItemDetail, renderTaskDetail } from "../src/dashboard/detail";
 import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import {
 	buildSnapshot,
@@ -11,6 +11,7 @@ import {
 	type SnapshotDeps,
 	type TaskInfo,
 } from "../src/dashboard/snapshot";
+import { renderTaskWork } from "../src/dashboard/task-work-client";
 import { taskOriginKey } from "../src/lanes/status";
 import { openStore } from "../src/store/db";
 

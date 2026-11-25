@@ -15,7 +15,6 @@ import {
 	renderPlan,
 	renderTaskDetail,
 	renderTaskFacts,
-	renderTaskWork,
 } from "./detail";
 import { hostChecksLevel, repoCountsText } from "./host-checks";
 import {
@@ -121,7 +120,6 @@ const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()};
 const renderFlowChain = ${renderFlowChain.toString()};
 const discordThreadHref = ${discordThreadHref.toString()};
-const renderTaskWork = ${renderTaskWork.toString()};
 const renderTaskDetail = ${renderTaskDetail.toString()};
 const renderDetailHead = ${renderDetailHead.toString()};
 const renderItemDetail = ${renderItemDetail.toString()};
