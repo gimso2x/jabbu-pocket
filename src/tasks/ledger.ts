@@ -14,7 +14,7 @@ import {
 	type TaskRisk,
 	worktreePathOf,
 } from "./docs";
-import { migrateTaskSchema, type TaskLandRecord } from "./ledger-schema";
+import { migrateTaskSchema, type TaskLandRecord, writeTx } from "./ledger-schema";
 import type { SignalCheck } from "./signals";
 
 export const TASK_STATUSES = ["working", "blocked", "review", "done", "cancelled"] as const;
@@ -307,7 +307,7 @@ export class TaskLedger {
 
 	/** Allocates the next `T-YYYYMMDD-NN` of the bot zone's day and inserts the row as `working`, in one transaction. */
 	register(input: NewTask): TaskRow {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const now = this.#clock.now();
 			const day = localDay(now, this.#timezone);
 			const prefix = `T-${day}-`;
@@ -345,7 +345,7 @@ export class TaskLedger {
 				);
 			this.#recordTransition(taskId, null, "working", "bot", "registered", now);
 			return this.require(taskId);
-		})();
+		});
 	}
 
 	get(taskId: string): TaskRow | undefined {
@@ -413,23 +413,23 @@ export class TaskLedger {
 	 * judging and every transition stay as they are. Pausing a paused task keeps its first mark.
 	 */
 	pauseTask(taskId: string): TaskRow {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const row = this.require(taskId);
 			if (row.status !== "working" && row.status !== "blocked") {
 				throw new TaskTransitionError(`${taskId}: ${row.status} 작업은 멈출 수 없습니다(working·blocked만)`);
 			}
 			if (this.isPaused(row)) return row;
 			return this.#writePauseMark(row, "pause", "unpause");
-		})();
+		});
 	}
 
 	/** Lifts the owner pause (an `unpause:<ms>` mark); a task that is not paused is returned as it is. */
 	unpauseTask(taskId: string): TaskRow {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const row = this.require(taskId);
 			if (!this.isPaused(row)) return row;
 			return this.#writePauseMark(row, "unpause", "pause");
-		})();
+		});
 	}
 
 	/** One `<kind>:<ms>` mark, strictly later than every `<opposite>:` mark even within one clock millisecond. */
@@ -446,7 +446,7 @@ export class TaskLedger {
 	 * same transaction.
 	 */
 	transition(taskId: string, to: TaskStatus, actor: TaskActor, reason?: string): TaskRow {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const row = this.require(taskId);
 			if (row.status === to) return row;
 			if (actor === "bot" && HUMAN_ONLY.includes(to)) {
@@ -470,16 +470,16 @@ export class TaskLedger {
 				.run(to, now, HUMAN_ONLY.includes(to) ? now : null, taskId);
 			this.#recordTransition(taskId, row.status, to, actor, reason ?? null, now);
 			return this.require(taskId);
-		})();
+		});
 	}
 
 	/** Merges gate receipts into the task's `gate_json`; a receipt of a kind replaces the one before it. */
 	recordGate(taskId: string, patch: TaskGate): TaskRow {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const gate = { ...(this.require(taskId).gate ?? {}), ...patch };
 			this.#db.query("UPDATE tasks SET gate_json = ? WHERE task_id = ?").run(JSON.stringify(gate), taskId);
 			return this.require(taskId);
-		})();
+		});
 	}
 
 	/** Replaces the task's `[check:]` results wholesale (null clears them). */
@@ -495,13 +495,13 @@ export class TaskLedger {
 	 * a repeated sweep over the same state stays silent.
 	 */
 	recordNotice(taskId: string, key: string): boolean {
-		return this.#db.transaction(() => {
+		return writeTx(this.#db, () => {
 			const row = this.require(taskId);
 			if (key in row.notices) return false;
 			const notices = { ...row.notices, [key]: this.#clock.now() };
 			this.#db.query("UPDATE tasks SET notices_json = ? WHERE task_id = ?").run(JSON.stringify(notices), taskId);
 			return true;
-		})();
+		});
 	}
 
 	/** Replaces the worker of a task (resume on another tier, or its rollback to what the row had). */
@@ -586,11 +586,11 @@ export class TaskLedger {
 	 * lines first (foreign keys). The only path that removes history lines.
 	 */
 	discard(taskId: string): void {
-		this.#db.transaction(() => {
+		writeTx(this.#db, () => {
 			if (this.#db.query("SELECT 1 FROM tasks WHERE task_id = ? AND status = 'working'").get(taskId) === null) return;
 			this.#db.query("DELETE FROM task_transitions WHERE task_id = ?").run(taskId);
 			this.#db.query("DELETE FROM tasks WHERE task_id = ?").run(taskId);
-		})();
+		});
 	}
 
 	close(): void {
