@@ -12,7 +12,7 @@ console.log("ready");
 let n = 0;
 while (!existsSync(stopFile)) {
 	insert.run(n++);
-	// A daemon writes in bursts, not in a tight loop: pause a little so the lock is free between writes.
+	// sleep-ok: cross-process writer fixture pauses 1ms per burst so the other process can acquire the lock
 	if (n % 4 === 0) Bun.sleepSync(1);
 }
 console.log(`wrote ${n}`);
