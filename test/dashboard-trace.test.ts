@@ -387,6 +387,26 @@ describe("delegated workers in the turn trace", () => {
 	});
 });
 
+describe("a damaged lanes row in the turn trace", () => {
+	test("damaged meta or history on one lane does not fail the trace; the intact lane still shows (defensive hardening of hand-damaged rows)", () => {
+		seed("answered", 20_000);
+		addLane("lane-ok", 4000, { parent: ORIGIN, closed: 12_000 });
+		for (const [name, column, value] of [
+			["lane-bad-meta", "meta", "{not json"],
+			["lane-null-meta", "meta", "null"],
+			["lane-bad-history", "history", "[oops"],
+			["lane-obj-history", "history", "{}"],
+		] as const) {
+			addLane(name, 5000, { parent: ORIGIN });
+			withDb((db) => db.run(`UPDATE lanes SET ${column} = ? WHERE name = ?`, [value, name]));
+		}
+		const trace = traceOf();
+		expect((trace.root.children ?? []).filter((span) => span.kind === "subagent").map((span) => span.id)).toEqual([
+			"L-lane-ok",
+		]);
+	});
+});
+
 describe("worker tier info and approvals in the turn trace", () => {
 	const TOKEN = "xoxb-TEST-0";
 	const setTask = (id: string, tier: string | null, reason: string | null, conf: string | null): void =>
