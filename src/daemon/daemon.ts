@@ -1032,7 +1032,7 @@ export class Daemon {
 
 	/** Hourly, not per-sweep: inbound attachments are context for one turn, kept 24h, then deleted. */
 	#sweepMedia(): void {
-		const now = Date.now();
+		const now = this.#clock.now();
 		if (now - this.#lastMediaSweep < MEDIA_SWEEP_INTERVAL_MS) return;
 		this.#lastMediaSweep = now;
 		try {
