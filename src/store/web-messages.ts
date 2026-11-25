@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { referencedWebFileNames } from "./web-files";
 
 /** DDL for web chat messages (`SCHEMA_VERSION` 12). */
 export const WEB_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS web_messages (
@@ -207,6 +208,11 @@ export class WebMessageStore {
 
 	listConversations(limit = 50): WebConversationSummary[] {
 		return listWebConversationsDb(this.#db, limit);
+	}
+
+	/** Base names of every file a message row names; the media sweep keeps the uploads among them. */
+	referencedFileNames(): Set<string> {
+		return referencedWebFileNames(this.#db);
 	}
 }
 
