@@ -169,5 +169,30 @@ describe("turnNoteRepos (heads read without turnSnapshot)", () => {
 		expect(
 			turnNoteRepos({ wikiNotes: { client }, taskAutoLand: { repos: ["/r/b"] }, turnSnapshot: { repos: [] } }),
 		).toEqual(["/r/b"]);
+		expect(turnNoteRepos({ wikiNotes: { client, turns: false }, taskAutoLand: { repos: ["/r/b"] } })).toEqual([]);
+	});
+});
+
+describe("wikiNotes.turns false", () => {
+	test("a committing turn records no row and a pending row is not written", async () => {
+		const repo = makeRepo(repos);
+		await wiki.notes.recordTurn({
+			originKey: THREAD_ORIGIN,
+			opRef: "op1",
+			threadRef: THREAD_REF,
+			rows: [commitTurn(repo, "feat: 켜진 동안")],
+		});
+		expect(store.listUnsentWikiTurns()).toHaveLength(1);
+		wiki.config = { ...(wiki.config as NonNullable<typeof wiki.config>), turns: false };
+		await wiki.notes.recordTurn({
+			originKey: THREAD_ORIGIN,
+			opRef: "op2",
+			threadRef: THREAD_REF,
+			rows: [commitTurn(repo, "feat: 꺼진 뒤")],
+		});
+		expect(store.listUnsentWikiTurns()).toHaveLength(1);
+		now += DAY_MS;
+		await wiki.notes.flushTurns();
+		expect(wiki.outbox()).toEqual([]);
 	});
 });

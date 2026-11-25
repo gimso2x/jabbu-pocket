@@ -4,7 +4,7 @@ import type { AcceptanceItem } from "../tasks/docs";
 import { withoutCheckTail } from "../tasks/signals";
 import { isGithubRepo } from "./pr";
 import type { LaneLandState } from "./status";
-import { type WorkflowName, workflowLine } from "./workflow";
+import { type WorkflowChoice, workflowLine } from "./workflow";
 
 export interface LaneTrigger {
 	title: string;
@@ -135,7 +135,7 @@ export function buildLanePrompt(input: {
 	/** The lane's work goes out as a GitHub PR (`meta.externalPr`). */
 	externalPr?: { repo: string; base: string; bodyFile: string } | undefined;
 	/** The workflow the head chose (`meta.workflow`): its keyword line opens the prompt. */
-	workflow?: { name: WorkflowName } | undefined;
+	workflow?: Pick<WorkflowChoice, "name"> | undefined;
 }): string {
 	const brief = input.brief?.trim();
 	const keywordLine = workflowLine(input.workflow?.name, brief);

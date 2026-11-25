@@ -2504,6 +2504,25 @@ describe("a not-done lane merged into the base branch outside the lane", () => {
 		expect(h.logs.some((line) => line.includes("lane_external_land_check_failed"))).toBe(true);
 		h.close();
 	});
+
+	test("a lane whose worktree and branch were removed by hand closes as discarded; only the worktree gone keeps it", async () => {
+		const repo = makeRepo(repos);
+		const h = laneHarness(home.dir);
+		const { lane } = await notDoneLane(h, repo);
+		rmSync(lane.meta.worktree ?? "", { recursive: true, force: true });
+		await tick(h);
+		expect(requireLane(h, lane.name).status).toBe("not-done");
+		git(repo, "worktree", "prune");
+		git(repo, "branch", "-D", lane.meta.branch ?? "");
+		await tick(h);
+		const row = requireLane(h, lane.name);
+		expect(row.status).toBe("closed");
+		expect(row.meta.land?.state).toBe("discarded");
+		expect(row.history.at(-1)?.event).toBe("discarded");
+		expect(h.logs.some((line) => line.includes("lane_tree_gone"))).toBe(true);
+		expect(h.logs.some((line) => line.includes("lane_external_land_check_failed"))).toBe(false);
+		h.close();
+	});
 });
 
 describe("lane scope and leftovers", () => {

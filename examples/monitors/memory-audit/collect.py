@@ -66,9 +66,14 @@ def first_line(text: object) -> str:
     return ""
 
 
+def parse_iso(value: str) -> dt.datetime:
+    """ISO8601 시각을 읽는다. 끝의 'Z'는 fromisoformat이 3.11부터 받으니 그 아래 판을 위해 '+00:00'으로 바꾼다."""
+    return dt.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+
+
 def parse_now(value: str) -> dt.datetime:
     try:
-        parsed = dt.datetime.fromisoformat(value)
+        parsed = parse_iso(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(f"ISO8601 시각이 아님: {value}") from error
     return parsed.replace(tzinfo=BOT_TZ) if parsed.tzinfo is None else parsed
@@ -90,7 +95,7 @@ def bounded_int(low: int, high: int | None):
 def parse_time(value: object) -> dt.datetime | None:
     """Mnemopi 시각 문자열(UTC ISO, 'Z' 접미)을 읽는다. 시간대가 없으면 UTC로 본다."""
     try:
-        parsed = dt.datetime.fromisoformat(str(value))
+        parsed = parse_iso(str(value))
     except ValueError:
         return None
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed

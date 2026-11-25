@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { cutCodePointSafe } from "../channel/text";
 import type { Logger } from "../log";
 import { rotatingFileSink } from "../ops/logfile";
 import { redact } from "../redact";
@@ -101,7 +102,7 @@ export function createDispatchAudit(options: DispatchAuditOptions): ProcessAudit
 					ts: new Date(now()).toISOString(),
 					host,
 					argv0,
-					cmd: safe.length > AUDIT_CMD_CHARS ? `${safe.slice(0, AUDIT_CMD_CHARS)}…` : safe,
+					cmd: safe.length > AUDIT_CMD_CHARS ? `${cutCodePointSafe(safe, AUDIT_CMD_CHARS)}…` : safe,
 					cmdSha256: createHash("sha256").update(safe).digest("hex").slice(0, 16),
 					rc: outcome.code,
 					ms,
@@ -122,7 +123,6 @@ export function createDispatchAudit(options: DispatchAuditOptions): ProcessAudit
 		},
 	};
 }
-
 let installed: ProcessAudit | undefined;
 
 /**

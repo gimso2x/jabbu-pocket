@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { ActionButton, MessageRef } from "../channel/port";
-import { escapeMrkdwn, formatElapsed } from "../channel/text";
+import { cutCodePointSafe, escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
 import { parseThreadRef, platformOfThreadRef } from "../core/normalize";
 import { pidAlive } from "../daemon/lock";
@@ -45,6 +45,7 @@ import {
 	receiptNowOf,
 	receiptStaleOf,
 } from "./land";
+import { closeLaneTreeGone, laneTreeLeft } from "./lane-tree";
 import {
 	AUTO_LAND_OFF,
 	CHECK_DETAIL_MAX,
@@ -96,6 +97,7 @@ import {
 import { PR_LAND_POLL_MS } from "./pr-land-steps";
 import { preserveFileEvidence, verifyProgressEvidence } from "./progress-evidence";
 import { cleanQaWorktrees, createGateSlot, type GateSlot, qaDepsOf, runLaneQa, untilAborted } from "./qa";
+import { refusalCardLines } from "./refusal-cap";
 import {
 	blockerMessage,
 	blockerSignature,
@@ -380,7 +382,7 @@ export class LaneManager {
 			log.warn("lane_refused_frozen", { channel: input.channel });
 			throw new LaneInputError(frozenMessage(frozen));
 		}
-		const title = redact(input.title.replace(/\s+/g, " ").trim()).slice(0, MAX_TITLE_CHARS);
+		const title = cutCodePointSafe(redact(input.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
 		const { risk, acceptance, scope, requestedTier, tierConfidence, tierReason, externalPrInput, workflow } =
 			this.#startArgs(input);
@@ -390,7 +392,7 @@ export class LaneManager {
 		const fullBrief = redact(input.brief?.trim() ?? "");
 		const briefCut = fullBrief.length > MAX_BRIEF_CHARS;
 		const brief = briefCut
-			? `${fullBrief.slice(0, MAX_BRIEF_CHARS)}\n[브리프 ${fullBrief.length}자 중 앞 ${MAX_BRIEF_CHARS}자만 남김: 뒷부분은 이 리뷰에 없다]`
+			? `${cutCodePointSafe(fullBrief, MAX_BRIEF_CHARS)}\n[브리프 ${fullBrief.length}자 중 앞 ${MAX_BRIEF_CHARS}자만 남김: 뒷부분은 이 리뷰에 없다]`
 			: fullBrief;
 		// Topic keywords put a floor under the class (raise only); `startNote` tells the starter.
 		const floored = applyRiskFloor(risk, [title, brief]);
@@ -576,7 +578,7 @@ export class LaneManager {
 				);
 			} catch (error) {
 				if (lane !== undefined) {
-					await this.failLaunch(lane.originKey, oneLine(String(error)).slice(0, 200)).catch(() => undefined);
+					await this.failLaunch(lane.originKey, cutCodePointSafe(oneLine(String(error)), 200)).catch(() => undefined);
 					throw error;
 				}
 				// The root stays in the channel and says the lane never started.
@@ -1090,7 +1092,7 @@ export class LaneManager {
 					return `레인 모델 \`${model}\`이 레인 omp의 모델 목록에 없습니다`;
 				}
 			} catch (error) {
-				return `레인 모델 \`${model}\`을 확인하지 못했습니다: ${oneLine(String(error)).slice(0, 200)}`;
+				return `레인 모델 \`${model}\`을 확인하지 못했습니다: ${cutCodePointSafe(oneLine(String(error)), 200)}`;
 			}
 		}
 		const workflow = this.#deps.store.getLaneByOrigin(originKey)?.meta.workflow;
@@ -1098,7 +1100,7 @@ export class LaneManager {
 		try {
 			if (advertisedWorkflow(await driver.availableCommands(), workflow.name)) return undefined;
 		} catch (error) {
-			return `워크플로 \`${workflow.name}\` 명령을 확인하지 못했습니다: ${oneLine(String(error)).slice(0, 200)}`;
+			return `워크플로 \`${workflow.name}\` 명령을 확인하지 못했습니다: ${cutCodePointSafe(oneLine(String(error)), 200)}`;
 		}
 		return `워크플로 \`${workflow.name}\` 명령이 레인 omp에 로드되어 있지 않습니다`;
 	}
@@ -1214,7 +1216,7 @@ export class LaneManager {
 		if (lane.status === "closed") return `lane ${lane.name} ${CLOSED_LANE_REPLY}`;
 		if (lane.status === "paused") return `lane ${lane.name} ${PAUSED_LANE_REPLY}`;
 		const needsOwner = options.needsOwner === true;
-		const milestone = redact(text.replace(/\s+/g, " ").trim()).slice(0, MAX_MILESTONE_CHARS);
+		const milestone = cutCodePointSafe(redact(text.replace(/\s+/g, " ").trim()), MAX_MILESTONE_CHARS);
 		if (milestone === "") throw new Error("text is required");
 		const origin = this.#deps.store.getOrigin(lane.originKey);
 		const sessionFile =
@@ -1348,7 +1350,7 @@ export class LaneManager {
 		fromTick: boolean,
 	): Promise<SettleOutcome> {
 		const { log, approvals } = this.#deps;
-		const lines = refusals.map((r) => `- ${r.category}: ${r.excerpt}`);
+		const lines = refusalCardLines(refusals);
 		const channel = parseThreadRef(lane.threadRef)?.channel;
 		let verdict: "approved" | "denied" | "timeout" = "timeout";
 		const ownerEvents = ownerEventCount(lane);
@@ -1491,7 +1493,7 @@ export class LaneManager {
 					// A commit that landed between the two HEAD reads was checked instead of the claim: the claim is unproven.
 					if (run.head !== sha) reasons.push(notClaimedHead(run.head));
 					for (const check of failed) {
-						reasons.push(`check ${check.id} 실패: ${check.detail.slice(0, CHECK_DETAIL_MAX)}`);
+						reasons.push(`check ${check.id} 실패: ${cutCodePointSafe(check.detail, CHECK_DETAIL_MAX)}`);
 					}
 				}
 			}
@@ -1769,7 +1771,7 @@ export class LaneManager {
 				top: [],
 				overlaps: [],
 				baseDrift: [],
-				error: String(error).slice(0, 200),
+				error: cutCodePointSafe(String(error), 200),
 			};
 		}
 		if (changes.error !== undefined) log.warn("lane_changes_failed", { lane: lane.name, error: changes.error });
@@ -1968,7 +1970,7 @@ export class LaneManager {
 		try {
 			written = appendFollowups(file, lane, this.#deps.clock.now());
 		} catch (error) {
-			this.#deps.log.warn("lane_followups_failed", { lane: lane.name, error: String(error).slice(0, 200) });
+			this.#deps.log.warn("lane_followups_failed", { lane: lane.name, error: cutCodePointSafe(String(error), 200) });
 			return;
 		}
 		if (written === 0) return;
@@ -2166,10 +2168,10 @@ export class LaneManager {
 			const errors = (store.getLane(name)?.meta.land?.errors ?? 0) + 1;
 			log.warn("lane_land_unavailable", { lane: name, errors, error: String(error) });
 			if (errors < LAND_ERRORS_MAX) {
-				this.#patchLand(name, { errors }, { event: "land_unavailable", detail: String(error).slice(0, 200) });
+				this.#patchLand(name, { errors }, { event: "land_unavailable", detail: cutCodePointSafe(String(error), 200) });
 				return "⚠️ 머지를 끝내지 못했습니다(git 또는 호스트 오류). 코어가 곧 이어서 다시 시도합니다.";
 			}
-			result = { state: "blocked", reason: `머지를 ${errors}번 끝내지 못함: ${String(error).slice(0, 200)}` };
+			result = { state: "blocked", reason: `머지를 ${errors}번 끝내지 못함: ${cutCodePointSafe(String(error), 200)}` };
 		}
 		const short = sha.slice(0, 12);
 		if (result.state === "not-ff") {
@@ -2537,7 +2539,7 @@ export class LaneManager {
 			try {
 				head = await this.#ops.headOf(worktree);
 			} catch (error) {
-				return { handled: false, text: `worktree를 읽지 못했습니다: ${String(error).slice(0, 200)}` };
+				return { handled: false, text: `worktree를 읽지 못했습니다: ${cutCodePointSafe(String(error), 200)}` };
 			}
 			if (head.sha !== sha || !head.clean) {
 				return {
@@ -2644,7 +2646,7 @@ export class LaneManager {
 				`외부 PR 게시(${what}): ${externalPr.repo}:${externalPr.base} ← ${target.value.login}:${branch}`,
 				`레인 ${lane.title} · 커밋 ${sha.slice(0, 12)} · 변경 ${changed}`,
 				`push 대상: ${target.value.url}${target.value.fork && plan.value.kind === "new" ? " (포크를 새로 만듦)" : ""}`,
-				`본문 ${externalPr.bodyFile} 첫 줄: ${input.firstLine.slice(0, 200)}`,
+				`본문 ${externalPr.bodyFile} 첫 줄: ${cutCodePointSafe(input.firstLine, 200)}`,
 				...(blocking.length === 0 ? [] : [`막는 남은 일: ${blocking.slice(0, 3).join(" · ")}`]),
 			].join("\n");
 			const result = await input.approve({
@@ -2667,7 +2669,7 @@ export class LaneManager {
 						? "승인 거부"
 						: result === "timeout"
 							? "승인 시간 초과"
-							: `답장(승인 아님): ${oneLine(result.replied).slice(0, 80)}`;
+							: `답장(승인 아님): ${cutCodePointSafe(oneLine(result.replied), 80)}`;
 				return await finish({ state: "held", reason }, { event: "pr_held", detail: reason });
 			}
 			const done = await publishPr(tools, {
@@ -2685,8 +2687,8 @@ export class LaneManager {
 		} catch (error) {
 			if (signal.aborted) return;
 			await finish(
-				{ state: "failed", reason: `게시 중 오류: ${String(error).slice(0, 200)}` },
-				{ event: "pr_failed", detail: String(error).slice(0, 200) },
+				{ state: "failed", reason: `게시 중 오류: ${cutCodePointSafe(String(error), 200)}` },
+				{ event: "pr_failed", detail: cutCodePointSafe(String(error), 200) },
 			);
 		} finally {
 			// `finish` released it on every recorded end; an abort was released by `stop()`.
@@ -2820,7 +2822,7 @@ export class LaneManager {
 			throw new LaneInputError(`after는 선행 레인 이름 1~${RESERVATION_AFTER_MAX}개여야 합니다.`);
 		}
 		if (new Set(names).size !== names.length) throw new LaneInputError("after에 같은 레인이 두 번 들어 있습니다.");
-		const title = redact(args.title.replace(/\s+/g, " ").trim()).slice(0, MAX_TITLE_CHARS);
+		const title = cutCodePointSafe(redact(args.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
 		this.#startArgs(args);
 		if (names.includes(slugify(title))) {
@@ -3302,11 +3304,16 @@ export class LaneManager {
 		) {
 			return;
 		}
+		if ((await laneTreeLeft(defaultGit, { repo, worktree, branch })).length === 0) {
+			log.warn("lane_tree_gone", { lane: name, worktree, branch });
+			await this.#showResult(await this.#sync(closeLaneTreeGone(store, lane), "transition"), false);
+			return;
+		}
 		let found: { sha: string; pushed: boolean } | undefined;
 		try {
 			found = await externallyLanded(defaultGit, { repo, worktree, branch, baseBranch, baseSha, claim: commit });
 		} catch (error) {
-			log.warn("lane_external_land_check_failed", { lane: name, error: String(error).slice(0, 300) });
+			log.warn("lane_external_land_check_failed", { lane: name, error: cutCodePointSafe(String(error), 300) });
 			return;
 		}
 		if (found === undefined) return;
@@ -3335,11 +3342,7 @@ export class LaneManager {
 		// An idle child of this lane still has the worktree as its cwd.
 		await this.#deps.stopWhenIdle(lane.originKey);
 		await this.#removeLaneWorktree(name, { repo, worktree, branch });
-		const left: string[] = [];
-		if (existsSync(worktree)) left.push(`worktree ${worktree}`);
-		if ((await defaultGit(["-C", repo, "rev-parse", "--verify", "-q", `refs/heads/${branch}`])).code === 0) {
-			left.push(`브랜치 ${branch}`);
-		}
+		const left = await laneTreeLeft(defaultGit, { repo, worktree, branch });
 		const row =
 			left.length === 0
 				? store.getLane(name)
@@ -3371,7 +3374,7 @@ export class LaneManager {
 		try {
 			pushed = await pushedOutside(defaultGit, { repo, baseBranch, sha });
 		} catch (error) {
-			log.warn("lane_pushed_outside_check_failed", { lane: name, error: String(error).slice(0, 300) });
+			log.warn("lane_pushed_outside_check_failed", { lane: name, error: cutCodePointSafe(String(error), 300) });
 			return;
 		}
 		if (!pushed) return;

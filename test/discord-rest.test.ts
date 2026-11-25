@@ -150,6 +150,7 @@ describe("DiscordRest", () => {
 			`GET /api/v10/channels/${CHANNEL}/messages?after=10&limit=100`,
 		]);
 		expect(JSON.parse(server.seen[2]?.body ?? "")).toEqual({ content: "x", components: [] });
+		expect(JSON.parse(server.seen[4]?.body ?? "")).toEqual({ name: "질문", auto_archive_duration: 1440 });
 	});
 
 	test("a success response that arrives after a 429 does not lift the block", async () => {

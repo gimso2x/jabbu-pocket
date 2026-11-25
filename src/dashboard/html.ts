@@ -25,7 +25,6 @@ import {
 	faviconHref,
 	inboxAttention,
 	inboxEntries,
-	inboxNextReason,
 	isStale,
 	markSeen,
 	orderKeyTarget,
@@ -41,6 +40,7 @@ import {
 	unreadIds,
 	unreadReady,
 } from "./inbox";
+import { contextBar, costCardBody } from "./load-view";
 import { renderDashboardMain } from "./main-view";
 import { renderMarkdown } from "./markdown";
 import {
@@ -69,7 +69,8 @@ import {
 } from "./text";
 import { TRACE_CLIENT } from "./trace-client";
 import { flowDoing, renderFlow, renderTrace } from "./trace-view";
-import { resetIn, usageLevel } from "./usage-limits";
+import { turnOf } from "./turn";
+import { resetIn, trendHtml, usageLevel } from "./usage-forecast";
 
 /**
  * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
@@ -95,7 +96,7 @@ const isStale = ${isStale.toString()};
 const attentionGroup = ${attentionGroup.toString()};
 const byAttention = ${byAttention.toString()};
 const inboxAttention = ${inboxAttention.toString()};
-const inboxNextReason = ${inboxNextReason.toString()};
+const turnOf = ${turnOf.toString()};
 const faviconHref = ${faviconHref.toString()};
 const tabSignal = ${tabSignal.toString()};
 const orderKeyTarget = ${orderKeyTarget.toString()};
@@ -114,8 +115,7 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()};
 const repoCountsText = ${repoCountsText.toString()};
-const usageLevel = ${usageLevel.toString()};
-const resetIn = ${resetIn.toString()};
+const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, trendHtml = ${trendHtml.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()};
 const renderFlowChain = ${renderFlowChain.toString()};
