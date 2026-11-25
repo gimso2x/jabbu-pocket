@@ -32,7 +32,7 @@ describe("nextLocalMidnight", () => {
 		expect(nextLocalMidnight(at("2025-09-06T19:37:55Z"), "America/Santiago")).toBe(at("2025-09-07T04:00:00Z"));
 		expect(nextLocalMidnight(at("2025-09-06T23:30:00Z"), "America/Santiago")).toBe(at("2025-09-07T04:00:00Z"));
 		// Lord Howe's half-hour fall-back tempts a fixed point 30 minutes into the new day; the boundary is 00:00, not 00:30.
-		expect(nextLocalMidnight(at("2025-04-04T12:00:00Z"), "Australia/Lord_Howe")).toBe(at("2025-04-04T13:00:00Z"));
+		expect(nextLocalMidnight(at("2025-04-05T12:00:00Z"), "Australia/Lord_Howe")).toBe(at("2025-04-05T13:00:00Z"));
 	});
 });
 

@@ -95,8 +95,8 @@ export function formatLocal(ms: number, tz: string): string {
 
 /** The first instant of the zone's calendar day after the one `ms` falls on. */
 export function nextLocalMidnight(ms: number, tz: string): number {
-	const target = Date.UTC(wall(ms, tz).year, wall(ms, tz).month - 1, wall(ms, tz).day + 1);
-	const day = localDay(ms, tz);
+	const w = wall(ms, tz);
+	const [target, day] = [Date.UTC(w.year, w.month - 1, w.day + 1), `${pad(w.year, 4)}${pad(w.month)}${pad(w.day)}`];
 	// Midnight's offset can differ from the one at `ms` (a DST change in between), and skip-midnight zones oscillate around the jump.
 	let guess = target - offsetMinutes(target, tz) * 60_000;
 	for (let i = 0; i < 3 && localDay(guess, tz) <= day; i++) guess = target - offsetMinutes(guess, tz) * 60_000;
