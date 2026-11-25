@@ -7,9 +7,13 @@ export interface WebBotTarget {
 	id: string;
 	name: string;
 	homeDir: string;
-	callDaemon: (request: unknown) => Promise<unknown>;
+	/** One IPC request to this bot's daemon; `timeoutMs` defaults to {@link WEB_IPC_TIMEOUT_MS}. */
+	callDaemon: (request: unknown, timeoutMs?: number) => Promise<unknown>;
 	accent?: string | undefined;
 }
+
+/** How long a web op waits for its daemon before the router answers 503 (the [TASK] ops wait longer, see routes.ts). */
+export const WEB_IPC_TIMEOUT_MS = 5_000;
 
 export interface WebBotSummary {
 	id: string;
@@ -69,7 +73,8 @@ export function resolveWebBots(
 			id: primaryId,
 			name: config?.channels.discord?.displayName ?? "송박",
 			homeDir,
-			callDaemon: (request) => callDaemon(join(homeDir, "jabbu.sock"), request, 5_000),
+			callDaemon: (request, timeoutMs = WEB_IPC_TIMEOUT_MS) =>
+				callDaemon(join(homeDir, "jabbu.sock"), request, timeoutMs),
 			accent: accentForBot(primaryId, 0),
 		},
 	];
@@ -88,7 +93,8 @@ export function resolveWebBots(
 			id,
 			name: info.name,
 			homeDir: peer.home,
-			callDaemon: (request) => callDaemon(join(peer.home, "jabbu.sock"), request, 5_000),
+			callDaemon: (request, timeoutMs = WEB_IPC_TIMEOUT_MS) =>
+				callDaemon(join(peer.home, "jabbu.sock"), request, timeoutMs),
 			accent: accentForBot(id, targets.length),
 		});
 	}
