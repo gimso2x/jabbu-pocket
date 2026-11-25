@@ -24,6 +24,10 @@ export function parseLaneTrigger(text: string): LaneTrigger | undefined {
 	return { title, cwd, brief: (match?.[3] ?? "").trim() };
 }
 
+/** Said when a message opens with `작업:` and an `@` but does not parse as a trigger (relative/`~`/spaced path). */
+export const LANE_TRIGGER_FORMAT_TEXT =
+	"레인으로 열지 못했습니다 — 형식은 `작업: <제목> @<절대경로>`입니다 (상대경로·`~`·공백이 든 경로는 쓸 수 없습니다).";
+
 /** Why a Discord DM opens no lane: a lane lives in a server-channel thread, and the DM has none to name. */
 export const DISCORD_LANE_CHANNEL_MISSING =
 	"Discord DM에서 레인을 열려면 config `channels.discord.laneChannelId`(레인을 열 서버 텍스트 채널 id)가 필요합니다. 서버 채널·스레드에서 요청하면 그 채널에 열립니다.";
@@ -43,10 +47,7 @@ export type PrCommand = { repo?: string; prNumber?: number } | { problem: string
 
 const PR_NUMBER_MAX = 1_000_000_000;
 
-/**
- * `!pr`, `!pr owner/name`, `!pr <https://github.com/owner/name/pull/N>`, `!pr owner/name#N` or `!pr N` / `!pr #N`
- * as the whole message; `undefined` for any other message.
- */
+/** `!pr`, `!pr owner/name`, `!pr <url>`, `!pr owner/name#N` or `!pr N` / `!pr #N` as the whole message; else `undefined`. */
 export function parsePrCommand(text: string): PrCommand | undefined {
 	const match = /^!pr(?:[ \t]+(\S+))?$/.exec(text.trim());
 	if (match === null) return undefined;
@@ -71,7 +72,7 @@ export type PrWatchCommand = { op: "off"; lane: string } | { problem: string };
 
 /**
  * `!prwatch off <레인>` as the whole message; `undefined` for any other message. Anything else starting with
- * `!prwatch` is refused with the one form it takes — the lane is named, so no position in a thread implies it.
+ * `!prwatch` is refused with the one form it takes.
  */
 export function parsePrWatchCommand(text: string): PrWatchCommand | undefined {
 	const trim = text.trim();
@@ -89,8 +90,7 @@ export type ClosedLaneMessage = "reopen" | "control" | "question" | "land" | "di
  * (`!model`, `!new`, `!queue`, `!thinking`…) keeps its meaning; `머지해` / `폐기해` as the whole message land or
  * discard the lane — only while its landing is `pending` or `blocked` (`landState`), and never as part of a longer
  * sentence (the code decides, not a model: `머지해 줘`, `머지해야 하나?` are questions); anything else that would
- * reach omp as a prompt — plain text or a `!followup <message>` payload — is a question the lane answers while it
- * stays closed.
+ * reach omp as a prompt is a question the lane answers while it stays closed.
  */
 export function classifyClosedLaneMessage(text: string, landState?: LaneLandState): ClosedLaneMessage {
 	if (isReopenCommand(text)) return "reopen";

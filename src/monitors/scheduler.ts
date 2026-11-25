@@ -240,7 +240,7 @@ export class MonitorScheduler {
 			skippedFrozen: 0,
 			dispatched: 0,
 		};
-		store.monitors.reconcileDeliveries();
+		store.reconcileMonitorDeliveries();
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them.
 		const skip = this.#skipReason();

@@ -4,6 +4,8 @@ import type { Logger } from "../log";
 import type { MonitorLedger, MonitorRow } from "./ledger";
 
 export const WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
+/** Admitted-but-undelivered events one monitor may hold; past it a POST is refused (a looping poster queues paid turns). */
+export const WEBHOOK_MAX_PENDING = 100;
 /** The part of a body that reaches the monitor event (and so the prompt); the rest is cut and marked. */
 export const WEBHOOK_MAX_PAYLOAD_BYTES = 16 * 1024;
 export const WEBHOOK_PATH_PREFIX = "/hook/";
@@ -20,10 +22,7 @@ export interface WebhookServerDeps {
 	config: { port: number; bind?: WebhookBind };
 	/** Called after an event was admitted, so the scheduler routes it without waiting for the next sweep. */
 	onFired?: () => void;
-	/**
-	 * The freeze switch (`jabbu-pocket freeze`). While it is on a post is still answered 202 but recorded as skipped
-	 * (`frozen`), like a cron slot that falls due while frozen: an admitted event kept waiting would fire after unfreeze.
-	 */
+	/** The freeze switch (`jabbu-pocket freeze`): while on, a post is answered 202 but recorded as skipped (`frozen`). */
 	frozen?: () => unknown;
 }
 
@@ -61,10 +60,9 @@ const json = (status: number, body: Record<string, unknown>, headers?: Record<st
 	Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
 
 /**
- * Loopback-only HTTP listener for `webhook` monitor triggers: `POST /hook/<id>` with `Authorization: Bearer <token>`
- * admits one event whose payload is the (UTF-8, cut) body, through the same ledger path as every other trigger, so
- * the overlap rule applies. Answers 202 + event id, 401 bad token, 404 unknown/disabled hook, 405 non-POST, 413 body
- * over 256 KiB. Nothing but the monitor id and event id is ever logged.
+ * Loopback-only HTTP listener for `webhook` triggers: `POST /hook/<id>` with `Authorization: Bearer <token>` admits
+ * one event (payload: the UTF-8, cut body) through the same ledger path as every other trigger. Answers 202 + event
+ * id, 401 bad token, 404 unknown/disabled, 405 non-POST, 413 over 256 KiB, 429 backlog full.
  */
 export class WebhookServer {
 	readonly #deps: WebhookServerDeps;
@@ -135,6 +133,7 @@ export class WebhookServer {
 		const bytes = new Uint8Array(await request.arrayBuffer());
 		if (bytes.length > WEBHOOK_MAX_BODY_BYTES) return json(413, { error: "payload_too_large" });
 		const payload = webhookPayload(bytes);
+		if (ledger.pendingEventCount(monitor.id) >= WEBHOOK_MAX_PENDING) return json(429, { error: "backlog_full" });
 		const frozen = this.#deps.frozen?.() !== undefined;
 		for (let slotAt = clock.now(); ; slotAt += 1) {
 			const claim = ledger.claimSlot({

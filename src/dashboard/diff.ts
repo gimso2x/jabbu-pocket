@@ -6,8 +6,8 @@ import { redact } from "../redact";
 import { taskTip } from "../tasks/gate";
 
 /**
- * `api/diff?lane=<name>` / `api/diff?task=<id>`: the change an owner is about to merge, read-only, per request, never
- * cached. The range is the one the independent review and the auto-land gate judge: the lane's `merge-base(base, sha)..sha`
+ * `api/diff?lane=<name>` / `api/diff?task=<id>`: the change an owner is about to merge, read-only, per request, never cached.
+ * The range is the one the independent review and the auto-land gate judge: the lane's `merge-base(base, sha)..sha`
  * (not `meta.baseSha`, which `!reopen` moves), the task's `merge-base(base, tip)..tip` without its own `docs/tasks`.
  */
 
@@ -126,7 +126,7 @@ async function resolveTask(db: Database, id: string, git: GitRunner): Promise<Ra
 export async function readDiff(
 	homeDir: string,
 	subject: DiffSubject,
-	git: GitRunner = gitRunner(GIT_TIMEOUT_MS),
+	git: GitRunner = gitRunner(GIT_TIMEOUT_MS, DIFF_TOTAL_MAX * 4),
 ): Promise<DiffAnswer> {
 	const dbPath = join(homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };

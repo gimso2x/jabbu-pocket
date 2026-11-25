@@ -16,6 +16,7 @@ import {
 	classifyClosedLaneMessage,
 	DISCORD_LANE_CHANNEL_MISSING,
 	isOwnerAcceptText,
+	LANE_TRIGGER_FORMAT_TEXT,
 	type LaneTrigger,
 	parseLaneTrigger,
 	parsePrCommand,
@@ -120,9 +121,11 @@ export class DaemonInbound {
 				}
 				if (lane) {
 					// `멈춰`/`계속` (the whole message) are the lane's hold and release: the core settles them itself,
-					// before any closed-lane reading — a closed lane's pause holds only its auto-merge.
+					// before any closed-lane reading — a closed lane's pause holds only its auto-merge. A resume word
+					// settles only when there is something to release: in a working lane `계속해` is the owner's answer
+					// to the lane's question, and settling it would swallow the answer (its silence fallback still fires).
 					const control = classifyLaneControl(message.text);
-					if (control !== undefined) {
+					if (control !== undefined && (control === "pause" || lane.status === "paused" || closedAs !== undefined)) {
 						void this.#settleLaneControl(row, lane.name, control);
 						return {};
 					}
@@ -169,6 +172,12 @@ export class DaemonInbound {
 					}
 					if (trigger) {
 						void this.#startLane(row, trigger);
+						return {};
+					}
+					const trimmed = message.text.trim();
+					if (trimmed.startsWith("작업:") && trimmed.includes("@")) {
+						// Looks like a lane trigger but does not parse: name the format instead of running it as a turn.
+						void this.#settleLaneCommand(row, "-", { kind: "refused", text: LANE_TRIGGER_FORMAT_TEXT });
 						return {};
 					}
 				}
@@ -333,8 +342,7 @@ export class DaemonInbound {
 	/**
 	 * `머지해` / `폐기해` in a closed lane's thread, `닫아` in a `not-done` lane's thread (or a `!reopen` the lane
 	 * cannot take: `refusal`): settled with the core's own answer like a lane start — the lane's omp session never
-	 * sees it. The answer is recorded once the landing ended; a landing cut off by a restart is finished by the lane
-	 * tick and shown on the lane's card.
+	 * sees it. A landing cut off by a restart is finished by the lane tick and shown on the lane's card.
 	 */
 	async #settleLaneCommand(
 		row: InboundRow,
@@ -416,8 +424,7 @@ export class DaemonInbound {
 
 	/**
 	 * A core-settled message whose store write threw (its callers fire and forget it): logged, and a row already
-	 * marked dispatched is discarded — left dispatched it would trip `inbound_starved` and get the restart's
-	 * interrupted notice for a turn that never ran.
+	 * marked dispatched is discarded — left dispatched it would trip `inbound_starved` for a turn that never ran.
 	 */
 	#settleFailed(kind: string, row: InboundRow, error: unknown): void {
 		this.#ctx.log.error("lane_settle_failed", { kind, id: row.platformMessageId, error: String(error) });
@@ -437,8 +444,7 @@ export class DaemonInbound {
 	/**
 	 * Owner pause/resume of one [TASK] (thread phrase or `jabbu-pocket tasks pause|resume`). A pause marks the ledger first
 	 * (the sweep holds its prompts, stale notice and auto-merge from then on), then sends the worker an Esc and reports
-	 * only what herdr re-read. A resume lifts the sweep hold only; it never prompts the worker. `ok: false` = nothing
-	 * was applied.
+	 * only what herdr re-read. A resume lifts the sweep hold only; it never prompts the worker.
 	 */
 	async controlTask(taskId: string, control: "pause" | "resume"): Promise<{ ok: boolean; text: string }> {
 		const tasks = startedStore(this.#ctx).tasks;
@@ -510,8 +516,7 @@ export class DaemonInbound {
 
 	/**
 	 * A `머지` / `폐기` click on a lane's Outcome card: the core lands or discards the lane and redraws the card with
-	 * the result. A lane that is not waiting for it (already landed, discarded, working again, or a click while the
-	 * first one still runs) takes nothing; a lane that no longer exists loses the buttons with a note.
+	 * the result. A lane that is not waiting for it takes nothing; a lane that no longer exists loses the buttons.
 	 */
 	async #handleLaneButton(
 		action: LaneAction,
@@ -572,8 +577,7 @@ export class DaemonInbound {
 
 	/**
 	 * A `▶ 시작` / `✖ 취소` click on a lane reservation card (the adapter already refused every user but the owner). The
-	 * card is redrawn without buttons once the reservation has left `waiting`/`ready`; a refusal that leaves it standing
-	 * is told in its thread.
+	 * card is redrawn without buttons once the reservation has left `waiting`/`ready`.
 	 */
 	async #handleReservationButton(
 		action: ReservationAction,

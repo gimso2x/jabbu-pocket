@@ -347,8 +347,8 @@ export class LaneManager {
 	/**
 	 * Creates the lane's worktree and branch, the thread, the registry row and starts the lane's first turn. The lane
 	 * works in `<repo>-l-yyyymmdd-nn` on `lane/L-YYYYMMDD-NN`, at the same sub path `cwd` had in its repository; the
-	 * repository's own checkout is never touched, so several lanes can run on one repository. `acceptance` and `risk`
-	 * arrive as the tool received them and are validated here. Throws `LaneInputError` for a refusal (nothing created).
+	 * repository's own checkout is never touched, so several lanes can run on one repository. Throws `LaneInputError`
+	 * for a refusal (nothing created).
 	 */
 	async start(input: {
 		title: string;
@@ -765,9 +765,8 @@ export class LaneManager {
 
 	/**
 	 * The owner stops this one lane (`멈춰` in the thread or the ⏸ button). The registry goes to `paused` first —
-	 * everything downstream (steers, verdicts, the mailbox's dispatch hold) reads the row, so a restart keeps it —
-	 * then the running turn is aborted. The answer is written only from state re-read after the stop: registry
-	 * `paused`, no turn, the driver settled; anything still off is named, and the owner asking again retries the stop.
+	 * everything downstream reads the row, so a restart keeps it — then the running turn is aborted. The answer is
+	 * written only from state re-read after the stop; anything still off is named, and asking again retries the stop.
 	 */
 	async pause(name: string, by: "owner-message" | "button"): Promise<LaneRequestOutcome> {
 		const { store, clock, log } = this.#deps;
@@ -860,6 +859,9 @@ export class LaneManager {
 			pausedBy: undefined,
 			sessionChoices: undefined,
 		};
+		// The status card's elapsed is the working period: the held span leaves `startedAt`.
+		if (lane.meta.pausedAt !== undefined)
+			patch.startedAt = lane.meta.startedAt + (this.#deps.clock.now() - lane.meta.pausedAt);
 		// The time held by a pause is not the owner's silence: the question's window starts again at the resume.
 		const asked = lane.meta.ownerQuestion;
 		if (asked && asked.fallbackAt === undefined) patch.ownerQuestion = { ...asked, askedAt: this.#deps.clock.now() };
@@ -895,8 +897,8 @@ export class LaneManager {
 	/**
 	 * `jabbu-pocket lanes attach`: hands the lane's session to a terminal omp. The file is read first — the one the running
 	 * child has open, else the one the next child would resume — then the lane is held (`paused`, registry `attach`, so no
-	 * child starts and thread messages wait), its turn is aborted (`wait`: awaited instead) and the child stopped. The
-	 * caller resumes exactly that file; `detach` (or the orphan check of `tick`) gives the lane back.
+	 * child starts and thread messages wait), its turn is aborted and the child stopped. The caller resumes exactly that
+	 * file; `detach` (or the orphan check of `tick`) gives the lane back.
 	 */
 	async attach(name: string, request: { pid: number; wait: boolean; keepPaused: boolean }): Promise<LaneAttachOutcome> {
 		const { store, clock, log, session } = this.#deps;
@@ -1264,9 +1266,8 @@ export class LaneManager {
 
 	/**
 	 * Verifies the pending claim. Closed when git agrees, `not-done` with reasons when not, still pending when git cannot
-	 * run. `fromTick`: the core's own deferred verdict — when a freeze began while it ran, a not-done stays pending
-	 * (could not be steered now) so the first tick after unfreeze judges it again. A claim made while the lane's verdict
-	 * runs is judged right after that verdict ends (not after the grace).
+	 * run. `fromTick`: the core's own deferred verdict — when a freeze began while it ran, a not-done stays pending so
+	 * the first tick after unfreeze judges it again. A claim made while the verdict runs is judged right after it ends.
 	 */
 	async #settle(name: string, fromTick = false): Promise<SettleOutcome> {
 		const { store, log } = this.#deps;
@@ -1576,8 +1577,7 @@ export class LaneManager {
 	/**
 	 * `closed`: the claim is proven (`held`: the owner let it through, `INTEGRITY_APPROVED`, `INCONCLUSIVE_APPROVED`
 	 * or `OWNER_ACCEPTED`). A worktree lane now waits for its merge (`meta.land` pending): the Outcome card goes up in
-	 * the background and, when `taskAutoLand` has no objection, the core lands it. A lane without a worktree (an older
-	 * row) is simply done.
+	 * the background and, when `taskAutoLand` has no objection, the core lands it. A lane without a worktree is done.
 	 */
 	async #close(
 		lane: LaneRow,

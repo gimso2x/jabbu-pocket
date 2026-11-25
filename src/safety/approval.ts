@@ -81,8 +81,7 @@ const GITHUB_PUBLISH =
 	/\bgh\s+(?:(?:issue|pr)\s+(?:create|comment|edit|close|reopen|review|merge)|release\s+(?:create|edit|upload)|gist\s+create|repo\s+(?:create|edit|rename)|api\b[^\n]*?(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE))\b/i;
 
 /**
- * The detail with `external` filled in when the caller left it empty but the action (or summary) publishes to GitHub,
- * so a public post never reaches the owner looking like an ordinary local approval.
+ * The detail with `external` filled in when the caller left it empty but the action publishes to GitHub.
  */
 function withExposure(summary: string, detail: ApprovalDetail | undefined): ApprovalDetail | undefined {
 	if (detail?.external !== undefined && detail.external.trim() !== "") return detail;
@@ -96,8 +95,8 @@ function cardTitle(detail: ApprovalDetail): string {
 }
 
 /**
- * The card text: header (with the owner mention when the card is escalated, so it notifies) + the already-redacted,
- * already-cut summary, an optional `요청 위치` line, then one `• 라벨: 값` line per filled (already shown) section.
+ * The card text: header (owner mention when escalated) + the redacted, cut summary, an optional `요청 위치` line,
+ * then one `• 라벨: 값` line per filled section.
  */
 function renderCard(
 	shownSummary: string,
@@ -116,8 +115,7 @@ function renderCard(
 }
 
 /**
- * `jabbu:approval:<approve|deny|retry>:<channel>:<ts>`; channel ids and message ts contain no colon. The key is always
- * the canonical card's, also on its mirror in the asking thread, so either card settles the same pending request.
+ * `jabbu:approval:<approve|deny|retry>:<channel>:<ts>`; the key is always the canonical card's, also on its mirror.
  */
 export function approvalActionId(decision: ApprovalDecision | "retry", channel: string, ts: string): string {
 	return `${APPROVAL_ACTION_PREFIX}:${decision}:${channel}:${ts}`;
@@ -245,8 +243,7 @@ export interface ApprovalBrokerOptions {
 	/** The owner on each platform, for clicks on that platform's cards; a platform not listed uses `ownerUserId`. */
 	platformOwners?: Partial<Record<ChatPlatform, string>> | undefined;
 	/**
-	 * The channel of each platform that receives the cards of that platform's requests that carry an origin (`ask` with
-	 * `origin`); a platform without one: the origin's own channel.
+	 * The channel of each platform that receives cards of requests carrying an origin; without one: the origin's own.
 	 */
 	escalationChannel?: EscalationChannels | undefined;
 	log: Logger;
@@ -266,6 +263,7 @@ interface Pending {
 	/** Settles once; returns false when the request was already decided (click, timeout or abort). */
 	settle: (outcome: ApprovalResult) => boolean;
 	isSettled: () => boolean;
+	outcome: () => ApprovalResult | undefined;
 	/** False when the ledger row could not be created, so there is no durable row to arbitrate against. */
 	recorded: boolean;
 	/** The asking conversation, when the request came from one. */
@@ -276,10 +274,7 @@ interface Pending {
 	cards: () => MessageRef[];
 }
 
-/**
- * Choice-card ledger rows expire this long after the card's own deadline: the card's timer settles it first and
- * writes the real outcome, so the approval sweeper never races it to an approval-worded card.
- */
+/** Choice-card ledger rows expire this long after the card's own deadline (its timer settles it first). */
 const CHOICE_LEDGER_GRACE_MS = 60_000;
 /** First characters of every choice card body (choice.ts): how a ledger row tells a choice card from an approval. */
 const CHOICE_HEADS = ["❓", "🔒"];
@@ -309,9 +304,8 @@ const ABORTED_TEXT = "⌛ 기다리던 작업이 중단돼 만료됨(데몬 재�
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 /**
- * Posts approve/deny buttons in the owner's DM and resolves when the owner clicks. Only the owner's click counts; any
- * other user, an unknown message or a repeated click is ignored. No click within `timeoutMs` resolves as `timeout`
- * (callers treat it as denied).
+ * Posts approve/deny buttons in the owner's DM and resolves when the owner clicks. Only the owner's click counts;
+ * a repeated click is ignored. No click within `timeoutMs` resolves as `timeout` (callers treat it as denied).
  */
 export class ApprovalBroker {
 	readonly #options: ApprovalBrokerOptions;
@@ -351,10 +345,9 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * A planned restart cut: every pending request's ledger row is expired (a later click is ignored and the next boot
-	 * leaves its card alone) and its cards say {@link RESTART_CUT_CARD_TEXT} without buttons; a card that cannot be
-	 * edited gets the line as a reply in its thread instead. The waiting tool calls stay open — the restart ends them.
-	 * Returns how many requests were withdrawn.
+	 * A planned restart cut: every pending request's ledger row is expired (a later click is ignored) and its cards
+	 * say {@link RESTART_CUT_CARD_TEXT} without buttons; a card that cannot be edited gets the line as a reply in its
+	 * thread instead. Returns how many requests were withdrawn.
 	 */
 	async cancelForRestart(): Promise<number> {
 		const { store, log } = this.#options;
@@ -436,9 +429,8 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * Posts the card and waits for the owner. With an `origin` and an `escalationChannel` the card goes to the
-	 * escalation channel (owner mention + `요청 위치`) and one pointer line lands in the asking thread; the origin is
-	 * also stored on the ledger row, so a reply in the card's thread can find its way back to the asking session.
+	 * Posts the card and waits. With an `origin` and an escalation channel the card goes there (owner mention +
+	 * `요청 위치`) and one pointer line lands in the asking thread; the origin is stored on the ledger row for replies.
 	 */
 	async ask(
 		requestChannel: string,
@@ -454,6 +446,7 @@ export class ApprovalBroker {
 		// Each platform has its own escalation channel: a request never moves to another platform's.
 		const requestPlatform = platformOfConversationId(requestChannel);
 		const escalation = requestPlatform === "discord" ? this.#escalation[requestPlatform] : undefined;
+		// A DM request never escalates: the card would publish what the owner is doing in DM to a guild channel.
 		const escalated =
 			origin !== undefined &&
 			escalation !== undefined &&
@@ -516,10 +509,10 @@ export class ApprovalBroker {
 			log.warn("approval_record_failed", { channel, ts: card.messageId, error: String(error) });
 		}
 		const decision = Promise.withResolvers<ApprovalResult>();
-		let settled = false;
+		let settledOutcome: ApprovalResult | undefined;
 		const settle = (outcome: ApprovalResult): boolean => {
-			if (settled) return false;
-			settled = true;
+			if (settledOutcome !== undefined) return false;
+			settledOutcome = outcome;
 			decision.resolve(outcome);
 			return true;
 		};
@@ -532,7 +525,8 @@ export class ApprovalBroker {
 		signal?.addEventListener("abort", onAbort, { once: true });
 		this.#pending.set(key, {
 			settle,
-			isSettled: () => settled,
+			isSettled: () => settledOutcome !== undefined,
+			outcome: () => settledOutcome,
 			recorded,
 			originKey: origin?.originKey,
 			summary: shown,
@@ -628,10 +622,9 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * Posts a choice card in the asking conversation (`origin`'s thread) and returns it open: button clicks, replies
-	 * in the card's thread and the conversation's own replies (`answerDialog`) queue up as `ChoiceEvent`s. The card
-	 * ends at its deadline (`timeout`) or when `signal` aborts (`cancelled`). The ledger keeps one approval row per
-	 * card, so a daemon restart expires a card left open, exactly like an approval card.
+	 * Posts a choice card in the asking conversation (`origin`'s thread) and returns it open: clicks and replies
+	 * queue up as `ChoiceEvent`s. The card ends at its deadline or when `signal` aborts. The ledger keeps one
+	 * approval row per card, so a restart expires a card left open, exactly like an approval card.
 	 */
 	async choose(
 		origin: ApprovalOrigin,
@@ -642,8 +635,7 @@ export class ApprovalBroker {
 		const { log, store } = this.#options;
 		const port = this.#port(origin.channel);
 		const now = this.#clock.now();
-		// omp's dialog timeout is any number; past the timer limit setTimeout would fire at once and the deadline
-		// line could not format the date (RangeError), so the card is held open at most that long.
+		// Past the timer limit setTimeout would fire at once, so the card is held open at most that long.
 		const timeoutMs = Math.min(
 			card.timeoutMs ?? this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
 			MAX_TIMER_DELAY_MS,
@@ -816,8 +808,7 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * Keeps the owner's free text for the next `input` dialog of `originKey` (omp opens it right after the "Other"
-	 * row of a select is picked). One slot per origin; a newer text replaces an unused one.
+	 * Keeps the owner's free text for the next `input` dialog of `originKey`. One slot per origin; newer replaces unused.
 	 */
 	holdInput(originKey: string, opRef: string | undefined, text: string): void {
 		this.#heldInput.set(originKey, { text, opRef, at: this.#clock.now() });
@@ -866,8 +857,7 @@ export class ApprovalBroker {
 
 	/**
 	 * The owner's plain message in the asking conversation answers its one open choice card. Resolves true once the
-	 * card has read it; false when there is no single open card or the card closed before reading it (a select
-	 * answered by a click a moment earlier) — the caller then delivers the message the normal way.
+	 * card has read it; false when there is no single open card or it closed first — the caller delivers it normally.
 	 */
 	answerDialog(originKey: string, text: string): Promise<boolean> {
 		const open = [...this.#choices.values()].filter((choice) => choice.originKey === originKey && choice.isOpen());
@@ -900,6 +890,13 @@ export class ApprovalBroker {
 		}
 	}
 
+	/** Tells the owner a click landed on an already-decided card, naming the outcome; best effort, fire-and-forget. */
+	#noteLateClick(channel: string, outcome: ApprovalOutcome): void {
+		void this.#port(channel)
+			.post({ conversationId: channel }, { text: `이미 처리된 승인 요청입니다 — ${FINAL_TEXT[outcome]}` })
+			.catch((error) => this.#options.log.warn("approval_late_click_note_failed", { error: String(error) }));
+	}
+
 	/** One pointer line in the asking thread (or the channel's main view) naming the escalation card; best effort. */
 	async #postPointer(
 		origin: ApprovalOrigin,
@@ -927,9 +924,8 @@ export class ApprovalBroker {
 	/**
 	 * The owner's reply in the thread of an approval card (`approvalId` = `<card channel>:<card ts>`). A still-pending
 	 * card is settled as `replied` (the waiting tool call returns the text); a settled one hands the reply back as a
-	 * `route` to the asking conversation. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
-	 * An `injected` message (`jabbu-pocket inject`, which anyone with the socket can send) never answers a card: in the thread
-	 * of a real choice card or of any approval row (pending or settled) it is `injected_rejected`, the card untouched.
+	 * `route` to the asking conversation. `undefined`: not a card this ledger knows. An `injected` message never
+	 * answers a card: in a card thread it is `injected_rejected`, the card untouched.
 	 */
 	handleCardReply(reply: {
 		approvalId: string;
@@ -973,15 +969,13 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * Boot + sweep: expires due pending rows (or ALL pending rows after a restart — a waiting click cannot outlive
-	 * the process) and rewrites their cards to say so, instead of leaving buttons that resolve to nothing.
+	 * Boot + sweep: expires due pending rows (or ALL after a restart) and rewrites their cards to say so.
 	 */
 	async expireStale(due = true): Promise<number> {
 		const { store, log } = this.#options;
 		const expired = store.expirePendingApprovals(this.#clock.now(), due);
 		for (const row of expired) {
-			// A choice card's ledger summary is its own body, which always opens with its ❓/🔒 head (`choose`);
-			// an approval's summary is the request text under the separate 🔐 header.
+			// A choice card's ledger summary is its own body (❓/🔒 head); an approval's is the request text under 🔐.
 			const choice = CHOICE_HEADS.some((head) => row.summary.startsWith(head));
 			const reason = due
 				? choice
@@ -1006,9 +1000,7 @@ export class ApprovalBroker {
 	}
 
 	/**
-	 * Rewrites a settled approval's cards (canonical, mirror, and the clicked message when it is neither) to `note`
-	 * with no buttons: the result of a `다시 요청` click. Without a ledger row only the canonical and clicked cards
-	 * are known.
+	 * Rewrites a settled approval's cards to `note` with no buttons: the result of a `다시 요청` click.
 	 */
 	async redrawCards(approvalId: string, note: string, clicked?: { channel: string; ts: string }): Promise<void> {
 		const { store, log } = this.#options;
@@ -1089,10 +1081,17 @@ export class ApprovalBroker {
 		const pending = this.#pending.get(cardId);
 		if (!pending) {
 			log.info("approval_click_ignored", { user: action.userId, reason: "no_pending_request" });
+			// The ask already returned and dropped its pending; the ledger still knows a decided card — answer its click.
+			const status = this.#options.store.getApproval(cardId)?.status;
+			if (status === "approved" || status === "denied" || status === "timeout")
+				this.#noteLateClick(parsed.channel, status);
 			return false;
 		}
 		if (pending.isSettled()) {
 			log.info("approval_click_ignored", { user: action.userId, reason: "already_decided" });
+			// The card's final edit may not have landed, leaving live-looking buttons on a decided request: answer it.
+			const outcome = pending.outcome();
+			if (typeof outcome === "string") this.#noteLateClick(parsed.channel, outcome);
 			return false;
 		}
 		const outcome: ApprovalOutcome = parsed.decision === "approve" ? "approved" : "denied";

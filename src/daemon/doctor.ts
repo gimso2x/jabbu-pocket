@@ -32,7 +32,7 @@ function listening(host: string, port: number): Promise<boolean> {
 /**
  * How many chat models `omp models --json` lists, run with the env the RPC driver gives omp. Zero means no provider
  * login and no API key: every turn would fail with "No default model selected", so doctor says so before the first DM.
- * A string is the reason the count could not be read (timeout, exit code, unparsable output).
+ * A string is the reason the count could not be read.
  */
 export async function countOmpModels(
 	ompExecutable: string,
@@ -137,8 +137,7 @@ export async function readJudgeRole(
 		}
 		if (typeof parsed !== "object" || parsed === null) return { unreadable: "unparsable output" };
 		const roles = (parsed as { modelRoles?: { value?: unknown } }).modelRoles?.value;
-		// No role storage at all reads as an unset role: omp keeps roles inside `modelRoles`, and an overlay that sets
-		// none leaves the global ones in place — so what is read here is the effective value.
+		// No role storage at all reads as an unset role: what is read here is the effective value.
 		const judge = typeof roles === "object" && roles !== null ? (roles as Record<string, unknown>).judge : undefined;
 		if (typeof judge === "string" && judge.trim() !== "") return { model: judge };
 		// qa-z #9: the probe does not always merge the overlay — the file itself is checked as the effective role.
@@ -198,7 +197,11 @@ export async function checkDiscord(
 		if (mode !== SECRET_MODE) return;
 		token = readDiscordToken(config);
 	} catch (error) {
-		report(false, "discord token", error instanceof ConfigError ? error.code : "missing");
+		const detail =
+			error instanceof ConfigError
+				? error.code
+				: `missing: ${discord.botTokenFile} (put the bot token there, mode 0600)`;
+		report(false, "discord token", detail);
 		return;
 	}
 	const rest = new DiscordRest({ token, fetchImpl });
@@ -219,8 +222,7 @@ export async function checkDiscord(
 /**
  * The `backup bundle` line. The bundle carries the conversation memory and operator files (sessions/, config.json,
  * workspace/, scripts/); a home that only backs up the ledger is half protected, so the stamp must name a bundle that
- * still exists and is fresh. A ledger-only home has no bundle sources at all — `runBackup` correctly writes no bundle
- * there, so that stamp passes.
+ * still exists and is fresh. A ledger-only home has no bundle sources — `runBackup` writes none there, so it passes.
  */
 export function checkBackupBundle(homeDir: string, report: Report, warn: (name: string, detail: string) => void): void {
 	const stamp = readStamp(join(homeDir, "backups"));
@@ -317,9 +319,9 @@ export interface DoctorNetwork {
 }
 
 /**
- * Prints one `ok`/`fail` line per check (`warn` lines never count as failures). Only paths, modes, token *prefixes* and public ids are printed; token values
- * never leave the config readers. Returns 0 when every check passed. With `repoDir` (the checkout the daemon runs),
- * a code rollback journal there is a warning.
+ * Prints one `ok`/`fail` line per check (`warn` lines never count as failures). Only paths, modes, token *prefixes*
+ * and public ids are printed; token values never leave the config readers. Returns 0 when every check passed. With
+ * `repoDir` (the checkout the daemon runs), a code rollback journal there is a warning.
  */
 export async function runDoctor(
 	homeDir: string,
@@ -343,7 +345,7 @@ export async function runDoctor(
 			report(homeMode === HOME_MODE, "home", `${homeDir} mode=${octal(homeMode)} expected=${octal(HOME_MODE)}`);
 		}
 	} catch {
-		report(false, "home", `${homeDir} missing`);
+		report(false, "home", `${homeDir} missing (no home yet: run the \`init\` command first)`);
 	}
 	// A token file problem is reported on its own `secret …` line below, so it must not hide every later check: the
 	// config is loaded again without the token files and the report goes on.
@@ -376,8 +378,7 @@ export async function runDoctor(
 		}
 
 		// The same check the RPC driver runs before every spawn, so an executable that does not answer `--version` as
-		// omp fails here instead of on the first DM. Skipped when omp is missing (reported above) and for agent "agy",
-		// which never spawns omp; a directory or an unreadable file is a failed line, not an exception.
+		// omp fails here instead of on the first DM. Skipped when omp is missing (reported above) and for agent "agy".
 		if ((config.agent ?? "omp") === "omp" && existsSync(config.ompExecutable)) {
 			const problem = await checkOmpRuntime(config.ompExecutable);
 			report(
@@ -399,8 +400,7 @@ export async function runDoctor(
 					: models,
 			);
 			// A missing judge role fails at runtime (worker-tier calls, auto review), so it is a `warn` here: the role is
-			// the owner's to set and a warning never counts as a failed check. An unreadable answer is its own line: only
-			// the missing role is actionable.
+			// the owner's to set and a warning never counts as a failed check.
 			const judge = await readJudgeRole(config.ompExecutable, config.ompConfigOverlay, 30_000, config.ompProfile);
 			if ("model" in judge) report(true, "omp judge", `${judge.model}`);
 			else if ("missing" in judge) {

@@ -127,9 +127,8 @@ interface AlertIncident {
 	/** When this alert period started; `now - firstAt` is how long the condition has stood. */
 	firstAt: number;
 	/**
-	 * True when this same condition had already alerted the owner and never resolved — the row's standing state
-	 * before this occurrence. A daemon restart reads it to keep "an alerted open must report its recovery" true
-	 * across processes (the in-memory gate bookkeeping starts empty).
+	 * True when this condition had already alerted the owner and never resolved. A daemon restart reads it to
+	 * keep "an alerted open must report its recovery" true across processes.
 	 */
 	standing: boolean;
 }
@@ -244,9 +243,8 @@ export class Store {
 	private peerCallPolicy: PeerCallPolicy | undefined;
 
 	/**
-	 * Start and config reload: confirmed deliveries from now on are recorded as peer calls under `policy`. `undefined`
-	 * switches the alert off: nothing is recorded and the calls still pending are `skipped`, so switching it back on
-	 * never reports an old silence.
+	 * Start and config reload: confirmed deliveries are recorded as peer calls under `policy`. `undefined` switches
+	 * the alert off: nothing is recorded, pending calls are `skipped`, so switching back on never reports an old silence.
 	 */
 	setPeerCallPolicy(policy: PeerCallPolicy | undefined): void {
 		this.peerCallPolicy = policy;
@@ -431,8 +429,7 @@ export class Store {
 	 * sweeper) a no-op that reports `false`, replacing the in-memory map's atomic pop.
 	 */
 	decideApproval(approvalId: string, status: "approved" | "denied" | "expired", now: number): boolean {
-		// A due-but-unswept row is expired by contract: a late click must not approve it (the sweeper would have
-		// refused). Marking it `expired` is always allowed — that is the sweeper's own honest outcome.
+		// A due-but-unswept row is expired by contract (a late click must not approve it); marking it is allowed.
 		const guard = status === "expired" ? "" : " AND expires_at > ?";
 		const params = status === "expired" ? [status, now, approvalId] : [status, now, approvalId, now];
 		return (
@@ -497,9 +494,8 @@ export class Store {
 
 	/**
 	 * Threads the bot answered in recently on one chat platform's origins (deliveries carry `<channel>:<rootTs>`),
-	 * newest first — backfill thread targets. The 7-day window and cap mirror the upstream participated-thread
-	 * tracking. Top-level posts (`<channel>:-`: slash-command answers, log-channel copies) have no thread to read, so
-	 * they are never targets.
+	 * newest first — backfill thread targets. Top-level posts (`<channel>:-`) have no thread to read, so they are
+	 * never targets.
 	 */
 	listThreadTargets(platform: ChatPlatform, since: number, limit: number): Array<{ channel: string; rootTs: string }> {
 		const rows = this.db
@@ -540,9 +536,8 @@ export class Store {
 	}
 
 	/**
-	 * Pins the session file the origin's next child resumes (`sessionToResume`) without a new epoch: the session dir,
-	 * the pending rows and the epoch stay as they are. A lane handed back from a terminal omp keeps writing the file the
-	 * terminal wrote, whatever else appeared in its session dir.
+	 * Pins the session file the next child resumes (`sessionToResume`) without a new epoch: nothing else moves.
+	 * A lane handed back from a terminal keeps writing the file the terminal wrote.
 	 */
 	pinSessionFile(originKey: string, sessionFile: string): OriginRow {
 		this.requireOrigin(originKey);
@@ -773,9 +768,8 @@ export class Store {
 	}
 
 	/**
-	 * Durations (ms) of answered turns of the last 30 days, newest first, at most 200: the turn's first answer part
-	 * minus its earliest dispatch, one sample per turn however many messages were steered into it. Turns of
-	 * `originKey` only, or of every chat origin when it is omitted (monitor and lane turns never count).
+	 * Answered-turn durations (ms), newest first, at most 200: the turn's first answer part minus its earliest
+	 * dispatch, one sample per turn. Turns of `originKey` only, or of every chat origin when omitted.
 	 */
 	turnDurationSamples(originKey?: string): number[] {
 		const scope =
@@ -801,10 +795,9 @@ export class Store {
 	}
 
 	/**
-	 * Recall candidates of one conversation space (its platform read from the id), newest first: owner messages and confirmed first-part bot
-	 * answers of the last 90 days whose origin AND thread both belong to `channel` (a DM origin's steer pointer into
-	 * a channel thread is excluded by the origin test), other than the `excludeThreadRef` thread and top-level posts.
-	 * Chat commands, command answers, failure notices and steer pointers are dropped after the query.
+	 * Recall candidates, newest first: owner messages and confirmed bot answers of 90 days whose origin AND thread
+	 * both belong to `channel` (a DM steer pointer is excluded by the origin test), minus the `excludeThreadRef`
+	 * thread and top-level posts. Commands, failure notices and steer pointers are dropped after the query.
 	 */
 	listRecallCandidates(channel: string, excludeThreadRef: string, limit: number): RecallCandidate[] {
 		const platform = platformOfConversationId(channel);
@@ -898,10 +891,9 @@ export class Store {
 	}
 
 	/**
-	 * One transaction: every dispatched inbound row of the op becomes `answered` and the delivery rows are created.
-	 * Any throw in between rolls both back. Re-recording the same (origin, op_ref, part) is a no-op. `answer` is the
-	 * turn's whole answer when `parts` leave out what interim deliveries already sent: the log-channel copy and the
-	 * steered-thread pointers are judged on it (default: `parts`). A [TASK] origin's turn makes no delivery.
+	 * One transaction: every dispatched inbound row becomes `answered` and the deliveries are created; any throw
+	 * rolls both back. Re-recording the same (origin, op_ref, part) is a no-op. `answer` is the turn's whole answer
+	 * when `parts` leave out what interim deliveries already sent (default: `parts`). A [TASK] turn makes no delivery.
 	 */
 	recordAnswer(input: {
 		originKey: string;
@@ -993,11 +985,10 @@ export class Store {
 	}
 
 	/**
-	 * The single choke point where chat answers become deliveries also writes the log-channel copy of a completion
-	 * report: a Discord chat or work-lane answer (never commands) whose first non-empty line starts with
-	 * `✅ 완료`. It goes to the #log channel of the answer's own platform (a lane: its thread's), never another
-	 * platform's. The copy is one delivery on `<logChannel>:-` under `<opRef>:log-copy`, so a replayed answer inserts
-	 * nothing new.
+	 * The choke point where chat answers become deliveries writes the log-channel copy of a completion report
+	 * (a chat or lane answer, never commands, whose first non-empty line starts with `✅ 완료`). It goes to the
+	 * answer's own platform's #log channel. The copy is one delivery under `<opRef>:log-copy`, so a replayed
+	 * answer inserts nothing new.
 	 */
 	private copyCompletion(input: { originKey: string; opRef: string; threadRef: string }, body: string): void {
 		if (COMMAND_OP_REF.test(input.opRef)) return;
@@ -1127,9 +1118,8 @@ export class Store {
 	}
 
 	/**
-	 * Where daemon-level owner notices and channel-less monitor reports go: ① the home registered with `!home`, ② the
-	 * owner's newest 1:1 conversation on any platform, ③ the conversation the owner last wrote in. `undefined` before
-	 * any of them exists (a fresh install whose owner has not written yet): callers warn and never post to an empty id.
+	 * Where daemon-level owner notices go: ① the home registered with `!home`, ② the owner's newest 1:1
+	 * conversation, ③ the conversation the owner last wrote in. `undefined` before any of them exists.
 	 */
 	ownerHome(): OwnerHome | undefined {
 		const registered = this.db.query("SELECT platform, conversation_id FROM owner_home WHERE id = 1").get() as {
@@ -1223,10 +1213,9 @@ export class Store {
 	}
 
 	/**
-	 * Settles one waiting event of a `verbatim` monitor in one transaction, without a turn or an inbound row: its stored
-	 * payload is the answer and is posted exactly like a turn's report; an empty payload ends as `no_report` with no
-	 * post and no copy. With `output` (a cron command's stdout, see `MonitorLedger.settleVerbatim`) that is the answer.
-	 * Returns false when the event was not waiting to run.
+	 * Settles one waiting event of a `verbatim` monitor in one transaction: its stored payload is the answer,
+	 * posted exactly like a turn's report; an empty payload ends as `no_report`. With `output` (a cron command's
+	 * stdout) that is the answer. Returns false when the event was not waiting to run.
 	 */
 	deliverMonitorVerbatim(eventId: number, opRef: string, output?: string): boolean {
 		return this.db.transaction((): boolean => {
@@ -1327,6 +1316,20 @@ export class Store {
 		})();
 	}
 
+	/** Expired monitor deliveries: count an incident and tell the owner once per repeat window, like a final failure. */
+	reconcileMonitorDeliveries(): void {
+		for (const expired of this.monitors.reconcileDeliveries()) {
+			const target = { originKey: monitorOrigin(expired.monitorId), opRef: `monitor-notice:${expired.eventId}` };
+			const threadRef = this.ownerAlertThreadRef(target);
+			if (threadRef === undefined) continue;
+			const incident = this.monitors.recordMonitorIncident(expired.monitorId, "delivery_expired", this.clock.now());
+			if (!incident.notify) continue;
+			const repeat = incident.count > 1 ? ` · 반복 ${incident.count}회차` : "";
+			const text = `⏰ ${expired.monitorName}\n⚠️ 모니터 보고가 배달되지 않고 만료됐습니다 (delivery_expired${repeat})`;
+			this.insertDelivery({ ...target, threadRef }, 0, text);
+		}
+	}
+
 	/** Reports a check-error alert that has no owner destination; always false so `canAlert` can chain it. */
 	private noteUnroutableCheckError(monitorId: string): false {
 		this.hooks.onOwnerNoticeUnroutable?.({
@@ -1397,9 +1400,8 @@ export class Store {
 	 * Counts one occurrence of an alert condition and decides whether the owner should be told (the shared incident
 	 * state machine — see `monitors/incidents`): the first occurrence alerts, the same (scope, normalized sign) within
 	 * `repeatMs` stays quiet, a still-standing condition re-alerts after `repeatMs`, and a resolved condition that
-	 * comes back reopens loudly (monitor incident semantics, used by the turn-failure escalation and the daemon's
-	 * gate sweep). `standing` reports the row's pre-call state, so a restarting daemon can rebuild "the owner was
-	 * already alerted" from the ledger alone.
+	 * comes back reopens loudly. `standing` reports the row's pre-call state, so a restarting daemon can rebuild
+	 * "the owner was already alerted" from the ledger alone.
 	 */
 	recordAlertIncident(scope: string, sign: string, now: number, repeatMs = ALERT_INCIDENT_REPEAT_MS): AlertIncident {
 		return countIncident(this.db, "alert_incidents", scope, sign, now, repeatMs);
@@ -1711,9 +1713,8 @@ export class Store {
 	}
 
 	/**
-	 * Sweeps stale rows, then moves up to `limit` due pending deliveries (next_at <= now) to inflight and returns them.
-	 * With `platform` only the rows whose thread ref posts to that platform are taken (monitor and lane answers
-	 * included: their thread ref is a chat conversation like any other); the rest stay pending for their adapter.
+	 * Sweeps stale rows, then moves up to `limit` due pending deliveries to inflight and returns them. With
+	 * `platform` only that platform's rows are taken (monitor and lane answers included); the rest stay pending.
 	 */
 	claimDue(limit = 20, platform?: ChatPlatform): DeliveryRow[] {
 		const now = this.clock.now();
@@ -1852,9 +1853,8 @@ export class Store {
 
 	/**
 	 * A send whose outcome is unknown. Sticky; never resent or expired automatically (the owner resolves it with
-	 * `jabbu-pocket deliveries ack|resend`). `sentParts` records how much of a multi-message answer was already out, so a
-	 * `resend` continues after them instead of posting them twice, and `replyTs` (the first part's id of a top-level
-	 * answer) is kept so the resent parts reply under it.
+	 * `jabbu-pocket deliveries ack|resend`). `sentParts` records how much of a multi-message answer was already out,
+	 * so a `resend` continues after them, and `replyTs` is kept so the resent parts reply under it.
 	 */
 	markAmbiguous(deliveryId: number, error: string, sentParts = 0, replyTs?: string): DeliveryRow {
 		return this.db.transaction(() => {

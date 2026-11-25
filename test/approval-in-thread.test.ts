@@ -309,6 +309,23 @@ describe("broker: mirror card in the asking thread", () => {
 		expect(lines.some((l) => l.includes("reason=already_decided"))).toBe(true);
 	});
 
+	test("persona: a click after the decision still answers the owner, naming the outcome", async () => {
+		const b = broker();
+		const { result, canonicalTs } = await askInThread(b);
+		const approve = approvalActionId("approve", ESC, canonicalTs);
+		expect(b.handleAction({ actionId: approve, userId: OWNER })).toBe(true);
+		expect(await result).toBe("approved");
+		expect(b.handleAction({ actionId: approve, userId: OWNER })).toBe(false);
+		await transport.until(
+			() => transport.posts((text) => text.startsWith("이미 처리된 승인 요청입니다")).length > 0,
+			"late click note",
+		);
+		const notes = transport.posts((text) => text.startsWith("이미 처리된 승인 요청입니다"));
+		expect(notes).toHaveLength(1);
+		expect(textOf(notes[0])).toContain("승인됨");
+		expect(notes[0]?.channelId).toBe(ESC);
+	});
+
 	test("AC-3: two clicks at once (mirror + canonical) decide the ledger once", async () => {
 		const b = broker();
 		const { result, canonicalTs } = await askInThread(b);

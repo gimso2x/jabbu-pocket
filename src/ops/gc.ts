@@ -46,6 +46,7 @@ export interface LedgerRemoved {
 	deliveries: number;
 	deliveryPosts: number;
 	monitorEvents: number;
+	monitorSlots: number;
 }
 
 /** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
@@ -63,13 +64,12 @@ function realpathOrResolve(path: string): string {
 /**
  * Deletes only session directories of PREVIOUS epochs (`sessions/<origin>/e<N>` with N below the origin's current
  * epoch in the ledger) whose newest file is older than the retention window. The current epoch, unknown origins,
- * and anything not named `e<N>` are never touched. The ledger is opened read-only.
+ * and anything not named `e<N>` are never touched.
  *
  * Thread-session origins (`slack/ch/<C>/t/<R>`) never churn epochs (`!new` is their only epoch path), so their
  * sessions would pile up forever. Once the origin's newest activity is past the retention window the whole
  * directory goes, together with the ledger row — a later message simply opens a fresh origin. Activity is the
  * newest file mtime (the ledger's `updated_at` is not bumped on turns); a missing directory ages by `updated_at`.
- * An origin with pending or dispatched inbound is never removed, and a symlinked origin directory is never followed.
  */
 export function gcSessions(options: GcOptions): GcResult {
 	const result: GcResult = {
@@ -79,7 +79,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
 		turnSnapshotsRemoved: 0,
-		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0 },
+		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0, monitorSlots: 0 },
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -153,8 +153,7 @@ export function gcSessions(options: GcOptions): GcResult {
 	}
 	// The read-only handle is closed before the cleanup pass opens, so the writable short-lived connection
 	// never fights a lock. busy_timeout mirrors the ledger's open options: a turn committing at the same
-	// moment must not fail the gc with an immediate SQLITE_BUSY. Only expired thread origins delete rows;
-	// everything else stays read-only. A dry run opens it read-only, only to count the turn snapshots.
+	// moment must not fail the gc with an immediate SQLITE_BUSY. Only expired thread origins delete rows.
 	const write = new Database(dbPath, options.dryRun ? { readonly: true, strict: true } : { strict: true });
 	write.run("PRAGMA busy_timeout = 5000");
 	const removeRow = options.dryRun ? undefined : write.query("DELETE FROM origins WHERE origin_key = ?");
@@ -198,12 +197,12 @@ function hasTable(db: Database, name: string): boolean {
  * Finished conversation rows past `LEDGER_RETENTION_DAYS` leave the ledger, in one transaction; a dry run only counts.
  * - inbound: `answered`/`failed_notified`/`discarded`, unless a pending approval card was asked from its thread
  *   (`origin_thread_ref`).
- * - deliveries: `confirmed`/`failed_ambiguous`/`expired`; its `delivery_posts` rows (written by older versions) go
- *   first. The gc connection never turns `foreign_keys` on (origins expire at 30 days, inbound at 90, so the origin
- *   delete would be refused), which is why the posts→deliveries order is kept here by hand.
+ * - deliveries: `confirmed`/`failed_ambiguous`/`expired`; its `delivery_posts` rows go first. The gc connection
+ *   never turns `foreign_keys` on (the origin delete would be refused), so the posts→deliveries order is kept by hand.
  * - monitor_events: the final stages only, aged by `updated_at`.
- * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing from an old
- * home makes its rule empty instead of failing.
+ * - monitor_slots: every slot aged past the cutoff by `created_at` (nothing reads slots that old).
+ * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing
+ * from an old home makes its rule empty instead of failing.
  */
 function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 	const cutoff = options.now - LEDGER_RETENTION_DAYS * DAY_MS;
@@ -227,6 +226,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		deliveries: hasDeliveries ? count(`deliveries d WHERE ${deliveriesWhere}`) : 0,
 		deliveryPosts: posts ? count(`delivery_posts WHERE ${postsWhere}`) : 0,
 		monitorEvents: events ? count(`monitor_events WHERE ${eventsWhere}`) : 0,
+		monitorSlots: hasTable(db, "monitor_slots") ? count("monitor_slots WHERE created_at < ?") : 0,
 	};
 	if (options.dryRun === true) return removed;
 	db.transaction(() => {
@@ -234,14 +234,14 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		if (hasDeliveries) db.query(`DELETE FROM deliveries AS d WHERE ${deliveriesWhere}`).run(cutoff);
 		db.query(`DELETE FROM inbound AS i WHERE ${inboundWhere}`).run(cutoff);
 		if (events) db.query(`DELETE FROM monitor_events WHERE ${eventsWhere}`).run(cutoff);
+		if (hasTable(db, "monitor_slots")) db.query("DELETE FROM monitor_slots WHERE created_at < ?").run(cutoff);
 	})();
 	return removed;
 }
 
 /**
  * `!undo` rows past the turn-snapshot retention (7 days, independent of the session window) leave the ledger, and the
- * `refs/jabbu/turns/<id>/…` that kept their trees alive go with them. Runs on the writable handle `gcSessions` already
- * opened; a dry run reads the count and writes nothing.
+ * `refs/jabbu/turns/<id>/…` that kept their trees alive go with them. A dry run reads the count and writes nothing.
  */
 function gcTurnSnapshots(db: Database, options: GcOptions): number {
 	if (!hasTable(db, "turn_snapshots")) return 0;

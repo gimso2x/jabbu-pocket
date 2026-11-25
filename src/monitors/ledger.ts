@@ -181,10 +181,7 @@ CREATE TABLE IF NOT EXISTS monitor_incidents (
 );
 `;
 
-/**
- * Creates the monitor tables in a database that may predate them (every statement is idempotent, so opening an old
- * ledger only adds what is missing and never touches its rows).
- */
+/** Creates the monitor tables in a database that may predate them (idempotent; existing rows are never touched). */
 export function migrateMonitorSchema(db: Database): void {
 	db.run(MONITOR_SCHEMA);
 	const columns = db.query("PRAGMA table_info(monitors)").all() as Array<{ name: string }>;
@@ -640,7 +637,7 @@ export class MonitorLedger {
 	 * Applies one finished script check. The state change, the fire (a claimed slot with its event) and the `once`
 	 * disable are one transaction, so a crash can neither refire a met condition nor lose the fire. `error` (timeout,
 	 * spawn or path failure) says nothing about the condition and leaves the state alone; it only counts in the check
-	 * error streak (`recordCheckError`), which a definitive check ends. Returns the claim when it fired.
+	 * error streak (`recordCheckError`). Returns the claim when it fired.
 	 */
 	recordScriptCheck(input: {
 		monitorId: string;
@@ -699,8 +696,7 @@ export class MonitorLedger {
 
 	/**
 	 * Counts one terminal monitor failure and decides whether the owner should be told (the shared incident state
-	 * machine — see `monitors/incidents`): the first occurrence alerts, the same (monitor, normalized error) within
-	 * `repeatMs` stays quiet, a re-alert refreshes the window, and a resolved incident that comes back reopens loudly.
+	 * machine — see `monitors/incidents`): the first occurrence alerts, repeats within `repeatMs` stay quiet.
 	 */
 	recordMonitorIncident(
 		monitorId: string,
@@ -716,8 +712,7 @@ export class MonitorLedger {
 	 * One script check or watch that failed: the error and its time are kept and the streak grows. The moment the streak
 	 * reaches `CHECK_ERROR_ALERT_STREAK` it counts as a monitor incident, and an incident that alerts goes to the owner
 	 * through `onCheckErrorAlert` in the same transaction; later errors of the same streak stay quiet. While `canAlert`
-	 * says the alert has no destination, the incident is left unrecorded and the streak stays one short of the
-	 * threshold, so the next error tries again once there is somewhere to send it. Returns the streak.
+	 * says the alert has no destination, the incident is left unrecorded and the streak stays one short of the threshold.
 	 */
 	recordCheckError(monitorId: string, error: string): number {
 		return this.#db.transaction((): number => {
@@ -876,8 +871,7 @@ export class MonitorLedger {
 	/**
 	 * admitted|failed -> authored, the stored payload being the answer, for a `verbatim` monitor (no turn, no marker
 	 * parsing); an empty payload goes to `no_report`. `opRef` is kept as this attempt's id. With `output` (a cron
-	 * command's stdout) the event must instead be `dispatched` under `opRef`, and `output` becomes its payload and answer.
-	 * Returns `undefined` when the event is gone or not waiting to run.
+	 * command's stdout) the event must instead be `dispatched` under `opRef`. Returns `undefined` when not waiting.
 	 */
 	settleVerbatim(eventId: number, opRef: string, output?: string): SettleAnswer | undefined {
 		const settled = this.#db.transaction((): SettleAnswer | undefined => {
@@ -941,13 +935,19 @@ export class MonitorLedger {
 		this.#db.query("UPDATE monitor_events SET delivery_id = ? WHERE event_id = ?").run(deliveryId, eventId);
 	}
 
-	/** authored -> delivered once the ledger delivery was confirmed; an expired delivery ends the event as failed. */
-	reconcileDeliveries(): number {
+	pendingEventCount(monitorId: string): number {
+		const sql =
+			"SELECT COUNT(*) AS n FROM monitor_events WHERE monitor_id = ? AND stage IN ('admitted','dispatched','authored','failed')";
+		return (this.#db.query(sql).get(monitorId) as { n: number }).n;
+	}
+
+	/** authored -> delivered once confirmed; an expired delivery ends the event as failed. Returns the expired ones. */
+	reconcileDeliveries(): Array<{ eventId: number; monitorId: string; monitorName: string }> {
 		const rows = this.#db
 			.query(
-				"SELECT e.event_id AS event_id, d.state AS state FROM monitor_events e JOIN deliveries d ON d.delivery_id = e.delivery_id WHERE e.stage = 'authored' AND d.state IN ('confirmed','failed_ambiguous','expired')",
+				"SELECT e.event_id AS event_id, e.monitor_id AS monitor_id, m.name AS monitor_name, d.state AS state FROM monitor_events e JOIN deliveries d ON d.delivery_id = e.delivery_id JOIN monitors m ON m.id = e.monitor_id WHERE e.stage = 'authored' AND d.state IN ('confirmed','failed_ambiguous','expired')",
 			)
-			.all() as Array<{ event_id: number; state: string }>;
+			.all() as Array<{ event_id: number; monitor_id: string; monitor_name: string; state: string }>;
 		for (const row of rows) {
 			const [stage, error] =
 				row.state === "confirmed"
@@ -962,7 +962,9 @@ export class MonitorLedger {
 				.run(stage, error, this.#clock.now(), row.event_id);
 			this.#emit(row.event_id);
 		}
-		return rows.length;
+		return rows
+			.filter((row) => row.state === "expired")
+			.map((row) => ({ eventId: row.event_id, monitorId: row.monitor_id, monitorName: row.monitor_name }));
 	}
 
 	/**

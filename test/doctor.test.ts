@@ -222,6 +222,15 @@ describe("doctor: discord", () => {
 		expect(seen).toHaveLength(0);
 	});
 
+	test("persona: a missing token file names the path and what to put there", async () => {
+		const config = home.config;
+		const tokenFile = config.channels.discord?.botTokenFile ?? "";
+		rmSync(tokenFile);
+		await checkDiscord(config, report, fakeFetch(healthy));
+		expect(lines).toEqual([`fail discord token: missing: ${tokenFile} (put the bot token there, mode 0600)`]);
+		expect(seen).toHaveLength(0);
+	});
+
 	test("off: no discord line and no request", async () => {
 		await checkDiscord({ ...home.config, channels: {} }, report, fakeFetch(healthy));
 		expect(lines).toEqual([]);

@@ -2022,3 +2022,52 @@ describe("monitors: event retention (gc)", () => {
 		expect(stages()).toHaveLength(12);
 	});
 });
+
+describe("persona: an expired monitor report delivery tells the owner", () => {
+	test("reconcile ends the event as delivery_expired and queues one owner notice", () => {
+		const dir2 = mkdtempSync(join(tmpdir(), "jabbu-reconcile-"));
+		const clock2 = new FakeClock();
+		const s = openStore({ timezone: "Asia/Seoul", path: join(dir2, "jabbu.db"), clock: clock2, redact });
+		try {
+			s.setOwnerHome({ platform: "discord", conversationId: CHANNEL_A });
+			const monitor = s.monitors.addMonitor({
+				name: "water",
+				trigger: { kind: "cron", schedule: "0 9 * * *", timezone: "UTC" },
+				instruction: "check",
+				overlap: "queue",
+				enabled: true,
+			});
+			const claim = s.monitors.claimSlot({ monitorId: monitor.id, slotAt: clock2.now() });
+			if (claim.status !== "admitted") throw new Error("claim not admitted");
+			const eventId = claim.event.eventId;
+			expect(s.monitors.markDispatched(eventId, "in-1")).toBe(true);
+			expect(s.monitors.settleAnswered(eventId, "물 부족")).not.toBeUndefined();
+			const db = new Database(join(dir2, "jabbu.db"));
+			const inserted = db
+				.query(
+					"INSERT INTO deliveries (origin_key, op_ref, part, thread_ref, body, state, next_at, created_at) VALUES (?, ?, 0, ?, ?, 'expired', ?, ?) RETURNING delivery_id",
+				)
+				.get(
+					monitorOrigin(monitor.id),
+					`monitor-report:${eventId}`,
+					`${CHANNEL_A}:-`,
+					"물 부족",
+					clock2.now(),
+					clock2.now(),
+				) as { delivery_id: number };
+			db.close();
+			s.monitors.attachDelivery(eventId, inserted.delivery_id);
+			s.reconcileMonitorDeliveries();
+			expect(s.monitors.getEvent(eventId)).toMatchObject({ stage: "failed_no_retry", error: "delivery_expired" });
+			const notices = s.listDeliveries().filter((row) => row.opRef === `monitor-notice:${eventId}`);
+			expect(notices).toHaveLength(1);
+			expect(notices[0]?.body).toContain("배달되지 않고 만료됐습니다");
+			// A second pass finds nothing left to expire: no duplicate notice.
+			s.reconcileMonitorDeliveries();
+			expect(s.listDeliveries().filter((row) => row.opRef === `monitor-notice:${eventId}`)).toHaveLength(1);
+		} finally {
+			s.close();
+			rmSync(dir2, { recursive: true, force: true });
+		}
+	});
+});
