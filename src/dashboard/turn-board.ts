@@ -145,7 +145,7 @@ export interface TurnsSectionDeps {
 }
 
 /** Rows of a read-only query; a database that predates the table simply has none. */
-function rows<T>(db: Database, sql: string, ...params: Array<string | number>): T[] {
+export function rows<T>(db: Database, sql: string, ...params: Array<string | number>): T[] {
 	try {
 		return db.query(sql).all(...params) as T[];
 	} catch (error) {

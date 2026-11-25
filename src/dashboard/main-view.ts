@@ -178,12 +178,7 @@ export function renderDashboardMain(
 	const viewLabel = view === "list" ? "목록" : (VIEWS.find(([id]) => id === view)?.[1] ?? "인박스");
 	const q = (ui.q ?? "").trim().toLowerCase();
 	const hit = (...texts: unknown[]): boolean =>
-		q === "" ||
-		texts.some((text) =>
-			String(text ?? "")
-				.toLowerCase()
-				.includes(q),
-		);
+		q === "" || texts.some((text) => `${text ?? ""}`.toLowerCase().includes(q));
 	const selected = ui.selected ?? "";
 	const isSel = (id: string): boolean => id !== "" && id === selected;
 	const theme = ui.theme === "light" || ui.theme === "dark" ? ui.theme : "system";
@@ -535,6 +530,13 @@ export function renderDashboardMain(
 		}`;
 	};
 
+	// 겹침: a badge whose hover lists the path and the other sessions; agy sessions are not checked (card hover says so).
+	const overlapOf = (key: string): string[] =>
+		s.overlaps?.hints[key] === undefined
+			? []
+			: [badge("", "is-warning", `<span title="${esc(s.overlaps.hints[key])}">겹침</span>`)];
+	const agyTitle = (key: string): string => (s.overlaps?.agy.includes(key) ? ' title="agy 세션은 검사 안 함"' : "");
+	const overlapRow = (line: string): string => `<p class="row">${badge("겹침", "is-warning")} ${esc(line)}</p>`;
 	/** A row of one of the other views; it opens in the detail panel as `?view=<view>&item=<id>`. */
 	const row = (id: string, badges: string[], title: string, sub: string[]): string => {
 		const lines = sub
@@ -611,13 +613,8 @@ export function renderDashboardMain(
 			// One card per conversation (chat thread = omp session), laid out like the inbox.
 			const openThreads = turns.threads.filter((thread) => thread.column === "working").length;
 			// Every number in the head says what it counts: open threads match the 진행 중 column, jobs link to their block.
-			const title = head(
-				"턴",
-				undefined,
-				`<span class="view-sum">진행 중 스레드 <b>${openThreads}</b>${
-					runningJobs > 0 ? ` · <a href="#jobs">백그라운드 작업 <b>${runningJobs}</b></a>` : ""
-				}</span>`,
-			);
+			const bg = runningJobs > 0 ? ` · <a href="#jobs">백그라운드 작업 <b>${runningJobs}</b></a>` : "";
+			const title = head("턴", undefined, `<span class="view-sum">진행 중 스레드 <b>${openThreads}</b>${bg}</span>`);
 			// No thread but live jobs: the jobs stand in for the empty board.
 			if (turns.threads.length === 0) {
 				return liveJobs.length > 0
@@ -665,6 +662,7 @@ export function renderDashboardMain(
 					...(thread.stalledCount > 0 ? [badge("정체", "is-warning")] : []),
 					...(restartHeld.has(thread.originKey) ? [badge("재시작이 기다리는 턴", "is-warning")] : []),
 					...(thread.jobs && thread.jobs.length > 0 ? [threadJobBadge(thread)] : []),
+					...overlapOf(thread.originKey),
 				].join("");
 			const byRecent = (a: (typeof threads)[number], b: (typeof threads)[number]): number =>
 				THREAD_RANK[a.column] - THREAD_RANK[b.column] || msOf(b.updatedAt) - msOf(a.updatedAt);
@@ -691,7 +689,7 @@ export function renderDashboardMain(
 					.join(" · ");
 				// One open turn is already the state badge; more rows say whether they are one run or a queue.
 				const meta = [`턴 ${thread.turnCount}`, ...(thread.openCount > 1 ? [openTurnsText(thread)] : [])];
-				return `<article class="card card-thread${isSel(key) ? " is-selected" : ""}" data-state="${esc(
+				return `<article class="card card-thread${isSel(key) ? " is-selected" : ""}"${agyTitle(key)} data-state="${esc(
 					`${thread.column}:${latest.state}`,
 				)}" data-row="${esc(key)}"><a class="card-link" data-row-link ${threadLink(key)}${
 					isSel(key) ? ' aria-current="true"' : ""
@@ -826,9 +824,9 @@ export function renderDashboardMain(
 			const rows = lanes.items
 				.filter((lane) => hit(lane.title, lane.name, lane.cwd))
 				.map((lane) =>
-					row(lane.name, [state(lane.status)], esc(lane.title), [
+					row(lane.name, [state(lane.status), ...overlapOf(lane.originKey)], esc(lane.title), [
 						`${lane.evidence === undefined ? "" : `<span title="${esc(`진행 증거: ${lane.evidence.file} sha256 ${lane.evidence.sha256}`)}">`}${esc(lane.name)} · 갱신 ${at(lane.updatedAt)}${lane.uncertainCount > 0 ? ` · 보류 ${lane.uncertainCount}건` : ""}${lane.typical === undefined ? "" : ` · 경과 ${Math.floor((lane.elapsedMs ?? 0) / 60_000)}분 · ${typicalNote(lane.elapsedMs ?? 0, lane.typical)}`}${lane.evidence === undefined ? "" : "</span>"}`,
-						esc(lane.cwd),
+						`<span${agyTitle(lane.originKey)}>${esc(lane.cwd)}</span>`,
 					]),
 				);
 			return listOf(
@@ -1079,10 +1077,11 @@ export function renderDashboardMain(
 					`<p class="notice" role="status">${badge("안내", "")}<span>지금 열린 알림은 없습니다. 아래는 아직 정리되지 않은 기록입니다.</span></p>`,
 				);
 			}
+			const lines = s.overlaps?.lines ?? [];
 			return listOf(
 				"알림",
-				rows,
-				alerts.items.length,
+				[...lines.filter((line) => hit(line)).map(overlapRow), ...rows],
+				alerts.items.length + lines.length,
 				"열린 알림이 없어요",
 				"데몬이나 모니터에서 반복 실패 인시던트가 발생하면 여기에 모입니다.",
 			);
