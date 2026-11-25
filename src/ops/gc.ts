@@ -53,6 +53,7 @@ export interface LedgerRemoved {
 	deliveryPosts: number;
 	monitorEvents: number;
 	monitorSlots: number;
+	webMessages: number;
 }
 
 /** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
@@ -85,7 +86,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
 		turnSnapshotsRemoved: 0,
-		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0, monitorSlots: 0 },
+		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0, monitorSlots: 0, webMessages: 0 },
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -224,8 +225,17 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 	const posts = hasDeliveries && hasTable(db, "delivery_posts");
 	const events = hasTable(db, "monitor_events");
 	const slots = hasTable(db, "monitor_slots");
+	const web = hasTable(db, "web_messages");
 	const postsWhere = `delivery_id IN (SELECT d.delivery_id FROM deliveries d WHERE ${deliveriesWhere})`;
 	const eventsWhere = "stage IN ('delivered','failed_no_retry','skipped','no_report') AND updated_at < ?";
+	const webWhere = [
+		"w.created_at < ?",
+		hasTable(db, "approvals")
+			? "NOT EXISTS (SELECT 1 FROM approvals a WHERE a.status = 'pending' AND a.channel = w.conversation AND a.message_ts = CAST(w.id AS TEXT))"
+			: undefined,
+	]
+		.filter((term) => term !== undefined)
+		.join(" AND ");
 	const count = (sql: string) => (db.query(`SELECT COUNT(*) AS n FROM ${sql}`).get(cutoff) as { n: number }).n;
 	const removed: LedgerRemoved = {
 		inbound: count(`inbound i WHERE ${inboundWhere}`),
@@ -233,6 +243,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		deliveryPosts: posts ? count(`delivery_posts WHERE ${postsWhere}`) : 0,
 		monitorEvents: events ? count(`monitor_events WHERE ${eventsWhere}`) : 0,
 		monitorSlots: slots ? count("monitor_slots WHERE created_at < ?") : 0,
+		webMessages: web ? count(`web_messages w WHERE ${webWhere}`) : 0,
 	};
 	if (options.dryRun === true) return removed;
 	db.transaction(() => {
@@ -241,6 +252,7 @@ function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
 		db.query(`DELETE FROM inbound AS i WHERE ${inboundWhere}`).run(cutoff);
 		if (events) db.query(`DELETE FROM monitor_events WHERE ${eventsWhere}`).run(cutoff);
 		if (slots) db.query("DELETE FROM monitor_slots WHERE created_at < ?").run(cutoff);
+		if (web) db.query(`DELETE FROM web_messages AS w WHERE ${webWhere}`).run(cutoff);
 	})();
 	return removed;
 }
