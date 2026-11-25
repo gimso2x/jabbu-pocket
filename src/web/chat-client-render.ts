@@ -89,10 +89,10 @@ export const CHAT_RENDER_SCRIPT = `
         continue;
       }
       if (m.role === "status") {
-        let deleted = false;
-        if (m.cardJson) { try { deleted = Boolean(JSON.parse(m.cardJson).deleted); } catch {} }
+        let deleted = false, final = false;
+        if (m.cardJson) { try { const c = JSON.parse(m.cardJson); deleted = Boolean(c.deleted); final = Boolean(c.final); } catch {} }
         const st = document.createElement("div");
-        st.className = "wc-msg-status" + (deleted ? " is-deleted" : "");
+        st.className = "wc-msg-status" + (deleted ? " is-deleted" : "") + (final ? " is-final" : "");
         st.dataset.msgId = String(m.id);
         st.innerHTML = '<span class="wc-spin"></span><span>' + esc(m.text || "") + "</span>";
         box.appendChild(st);
@@ -206,7 +206,7 @@ export const CHAT_RENDER_SCRIPT = `
     const hit = threads.find((t) => t.thread === msg.thread);
     if (msg.role === "status") {
       let del = false;
-      if (msg.cardJson) { try { del = Boolean(JSON.parse(msg.cardJson).deleted); } catch {} }
+      if (msg.cardJson) { try { const c = JSON.parse(msg.cardJson); del = Boolean(c.deleted) || Boolean(c.final); } catch {} }
       if (hit) hit.inProgress = !del;
       return;
     }
