@@ -1,5 +1,4 @@
 import { CARD_ANSWERS_DDL } from "./card-answers";
-import { LEGACY_FEEDBACK_DDL } from "./legacy-ddl";
 import { WEB_MESSAGES_DDL } from "./web-messages";
 
 /**
@@ -59,26 +58,6 @@ const LANE_RESERVATIONS_DDL = `CREATE TABLE IF NOT EXISTS lane_reservations (
 	expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS lane_reservations_state ON lane_reservations(state);`;
-
-/**
- * Ledger of the removed turn snapshots: nothing writes or reads it any more. The table stays until a schema change
- * drops it, so an older ledger keeps opening.
- */
-const TURN_SNAPSHOTS_DDL = `CREATE TABLE IF NOT EXISTS turn_snapshots (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	origin_key TEXT NOT NULL,
-	op_ref TEXT NOT NULL,
-	repo TEXT NOT NULL,
-	head_before TEXT NOT NULL,
-	tree_before TEXT NOT NULL,
-	head_after TEXT NOT NULL,
-	tree_after TEXT NOT NULL,
-	started_at INTEGER NOT NULL,
-	ended_at INTEGER NOT NULL,
-	reverted_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS turn_snapshots_origin ON turn_snapshots(origin_key, id);
-CREATE INDEX IF NOT EXISTS turn_snapshots_ended ON turn_snapshots(ended_at);`;
 
 /**
  * Wiki result notes (`src/wiki`). `wiki_notes`: one row per note `source_id`, a `draft` (collected before a landing
@@ -295,8 +274,6 @@ CREATE TABLE IF NOT EXISTS auto_choices (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS auto_choices_at ON auto_choices(created_at);
-${LEGACY_FEEDBACK_DDL}
-${TURN_SNAPSHOTS_DDL}
 ${WIKI_NOTES_DDL}
 ${HERDR_PROMPTS_DDL}
 ${PEER_CALLS_DDL}

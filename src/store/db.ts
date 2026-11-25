@@ -72,6 +72,7 @@ import {
 } from "./db-schema";
 import { columnsOf, migrateInbound } from "./db-sending";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
+import { dropRemovedTables } from "./removed-tables";
 import { migrateOldNames } from "./rename-migration";
 import { checkSchemaVersion, stampSchemaVersion } from "./schema-version";
 import {
@@ -86,6 +87,9 @@ import {
 	type UncertainReason,
 } from "./transitions";
 import { WebMessageStore } from "./web-messages";
+
+/** Schema 13: tables of removed features that nothing reads or writes; `dropRemovedTables` drops them on open. */
+const DROPPED_AT_13 = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
 
 /** Words a placeholder answer uses when omp returned no text (mailbox writes it); a monitor treats it as a failure. */
 const EMPTY_ANSWER = "(응답 없음)";
@@ -2155,11 +2159,7 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
-		// Schema 7: the removed Teams channel's tables (namespace `teams_`) go with their index; rows were only Teams state.
-		const teamsTables = this.db
-			.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'teams[_]*'")
-			.all() as Array<{ name: string }>;
-		for (const { name } of teamsTables) this.db.run(`DROP TABLE IF EXISTS "${name}"`);
+		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);
 		migrateInbound(this.db);
