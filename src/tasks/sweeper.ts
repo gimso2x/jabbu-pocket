@@ -104,14 +104,12 @@ function lastResumeAt(row: TaskRow, history: readonly TaskTransitionRow[]): numb
 
 /** An agy limit block since `nudgeBase` (the latest resume, else the registration): no prompt goes to the worker. */
 function agyLimitHeld(row: TaskRow): boolean {
-	const since = nudgeBase(row);
-	return Object.entries(row.notices).some(([key, at]) => key.startsWith("agylimit:") && at >= since);
+	return Object.entries(row.notices).some(([key, at]) => key.startsWith("agylimit:") && at >= nudgeBase(row));
 }
 
 /** Unmet-condition nudges recorded since `nudgeBase`. */
 function nudgesSince(row: TaskRow): number {
-	const since = nudgeBase(row);
-	return Object.entries(row.notices).filter(([key, at]) => key.startsWith("unmet:") && at >= since).length;
+	return Object.entries(row.notices).filter(([key, at]) => key.startsWith("unmet:") && at >= nudgeBase(row)).length;
 }
 
 /** The `<ms>` of every `blockretry:<ms>` mark (one per retry prompt, sent or not). */
@@ -490,6 +488,16 @@ export class TaskSweeper {
 				log.info("task_reach_deferred", { task: row.taskId, reason: "not_ready" });
 				return this.#result(row, status, judgement, actions);
 			}
+			// The notice is recorded before the transition: in review the task leaves the swept set, so a failure
+			// after the transition would lose the reach for good. A notice already set with no review transition
+			// at or after it means that attempt died before the transition, so the flow below runs now; with such
+			// a transition it already reported (e.g. re-checked after a resume) and stays silent.
+			const noticeKey = `reached:${judgement.reachKey}`;
+			const noticeAt = row.notices[noticeKey];
+			const reported =
+				noticeAt !== undefined &&
+				ledger.history(row.taskId).some((item) => item.toStatus === "review" && item.at >= noticeAt);
+			const noticed = ledger.recordNotice(row.taskId, noticeKey);
 			// The reviewed row, not the swept one: the core landing behind `autoLand` refuses a task not in review.
 			const reviewed = ledger.transition(
 				row.taskId,
@@ -500,9 +508,7 @@ export class TaskSweeper {
 			status = "review";
 			await setStatusReaction(this.#deps.channels, log, row.threadRef, "review");
 			actions.push("working → review, 🔍");
-			if (ledger.recordNotice(row.taskId, `reached:${judgement.reachKey}`)) {
-				await this.#reachedNotice(reviewed, judgement, actions);
-			}
+			if (noticed || !reported) await this.#reachedNotice(reviewed, judgement, actions);
 			return this.#result(row, status, judgement, actions);
 		}
 
@@ -576,10 +582,10 @@ export class TaskSweeper {
 	}
 
 	/**
-	 * The one card of a reach (its `reached:<reachKey>` notice key is already recorded, so a repeat sweep never gets
-	 * here). With `taskAutoLand` on and nothing in the way, the landing runs first (`autoLand`: the core's landing, or
-	 * "머지해" for the model turn on a handoff) and the card reports what it came to; a skipped, blocked or failed
-	 * auto-merge leaves today's 머지 question with one line saying why.
+	 * The one card of a reach (its `reached:<reachKey>` notice key is recorded before the review transition, so a
+	 * repeat sweep over the reviewed task never gets here). With `taskAutoLand` on and nothing in the way, the landing
+	 * runs first (`autoLand`: the core's landing, or "머지해" for the model turn on a handoff) and the card reports
+	 * what it came to; a skipped, blocked or failed auto-merge leaves today's 머지 question with one line saying why.
 	 */
 	async #reachedNotice(row: TaskRow, judgement: TaskJudgement, actions: string[]): Promise<void> {
 		const { log, ownerUserId } = this.#deps;
@@ -609,13 +615,7 @@ export class TaskSweeper {
 		];
 		// A task in the confident band is judged without the gate's receipts first: only one the gate alone holds back
 		// reaches `autoLand`, whose gate then runs review → QA → landing.
-		const ungated =
-			band === undefined
-				? policy
-				: {
-						repos: policy.repos,
-						maxRisk: band.maxRisk,
-					};
+		const ungated = band === undefined ? policy : { repos: policy.repos, maxRisk: band.maxRisk };
 		if ([...held, ...autoLandBlockers(row, judgement, ungated, repoMatched, remoteViaPr)].length > 0) {
 			const blockers = [...held, ...autoLandBlockers(row, judgement, policy, repoMatched, remoteViaPr)];
 			log.info("task_autoland_skipped", { task: row.taskId, reasons: blockers.join(" · ") });
