@@ -52,10 +52,12 @@ export function interimOf(message: unknown): { kind: "answer" | "waitNote"; text
 	return waits && Array.from(text.trim()).length >= WAIT_NOTE_MIN_CHARS ? { kind: "waitNote", text } : undefined;
 }
 
-/** Whether `text` already went out as one of `sent`: equal up to whitespace, or {@link nearlySame}. */
-export function alreadySent(text: string, sent: readonly string[]): boolean {
-	return sent.some((body) => nearlySame(body, text));
-}
+/** The text with every whitespace run as one space and the ends trimmed; nothing else (case, punctuation, digits, symbols) is touched. */
+const squash = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/** Whether `text` already went out as one of `sent`: identical up to whitespace, never approximate ("성공" to "실패", "-120" to "120", "1.000" to "1,000" all go out). */
+export const alreadySent = (text: string, sent: readonly string[]): boolean =>
+	squash(text) !== "" && sent.some((body) => squash(body) === squash(text));
 
 /**
  * Turn-end delivery of a turn whose answer parts are `parts` and whose interim deliveries carried `sent`: the parts
@@ -70,28 +72,20 @@ export function closingAnswer(parts: readonly string[], sent: readonly string[])
 	return { body, whole: parts.length > 0 ? parts.join("\n\n") : body };
 }
 
-/** Dice coefficient of character bigrams at or above which two answers count as the same answer re-written. */
+/** Bigram Dice at or above which `turnAnswerParts` lets a later answer replace the one before it (the later one is sent). */
 const NEAR_DUPLICATE_DICE = 0.9;
 
-/** Whether two answers are the same up to whitespace or a small edit (bigram Dice ≥ {@link NEAR_DUPLICATE_DICE}). */
+/** Whether two answers are the same up to whitespace or a small edit. */
 function nearlySame(a: string, b: string): boolean {
-	const x = a.replace(/\s+/g, " ").trim();
-	const y = b.replace(/\s+/g, " ").trim();
+	const [x, y] = [a, b].map((t) => t.replace(/\s+/g, " ").trim()) as [string, string];
 	if (x === y) return true;
 	if (x.length < 2 || y.length < 2) return false;
-	const counts = new Map<string, number>();
-	for (let i = 0; i < x.length - 1; i++) {
-		const bigram = x.slice(i, i + 2);
-		counts.set(bigram, (counts.get(bigram) ?? 0) + 1);
-	}
+	const left = new Map<string, number>();
+	for (let i = 0; i < x.length - 1; i++) left.set(x.slice(i, i + 2), (left.get(x.slice(i, i + 2)) ?? 0) + 1);
 	let shared = 0;
 	for (let i = 0; i < y.length - 1; i++) {
-		const bigram = y.slice(i, i + 2);
-		const left = counts.get(bigram) ?? 0;
-		if (left > 0) {
-			shared++;
-			counts.set(bigram, left - 1);
-		}
+		const gram = y.slice(i, i + 2);
+		if ((left.get(gram) ?? 0) > 0 && ++shared) left.set(gram, (left.get(gram) ?? 0) - 1);
 	}
-	return (2 * shared) / (x.length - 1 + (y.length - 1)) >= NEAR_DUPLICATE_DICE;
+	return (2 * shared) / (x.length + y.length - 2) >= NEAR_DUPLICATE_DICE;
 }

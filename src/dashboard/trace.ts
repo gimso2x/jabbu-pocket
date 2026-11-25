@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pidAlive } from "../daemon/lock";
-import type { LaneHistoryEntry, LaneMeta, LaneStatus } from "../lanes/status";
+import type { LaneStatus } from "../lanes/status";
 import { ompSessionDirFor } from "../omp/session-dir";
 import { newestSessionFile } from "../omp/session-heal";
 import { maskPersonal, redact } from "../redact";
@@ -12,6 +12,7 @@ import { agyModelOf } from "../tasks/worker-tier";
 import { hostTimezone } from "../time";
 import type { BoardCard } from "./board";
 import { hasSecretsSegment, isAllowedJobCwd, type JobInfo, jobAllowedRoots, readJobFile } from "./snapshot";
+import { readTraceLanes } from "./trace-lanes";
 import {
 	BRIEF_PREVIEW_CHARS,
 	lastUserAt,
@@ -108,6 +109,8 @@ export type TurnTrace =
 			now: number;
 			live: boolean;
 			truncated: boolean;
+			/** Lanes of the turn window left out because their stored `meta` or `history` was unreadable: the worker list may be incomplete. */
+			skippedLanes?: number;
 			root: TraceSpan;
 			/** Only a turn trace has it: the approvals of the turn's origin created inside the turn window, oldest first. */
 			approvals?: TraceApproval[];
@@ -318,7 +321,7 @@ function findWorkers(
 	starts: number[],
 	now: number,
 	where: TraceWhere,
-): Worker[] {
+): { workers: Worker[]; skippedLanes: number } {
 	const { from, to } = window;
 	const workers: Worker[] = [];
 	const startPreview = db.query<{ preview: string }, [string, string, number]>(
@@ -375,16 +378,10 @@ function findWorkers(
 			},
 		});
 	}
-	const lanes = db
-		.query<
-			{ name: string; status: LaneStatus; history: string; meta: string; session_dir: string; created_at: number },
-			[number, number]
-		>("SELECT name, status, history, meta, session_dir, created_at FROM lanes WHERE created_at >= ? AND created_at < ?")
-		.all(from, to);
+	const { lanes, skipped: skippedLanes } = readTraceLanes(db, from, to);
 	for (const lane of lanes) {
-		const meta = JSON.parse(lane.meta) as LaneMeta;
+		const { meta, history } = lane;
 		if (meta.parentOrigin !== originKey) continue;
-		const history = JSON.parse(lane.history) as LaneHistoryEntry[];
 		const closed = lane.status === "working" ? undefined : history.findLast((entry) => entry.event === "closed")?.at;
 		const status = LANE_SPAN_STATUS[lane.status];
 		const laneFile = sessionOf(lane.session_dir);
@@ -409,7 +406,7 @@ function findWorkers(
 			},
 		});
 	}
-	return workers;
+	return { workers, skippedLanes };
 }
 
 /** A worker's spans start and end on the turn's clock, never before its dispatch (the model call that began earlier). */
@@ -571,9 +568,8 @@ export function readTurnTrace(homeDir: string, inboundId: number, now: number, w
 		const { startedAt, to } = turn;
 		const turnLive = turn.state === "dispatched";
 		const main = readTranscript(turn.file, { from: startedAt, to, live: turnLive, origin: startedAt });
-		const built = findWorkers(db, turn.originKey, { from: startedAt, to }, turn.starts, now, where).map((worker) =>
-			workerSpan(worker, startedAt),
-		);
+		const found = findWorkers(db, turn.originKey, { from: startedAt, to }, turn.starts, now, where);
+		const built = found.workers.map((worker) => workerSpan(worker, startedAt));
 		const workers = built.map((entry) => entry.span);
 		const live = turnLive || workers.some((span) => span.status === "running");
 		return {
@@ -583,6 +579,7 @@ export function readTurnTrace(homeDir: string, inboundId: number, now: number, w
 			now,
 			live,
 			truncated: main.truncated || built.some((entry) => entry.truncated),
+			...(found.skippedLanes > 0 ? { skippedLanes: found.skippedLanes } : {}),
 			root: turnRoot(main, live, turn.state === "failed_notified", workers),
 			approvals: readApprovals(db, turn.originKey, { from: startedAt, to }, now),
 		};
@@ -609,7 +606,7 @@ export function readTurnSource(homeDir: string, inboundId: number, now: number, 
 	try {
 		const turn = locateTurn(db, inboundId);
 		if (!turn.ok) return turn;
-		const workers = findWorkers(db, turn.originKey, { from: turn.startedAt, to: turn.to }, turn.starts, now, where);
+		const { workers } = findWorkers(db, turn.originKey, { from: turn.startedAt, to: turn.to }, turn.starts, now, where);
 		return {
 			ok: true,
 			file: turn.file,
