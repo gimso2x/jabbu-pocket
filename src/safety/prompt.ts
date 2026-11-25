@@ -14,6 +14,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { type ChatPlatform, chatPlatformOf, parseChatOrigin } from "../core/origin-key";
 import { isLaneOrigin } from "../lanes/status";
@@ -80,14 +81,11 @@ export const JABBU_BUN = process.execPath;
  */
 export const JABBU_NO_ENV_FILE = "--no-env-file";
 
-/**
- * The CLI call the background-resume line names: this bun and checkout, prefixed with `env JABBU_HOME=<home>` when
- * this daemon runs a non-default home. Without it a detached `inject` reads the default ~/.jabbu (another install's
- * socket, or none at all) and the `[자동 후속]` never reaches this conversation.
- */
+/** CLI call for detached `[자동 후속]`: prefixed with `env JABBU_HOME=<home>` when non-default (`~` expanded like `defaultHomeDir`). */
 export function jabbuCli(env: Record<string, string | undefined> = process.env): string {
-	const home = env.JABBU_HOME;
-	if (home === undefined || home === "") return `${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN}`;
+	const raw = env.JABBU_HOME;
+	if (raw === undefined || raw === "") return `${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN}`;
+	const home = raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
 	const assignment = `JABBU_HOME=${resolve(home)}`;
 	const word = /^[\w/.,:@+=-]+$/.test(assignment) ? assignment : `'${assignment.replaceAll("'", `'\\''`)}'`;
 	return `env ${word} ${JABBU_BUN} ${JABBU_NO_ENV_FILE} ${JABBU_MAIN}`;
@@ -654,8 +652,10 @@ function daemonKey(): Buffer {
 }
 
 const keyId = (key: Buffer): string => createHash("sha256").update(key).digest("hex").slice(0, 16);
-const pinMac = (key: Buffer, staticLength: number, body: string): string =>
-	createHmac("sha256", key).update(`static=${staticLength}\n${body}`).digest("hex");
+const pinMac = (key: Buffer, sessionDir: string, staticLength: number, body: string): string =>
+	createHmac("sha256", key)
+		.update(`dir=${resolve(sessionDir)}\nstatic=${staticLength}\n${body}`)
+		.digest("hex");
 
 /** The pinned unit of a spawn: the static floors, then the owner docs. */
 interface PinnedPrefix {
@@ -704,7 +704,7 @@ export function pinPrefix(
 				const body = raw.slice(newline + 1);
 				const staticLength = Number(header[1]);
 				if (header[2] === keyId(key)) {
-					const expected = Buffer.from(pinMac(key, staticLength, body), "hex");
+					const expected = Buffer.from(pinMac(key, sessionDir, staticLength, body), "hex");
 					if (timingSafeEqual(expected, Buffer.from(header[3] as string, "hex")) && staticLength <= body.length) {
 						return { floors: body.slice(0, staticLength), owner: body.slice(staticLength), pin: "mac" };
 					}
@@ -727,7 +727,7 @@ export function pinPrefix(
 	const temp = `${path}.${randomUUID()}.tmp`;
 	try {
 		mkdirSync(sessionDir, { recursive: true });
-		const header = `jabbu-pinned-owner-docs v3 static=${kept.floors.length} key=${keyId(key)} mac=${pinMac(key, kept.floors.length, body)}`;
+		const header = `jabbu-pinned-owner-docs v3 static=${kept.floors.length} key=${keyId(key)} mac=${pinMac(key, sessionDir, kept.floors.length, body)}`;
 		writeFileSync(temp, `${header}\n${body}`, { mode: 0o600 });
 		renameSync(temp, path);
 	} catch (error) {

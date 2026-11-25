@@ -19,10 +19,7 @@ export interface OmpRuntimeProblem {
 const VERSION_TIMEOUT_MS = 15_000;
 const VERSION_LINE = /^omp\/(\d+\.\d+\.\d+\S*)/;
 
-/**
- * Versions already read, by executable identity (realpath, mtime, size): `cli.js --version` takes about a second and
- * runs before every child, so an unchanged executable is asked once per process.
- */
+/** Versions already read, by executable identity (realpath, mtime, size): unchanged executables run `--version` once per process. */
 const knownVersions = new Map<string, string>();
 
 function identity(executable: string): string | OmpRuntimeProblem {
@@ -129,12 +126,13 @@ export function checkOmpRuntimeSync(
 	if (typeof key !== "string") return key;
 	if (knownVersions.has(key)) return undefined;
 	// Output goes to a file, not a pipe: a grandchild holding a pipe open would keep the call waiting past the limit.
-	const dir = mkdtempSync(join(tmpdir(), "jabbu-omp-version-"));
-	const outPath = join(dir, "out");
-	const errPath = join(dir, "err");
-	const outFd = openSync(outPath, "w");
-	const errFd = openSync(errPath, "w");
+	let dir: string | undefined;
+	let outFd: number | undefined;
+	let errFd: number | undefined;
 	try {
+		dir = mkdtempSync(join(tmpdir(), "jabbu-omp-version-"));
+		outFd = openSync(join(dir, "out"), "w");
+		errFd = openSync(join(dir, "err"), "w");
 		// Own process group and SIGKILL (a launcher may ignore SIGTERM): the whole group dies with the timeout.
 		const run = Bun.spawnSync([executable, "--version"], {
 			env,
@@ -149,7 +147,7 @@ export function checkOmpRuntimeSync(
 			try {
 				process.kill(-run.pid, "SIGKILL");
 			} catch {
-				// ESRCH: the group is already gone
+				/* ESRCH: the group is already gone */
 			}
 			return problem(
 				executable,
@@ -159,14 +157,14 @@ export function checkOmpRuntimeSync(
 		}
 		return verdict(executable, key, {
 			exitCode: run.exitCode,
-			stdout: readFileSync(outPath, "utf8"),
-			stderr: readFileSync(errPath, "utf8"),
+			stdout: readFileSync(join(dir, "out"), "utf8"),
+			stderr: readFileSync(join(dir, "err"), "utf8"),
 		});
 	} catch (error) {
 		return spawnFailure(executable, error);
 	} finally {
-		closeSync(outFd);
-		closeSync(errFd);
-		rmSync(dir, { recursive: true, force: true });
+		if (outFd !== undefined) closeSync(outFd);
+		if (errFd !== undefined) closeSync(errFd);
+		if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
 	}
 }

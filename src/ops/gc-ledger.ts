@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { rmSync } from "node:fs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -48,9 +49,33 @@ export function emptyLedgerRemoved(): LedgerRemoved {
  * - deliveries: `confirmed`/`failed_ambiguous`/`expired`.
  * - monitor_events: the final stages only, aged by `updated_at`; monitor_slots and inbound_conflicts: every row aged
  *   by `created_at`.
+ * - web_messages: rows older than `LEDGER_RETENTION_DAYS` unless referenced by a pending approval card.
  * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing from an
  * old home makes its rule empty instead of failing.
  */
+export function removeOriginWithDir(
+	db: Database,
+	removeRow: { run(...params: [string, string]): { changes: number } },
+	originKey: string,
+	originDir: string,
+	rmDir: boolean,
+): boolean {
+	db.run("SAVEPOINT gc_origin");
+	try {
+		if (removeRow.run(originKey, originKey).changes === 0) {
+			db.run("RELEASE gc_origin");
+			return false;
+		}
+		if (rmDir) rmSync(originDir, { recursive: true, force: true });
+		db.run("RELEASE gc_origin");
+		return true;
+	} catch {
+		db.run("ROLLBACK TO gc_origin");
+		db.run("RELEASE gc_origin");
+		return false;
+	}
+}
+
 export function gcLedger(db: Database, options: LedgerGcOptions): LedgerRemoved {
 	const cutoff = options.now - LEDGER_RETENTION_DAYS * DAY_MS;
 	const finished = [

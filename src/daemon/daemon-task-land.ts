@@ -256,13 +256,13 @@ export class DaemonTaskLanding {
 		return failed === undefined ? [] : [`herdr 워커 정리 실패: ${failed.slice(0, 160)}`];
 	}
 
-	/** Ends a closed task's herdr agent where it runs (`herdrCloseTaskAgent`, over ssh for a remote task). Undefined when nothing failed; a failure is logged (`task_agent_close_failed`) and returned. */
+	/** Ends a closed task's herdr agent (`herdrCloseTaskAgent`, over ssh if remote). Logged and returned on failure. */
 	async closeTaskAgent(row: TaskRow): Promise<string | undefined> {
 		const config = this.#ctx.options.config; // live: dispatchHosts and recordsRepo are reloadable
 		await recordWithConfig(config, this.#ctx.store?.tasks.get(row.taskId) ?? row); // the closed task's last records commit
-		const entry = row.host === null ? undefined : config.dispatchHosts?.[row.host];
-		if (row.runtime === "herdr" && (row.host === null ? config.herdr === undefined : entry === undefined))
-			return undefined;
+		const hosts = config.dispatchHosts;
+		const entry = row.host !== null && hosts && Object.hasOwn(hosts, row.host) ? hosts[row.host] : undefined;
+		if (row.runtime === "herdr" && (row.host === null ? !config.herdr : !entry)) return undefined;
 		const closed = await taskRuntimeOf(this.#ctx, row).close(row);
 		if (closed.ok) return undefined;
 		this.#ctx.log.warn("task_agent_close_failed", {

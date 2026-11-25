@@ -101,15 +101,11 @@ function gcCommand(args: string[], homeDir: string): number {
 	});
 	const verb = dryRun ? "would_remove" : "removed";
 	for (const path of result.removed) process.stdout.write(`gc ${verb} path=${path}\n`);
-	for (const key of result.threadOriginsRemoved) {
-		process.stdout.write(`gc thread_${verb} origin=${key}\n`);
-	}
-	for (const key of result.monitorOriginsRemoved) {
-		process.stdout.write(`gc monitor_${verb} origin=${key}\n`);
-	}
+	for (const key of result.threadOriginsRemoved) process.stdout.write(`gc thread_${verb} origin=${key}\n`);
+	for (const key of result.monitorOriginsRemoved) process.stdout.write(`gc monitor_${verb} origin=${key}\n`);
 	for (const path of result.laneArtifactsRemoved) process.stdout.write(`gc lane_artifacts_${verb} path=${path}\n`);
 	process.stdout.write(
-		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts}\n`,
+		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts} web_messages=${result.ledgerRemoved.webMessages}\n`,
 	);
 	return 0;
 }
@@ -370,7 +366,11 @@ function freezeCommand(args: string[], homeDir: string): number {
 	return 0;
 }
 
-function unfreezeCommand(homeDir: string): number {
+function unfreezeCommand(args: string[], homeDir: string): number {
+	if (parseArgs({ args, options: {}, allowPositionals: true }).positionals.length > 0) {
+		process.stderr.write("usage: jabbu-pocket unfreeze\n");
+		return 2;
+	}
 	const was = readFreeze(homeDir) !== undefined;
 	try {
 		clearFreeze(homeDir);
@@ -514,7 +514,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 			case "freeze":
 				return freezeCommand(rest, homeDir);
 			case "unfreeze":
-				return unfreezeCommand(homeDir);
+				return unfreezeCommand(rest, homeDir);
 			case "gates":
 				return gatesCommand(rest, homeDir, hostLoadDeps(env));
 			case "inject":

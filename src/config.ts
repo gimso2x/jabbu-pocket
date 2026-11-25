@@ -734,7 +734,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	const timezoneRaw = optionalString(configPath, root, "timezone");
 	if (timezoneRaw !== undefined && !isTimezone(timezoneRaw)) invalid(configPath, "timezone");
 
-	const sessionRetentionDays = optionalInt(configPath, root, "sessionRetentionDays", 1);
+	const sessionRetentionDays = optionalInt(configPath, root, "sessionRetentionDays", 1, 100_000);
 	const maxBundleBytes = optionalInt(configPath, root, "maxBundleBytes", 1);
 	const idleTimeoutMinutes = optionalInt(configPath, root, "idleTimeoutMinutes", 0);
 	const idleKeepResident = root.idleKeepResident;
@@ -1158,7 +1158,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 				if (value !== "log" && value !== "card") invalid(configPath, "candidates.mode");
 				candidates.mode = value;
 			} else if (key === "minDays" || key === "windowDays" || key === "maxOpenCards" || key === "snoozeDays") {
-				if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
+				if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 100_000)
 					invalid(configPath, `candidates.${key}`);
 				candidates[key] = value;
 			} else {
