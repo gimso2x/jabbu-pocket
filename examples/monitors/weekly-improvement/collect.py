@@ -65,9 +65,14 @@ def clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + CUT
 
 
+def parse_iso(value: str) -> dt.datetime:
+    """ISO8601 시각을 읽는다. 끝의 'Z'는 fromisoformat이 3.11부터 받으니 그 아래 판을 위해 '+00:00'으로 바꾼다."""
+    return dt.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+
+
 def parse_now(value: str) -> dt.datetime:
     try:
-        parsed = dt.datetime.fromisoformat(value)
+        parsed = parse_iso(value)
     except ValueError as error:
         raise argparse.ArgumentTypeError(f"ISO8601 시각이 아님: {value}") from error
     return parsed.replace(tzinfo=BOT_TZ) if parsed.tzinfo is None else parsed
@@ -199,7 +204,7 @@ def collect_log(home: Path, start: dt.datetime, end: dt.datetime) -> tuple[str, 
                 if fields.get("level") not in ("warn", "error") or not fields.get("event"):
                     continue
                 try:
-                    at = dt.datetime.fromisoformat(fields.get("ts", ""))
+                    at = parse_iso(fields.get("ts", ""))
                 except ValueError:
                     continue
                 if at.tzinfo is not None and start <= at < end:
