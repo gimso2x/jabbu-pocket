@@ -2231,6 +2231,22 @@ describe("mailbox: tool repeat loop (stuck-loop)", () => {
 		}
 	});
 
+	test("a turn that finishes on its own right after the 3rd repeat is not steered: the final arrived before the queued steer ran", async () => {
+		const mailbox = loopMailbox({ events: pairs(3) });
+		try {
+			const row = msg("테스트 고쳐", { originKey: LOOP_ORIGIN });
+			await mailbox.enqueue(row);
+			const driver = opened[0] as LoopDriver;
+			await untilFinal(mailbox, driver, () => {});
+			// Steering an idle child would start a phantom run whose final is never tracked.
+			expect(driver.calls.filter((c) => c.startsWith("steer:"))).toHaveLength(0);
+			expect(store.getInbound(row.platformMessageId)?.state).toBe("answered");
+			expect(store.listDeliveries({ originKey: LOOP_ORIGIN }).map((d) => d.body)).toEqual(["ECHO 테스트 고쳐"]);
+		} finally {
+			await mailbox.close();
+		}
+	});
+
 	test("a normal final that lands before the loop abort settles the turn once, as answered", async () => {
 		const mailbox = loopMailbox({ events: [...pairs(5), start(6)] });
 		try {

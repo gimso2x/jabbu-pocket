@@ -7,7 +7,10 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { checkSchemaVersion } from "../store/schema-version";
 import { assertRegularLedger } from "./gates";
 import { gcLaneArtifacts, newestMtimeMs } from "./gc-lanes";
+import { emptyLedgerRemoved, gcLedger, LEDGER_RETENTION_DAYS, type LedgerRemoved } from "./gc-ledger";
 import { gcTurnSnapshots, hasTable } from "./gc-turns";
+
+export { LEDGER_RETENTION_DAYS, type LedgerRemoved };
 
 /** Thread-session origins of the removed Slack and Teams channels. */
 const REMOVED_PLATFORM_THREAD = /^(slack|teams)\/ch\/[^/]+\/t\/[^/]+$/;
@@ -46,18 +49,6 @@ export interface GcResult {
 	ledgerRemoved: LedgerRemoved;
 }
 
-/** Row counts `gcLedger` removed per table; `deliveryPosts` are the posts of the removed deliveries. */
-export interface LedgerRemoved {
-	inbound: number;
-	deliveries: number;
-	deliveryPosts: number;
-	monitorEvents: number;
-	monitorSlots: number;
-}
-
-/** How long finished inbound, delivery and monitor-event rows stay in the ledger. */
-export const LEDGER_RETENTION_DAYS = 90;
-
 /** The real path of an existing path; a path that is not there is only resolved. */
 function realpathOrResolve(path: string): string {
 	try {
@@ -85,7 +76,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
 		turnSnapshotsRemoved: 0,
-		ledgerRemoved: { inbound: 0, deliveries: 0, deliveryPosts: 0, monitorEvents: 0, monitorSlots: 0 },
+		ledgerRemoved: emptyLedgerRemoved(),
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
 	if (!existsSync(dbPath)) return result;
@@ -196,51 +187,4 @@ export function gcSessions(options: GcOptions): GcResult {
 	}
 	result.laneArtifactsRemoved = gcLaneArtifacts(options);
 	return result;
-}
-
-/**
- * Finished conversation rows past `LEDGER_RETENTION_DAYS` leave the ledger, in one transaction; a dry run only counts.
- * - inbound: `answered`/`failed_notified`/`discarded`, unless a pending approval card was asked from its thread
- *   (`origin_thread_ref`).
- * - deliveries: `confirmed`/`failed_ambiguous`/`expired`; its `delivery_posts` rows (written by older versions) go
- *   first. The gc connection never turns `foreign_keys` on (origins expire at 30 days, inbound at 90, so the origin
- *   delete would be refused), which is why the posts→deliveries order is kept here by hand.
- * - monitor_events: the final stages only, aged by `updated_at`; monitor_slots: every slot aged by `created_at`.
- * Waiting, running and uncertain rows, approvals, usage and alert incidents are never touched. A table missing from an old
- * home makes its rule empty instead of failing.
- */
-function gcLedger(db: Database, options: GcOptions): LedgerRemoved {
-	const cutoff = options.now - LEDGER_RETENTION_DAYS * DAY_MS;
-	const inboundWhere = [
-		"i.created_at < ? AND i.state IN ('answered','failed_notified','discarded')",
-		hasTable(db, "approvals")
-			? "NOT EXISTS (SELECT 1 FROM approvals a WHERE a.status = 'pending' AND a.origin_thread_ref = i.thread_ref)"
-			: undefined,
-	]
-		.filter((term) => term !== undefined)
-		.join(" AND ");
-	const deliveriesWhere = "d.created_at < ? AND d.state IN ('confirmed','failed_ambiguous','expired')";
-	const hasDeliveries = hasTable(db, "deliveries");
-	const posts = hasDeliveries && hasTable(db, "delivery_posts");
-	const events = hasTable(db, "monitor_events");
-	const slots = hasTable(db, "monitor_slots");
-	const postsWhere = `delivery_id IN (SELECT d.delivery_id FROM deliveries d WHERE ${deliveriesWhere})`;
-	const eventsWhere = "stage IN ('delivered','failed_no_retry','skipped','no_report') AND updated_at < ?";
-	const count = (sql: string) => (db.query(`SELECT COUNT(*) AS n FROM ${sql}`).get(cutoff) as { n: number }).n;
-	const removed: LedgerRemoved = {
-		inbound: count(`inbound i WHERE ${inboundWhere}`),
-		deliveries: hasDeliveries ? count(`deliveries d WHERE ${deliveriesWhere}`) : 0,
-		deliveryPosts: posts ? count(`delivery_posts WHERE ${postsWhere}`) : 0,
-		monitorEvents: events ? count(`monitor_events WHERE ${eventsWhere}`) : 0,
-		monitorSlots: slots ? count("monitor_slots WHERE created_at < ?") : 0,
-	};
-	if (options.dryRun === true) return removed;
-	db.transaction(() => {
-		if (posts) db.query(`DELETE FROM delivery_posts WHERE ${postsWhere}`).run(cutoff);
-		if (hasDeliveries) db.query(`DELETE FROM deliveries AS d WHERE ${deliveriesWhere}`).run(cutoff);
-		db.query(`DELETE FROM inbound AS i WHERE ${inboundWhere}`).run(cutoff);
-		if (events) db.query(`DELETE FROM monitor_events WHERE ${eventsWhere}`).run(cutoff);
-		if (slots) db.query("DELETE FROM monitor_slots WHERE created_at < ?").run(cutoff);
-	})();
-	return removed;
 }

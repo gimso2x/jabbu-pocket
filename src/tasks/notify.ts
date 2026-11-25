@@ -322,7 +322,7 @@ export function autoLandBlockers(
 }
 
 /** The line of a reached card while the gate runs (no owner mention: nothing to decide yet). */
-export const GATE_RUNNING_LINE = "🔎 독립 리뷰 → 실행 QA(뚱기) 진행 중";
+export const GATE_RUNNING_LINE = "🔎 독립 리뷰 → 실행 QA 진행 중";
 
 /** The gate's receipts as card lines, in the lane card's words. */
 export function gateReceiptLines(gate: TaskGate | null): string[] {
@@ -336,7 +336,7 @@ export function gateReceiptLines(gate: TaskGate | null): string[] {
 	const qa = gate?.qa;
 	if (qa !== undefined) {
 		const label = qa.verdict === "inconclusive" ? `확인 불가(${qa.reason ?? "?"})` : qa.verdict;
-		lines.push(`🧪 실행 QA(뚱기 · ${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${label}`);
+		lines.push(`🧪 실행 QA(${qa.model.replace(/^.*\//, "").replace(/:[^:]*$/, "")}): ${label}`);
 		lines.push(...qa.findings.slice(0, 3).map((finding) => `> ${clip(finding, 200)}`));
 	}
 	return lines;
@@ -685,7 +685,7 @@ export function agyLimitLine(screen: string): string | undefined {
 }
 
 /**
- * The task's agy worker stopped on its (free, shared with 서팍) limit: the task is blocked and the bot stops prompting
+ * The task's agy worker stopped on its (free, shared) limit: the task is blocked and the bot stops prompting
  * it, so only the owner moves it on — a resume once the limit lifts.
  */
 export function buildAgyLimitCard(row: TaskRow, line: string, ownerUserId: string, link?: string): TaskCard {
