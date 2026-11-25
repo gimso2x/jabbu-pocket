@@ -163,16 +163,7 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		// A home without a usable config takes the zone a config without `timezone` gets.
 		defaultTimezone: config?.timezone ?? hostTimezone(),
 	};
-	if (
-		sub !== "export" &&
-		sub !== "apply" &&
-		sub !== "add" &&
-		sub !== "list" &&
-		sub !== "show" &&
-		sub !== "update" &&
-		sub !== "remove" &&
-		sub !== "test"
-	) {
+	if (!["export", "apply", "add", "list", "show", "update", "remove", "test"].includes(sub ?? "")) {
 		process.stderr.write(`usage: jabbu-pocket monitors <subcommand>\n${MONITORS_USAGE}`);
 		return 2;
 	}
@@ -196,6 +187,10 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		allowPositionals: true,
 		options: { json: { type: "string" } },
 	});
+	if (positionals.length > (sub === "add" || sub === "list" ? 0 : 1)) {
+		process.stderr.write(`monitors ${sub}: too many arguments\n`);
+		return 2;
+	}
 	const ledger = openMonitorLedger(join(homeDir, "jabbu.db"));
 	try {
 		const out = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
