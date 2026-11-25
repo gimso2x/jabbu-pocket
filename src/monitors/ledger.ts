@@ -311,6 +311,8 @@ const toEvent = (r: EventSql): MonitorEventRow => ({
 
 /** Events that still owe an authoring turn: a new fire behind them is queued (or skipped, per `overlap`). */
 const OWING = "('admitted','dispatched','failed')";
+const PENDING_COUNT_SQL =
+	"SELECT COUNT(*) AS n FROM monitor_events WHERE monitor_id = ? AND stage IN ('admitted','dispatched','authored','failed')";
 
 /** The next time `row` can fire, or `null` (disabled, finished one-shot, no match, past the `Date` range). */
 export function nextFireOf(row: MonitorRow): number | null {
@@ -431,11 +433,8 @@ export class MonitorLedger {
 	}
 
 	cron(schedule: string): CronSchedule {
-		let parsed = this.#cronCache.get(schedule);
-		if (!parsed) {
-			parsed = parseCron(schedule);
-			this.#cronCache.set(schedule, parsed);
-		}
+		const parsed = this.#cronCache.get(schedule) ?? parseCron(schedule);
+		this.#cronCache.set(schedule, parsed);
 		return parsed;
 	}
 
@@ -580,6 +579,11 @@ export class MonitorLedger {
 	}
 
 	// ---- slots ----
+
+	/** Events of one monitor that are not finished yet (waiting, running, being written up, or retrying). */
+	pendingEventCount(monitorId: string): number {
+		return (this.#db.query(PENDING_COUNT_SQL).get(monitorId) as { n: number }).n;
+	}
 
 	/**
 	 * Claims `(monitorId, slotAt)` exactly once. The slot row, its event and the overlap decision are one
