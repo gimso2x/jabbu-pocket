@@ -1859,16 +1859,16 @@ describe("closed → Outcome card and auto-merge (AC-5)", () => {
 			},
 		});
 		const auto = buildLaneOutcomeCard(row("PASS"), { kind: "auto" }).text;
-		expect(auto).toContain("🔎 독립 리뷰 CLEAR · m/x\n🧪 실행 QA(뚱기 · glm-5.3-flash): PASS");
+		expect(auto).toContain("🔎 독립 리뷰 CLEAR · m/x\n🧪 실행 QA(glm-5.3-flash): PASS");
 		const ask = buildLaneOutcomeCard(row("FAIL"), { kind: "ask", skipped: [QA_FAIL] }).text;
-		expect(ask).toContain("🧪 실행 QA(뚱기 · glm-5.3-flash): FAIL");
+		expect(ask).toContain("🧪 실행 QA(glm-5.3-flash): FAIL");
 		expect(ask).toContain("> bun test → 3 fail");
 		expect(ask).toContain("> 셋째");
 		expect(ask).not.toContain("넷째");
 		expect(ask).not.toContain(token);
 		expect(ask).toContain("> token [REDACTED] 노출");
 		const unsure = buildLaneOutcomeCard(row("inconclusive", "시간 초과"), { kind: "ask" }).text;
-		expect(unsure).toContain("🧪 실행 QA(뚱기 · glm-5.3-flash): 확인 불가(시간 초과)");
+		expect(unsure).toContain("🧪 실행 QA(glm-5.3-flash): 확인 불가(시간 초과)");
 		// A receipt of another commit is not shown.
 		const stale: LaneRow = { ...row("PASS"), meta: { ...row("PASS").meta, sha: "f".repeat(40) } };
 		expect(buildLaneOutcomeCard(stale, { kind: "auto" }).text).not.toContain("실행 QA");

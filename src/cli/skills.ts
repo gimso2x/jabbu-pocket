@@ -13,7 +13,7 @@ export const SKILLS_USAGE = `  skills rollback <name>         restore an install
 export function skillsCommand(args: string[], env: Record<string, string | undefined> = process.env): number {
 	const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
 	const [sub, name] = positionals;
-	if (sub !== "rollback" || typeof name !== "string" || name === "") {
+	if (sub !== "rollback" || typeof name !== "string" || name === "" || positionals.length !== 2) {
 		process.stderr.write(`usage: jabbu-pocket skills rollback <name>\n${SKILLS_USAGE}`);
 		return 2;
 	}

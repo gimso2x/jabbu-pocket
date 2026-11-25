@@ -2535,6 +2535,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		deliveryPosts: 3,
 		monitorEvents: 0,
 		monitorSlots: 0,
+		webMessages: 0,
 		inboundConflicts: 0,
 	};
 
@@ -2555,6 +2556,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveryPosts: 0,
 			monitorEvents: 0,
 			monitorSlots: 0,
+			webMessages: 0,
 			inboundConflicts: 0,
 		});
 	});
@@ -2578,6 +2580,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveryPosts: 0,
 			monitorEvents: 0,
 			monitorSlots: 0,
+			webMessages: 0,
 			inboundConflicts: 0,
 		});
 		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
