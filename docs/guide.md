@@ -670,7 +670,7 @@ bun src/main.ts dashboard [--port N] [--bind 127.0.0.1|::1]   # 읽기 전용 �
 journalctl --user -u jabbu -f
 ```
 
-**DB 스키마 버전**: `jabbu.db`는 `PRAGMA user_version`에 스키마 세대를 기록합니다(코드의 `SCHEMA_VERSION`, 지금은 10). 데몬이 열 때 이행이 끝나면 옛 DB(0)가 현재 버전으로 올라갑니다. 버전 10은 `tasks.runtime` 열(`herdr`·`headless`)을 더하므로, 그 이전 코드로 되돌릴 때는 되돌리기 전 백업 복원이 필요합니다. 코드보다 새 버전의 DB는 쓰기 열기(데몬·`gc`·CLI 쓰기)가 `newer_schema`로 거부하고 파일을 건드리지 않습니다. 읽기 전용 열기(`status`·대시보드 등)는 그대로 됩니다. `apply`가 코드를 되돌린 뒤 데몬이 안 뜨면 `journalctl --user -u jabbu -n 50`에서 `daemon_fatal`의 `newer_schema`(DB 버전·코드 버전)를 확인하고, 데몬이 꺼진 상태에서 그 코드가 만든 백업으로 `bun src/main.ts restore <백업 db 경로> --yes`를 실행합니다. `apply` 결과 자체에는 이 오류가 나오지 않습니다.
+**DB 스키마 버전**: `jabbu.db`는 `PRAGMA user_version`에 스키마 세대를 기록합니다(코드의 `SCHEMA_VERSION`, 지금은 11). 데몬이 열 때 이행이 끝나면 옛 DB(0)가 현재 버전으로 올라갑니다. 버전 10은 `tasks.runtime` 열(`herdr`·`headless`)을, 버전 11은 `inbound.state`가 `sending` 값을 받게 하는 변경을 더하므로, 그 이전 코드로 되돌릴 때는 되돌리기 전 백업 복원이 필요합니다. 코드보다 새 버전의 DB는 쓰기 열기(데몬·`gc`·CLI 쓰기)가 `newer_schema`로 거부하고 파일을 건드리지 않습니다. 읽기 전용 열기(`status`·대시보드 등)는 그대로 됩니다. `apply`가 코드를 되돌린 뒤 데몬이 안 뜨면 `journalctl --user -u jabbu -n 50`에서 `daemon_fatal`의 `newer_schema`(DB 버전·코드 버전)를 확인하고, 데몬이 꺼진 상태에서 그 코드가 만든 백업으로 `bun src/main.ts restore <백업 db 경로> --yes`를 실행합니다. `apply` 결과 자체에는 이 오류가 나오지 않습니다.
 
 - **CLI 입력 오류**: 모든 CLI 명령은 모르는 옵션·값 없는 옵션·`--days -1`처럼 `-`로 시작하는 값을 `<명령>: <사유> (jabbu-pocket --help)` 한 줄과 종료 코드 2로 거부합니다(음수를 값으로 주려면 `--days=-1`). `reload`는 데몬이 없으면 `reload: daemon not reachable (…)`와 종료 코드 1입니다. `inject --text`가 비었거나 공백뿐이면 종료 코드 2입니다. `drain --timeout`은 숫자여야 합니다(빈 값 거부).
 - **데몬 없을 때 `status`**: 토큰 파일을 읽지 않고 DB로 답하며, config.json이 없는 홈에서는 omp 버전을 `unknown`으로 보입니다. `jabbu.db`가 0바이트·손상·테이블 누락이면 원시 SQLiteError 대신 집계 0과 `자가진단 게이트 … ledger_unreadable error=…` 줄을 내고, `--json`도 같은 리포트를 JSON으로 냅니다(`jabbu-pocket gates`와 같은 게이트 이름).
@@ -866,7 +866,7 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 - **열림**(`open`): 아래 표의 조건에 걸림. 하나라도 있으면 exit 1입니다.
 - **닫힘**(`closed`): 판정했고 문제없음.
-- **판정불가**(`unknown`): 판정할 근거가 없음 — 하트비트 스탬프(`~/.jabbu/sweep-heartbeat`)가 없으면 `sweep_stalled`·`monitors_stalled`(detail `stamp=missing`), `jabbu.db`가 없으면 원장 게이트 8개(`inbound_starved`·`origin_silent`·`deliveries_overdue`·`deliveries_ambiguous_stuck`·`lanes_stuck`·`monitors_failed`·`monitors_stalled`·`turns_failing`, detail `db=missing`). 데몬이 한 번도 돌지 않은 새 설치가 이 상태입니다. 기본은 exit 코드에 영향이 없고, `--strict`를 주면 판정불가가 하나라도 있을 때도 exit 1입니다.
+- **판정불가**(`unknown`): 판정할 근거가 없음 — 하트비트 스탬프(`~/.jabbu/sweep-heartbeat`)가 없으면 `sweep_stalled`·`monitors_stalled`(detail `stamp=missing`), `jabbu.db`가 없으면 원장 게이트 8개(`inbound_starved`·`origin_silent`·`deliveries_overdue`·`deliveries_ambiguous_stuck`·`lanes_stuck`·`monitors_failed`·`monitors_stalled`·`turns_failing`, detail `db=missing`)과, `costCap.dailyUsd`가 설정돼 있으면 `cost_cap`(같은 detail `db=missing`). 데몬이 한 번도 돌지 않은 새 설치가 이 상태입니다. 기본은 exit 코드에 영향이 없고, `--strict`를 주면 판정불가가 하나라도 있을 때도 exit 1입니다.
 
 자동화가 아픈 봇을 "건강"으로 오판하지 못하게 하는 계약은 판정할 수 있는 게이트에만 걸립니다. 데몬이 실제로 떠 있는지까지 확인하려면 `--strict`를 씁니다. 마지막 줄은 `gates_done open=N unknown=M total=T`이고 열린 게이트가 있으면 ` opened=이름(detail),…`, 판정불가가 있으면 ` unknown_gates=이름,…`이 붙습니다. 사람이 읽는 경보에는 `--ko`를 붙이면 마지막 줄이 현황판과 같은 한국어 이름으로 바뀝니다(`게이트 1/19개 열림 — 레인이 24시간 넘게 멈춤·머지 대기(…) · 할 일: …`, 모두 닫히면 `게이트 N개 모두 정상`). 종료 코드는 같습니다. `--json`은 `{ open, unknown, gates }`입니다. `herdr_unreachable`의 오래된 스탬프(`stamp=stale`)도 닫힘, 백업 도장이 없으면 `backup_age`는 열림, DB가 손상되면 `ledger_unreadable`이 열림입니다.
 
