@@ -10,9 +10,9 @@ import {
 	LaneDiffUnavailable,
 	laneDiffUnavailableRefusal,
 	laneDiffUnreadRefusal,
-	MAX_REFUSALS,
 } from "./integrity";
 import { collectLaneDiff } from "./lane-diff";
+import { capRefusals } from "./refusal-cap";
 import type { LaneClaim, LaneRow } from "./status";
 
 /** The events by which the owner steps into a lane that has claimed done: a reply, a pause, a reopen. */
@@ -86,14 +86,14 @@ export async function integrityRefusalsOf(
 		} catch (error) {
 			readers.warn("lane_diff_unavailable", { lane: lane.name, error: String(error) });
 			if (error instanceof LaneDiffUnavailable) {
-				return [laneDiffUnavailableRefusal(error), ...classify({ summary: claim.summary, diff: "" })];
+				return capRefusals([laneDiffUnavailableRefusal(error), ...classify({ summary: claim.summary, diff: "" })]);
 			}
 		}
 	}
 	const refusals = classify({ summary: claim.summary, diff, declared: await laneDeclared(lane, readers.plansRoot()) });
 	const unreadRefusals = unread.length > 0 ? [laneDiffUnreadRefusal(unread)] : [];
 	const identities = await commitIdentityRefusalsOf(readers, lane, range, sha);
-	return [...unreadRefusals, ...refusals, ...identities].slice(0, MAX_REFUSALS);
+	return capRefusals([...unreadRefusals, ...refusals, ...identities]);
 }
 
 /**

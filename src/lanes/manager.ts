@@ -45,6 +45,7 @@ import {
 	receiptNowOf,
 	receiptStaleOf,
 } from "./land";
+import { closeLaneTreeGone, laneTreeLeft } from "./lane-tree";
 import {
 	AUTO_LAND_OFF,
 	CHECK_DETAIL_MAX,
@@ -96,6 +97,7 @@ import {
 import { PR_LAND_POLL_MS } from "./pr-land-steps";
 import { preserveFileEvidence, verifyProgressEvidence } from "./progress-evidence";
 import { cleanQaWorktrees, createGateSlot, type GateSlot, qaDepsOf, runLaneQa, untilAborted } from "./qa";
+import { refusalCardLines } from "./refusal-cap";
 import {
 	blockerMessage,
 	blockerSignature,
@@ -1348,7 +1350,7 @@ export class LaneManager {
 		fromTick: boolean,
 	): Promise<SettleOutcome> {
 		const { log, approvals } = this.#deps;
-		const lines = refusals.map((r) => `- ${r.category}: ${r.excerpt}`);
+		const lines = refusalCardLines(refusals);
 		const channel = parseThreadRef(lane.threadRef)?.channel;
 		let verdict: "approved" | "denied" | "timeout" = "timeout";
 		const ownerEvents = ownerEventCount(lane);
@@ -3302,6 +3304,11 @@ export class LaneManager {
 		) {
 			return;
 		}
+		if ((await laneTreeLeft(defaultGit, { repo, worktree, branch })).length === 0) {
+			log.warn("lane_tree_gone", { lane: name, worktree, branch });
+			await this.#showResult(await this.#sync(closeLaneTreeGone(store, lane), "transition"), false);
+			return;
+		}
 		let found: { sha: string; pushed: boolean } | undefined;
 		try {
 			found = await externallyLanded(defaultGit, { repo, worktree, branch, baseBranch, baseSha, claim: commit });
@@ -3335,11 +3342,7 @@ export class LaneManager {
 		// An idle child of this lane still has the worktree as its cwd.
 		await this.#deps.stopWhenIdle(lane.originKey);
 		await this.#removeLaneWorktree(name, { repo, worktree, branch });
-		const left: string[] = [];
-		if (existsSync(worktree)) left.push(`worktree ${worktree}`);
-		if ((await defaultGit(["-C", repo, "rev-parse", "--verify", "-q", `refs/heads/${branch}`])).code === 0) {
-			left.push(`브랜치 ${branch}`);
-		}
+		const left = await laneTreeLeft(defaultGit, { repo, worktree, branch });
 		const row =
 			left.length === 0
 				? store.getLane(name)

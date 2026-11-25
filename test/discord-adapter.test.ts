@@ -277,14 +277,20 @@ describe("server channel", () => {
 		expect(inbound.map((m) => m.originKey)).toEqual([`discord/ch/${CH}/t/${root.id}`]);
 	});
 
-	test("④ requireMention: only a mention addresses, in a mention-free channel and in a known thread alike", async () => {
-		await adapter({ mentionFreeChannels: [CH], requireMention: true });
+	test("④ requireMention: only a mention addresses, at a root and in a known thread alike", async () => {
+		await adapter({ requireMention: true });
 		await transport.emitMessage(message("멘션 없이"));
 		expect(inbound).toHaveLength(0);
 		const root = message(`<@${BOT}> 멘션`);
 		await transport.emitMessage(root);
 		await transport.emitMessage(message("스레드 안 멘션 없이", { channel_id: root.id }));
 		expect(inbound.map((m) => m.text)).toEqual(["멘션"]);
+	});
+
+	test("④ requireMention: a mention-free channel still takes an unmentioned root", async () => {
+		await adapter({ mentionFreeChannels: [CH], requireMention: true });
+		await transport.emitMessage(message("멘션 없이"));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션 없이"]);
 	});
 
 	test("④ requireMention: the bot's managed role mention addresses it, another role does not", async () => {

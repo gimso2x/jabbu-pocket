@@ -1,6 +1,5 @@
-import { accessSync, constants, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { AgyMcpServer } from "../config-agy";
 import {
 	OWN_ANSWER_LINE,
 	ROTATION_CONTEXT_HEADER,
@@ -12,8 +11,9 @@ import type { Logger } from "../log";
 import { INJECTION_WARNING_HEAD, injectionWarning, scanForInjection } from "../safety/injection";
 import type { Store } from "../store/db";
 import { formatLocal } from "../time";
-import type { AgyBlockedAccount } from "./agy-account-pool";
-import { OmpDriverError, type OmpFinal } from "./driver";
+import type { AgyAccountPool, AgyBlockedAccount } from "./agy-account-pool";
+import { isQuotaErrorText, quotaRetryNotice } from "./agy-acp-client";
+import { OmpDriverError } from "./driver";
 import { isRecord } from "./type-guards";
 
 export const DEFAULT_QUOTA_BLOCK_MS = 60 * 60_000;
@@ -103,20 +103,38 @@ export function formatQuotaExhaustedError(params: {
 	return `agy rate limited (429): ${detail} (다음 계정 ${nextAccount}으로 전환됨, 이어서 요청해 주세요)`;
 }
 
-export function resolveAgyExecutable(executable: string, env: Record<string, string>): string {
-	if (executable.includes("/")) {
-		try {
-			accessSync(executable, constants.X_OK);
-			return executable;
-		} catch (cause) {
-			throw new OmpDriverError("agy_executable_missing", `agy executable not found or not executable: ${executable}`, {
-				cause,
-			});
-		}
-	}
-	const found = Bun.which(executable, { PATH: env.PATH ?? "" });
-	if (!found) throw new OmpDriverError("agy_executable_missing", `agy executable not found on PATH: ${executable}`);
-	return found;
+/** Builds the `rpc_error` thrown when every pool account is currently rate-limited. */
+export function allAccountsExhaustedError(accounts: AgyAccountPool, now: number, timezone?: string): OmpDriverError {
+	return new OmpDriverError(
+		"rpc_error",
+		formatQuotaExhaustedError({
+			detail: "all accounts exhausted",
+			hadToolCall: false,
+			soonest: accounts.soonestReset(now),
+			timezone,
+		}),
+	);
+}
+
+/** Records a quota retry notice detail (`RESOURCE_EXHAUSTED …`) onto the active turn. */
+export function setQuotaNotice(
+	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number },
+	detail: string,
+): void {
+	turn.rateLimit = `agy rate limited (429): ${detail}`;
+	turn.rateLimitDetail = detail;
+	turn.rateLimitResetMs = parseResetDurationMs(detail);
+}
+
+/** Records a 429/RESOURCE_EXHAUSTED error failure onto the turn when no retry notice already did. */
+export function recordQuotaFailure(
+	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number },
+	failure: unknown,
+): void {
+	if (failure === undefined || turn.rateLimit !== undefined) return;
+	const message = failure instanceof Error ? failure.message : String(failure);
+	if (!isQuotaErrorText(message)) return;
+	setQuotaNotice(turn, quotaRetryNotice(message) ?? message);
 }
 
 export interface AgyPointer {
@@ -158,44 +176,4 @@ export function parseAgySessionStem(sessionFile: string): string {
 		throw new OmpDriverError("rpc_error", `not an agy conversation id: ${sessionFile}`);
 	}
 	return stem;
-}
-
-/** Builds ACP `session/new` / `session/load` params (`cwd`, `mcpServers`, optional system prompt appendix). */
-export function buildAgySessionParams(
-	cwd: string,
-	systemPrompt: string | undefined,
-	mcpServers: readonly AgyMcpServer[] | undefined,
-): Record<string, unknown> {
-	return {
-		cwd: resolve(cwd),
-		mcpServers: (mcpServers ?? []).map(({ name, command, args, env }) => ({ name, command, args, env })),
-		...(systemPrompt === undefined || systemPrompt === ""
-			? {}
-			: { _meta: { antigravity: { systemPrompt: { append: systemPrompt } } } }),
-	};
-}
-
-/** Computes final status and error message for a `session/prompt` reply. */
-export function resolvePromptOutcome(params: {
-	abortRequested: boolean;
-	stopReason: string | undefined;
-	succeeded: boolean;
-	failure: unknown;
-	droppedSteers: number;
-}): { status: OmpFinal["status"]; error?: string } {
-	const { abortRequested, stopReason, succeeded, failure, droppedSteers } = params;
-	const status: OmpFinal["status"] =
-		abortRequested || stopReason === "cancelled" ? "aborted" : succeeded ? "completed" : "error";
-	let error =
-		status === "completed"
-			? undefined
-			: failure !== undefined
-				? failure instanceof Error
-					? failure.message
-					: String(failure)
-				: status === "aborted"
-					? "cancelled"
-					: `agy turn ended with stopReason ${stopReason ?? "none"}`;
-	if (error !== undefined && droppedSteers > 0) error = `${error} (steer ${droppedSteers}건 미전달)`;
-	return error === undefined ? { status } : { status, error };
 }

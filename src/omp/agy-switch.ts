@@ -1,18 +1,17 @@
 import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
 import type { AgyAccountEntry, AgyAccountPool } from "./agy-account-pool";
-import { type AgyAcpClient, toolOutputOf } from "./agy-acp-client";
+import { type AgyAcpClient, resolveAgyExecutable, toolOutputOf } from "./agy-acp-client";
 import {
-	clearAgyPointer,
+	allAccountsExhaustedError,
 	DEFAULT_QUOTA_BLOCK_MS,
 	EFFORT_SUFFIX,
 	formatQuotaExhaustedError,
 	prependRotationContext,
 	QUOTA_RESET_BUFFER_MS,
-	resolveAgyExecutable,
 } from "./agy-quota";
 import type { AgyToolKeepalive, AgyToolKeepaliveOptions } from "./agy-tool-keepalive";
-import { OmpDriverError, type OmpEntry, type OmpEvent, type OmpFinal, type OmpTurnUsage } from "./driver";
+import type { OmpEntry, OmpEvent, OmpFinal, OmpTurnUsage, OmpUsage } from "./driver";
 import { buildChildEnv } from "./env";
 
 export interface AgyOmpDriverOptions {
@@ -43,6 +42,8 @@ export interface AgyOmpDriverOptions {
 	originKey?: string;
 	/** Tool-execution keepalive timer overrides (tests); defaults to 60 s interval up to 8 min. */
 	toolKeepalive?: AgyToolKeepaliveOptions;
+	/** `<homeDir>/media/inbound`: attached images under it go with the prompt as image blocks (`agy-images.ts`). */
+	inboundRoot?: string;
 	/** Shared account pool (`--app-data-dir` isolation + seamless pre-tool retry on 429). */
 	accounts?: AgyAccountPool;
 	/** Provides thread/exchange context when switching to a fresh account session. */
@@ -95,14 +96,12 @@ export function createPendingTurn(opRef: string, originalPrompt: string): Pendin
 
 export interface QuotaSwitchHost {
 	readonly options: AgyOmpDriverOptions;
-	readonly pointerPath: string;
 	readonly started: () => boolean;
 	readonly activeTurn: () => PendingTurn | undefined;
 	readonly activeClient: () => AgyAcpClient | undefined;
 	readonly currentAccount: () => AgyAccountEntry | undefined;
 	readonly now: () => number;
-	readonly clearSessionId: () => void;
-	readonly markSwitchedBeforePrompt: () => void;
+	readonly dropSession: (markSwitched?: boolean) => void;
 	readonly retireChild: () => void;
 	readonly endClient: (client: AgyAcpClient) => Promise<void>;
 	readonly launch: (executable: string, env: Record<string, string>) => Promise<void>;
@@ -136,6 +135,34 @@ export function resolveAgyConfigTarget(params: {
 	return { modelId: id, ...(level === undefined ? {} : { thinking: level }) };
 }
 
+/** Applies the resolved model and (when supported) thought_level onto the live session. */
+export async function applyAgyConfig(params: {
+	overrideModel?: string;
+	userModel?: string;
+	accountModel?: string;
+	defaultModel?: string;
+	userThinking?: string;
+	defaultThinking?: string;
+	modelValues: readonly string[];
+	option: (id: string) => { currentValue?: string } | undefined;
+	setOption: (configId: string, value: string) => Promise<void>;
+	log?: Logger;
+	originKey?: string;
+}): Promise<void> {
+	const target = resolveAgyConfigTarget(params);
+	if (target.modelId !== undefined) await params.setOption("model", target.modelId);
+	if (target.thinking === undefined) return;
+	if (params.option("thought_level") === undefined) {
+		params.log?.info("agy.acp.thinking_unsupported", {
+			origin: params.originKey,
+			model: params.option("model")?.currentValue,
+			level: target.thinking,
+		});
+		return;
+	}
+	await params.setOption("thought_level", target.thinking);
+}
+
 /** Selects the account for a new ACP launch (`undefined` = pool off; throws when every account is blocked). */
 export function selectLaunchAccount(
 	options: AgyOmpDriverOptions,
@@ -144,17 +171,7 @@ export function selectLaunchAccount(
 	const accounts = options.accounts;
 	if (accounts === undefined) return {};
 	const picked = accounts.selectAvailable(now);
-	if (picked === null) {
-		throw new OmpDriverError(
-			"rpc_error",
-			formatQuotaExhaustedError({
-				detail: "all accounts exhausted",
-				hadToolCall: false,
-				soonest: accounts.soonestReset(now),
-				timezone: options.timezone,
-			}),
-		);
-	}
+	if (picked === null) throw allAccountsExhaustedError(accounts, now, options.timezone);
 	if (picked === undefined) {
 		const err = accounts.status(now)?.error;
 		if (err !== undefined) {
@@ -163,6 +180,21 @@ export function selectLaunchAccount(
 		return {};
 	}
 	return { account: picked, appDataDir: accounts.prepareAccountDir(picked) };
+}
+
+/** True when a live idle child should switch to `wanted` (current blocked, or primary unblocked over fallback). */
+export function shouldSwitchAgyAccount(
+	current: AgyAccountEntry | undefined,
+	wanted: AgyAccountEntry | undefined,
+	accounts: AgyAccountPool,
+	now: number,
+): boolean {
+	return (
+		current !== undefined &&
+		wanted !== undefined &&
+		current.name !== wanted.name &&
+		(accounts.isBlocked(current.name, now) || (wanted.tier === "primary" && current.tier === "fallback"))
+	);
 }
 
 /** Records tool start/end entries and events for one `tool_call`/`tool_call_update` frame. */
@@ -217,6 +249,41 @@ export function applyAgyToolUpdate(params: {
 	});
 }
 
+/** Accumulates one prompt reply's token usage into the turn summary. */
+export function addAgyUsage(target: OmpTurnUsage, usage: OmpUsage | undefined): void {
+	if (usage === undefined) return;
+	target.calls += 1;
+	target.input += usage.input ?? 0;
+	target.cacheRead += usage.cacheRead ?? 0;
+	target.output += usage.output ?? 0;
+}
+
+/** Appends an assistant message entry when a prompt reply produced text or usage. */
+export function pushAgyAssistantEntry(params: {
+	entries: OmpEntry[];
+	nextSeq: () => number;
+	text: string;
+	succeeded: boolean;
+	provider: string;
+	model: string | undefined;
+	usage: OmpUsage | undefined;
+}): void {
+	const { entries, nextSeq, text, succeeded, provider, model, usage } = params;
+	if (text.trim() === "" && usage === undefined) return;
+	entries.push({
+		id: `ag-${nextSeq()}`,
+		type: "message",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text }],
+			stopReason: succeeded ? "stop" : "error",
+			provider,
+			...(model === undefined ? {} : { model }),
+			...(usage === undefined ? {} : { usage }),
+		},
+	});
+}
+
 /** Handles a 429 rate-limit: marks exhausted, retries pre-tool on next account, or fails safely after tools. */
 export async function handleAgyQuotaSwitch(
 	host: QuotaSwitchHost,
@@ -235,11 +302,9 @@ export async function handleAgyQuotaSwitch(
 	const resetMs = turn.rateLimitResetMs ?? DEFAULT_QUOTA_BLOCK_MS + QUOTA_RESET_BUFFER_MS;
 	accounts.markExhausted(current.name, now + resetMs, turn.rateLimitDetail);
 	if (turn.abortRequested || !host.started()) {
-		clearAgyPointer(host.pointerPath);
-		host.clearSessionId();
+		host.dropSession(true);
 		host.retireChild();
 		turn.usage.rotated = true;
-		host.markSwitchedBeforePrompt();
 		host.finish(turn, { opRef: turn.opRef, status: "aborted", text: "", error: "cancelled" });
 		return;
 	}
@@ -252,11 +317,9 @@ export async function handleAgyQuotaSwitch(
 		next.name !== current.name &&
 		turn.quotaSwitches < accounts.size();
 	if (!canRetry) {
-		clearAgyPointer(host.pointerPath);
-		host.clearSessionId();
+		host.dropSession(true);
 		host.retireChild();
 		turn.usage.rotated = true;
-		host.markSwitchedBeforePrompt();
 		host.options.log?.warn("agy.account.switched", {
 			origin: host.options.originKey,
 			from: current.name,
@@ -282,14 +345,13 @@ export async function handleAgyQuotaSwitch(
 	turn.cancelling = undefined;
 	turn.switching = true;
 	turn.promptReplied = Promise.withResolvers<void>();
-	clearAgyPointer(host.pointerPath);
-	host.clearSessionId();
+	host.dropSession(false);
 	await host.withRespawnLock(async () => {
 		try {
 			if (host.activeClient() === client) await host.endClient(client);
 			if (!host.started() || turn.abortRequested) {
 				turn.usage.rotated = true;
-				host.markSwitchedBeforePrompt();
+				host.dropSession(true);
 				host.finish(turn, { opRef: turn.opRef, status: "aborted", text: "", error: "cancelled" });
 				return;
 			}
@@ -299,10 +361,8 @@ export async function handleAgyQuotaSwitch(
 			const nextClient = host.activeClient();
 			if (!host.started() || turn.abortRequested || !nextClient) {
 				if (nextClient !== undefined) await host.endClient(nextClient);
-				clearAgyPointer(host.pointerPath);
-				host.clearSessionId();
+				host.dropSession(true);
 				turn.usage.rotated = true;
-				host.markSwitchedBeforePrompt();
 				host.finish(turn, { opRef: turn.opRef, status: "aborted", text: "", error: "cancelled" });
 				return;
 			}
@@ -317,10 +377,8 @@ export async function handleAgyQuotaSwitch(
 			const retryPrompt = prependRotationContext(turn.originalPrompt, host.options.rotationContext?.() ?? null);
 			host.sendPrompt(nextClient, turn, retryPrompt);
 		} catch (error) {
-			clearAgyPointer(host.pointerPath);
-			host.clearSessionId();
+			host.dropSession(true);
 			turn.usage.rotated = true;
-			host.markSwitchedBeforePrompt();
 			host.finish(turn, {
 				opRef: turn.opRef,
 				status: "error",

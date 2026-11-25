@@ -383,7 +383,7 @@ export class WikiNotes {
 	}): Promise<void> {
 		const config = this.#deps.config();
 		const { store, timezone } = this.#deps;
-		if (config === undefined) return;
+		if (config === undefined || config.turns === false) return;
 		const origin = parseChatOrigin(turn.originKey);
 		if (origin === undefined) return;
 		try {
@@ -420,7 +420,7 @@ export class WikiNotes {
 	async flushTurns(): Promise<void> {
 		const config = this.#deps.config();
 		const { store, clock, timezone } = this.#deps;
-		if (config === undefined || this.#flushing) return;
+		if (config === undefined || config.turns === false || this.#flushing) return;
 		this.#flushing = true;
 		try {
 			const today = localDay(clock.now(), timezone);
@@ -476,9 +476,9 @@ export class WikiNotes {
  * `wikiNotes`, no repository: no git.
  */
 export function turnNoteRepos(config: Pick<JabbuConfig, "wikiNotes" | "taskAutoLand" | "turnSnapshot">): string[] {
-	if (config.wikiNotes === undefined || (config.turnSnapshot?.repos.length ?? 0) > 0) return [];
-	const listed = config.wikiNotes.repos ?? [];
-	return listed.length > 0 ? listed : (config.taskAutoLand?.repos ?? []);
+	const notes = config.wikiNotes;
+	if (notes === undefined || notes.turns === false || (config.turnSnapshot?.repos.length ?? 0) > 0) return [];
+	return notes.repos?.length ? notes.repos : (config.taskAutoLand?.repos ?? []);
 }
 
 const laneSourceId = (lane: LaneRow): string | undefined =>

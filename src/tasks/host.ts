@@ -36,7 +36,7 @@ export interface TaskHostOps {
 	pathExists(path: string): Promise<HostResult<boolean>>;
 	/** `git -C <repo> worktree add -b <branch> <worktree> HEAD`; fails when the branch or path already exists. */
 	createWorktree(input: { repo: string; worktree: string; branch: string }): Promise<HostResult<null>>;
-	/** Best-effort rollback of a worktree this call created (a failed registration). */
+	/** Best-effort removal of a worktree and its branch (a failed registration, a landed or discarded lane). */
 	removeWorktree(input: { repo: string; worktree: string; branch: string }): Promise<void>;
 	/** Best-effort removal of a failed start's records directory (a `…/docs/tasks/<id>` path only). */
 	removeRecords(dir: string): Promise<void>;
@@ -130,8 +130,8 @@ export function sshCommand(sshTarget: string, remote: string[]): string[] {
 	return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", sshTarget, ...remote];
 }
 
-function assertPath(path: string): void {
-	if (!TASK_PATH_PATTERN.test(path)) throw new Error(`unsafe path: ${path}`);
+function assertPath(...paths: string[]): void {
+	for (const path of paths) if (!TASK_PATH_PATTERN.test(path)) throw new Error(`unsafe path: ${path}`);
 }
 
 /** A task branch (`task/T-YYYYMMDD-NN`) or a work lane's branch (`lane/L-YYYYMMDD-NN`); nothing else reaches git. */
@@ -210,8 +210,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 		},
 
 		async createWorktree({ repo, worktree, branch }) {
-			assertPath(repo);
-			assertPath(worktree);
+			assertPath(repo, worktree);
 			assertBranch(branch);
 			const result = await exec(["git", "-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"], GIT_TIMEOUT_MS);
 			if (result.code === 0 && !result.timedOut) return { ok: true, value: null };
@@ -219,9 +218,10 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 		},
 
 		async removeWorktree({ repo, worktree, branch }) {
-			assertPath(repo);
-			assertPath(worktree);
+			assertPath(repo, worktree);
 			assertBranch(branch);
+			// A read-only dir inside stops `worktree remove` halfway (`.git` gone, tree left): restore u+w first.
+			await exec(["chmod", "-R", "u+w", "--", worktree], GIT_TIMEOUT_MS);
 			await exec(["git", "-C", repo, "worktree", "remove", "--force", worktree], GIT_TIMEOUT_MS);
 			await exec(["git", "-C", repo, "branch", "-D", branch], GIT_TIMEOUT_MS);
 		},

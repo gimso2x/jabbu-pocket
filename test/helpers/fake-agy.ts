@@ -19,7 +19,11 @@ import { createInterface } from "node:readline";
  * - "@holdtool": a tool call in_progress until SIGUSR1 (completes it, answers HELD-TOOL-DONE) or `session/cancel`.
  * - "@deaf": starts a grandchild that connects to the unix socket FAKE_AGY_GRAND_SOCK and stays, reports a tool call
  *   in_progress, and ignores cancel.
- * - "@ask": sends `session/request_permission` (reject_once, allow_once) and answers ASKED once the client replied.
+ * - "@ask": sends `session/request_permission` (reject_once, allow_always, allow_once) and answers ASKED once the
+ *   client replied; "@askalways" offers only allow_always and reject_once; "@askother" asks `fs/read_text_file`.
+ * - initialize offers `promptCapabilities.image` unless FAKE_AGY_NO_IMAGE=1.
+ * - "@lost": the prompt fails like agy's lost trajectory; "@lostload" only on a session opened by `session/load`.
+ * - FAKE_AGY_HOLD_NEW=1: `session/new` answers only on `session/cancel` or SIGUSR1.
  * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@full" / "@half": `usage_update` used
  *   800 / 500 of size 1000 before the reply (otherwise 100).
  * - anything else: answers `REPLY<n>:<last line of the prompt>` in two chunks (n = prompts of this process).
@@ -64,6 +68,8 @@ const LEVELS = ["low", "medium", "high", "xhigh"];
 let model = "gemini-4-neon";
 let level = "high";
 let sessionId = "";
+/** Whether the current session was opened by `session/load` (what "@lostload" fails on). */
+let loaded = false;
 let prompts = 0;
 let held: { id: unknown; onSignal: () => void; onCancel?: () => void } | undefined;
 
@@ -135,19 +141,20 @@ function prompt(id: unknown, text: string): void {
 		});
 		return;
 	}
+	if (text.includes("@lost") && (loaded || !text.includes("@lostload"))) {
+		send({ id, error: { code: -32603, message: `Trajectory not found: ${sessionId}` } });
+		return;
+	}
 	if (text.includes("@ask")) {
 		held = { id, onSignal: () => finish("ASKED") };
-		send({
-			id: "perm-1",
-			method: "session/request_permission",
-			params: {
-				sessionId,
-				options: [
-					{ optionId: "no", kind: "reject_once" },
-					{ optionId: "yes-once", kind: "allow_once" },
-				],
-			},
-		});
+		const always = { optionId: "yes-always", kind: "allow_always" };
+		const reject = { optionId: "no", kind: "reject_once" };
+		const options = text.includes("@askalways")
+			? [always, reject]
+			: [reject, always, { optionId: "yes-once", kind: "allow_once" }];
+		const toolCall = { toolCallId: "call_perm", title: "run\nrm -rf build" };
+		const method = text.includes("@askother") ? "fs/read_text_file" : "session/request_permission";
+		send({ id: "perm-1", method, params: { sessionId, toolCall, options } });
 		return;
 	}
 	if (text.includes("@holdmsg")) {
@@ -212,7 +219,16 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 	switch (message.method) {
 		case "initialize": {
 			const replyInit = () =>
-				send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+				send({
+					id: message.id,
+					result: {
+						protocolVersion: 1,
+						agentCapabilities: {
+							loadSession: true,
+							...(process.env.FAKE_AGY_NO_IMAGE === "1" ? {} : { promptCapabilities: { image: true } }),
+						},
+					},
+				});
 			if (HOLD_INIT_DIR !== undefined && HOLD_INIT_SOCK !== undefined && APP_DATA_DIR === HOLD_INIT_DIR) {
 				let released = false;
 				const release = () => {
@@ -238,15 +254,23 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 			}
 			return replyInit();
 		}
-		case "session/new":
-			sessionId = `fake-${randomUUID()}`;
-			return send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+		case "session/new": {
+			const open = (): void => {
+				sessionId = `fake-${randomUUID()}`;
+				loaded = false;
+				send({ id: message.id, result: { sessionId, configOptions: configOptions() } });
+			};
+			if (process.env.FAKE_AGY_HOLD_NEW !== "1") return open();
+			held = { id: message.id, onSignal: open, onCancel: open };
+			return;
+		}
 		case "session/load": {
 			const wanted = String(params.sessionId);
 			if (!wanted.startsWith("fake-") || process.env.FAKE_AGY_UNKNOWN_SESSION === "1") {
 				return send({ id: message.id, error: { code: -32602, message: `Session not found: ${wanted}` } });
 			}
 			sessionId = wanted;
+			loaded = true;
 			// Like agy, load replays the conversation as updates before it answers.
 			update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "old question" } });
 			update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "REPLAYED" } });

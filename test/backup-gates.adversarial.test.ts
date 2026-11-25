@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type GatesCommandDeps, gatesCommand } from "../src/cli/index";
+import { type GatesCommandDeps, gatesCommand } from "../src/cli/gates";
 import {
 	BACKUP_FILE_PATTERN,
 	type BackupResult,

@@ -153,4 +153,18 @@ describe("stuck: fingerprint", () => {
 		expect(fingerprint(`${base}${note}  \n`)).toBe(fingerprint("head"));
 		expect(fingerprint(`${base}[You have received this identical output many times]`)).not.toBe(fingerprint("head"));
 	});
+
+	test("many counter marks on one line without newlines fingerprint in linear time (qa-aa #41)", () => {
+		const mark = "[You have received this identical output";
+		const text = `x${mark.repeat(40000)}]`;
+		const started = performance.now();
+		toolFingerprint("read", {}, { content: [{ type: "text", text }] }, false);
+		expect(performance.now() - started).toBeLessThan(50);
+		const fingerprint = (value: string): string =>
+			toolFingerprint("read", {}, { content: [{ type: "text", text: value }] }, false);
+		// Only a note on the last line of its own is stripped; one followed by more text or mid-line stays.
+		expect(fingerprint(`head\n${mark} 3 times. again]`)).toBe(fingerprint("head"));
+		expect(fingerprint(`head\n${mark} 3 times. again]\nmore]`)).not.toBe(fingerprint("head"));
+		expect(fingerprint(`head ${mark} 3 times. again]`)).not.toBe(fingerprint("head"));
+	});
 });

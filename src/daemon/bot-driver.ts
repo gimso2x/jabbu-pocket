@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import type { JabbuConfig } from "../config";
 import type { DriverFactory } from "../core/mailbox";
 import type { MailboxClock } from "../core/types";
@@ -78,6 +78,7 @@ export function createBotDriverFactory(deps: BotDriverFactoryDeps): DriverFactor
 					now: () => deps.clock.now(),
 					log: deps.log,
 					originKey: origin,
+					inboundRoot: join(config.homeDir, "media", "inbound"),
 				})
 			: new RpcOmpDriver({
 					ompExecutable: config.ompExecutable,
