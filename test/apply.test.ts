@@ -1389,6 +1389,24 @@ describe("runApply apply lock (one apply per home)", () => {
 		expect(readFileSync(lockPath(), "utf8")).toBe(text);
 	});
 
+	// 11-25: songbak's apply waited for ttungi's home inside its peer step while ttungi's own apply, holding that home,
+	// waited for songbak's home in its peer step; both sat until the limit.
+	test("a peer apply does not wait for a live holder of its home: it leaves the home to it, skipped with exit 0", async () => {
+		const text = `${JSON.stringify({ pid: 777, stamp: OTHER, startedAt: new Date(T0).toISOString() })}\n`;
+		writeFileSync(lockPath(), text, { mode: 0o600 });
+		const world = makeWorld();
+		const { exitCode, receipt } = await runApply({ ...base, peerOf: "20261125-101634" }, makeDeps(world));
+		expect(exitCode).toBe(0);
+		expect(receipt.status).toBe("skipped");
+		expect(receipt.steps).toHaveLength(1);
+		expect(receipt.steps[0]).toMatchObject({ name: "wait_apply", ok: true });
+		expect(receipt.steps[0]?.detail).toContain(`held by apply ${OTHER} pid=777`);
+		expect(world.drains).toBe(0);
+		expect(world.commands).toHaveLength(0);
+		expect(world.clock).toBe(T0);
+		expect(readFileSync(lockPath(), "utf8")).toBe(text);
+	});
+
 	test("a lock from before a reboot is taken over even when its pid is alive again", async () => {
 		const stale = { pid: 777, stamp: OTHER, startedAt: new Date(T0).toISOString(), bootId: "boot-before-reboot" };
 		writeFileSync(lockPath(), `${JSON.stringify(stale)}\n`, { mode: 0o600 });
@@ -2342,6 +2360,7 @@ describe("apply code rollback options (apply-rollback-mode)", () => {
 			allowDetached: true,
 			codeRollback: "detach",
 			codeRollbackOff: "peer install (the first home's apply owns the code rollback)",
+			peerOf: base.stamp,
 		};
 		expect(peerApplyOptions(options, false)).toEqual({ ...peer, mergedAt });
 		expect(peerApplyOptions(options, true)).toEqual(peer);
