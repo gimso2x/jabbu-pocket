@@ -151,9 +151,8 @@ export class StatusTracker {
 		if (entry === undefined || entry.final !== undefined) return;
 		entry.progress = progress;
 		await entry.setup;
-		if (entry.final === undefined && this.#clock.now() - entry.lastUpdateAt >= this.#intervalMs) {
-			await this.#updateRunning(entry);
-		}
+		if (entry.final !== undefined || this.#clock.now() - entry.lastUpdateAt < this.#intervalMs) return;
+		await this.#updateRunning(entry);
 	}
 
 	/**
@@ -213,7 +212,10 @@ export class StatusTracker {
 	async #updateRunning(entry: StatusEntry): Promise<void> {
 		if (entry.statusId === undefined) return;
 		const text = runningStatusText(entry.stalled, this.#clock.now() - entry.startedAt, entry.progress);
-		if (!(await this.#platform.edit(entry, text, false))) entry.lastUpdateAt = this.#clock.now();
+		// Before the await: progress events landing during the edit see the new cadence and send none of their own.
+		entry.lastUpdateAt = this.#clock.now();
+		// Rate limited (`true`): the overdue stamp makes the next tick (or the next progress event) send it again.
+		if (await this.#platform.edit(entry, text, false)) entry.lastUpdateAt = entry.startedAt;
 	}
 
 	async #flushFinal(key: string, entry: StatusEntry): Promise<void> {
