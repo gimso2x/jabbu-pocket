@@ -263,7 +263,7 @@ export class DiscordRest {
 
 	async startThread(args: StartThreadArgs): Promise<{ id: string }> {
 		const body = await this.#request("POST", `/channels/${args.channelId}/messages/${args.messageId}/threads`, {
-			json: { name: args.name },
+			json: { name: args.name, auto_archive_duration: 1440 }, // hide after 24h idle, not the channel default (days)
 		});
 		return { id: messageId(body, "start thread") };
 	}
