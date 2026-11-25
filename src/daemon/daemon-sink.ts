@@ -21,6 +21,7 @@ import {
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
+import { laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseApprovalRetryActionId } from "../safety/approval";
@@ -86,11 +87,10 @@ export class DaemonInbound {
 				// `머지해`/`폐기해` (the whole message, while the landing waits) are the card's buttons in words.
 				const closedAs =
 					lane?.status === "closed" ? classifyClosedLaneMessage(message.text, lane.meta.land?.state) : undefined;
-				const question = closedAs === "question";
 				const { inserted, row } = store.recordInbound({
 					originKey,
 					platformMessageId: message.platformMessageId,
-					textRef: question ? buildClosedLaneQuestion(message.text) : message.text,
+					textRef: closedAs === "question" ? buildClosedLaneQuestion(message.text) : message.text,
 					threadRef: message.threadRef,
 					injected: message.injected === true,
 				});
@@ -162,14 +162,17 @@ export class DaemonInbound {
 						return {};
 					}
 					const trigger = parseLaneTrigger(message.text);
-					if (trigger && ctx.router?.draining === true) {
+					if (trigger) {
 						// A drain must not create a worktree and branch mid-restart, and a pending trigger row would reach
 						// the DM's omp session after it instead of starting the lane: refuse it with a retry hint.
-						void this.#settleLaneCommand(row, trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
+						if (ctx.router?.draining === true)
+							void this.#settleLaneCommand(row, trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
+						else void this.#startLane(row, trigger);
 						return {};
 					}
-					if (trigger) {
-						void this.#startLane(row, trigger);
+					const triggerRefusal = laneTriggerRefusal(message.text);
+					if (triggerRefusal !== undefined) {
+						void this.#settleLaneCommand(row, "-", { kind: "refused", text: triggerRefusal });
 						return {};
 					}
 				}
