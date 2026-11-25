@@ -72,8 +72,8 @@ const spawnProcess: ProcessRunner = (cmd, opts) => {
 	const stdoutCap = opts.stdoutCap ?? DEFAULT_STDOUT_CAP;
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string) => {
-		if (stdout.length < stdoutCap) stdout += chunk;
-		else truncated = true;
+		if (stdout.length + chunk.length > stdoutCap) truncated = true; // one read can cross the cap by itself
+		if (stdout.length < stdoutCap) stdout += chunk.slice(0, stdoutCap - stdout.length);
 	});
 	let stderr = "";
 	child.stderr?.setEncoding("utf8");
