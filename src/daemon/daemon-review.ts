@@ -173,7 +173,7 @@ export class DaemonSkillReview {
 						this.#ctx.log.info("skill_revision_saved", { name: proposal.name, revision: basename(revision) });
 				},
 				requestApproval: (summary) => approvalOf(this.#ctx).request(channel, summary),
-				notify: (text) => adapter.postNotice(channel, text),
+				notify: async (text) => void (await adapter.postNotice(channel, text)),
 				log: this.#ctx.log,
 				now: () => Date.now(),
 			},
