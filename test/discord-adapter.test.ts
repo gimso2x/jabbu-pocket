@@ -2,13 +2,8 @@
 // all on FakeDiscordTransport.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { PEER_HOP_NOTICE } from "../src/channel/inbound";
-import type {
-	CoreSink,
-	DeliverySource,
-	InboundMessage,
-	PeerInboundMessage,
-	PeerInboundOutcome,
-} from "../src/channel/types";
+import type { PeerInboundOutcome } from "../src/channel/peer-outcome";
+import type { CoreSink, DeliverySource, InboundMessage, PeerInboundMessage } from "../src/channel/types";
 import { QUOTED_HEADER } from "../src/core/normalize";
 import { parseCommand } from "../src/core/types";
 import { DiscordAdapter, type DiscordAdapterOptions } from "../src/discord/adapter";

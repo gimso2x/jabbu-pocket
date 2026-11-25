@@ -99,10 +99,8 @@ export async function recordInbound(
 	if (outcome?.duplicate) return duplicate(log, inbound.platformMessageId);
 	const parsed = parseThreadRef(inbound.threadRef);
 	if (parsed !== undefined) {
-		const command = parseCommand(inbound.text);
-		// The status is the turn of the origin the core recorded the message under (a lane thread's is the lane's).
 		const originKey = core.inboundOrigin?.(inbound.platformMessageId) ?? inbound.originKey;
-		await begin(parsed, command === undefined || command.kind === "followup", originKey);
+		await begin(parsed, (parseCommand(inbound.text)?.kind ?? "followup") === "followup", originKey);
 	}
 	return "recorded";
 }

@@ -3,6 +3,7 @@ import { StoreError } from "../store/transitions";
 import type { TaskCheck } from "../tasks/checker";
 import type { AcceptanceItem, TaskRisk } from "../tasks/docs";
 import type { LanePrLand } from "./pr-land-types";
+import type { LaneProgressEvidence } from "./progress-evidence-types";
 import type { WorkflowChoice } from "./workflow";
 
 /** Work lane states: `closed` only via a verified done claim; `paused` is the owner's hold (turn aborted, autonomous actions wait). */
@@ -224,22 +225,6 @@ export interface LanePrWatch {
 	/** ISO time the merged or closed state was first read. */
 	closedAt?: string;
 }
-
-/** Evidence of a lane's progress report: a worktree file and its content hash (`preserved`: copied to the artifacts). */
-export interface LaneFileEvidence {
-	file: string;
-	sha256: string;
-	preserved?: boolean;
-}
-
-/** Evidence of a progress report: a successful tool call of the lane session and the hash of its result text. */
-export interface LaneToolEvidence {
-	toolCallId: string;
-	tool: string;
-	sha256: string;
-}
-
-export type LaneProgressEvidence = LaneFileEvidence | LaneToolEvidence;
 
 /** Runtime facts of a lane that are not registry columns (kept as one JSON column). */
 export interface LaneMeta {

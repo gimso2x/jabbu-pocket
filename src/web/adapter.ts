@@ -12,13 +12,8 @@ import {
 	finishDeliveryStatus,
 } from "../channel/pump";
 import { RetryAfterGate } from "../channel/retry";
-import {
-	createStatusMessage,
-	editStatusMessage,
-	removeStatusMessage,
-	type StatusEntry,
-	StatusTracker,
-} from "../channel/status";
+import { type StatusEntry, StatusTracker } from "../channel/status";
+import { createStatusMessage, editStatusMessage, removeStatusMessage } from "../channel/status-message";
 import { errorText, REDELIVERED_PREFIX, STATUS_MIN_INTERVAL_MS } from "../channel/text";
 import type { AdapterClock, CoreSink, DeliveryItem, DeliverySource, IngestOutcome } from "../channel/types";
 import { WEB_OWNER_USER_ID } from "../config-web";
@@ -338,9 +333,7 @@ export class WebAdapter implements ChannelAdapter {
 			return { kind: "failed", error: `invalid thread_ref ${delivery.threadRef}`, outcome: "definitive", sentParts: 0 };
 		}
 		const threadId = target.threadTs === TOP_LEVEL_TS ? undefined : target.threadTs;
-		const footer = answerFooter(delivery, (threadRef, originKey, outcome) =>
-			this.#status.footer(threadRef, originKey, outcome),
-		);
+		const footer = answerFooter(delivery, (ref, origin, outcome) => this.#status.footer(ref, origin, outcome));
 		const prefix = delivery.redelivered ? `${REDELIVERED_PREFIX}\n` : "";
 		const suffix = footer === undefined ? "" : `\n_${footer}_`;
 		const text = `${prefix}${renderMentions(delivery.body, this.#channel)}${suffix}`;

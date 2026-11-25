@@ -1,7 +1,7 @@
-import { parseChatOrigin } from "../core/origin-key";
 import { LANE_MODEL_TIERS } from "../model-tiers";
 import type { HostToolDef } from "../safety/host-tools";
 import { TASK_RISKS } from "../tasks/docs";
+import { borrowThreadOf, startToolReply } from "./borrow-thread";
 import type { LaneManager } from "./manager";
 import { LaneInputError } from "./manager-constants";
 import { RESERVATION_AFTER_MAX } from "./reservations";
@@ -134,35 +134,16 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 				return `예약됨 #${reservation.id}: ${reservation.after.join(", ")} 착지 뒤 시작 가능 카드를 올립니다 (24시간 안에 시작하지 않으면 만료). tell the owner the reservation is waiting; no lane was started.`;
 			}
 			// The first lane of a conversation thread runs in that thread; a reservation (above) always opens its own.
-			const threadId = parseChatOrigin(originKey)?.threadId;
+			const borrow = borrowThreadOf(originKey);
 			const lane = await manager
-				.start({
-					...args,
-					parentOrigin: originKey,
-					force: params.force === true,
-					reuseOpen: true,
-					...(threadId === undefined ? {} : { borrowThread: { threadId } }),
-				})
+				.start({ ...args, ...borrow, parentOrigin: originKey, force: params.force === true, reuseOpen: true })
 				.catch((error: unknown) => {
 					// The capacity refusal carries the measured numbers; the force hint is this surface's, not the manager's.
 					if (error instanceof LaneInputError && error.message.startsWith("시작 거부: "))
 						throw new LaneInputError(`${error.message} — 오너가 강행한다고 명시하면 force: true로 다시 시작하세요`);
 					throw error;
 				});
-			if (lane.meta.borrowedThread === true) {
-				// The lane is in this very thread: no link to hand over.
-				const said =
-					lane.reused === true
-						? `이 스레드의 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다`
-						: `이 스레드에서 레인 \`${lane.name}\`을 시작했습니다`;
-				const reply = `${said} (thread ${lane.threadRef}, origin ${lane.originKey}); tell the owner exactly this, without a link`;
-				return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
-			}
-			const link = await manager.threadLink(lane);
-			const state = lane.reused === true ? "already open for this request" : "started";
-			const started = `lane ${lane.name} ${state} (thread ${lane.threadRef}, origin ${lane.originKey})`;
-			const reply = link === undefined ? started : `${started}; tell the owner the lane thread link: ${link}`;
-			return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+			return startToolReply(lane, lane.meta.borrowedThread === true ? undefined : await manager.threadLink(lane));
 		},
 	};
 }

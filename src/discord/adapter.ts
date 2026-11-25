@@ -30,14 +30,13 @@ import {
 	finishDeliveryStatus,
 } from "../channel/pump";
 import { RetryAfterGate } from "../channel/retry";
+import { type StatusEntry, StatusTracker } from "../channel/status";
 import {
 	createStatusMessage,
 	editStatusMessage,
 	removeStatusMessage,
-	type StatusEntry,
-	StatusTracker,
 	swapStatusReaction,
-} from "../channel/status";
+} from "../channel/status-message";
 import {
 	cutCodePointSafe,
 	DENIED_TEXT,
@@ -1163,17 +1162,11 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	/**
 	 * Marks the turn finished: the status message is deleted (`delete`: the answer carries the footer) or becomes
-	 * ✅/⚠️ (`update`), 👀 is removed and the result mark added. Retried by tick() under a rate limit. Only `originKey`'s
-	 * turn in the thread ends; the typing indicator is the thread's and stops with it.
+	 * ✅/⚠️ (`update`), 👀 is removed and the result mark added. Retried by tick() under a rate limit. Only `origin`'s turn.
 	 */
-	async finishStatus(
-		threadRef: string,
-		originKey: string,
-		outcome: FinalOutcome,
-		action: "delete" | "update" = "update",
-	): Promise<void> {
-		this.#stopTyping(threadRef, true);
-		await this.#status.finish(threadRef, originKey, outcome, action);
+	async finishStatus(ref: string, origin: string, outcome: FinalOutcome, action: "delete" | "update"): Promise<void> {
+		this.#stopTyping(ref, true);
+		await this.#status.finish(ref, origin, outcome, action);
 	}
 
 	/** True when the step must be retried later (rate limited); other errors (unknown reaction) are final. */
@@ -1197,9 +1190,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			return { kind: "failed", error: `invalid thread_ref ${delivery.threadRef}`, outcome: "definitive", sentParts: 0 };
 		}
 		const topLevel = target.threadTs === TOP_LEVEL_TS;
-		const footer = answerFooter(delivery, (threadRef, originKey, outcome) =>
-			this.#status.footer(threadRef, originKey, outcome),
-		);
+		const footer = answerFooter(delivery, (ref, origin, outcome) => this.#status.footer(ref, origin, outcome));
 		let sent = delivery.sentParts ?? 0;
 		// A top-level answer is one message: parts 2+ reply to part 1 instead of standing alone.
 		let replyTo = topLevel && sent > 0 ? (delivery.replyTs ?? undefined) : undefined;

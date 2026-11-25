@@ -4,9 +4,7 @@ import type { ActionButton, MessageRef } from "../channel/port";
 import { cutCodePointSafe, escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
 import { parseThreadRef, platformOfThreadRef, threadRefOf } from "../core/normalize";
-import { parseChatOrigin } from "../core/origin-key";
 import { pidAlive } from "../daemon/lock";
-import { LANE_MODEL_TIERS, type LaneModelTier } from "../model-tiers";
 import type { OmpSessionDriver, TodoPhase } from "../omp/driver";
 import { frozenMessage } from "../ops/freeze";
 import { diskHeadroom } from "../ops/host-resources";
@@ -16,7 +14,7 @@ import type { Store } from "../store/db";
 import { typicalLaneDuration } from "../store/turn-duration";
 import type { LaneQaPolicy } from "../tasks/auto-land-policy";
 import { type TaskCheck, type TaskChecksRun, taskChecksOf } from "../tasks/checker";
-import { oneLine, parseTierConfidence, worktreePathOf } from "../tasks/docs";
+import { oneLine, worktreePathOf } from "../tasks/docs";
 import { runWorktreeChecks } from "../tasks/evaluate";
 import { createTaskHostOps, type TaskHostOps } from "../tasks/host";
 import { cardMessage } from "../tasks/notify";
@@ -26,6 +24,7 @@ import { CHECK_TIMEOUT_MS, type SignalCheck } from "../tasks/signals";
 import { resolveWorkerTier } from "../tasks/worker-tier";
 import { localDay } from "../time";
 import { changedFilesSince, fileSize, headOf, sessionDelta } from "./attach";
+import { claimBorrowedThread, failBorrowedStatus } from "./borrow-thread";
 import { buildLaneOutcomeCard, type LaneCardView, laneSessionActionId } from "./card";
 import { computeLaneChanges } from "./changes";
 import { laneCost } from "./cost";
@@ -88,7 +87,6 @@ import {
 	defaultPrTools,
 	type ExternalPrInput,
 	firstLineOf,
-	parseExternalPrInput,
 	planPr,
 	publishPr,
 	readPrBody,
@@ -112,7 +110,8 @@ import {
 import { formatConfidence, reviewLane } from "./review";
 import { currentRuntime, primeGateChanges } from "./runtime";
 import { openLanesOfRepo, type RepoMatcher, sameRepo } from "./same-repo";
-import { appendFollowups, checkLaneScope, parseLaneLeftovers, parseLaneScope } from "./scope";
+import { appendFollowups, checkLaneScope, parseLaneLeftovers } from "./scope";
+import { parseStartArgs } from "./start-args";
 import {
 	INCONCLUSIVE_APPROVED,
 	INTEGRITY_APPROVED,
@@ -142,16 +141,8 @@ import {
 	classifyClosedLaneMessage,
 } from "./trigger";
 import { type ClaimEvidence, defaultGit, resolveBaseSha, type VerifyResult, verifyClaim } from "./verify";
-import { advertisedWorkflow, isUlwWorkflow, workflowChoice } from "./workflow";
-import {
-	DEFAULT_LANE_RISK,
-	laneBranchOf,
-	laneIdsOnBranches,
-	nextLaneId,
-	parseLaneAcceptance,
-	parseLaneRisk,
-	resolveLaneRepo,
-} from "./worktree";
+import { advertisedWorkflow, isUlwWorkflow } from "./workflow";
+import { DEFAULT_LANE_RISK, laneBranchOf, laneIdsOnBranches, nextLaneId, resolveLaneRepo } from "./worktree";
 
 /**
  * Work lanes: one omp session per long task with its own thread, a registry row and a verified end.
@@ -378,10 +369,7 @@ export class LaneManager {
 		force?: boolean;
 		/** An open lane of the same conversation, title and path is returned (`reused`) instead of starting another. */
 		reuseOpen?: boolean;
-		/**
-		 * The conversation thread (`parentOrigin`'s own) the lane may borrow instead of opening a sibling: taken when no
-		 * lane row ever used it and no other start is borrowing it; otherwise the lane opens its own thread as before.
-		 */
+		/** `parentOrigin`'s own thread, borrowed instead of opening a sibling when free (`claimBorrowedThread`). */
 		borrowThread?: { threadId: string };
 	}): Promise<LaneRow & { startNote?: string; reused?: boolean }> {
 		const { store, channels, clock, log } = this.#deps;
@@ -393,7 +381,7 @@ export class LaneManager {
 		const title = cutCodePointSafe(redact(input.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
 		const { risk, acceptance, scope, requestedTier, tierConfidence, tierReason, externalPrInput, workflow } =
-			this.#startArgs(input);
+			parseStartArgs(input, this.#deps.laneModels?.());
 		const givenReason = tierReason === undefined ? "" : redact(oneLine(tierReason));
 		// Kept for the independent review: the spec it reads first. A cut one says so inside, so the review knows the
 		// rest is missing; the lane itself gets the whole brief.
@@ -447,9 +435,7 @@ export class LaneManager {
 		const startKey = `${input.parentOrigin ?? crypto.randomUUID()}\0${title}\0${cwd}`;
 		if (this.#startingKeys.has(startKey)) throw new LaneInputError("같은 레인을 시작하는 중입니다");
 		this.#startingKeys.add(startKey);
-		// Decided before the first await like the key above: of two starts borrowing one thread, the second opens a sibling.
-		const borrowed = this.#borrowableThread(input);
-		if (borrowed !== undefined) this.#borrowingThreads.add(borrowed.threadRef);
+		const borrowed = claimBorrowedThread(input, this.#borrowingThreads, this.#deps.store);
 		try {
 			const found = await resolveLaneRepo(cwd);
 			if (!found.ok) throw new LaneInputError(found.problem);
@@ -482,7 +468,6 @@ export class LaneManager {
 			// Set once the root is up: a later failure turns it into ❌ so no 🔄 root is left behind.
 			let rootRef: MessageRef | undefined;
 			let threadOpened = false;
-			// A borrowed thread's failed start turns its status into ❌ instead (no root of its own).
 			let statusRef: MessageRef | undefined;
 			let lane: LaneRow | undefined;
 			let externalPr: LaneExternalPr | undefined;
@@ -602,7 +587,8 @@ export class LaneManager {
 					throw error;
 				}
 				// The borrowed thread is the conversation: its status (when it was posted) says ❌, nothing is archived.
-				if (borrowed !== undefined && statusRef !== undefined) await this.#failBorrowedStatus(statusRef, shown);
+				if (borrowed !== undefined && statusRef !== undefined)
+					await failBorrowedStatus(channels.portFor(statusRef.conversationId), log, statusRef, shown);
 				// The root stays in the channel and says the lane never started.
 				if (rootRef !== undefined) {
 					await channels
@@ -637,94 +623,6 @@ export class LaneManager {
 			this.#startingKeys.delete(startKey);
 			if (borrowed !== undefined) this.#borrowingThreads.delete(borrowed.threadRef);
 		}
-	}
-
-	/**
-	 * The thread `start` may borrow (`borrowThread`): the starting conversation's own thread in `input.channel`, never
-	 * used by any lane row (the thread ref is unique) and not being borrowed by another start in flight. Synchronous.
-	 */
-	#borrowableThread(input: {
-		channel: string;
-		parentOrigin?: string;
-		borrowThread?: { threadId: string };
-	}): { threadId: string; threadRef: string } | undefined {
-		const threadId = input.borrowThread?.threadId;
-		if (threadId === undefined || input.parentOrigin === undefined) return undefined;
-		const origin = parseChatOrigin(input.parentOrigin);
-		if (origin?.kind !== "ch" || origin.conversationId !== input.channel || origin.threadId !== threadId)
-			return undefined;
-		const threadRef = threadRefOf(input.channel, threadId);
-		if (this.#borrowingThreads.has(threadRef) || this.#deps.store.getLaneByThread(threadRef) !== undefined)
-			return undefined;
-		return { threadId, threadRef };
-	}
-
-	/** A borrowed start failed after its status was posted: the status becomes ❌ (no button); a new ❌ only if that fails. */
-	async #failBorrowedStatus(statusRef: MessageRef, shown: string): Promise<void> {
-		const { channels, log } = this.#deps;
-		const port = channels.portFor(statusRef.conversationId);
-		try {
-			await port.edit(statusRef, { text: `❌ ${shown}`, buttons: [] });
-		} catch (editError) {
-			log.warn("lane_status_edit_failed", { channel: statusRef.conversationId, error: String(editError) });
-			await port
-				.post({ conversationId: statusRef.conversationId, threadId: statusRef.threadId }, { text: `❌ ${shown}` })
-				.catch((postError: unknown) =>
-					log.warn("lane_thread_post_failed", { channel: statusRef.conversationId, error: String(postError) }),
-				);
-		}
-	}
-
-	/** The tier the starter asked for, checked against the configured ones; undefined when none was asked for. */
-	/** `start`'s arguments, validated (`LaneInputError` on the first bad one); a reservation runs it too, so it fails when stored. */
-	#startArgs(input: {
-		risk?: unknown;
-		acceptance?: unknown;
-		scope?: unknown;
-		model?: unknown;
-		tierConfidence?: unknown;
-		tierReason?: unknown;
-		externalPr?: unknown;
-		workflow?: unknown;
-	}) {
-		const risk = parseLaneRisk(input.risk);
-		if (!risk.ok) throw new LaneInputError(risk.problem);
-		const acceptance = parseLaneAcceptance(input.acceptance);
-		if (!acceptance.ok) throw new LaneInputError(acceptance.problem);
-		const scope = parseLaneScope(input.scope);
-		if (!scope.ok) throw new LaneInputError(scope.problem);
-		const requestedTier = this.#laneTier(input.model);
-		const tierConfidence = parseTierConfidence(input.tierConfidence);
-		if (tierConfidence === null) throw new LaneInputError("tierConfidence는 0 이상 1 이하의 숫자여야 합니다.");
-		if (input.tierReason !== undefined && typeof input.tierReason !== "string")
-			throw new LaneInputError("tierReason은 문자열이어야 합니다.");
-		const externalPr = parseExternalPrInput(input.externalPr);
-		if (!externalPr.ok) throw new LaneInputError(externalPr.problem);
-		const workflow = workflowChoice(input.workflow);
-		return {
-			workflow,
-			externalPrInput: externalPr.value,
-			risk: risk.value,
-			acceptance: acceptance.value,
-			scope: scope.value,
-			requestedTier,
-			tierConfidence,
-			tierReason: input.tierReason,
-		};
-	}
-
-	#laneTier(tier: unknown): LaneModelTier | undefined {
-		if (tier === undefined) return undefined;
-		const tiers = this.#deps.laneModels?.() ?? {};
-		const configured = LANE_MODEL_TIERS.filter((name) => tiers[name] !== undefined);
-		if (typeof tier === "string" && Object.hasOwn(tiers, tier) && tiers[tier as LaneModelTier] !== undefined) {
-			return tier as LaneModelTier;
-		}
-		throw new LaneInputError(
-			configured.length === 0
-				? "레인 모델 등급이 설정돼 있지 않습니다(config lanes.models). model 없이 시작하세요."
-				: `레인 모델 등급은 ${configured.join("·")} 중 하나입니다: ${String(tier)}`,
-		);
 	}
 
 	#uniqueName(base: string): string {
@@ -2885,7 +2783,7 @@ export class LaneManager {
 		if (new Set(names).size !== names.length) throw new LaneInputError("after에 같은 레인이 두 번 들어 있습니다.");
 		const title = cutCodePointSafe(redact(args.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
-		this.#startArgs(args);
+		parseStartArgs(args, this.#deps.laneModels?.());
 		if (names.includes(slugify(title))) {
 			throw new LaneInputError(
 				`선행 레인 ${slugify(title)}은 이 예약의 레인과 같은 이름입니다 (순환): 제목을 바꾸세요.`,
