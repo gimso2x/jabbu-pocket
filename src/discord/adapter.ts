@@ -65,6 +65,7 @@ import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTi
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
 import { type DiscordPart, renderDiscordMessages } from "./messages";
+import { notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
 import {
 	type DiscordAttachment,
 	DiscordCallError,
@@ -136,6 +137,8 @@ export interface DiscordAdapterOptions {
 	typingTimers?: TypingTimers | undefined;
 	/** How long `start()` waits for the first Ready before it lets the daemon go on. Default `START_WAIT_MS`. */
 	startWaitMs?: number | undefined;
+	/** How long a mentioned peer post waits for the rest of its split answer. Default `PEER_PART_WAIT_MS`; 0: no wait. */
+	peerPartWaitMs?: number | undefined;
 	/** A fatal gateway close after `start()` returned: the daemon drops this adapter (see `AdapterDeps.detach`). */
 	onFatal?: ((error: Error) => void) | undefined;
 }
@@ -184,6 +187,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #recoveredThreads = new Set<string>();
 	#ready: Promise<string | undefined> = Promise.resolve(undefined);
 	readonly #startWaitMs: number;
+	readonly #peerParts: PeerParts;
 	readonly #onFatal: ((error: Error) => void) | undefined;
 	/** `start()` has returned (Ready, or the wait ran out): a fatal close from here on is for the daemon to handle. */
 	#startReturned = false;
@@ -209,6 +213,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		this.#mediaRoot = options.mediaRoot;
 		this.#typingTimers = options.typingTimers ?? INTERVAL_TIMERS;
 		this.#startWaitMs = options.startWaitMs ?? START_WAIT_MS;
+		this.#peerParts = new PeerParts(options.peerPartWaitMs ?? PEER_PART_WAIT_MS);
 		this.#onFatal = options.onFatal;
 		this.#gate = new RetryAfterGate({
 			clock: options.clock,
@@ -821,11 +826,15 @@ export class DiscordAdapter implements ChannelAdapter {
 		if (event.guild_id === undefined) return drop("peer_dm");
 		if (this.#guildIds !== undefined && !this.#guildIds.has(event.guild_id)) return drop("guild_not_allowed");
 		const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
+		const partKey = `${event.channel_id}:${peer.userId}`;
 		if (!tokens.some((token) => event.content.includes(token))) {
-			await this.#notePeerSeen(event, peer.userId);
+			if (this.#peerParts.join(partKey, event, this.#log)) return "recorded";
+			const seen = { core: this.#core, log: this.#log, logChannel: this.#logChannel };
+			await notePeerSeen({ ...seen, place: (e) => this.#serverPlace(e) }, event, peer.userId);
 			return drop("peer_not_mentioned");
 		}
 		if (this.#core.onPeerInbound === undefined) return drop("peer_unsupported");
+		const content = await this.#peerParts.gather(partKey, event.content);
 		const { conversationId, threadId } = await this.#serverPlace(event);
 		if (conversationId === this.#logChannel) return drop("log_channel");
 		// A root's keys are those of the thread the owner path would open from it (Discord: thread id = message id).
@@ -833,7 +842,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		const threadRef = threadRefOf(conversationId, root);
 		// Before the hop cap: a post dropped there still shows the peer is awake.
 		this.#core.onPeerSeen?.({ threadRef, peerUserId: peer.userId, at: snowflakeTime(event.id) });
-		let text = event.content;
+		let text = content;
 		for (const token of tokens) text = text.split(token).join(" ");
 		text = text.trim();
 		const quoted = (event.embeds ?? [])
@@ -878,25 +887,6 @@ export class DiscordAdapter implements ChannelAdapter {
 		return info.parentId !== undefined && info.type !== 0
 			? { conversationId: info.parentId, threadId: event.channel_id }
 			: { conversationId: event.channel_id, threadId: undefined };
-	}
-
-	/**
-	 * A peer post that does not mention this bot is never taken, but it still answers this bot's calls to that peer in its
-	 * thread (`onPeerSeen`), outside the #log channel. A failed channel lookup is logged and the post dropped as before.
-	 */
-	async #notePeerSeen(event: DiscordMessageEvent, peerUserId: string): Promise<void> {
-		const onPeerSeen = this.#core.onPeerSeen;
-		if (onPeerSeen === undefined) return;
-		let place: { conversationId: string; threadId: string | undefined };
-		try {
-			place = await this.#serverPlace(event);
-		} catch (err) {
-			this.#log.warn("peer_seen_lookup_failed", { channel: event.channel_id, id: event.id, error: errorText(err) });
-			return;
-		}
-		if (place.conversationId === this.#logChannel) return;
-		const threadRef = threadRefOf(place.conversationId, place.threadId ?? event.id);
-		onPeerSeen({ threadRef, peerUserId, at: snowflakeTime(event.id) });
 	}
 
 	/**
