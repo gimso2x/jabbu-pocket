@@ -12,9 +12,9 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.bun/install/cache
-        key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+        key: ${{ runner.os }}-${{ runner.arch }}-bun-root-${{ hashFiles('bun.lock') }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-bun-
+          ${{ runner.os }}-${{ runner.arch }}-bun-root-
     - shell: bash
       run: |
         if ! bun install --frozen-lockfile; then

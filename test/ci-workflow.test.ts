@@ -403,7 +403,9 @@ describe("setup action", () => {
 		expect(restore?.uses).toContain("actions/cache/restore@");
 		expect(restore?.with?.path).toBe("~/.bun/install/cache");
 		expect(String(restore?.with?.key)).toContain("hashFiles('bun.lock')");
+		expect(String(restore?.with?.key)).toContain("-bun-root-");
 		expect(String(restore?.with?.["restore-keys"])).toContain("runner.arch");
+		expect(String(restore?.with?.["restore-keys"])).toContain("-bun-root-");
 
 		const install = setup.runs.steps[2];
 		expect(install?.shell).toBe("bash");
