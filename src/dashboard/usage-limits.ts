@@ -3,7 +3,7 @@ import { isRecord } from "../omp/type-guards";
 import { redact } from "../redact";
 import { cleanError, sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
-import { type UsageTrend, withTrends } from "./usage-forecast";
+import { type TrendOptions, type UsageTrend, withTrends } from "./usage-forecast";
 
 /**
  * The "모델 한도" card's data: config `dashboard.usageLimits` lists commands, each
@@ -59,7 +59,7 @@ export function readUsageLimits(
 	config: UsageLimitsConfig,
 	run: ProcessRunner,
 	now: () => number,
-	samples?: Parameters<typeof withTrends>[1],
+	samples?: TrendOptions,
 ): Promise<Section<UsageLimitsInfo>> {
 	return cache.read(JSON.stringify(config), now, async () => {
 		const sources = await collect(config, run);

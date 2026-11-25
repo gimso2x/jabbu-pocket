@@ -42,6 +42,13 @@ export interface SampleStore {
 	warn(message: string): void;
 }
 
+/** Where samples live and how their times read; `store` replaces the file system in tests. */
+export interface TrendOptions {
+	home: string;
+	timezone: string;
+	store?: SampleStore;
+}
+
 const KEEP_MS = 7 * 86_400_000;
 const FIT_MS = { "5h": 90 * 60_000, weekly: 24 * 3_600_000 } as const;
 const MIN_SPAN_MS = 60_000;
@@ -221,11 +228,7 @@ export function trendHtml(trend: UsageTrend | undefined, now: number): string {
  * Records this run's five-hour and weekly rows and returns the sources with each such row's {@link UsageTrend}.
  * Never throws for the file: a failed read or write only warns.
  */
-export function withTrends(
-	sources: UsageSource[],
-	options: { home: string; timezone: string; store?: SampleStore },
-	now: number,
-): UsageSource[] {
+export function withTrends(sources: UsageSource[], options: TrendOptions, now: number): UsageSource[] {
 	const keyOf = (s: Pick<UsageSample, "source" | "label" | "window">): string => `${s.source}\t${s.label}\t${s.window}`;
 	const tracked = (row: UsageRow): row is UsageRow & { window: "5h" | "weekly" } => row.window !== "other";
 	const fresh = sources.flatMap((source) =>
