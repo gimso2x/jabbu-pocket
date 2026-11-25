@@ -76,9 +76,9 @@ function shownDetail(detail: ApprovalDetail | undefined): ApprovalDetail {
 	return shown;
 }
 
-/** `gh` commands that write to GitHub where others can see it (issue/PR/comment/release/gist/repo, mutating `gh api`). */
+/** `gh` commands that write to GitHub where others can see it (issue/PR/comment/release/gist/repo, mutating `gh api`: an explicit method, or a field/`--input`/`graphql`, which make `gh api` POST by itself). The `\b` closes only the keyword branches: a `gh api` match can end on a flag followed by a quote or path. */
 const GITHUB_PUBLISH =
-	/\bgh\s+(?:(?:issue|pr)\s+(?:create|comment|edit|close|reopen|review|merge)|release\s+(?:create|edit|upload)|gist\s+create|repo\s+(?:create|edit|rename)|api\b[^\n]*?(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE))\b/i;
+	/\bgh\s+(?:(?:(?:issue|pr)\s+(?:create|comment|edit|close|reopen|review|merge)|release\s+(?:create|edit|upload)|gist\s+create|repo\s+(?:create|edit|rename))\b|api\b[^\n]*?(?:(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)\b|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)(?:[\s=]|$)|(?:^|\s)graphql(?:\s|$)))/i;
 
 /**
  * The detail with `external` filled in when the caller left it empty but the action (or summary) publishes to GitHub,
@@ -491,7 +491,7 @@ export class ApprovalBroker {
 		// Before the buttons go up (no click can arrive yet); a failed lookup only leaves the dashboard without a link.
 		const cardUrl = await this.#permalink(channel, card.messageId);
 		const now = this.#clock.now();
-		const timeoutMs = this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+		const timeoutMs = Math.min(this.#options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS, MAX_TIMER_DELAY_MS);
 		let recorded = true;
 		try {
 			store.createApproval({
