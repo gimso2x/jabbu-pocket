@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { injectionWarning, scanForInjection } from "../safety/injection";
 import { type ChatPlatform, chatOriginKey, parseChatOrigin, platformOfConversationId } from "./origin-key";
 import { fenced } from "./turn-prompt-guard";
-import { parseCommand, parsePurposeCommand, TAKES_ARG } from "./types";
+import { isHomeCommand, parseCommand, parsePurposeCommand, TAKES_ARG } from "./types";
 
 export interface NormalizeInput {
 	userId: string | undefined;
@@ -68,7 +68,7 @@ export function originKeyForMessage(
 ): string {
 	if (channelType === undefined || channelType === "im") return originKeyForChannel(channel, channelType, platform);
 	const root = threadTs === undefined || threadTs === "" || threadTs === ts;
-	if (root && (parseCommand(text) !== undefined || parsePurposeCommand(text) !== undefined))
+	if (root && (parseCommand(text) !== undefined || parsePurposeCommand(text) !== undefined || isHomeCommand(text)))
 		return originKeyForChannel(channel, channelType, platform);
 	return `${originKeyForChannel(channel, channelType, platform)}/t/${root ? ts : threadTs}`;
 }
