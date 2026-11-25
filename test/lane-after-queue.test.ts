@@ -14,6 +14,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { CHANNEL, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
+import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
@@ -408,6 +409,7 @@ describe("reservations inside the daemon: the tool and the buttons", () => {
 		const discordConfig = home.config.channels.discord as NonNullable<JabbuConfig["channels"]["discord"]>;
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, channels: { discord: { ...discordConfig, laneChannelId: LANE_CH } } },
 			channels: [new DiscordBinding(new DiscordChannel(discord, { ownerUserId: OWNER }))],
 			log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact }),

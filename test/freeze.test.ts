@@ -16,6 +16,7 @@ import { collectGates } from "../src/ops/gates";
 import { redact } from "../src/redact";
 import { SKILL_REVIEW_ORIGIN } from "../src/review/skills";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { isRoot } from "./helpers/privileges";
 
 let dir: string;
@@ -264,7 +265,7 @@ describe("gate and CLI", () => {
 			return true;
 		}) as typeof process.stdout.write;
 		try {
-			const env = { JABBU_HOME: dir };
+			const env = { JABBU_HOME: dir, JABBU_TEST_HOOKS: "1", JABBU_TEST_HOST_LOAD: "idle", JABBU_TEST_STATFS: "roomy" };
 			expect(await runCli(["freeze", "--reason", "test"], env)).toBe(0);
 			expect(readFreeze(dir)?.reason).toBe("test");
 			expect(await runCli(["gates", "--json"], env)).toBe(1);
@@ -295,6 +296,7 @@ describe("daemon under freeze", () => {
 		const sessions = new FakeSessionStore();
 		const transport = new WaitingDiscordTransport();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			log: createLogger({ sink: () => undefined, clock: { now: () => Date.now() }, redact }),
@@ -319,6 +321,7 @@ describe("daemon under freeze", () => {
 		const origins: string[] = [];
 		const clock = { now: () => Date.now() };
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: { ...home.config, skillReviewTurns: 1 },
 			channels: [discordBinding(transport)],
 			clock,
@@ -401,6 +404,7 @@ describe("autonomous rows under freeze", () => {
 		const sessions = new FakeSessionStore();
 		const clock = { now: () => t };
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,

@@ -121,6 +121,41 @@ async function ownerDm(id = QUESTION): Promise<void> {
 	await transport.emitMessage(event);
 }
 
+describe("inline reply channel answers", () => {
+	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+		const inline = new DiscordAdapter({
+			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
+			core,
+			deliveries: source(),
+			ownerUserId: OWNER,
+			clock: { now: () => now },
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+			mentionFreeChannels: [CH],
+			inline: { channels: [CH] },
+		});
+		await inline.start();
+		await transport.emitMessage({
+			id: QUESTION,
+			channel_id: CH,
+			guild_id: GUILD,
+			author: { id: OWNER },
+			content: "질문",
+			type: 0,
+		});
+		const id = deliver(`${CH}:${QUESTION}`, longBody(2500), `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(row(id)?.state).toBe("confirmed");
+		const lookups = transport.calls.filter((c) => c.method === "getChannel" && c.channelId === QUESTION);
+		expect(lookups.length).toBeLessThanOrEqual(1);
+		expect(transport.calls.some((c) => c.method === "startThread")).toBe(false);
+		await inline.stop();
+	});
+});
+
 describe("splitting and destinations", () => {
 	test("a 2500-character answer goes as two messages of at most 2000, both as replies in the DM", async () => {
 		await ownerDm();

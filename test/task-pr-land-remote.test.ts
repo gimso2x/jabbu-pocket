@@ -29,6 +29,7 @@ import { remoteIntegrityBase } from "../src/tasks/land-remote";
 import type { TaskRow } from "../src/tasks/ledger";
 import { integrityBaseOf } from "../src/tasks/pr-land-task";
 import { discordBinding, GUILD, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 import { FakeGh } from "./helpers/fake-gh";
 import { git } from "./helpers/git-fixtures";
 import { CHANNEL, GITHUB_URL, passed, SLUG, THREAD } from "./helpers/task-pr-harness";
@@ -182,6 +183,7 @@ class RemoteWorld {
 		writeFileSync(gitleaks, "#!/bin/sh\nexit 0\n");
 		chmodSync(gitleaks, 0o755);
 		this.daemon = new Daemon({
+			...daemonTestOptions(),
 			config: {
 				...this.home.config,
 				herdr: { bin: "herdr" },

@@ -14,6 +14,7 @@ import { acceptanceItems, docsDirOf } from "../src/tasks/docs";
 import { landTask, type TaskLandDeps } from "../src/tasks/land";
 import type { TaskRow } from "../src/tasks/ledger";
 import { CHANNEL, discordBinding, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 // The wiki result note of a [TASK]: the core's landing, `tasks close --as
 // done` with its `tasks_sync`, and a close made while the daemon was down. Real git, a real daemon, a fake client
@@ -43,6 +44,7 @@ const noteOf = (taskId: string) =>
 function newDaemon(): Daemon {
 	const sessions = new FakeSessionStore();
 	return new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(new WaitingDiscordTransport())],
 		log: createLogger({ sink: () => {}, clock, redact }),

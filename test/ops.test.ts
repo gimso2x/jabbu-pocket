@@ -47,7 +47,6 @@ import { readStamp, runBackup, STAMP_FILE } from "../src/ops/backup";
 import { BackupError } from "../src/ops/backup-error";
 import { collectGates, INBOUND_STARVATION_MS, SWEEP_STALLED_MS, TURNS_FAILING_WINDOW_MS } from "../src/ops/gates";
 import { gcSessions } from "../src/ops/gc";
-import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { LOG_FILES, LOG_MAX_BYTES, LogDirError, openLogSink, rotatingFileSink } from "../src/ops/logfile";
 import { redact } from "../src/redact";
 import { ALERT_INCIDENT_REPEAT_MS, type Store } from "../src/store/db";
@@ -64,6 +63,7 @@ import {
 	WaitingDiscordTransport,
 } from "./helpers/bot-home";
 import { killSpawned, runMain, spawnDaemon } from "./helpers/daemon-process";
+import { daemonTestOptions } from "./helpers/disk";
 import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
 import { isRoot } from "./helpers/privileges";
 
@@ -756,13 +756,13 @@ describe("daemon surface: status text, stall status, delivery_state", () => {
 	): Promise<void> {
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
 			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
 			ompVersion: "omp-test 0",
 			bootId: "boot",
-			hostLoad: IDLE_HOST_LOAD, // status is read twice (slash, CLI): live load would differ between the readings
 			driverFactory: (_origin, sessionDir) => {
 				const driver = new OpsDriver({
 					sessionDir,
@@ -1014,6 +1014,7 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		const sessions = new FakeSessionStore();
 		const failPrompts = options.failPrompts ?? 0;
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(transport)],
 			clock,
@@ -1099,6 +1100,27 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		const status = renderStatusText(daemon.status());
 		expect(status).toContain("자가진단 게이트");
 		expect(status).toContain("turns_failing recent=4");
+	});
+
+	test("a failed owner DM of the turn-failure escalation re-arms the incident: the next failure notifies again, not 24h later", async () => {
+		await startDaemon({ failPrompts: 99 });
+		const real = transport.createMessage.bind(transport);
+		let dropped = 0;
+		transport.createMessage = async (args) => {
+			if ((args.content ?? "").includes("연속 실패") && dropped === 0) {
+				dropped++;
+				throw new Error("discord_http_500");
+			}
+			return real(args);
+		};
+		for (let i = 0; i < 3; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		await transport.waitForPosts((text) => text.startsWith("[turn failed]"), 3);
+		for (let i = 3; i < 8; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		clock.advance(23 * 3_600_000);
+		for (let i = 8; i < 11; i++) await daemon.inject({ origin: ORIGIN, asOwner: true, text: `job ${i}` });
+		expect(dropped).toBe(1);
+		// the dropped DM did not start a 24h silence: a later failure of the same sign reached the owner
+		expect(transport.posts((text) => text.includes("연속 실패"))).toHaveLength(1);
 	});
 
 	test("turns_failing (a window gate) closes silently when its evidence ages out: no false '회복' DM", async () => {
@@ -1897,6 +1919,35 @@ describe("jabbu-pocket gc", () => {
 		}
 	});
 
+	test("gc prunes monitor_slots past the ledger retention window and keeps fresh ones", () => {
+		const store = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
+		const monitor = store.monitors.addMonitor({
+			name: "slots",
+			trigger: { kind: "cron", schedule: "* * * * *", timezone: "UTC" },
+			instruction: "check",
+			overlap: "queue",
+			enabled: true,
+		});
+		store.close();
+		const now = Date.now();
+		const db = new Database(join(home.dir, "jabbu.db"));
+		const insert = db.query(
+			"INSERT INTO monitor_slots (monitor_id, slot_at, state, created_at) VALUES (?, ?, 'claimed', ?)",
+		);
+		insert.run(monitor.id, now - 100 * DAY_MS, now - 100 * DAY_MS);
+		insert.run(monitor.id, now - 91 * DAY_MS, now - 91 * DAY_MS);
+		insert.run(monitor.id, now - DAY_MS, now - DAY_MS);
+		db.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now });
+		expect(result.ledgerRemoved.monitorSlots).toBe(2);
+		const after = new Database(join(home.dir, "jabbu.db"), { readonly: true });
+		try {
+			expect(after.query("SELECT COUNT(*) AS n FROM monitor_slots").get()).toEqual({ n: 1 });
+		} finally {
+			after.close();
+		}
+	});
+
 	test("a resumed older epoch stays live when the home is reached through a symlink", () => {
 		const link = join(home.dir, "..", `${basename(home.dir)}-link`);
 		symlinkSync(home.dir, link);
@@ -2062,6 +2113,39 @@ describe("jabbu-pocket gc: thread-scoped sessions", () => {
 		expect(existsSync(sessionOf("discord/ch/300000000000000001/t/50"))).toBe(true);
 		expect(hasOrigin("discord/ch/300000000000000001/t/50")).toBe(true);
 	});
+
+	test.each(["pending", "sending"])(
+		"a %s inbound that arrives after gc scanned the ledger keeps its expired thread origin",
+		(late) => {
+			const thread = "discord/ch/300000000000000001/t/50";
+			const result = gcSessions({
+				homeDir: home.dir,
+				retentionDays: 30,
+				now: Date.now(),
+				afterScan: () => {
+					// The daemon takes a message for the expired thread between gc's scan and its delete.
+					const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
+					db.run("PRAGMA busy_timeout = 5000");
+					db.run(
+						"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, state, created_at) VALUES ('late', ?, 1, 'x', ?, 0)",
+						[thread, late],
+					);
+					db.close();
+				},
+			});
+			expect(result.threadOriginsRemoved).toEqual([]);
+			expect(existsSync(sessionOf(thread))).toBe(true);
+			expect(hasOrigin(thread)).toBe(true);
+			const db = new Database(join(home.dir, "jabbu.db"), { strict: true });
+			const orphans = db
+				.query(
+					"SELECT COUNT(*) AS n FROM inbound i WHERE NOT EXISTS (SELECT 1 FROM origins o WHERE o.origin_key = i.origin_key)",
+				)
+				.get() as { n: number };
+			db.close();
+			expect(orphans.n).toBe(0);
+		},
+	);
 });
 
 describe("jabbu-pocket gc: uncertain inbound keeps its origin", () => {
@@ -2191,6 +2275,7 @@ describe.each([
 		const prompts: string[] = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: home.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock,
@@ -2422,7 +2507,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 
 	const KEPT_INBOUND = ["in-89", "in-approval-pending", "in-old-dispatched", "in-old-pending"];
 	const KEPT_DELIVERIES = ["d-89", "d-old-inflight", "d-old-pending"];
-	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0 };
+	const EXPECTED = { inbound: 4, deliveries: 3, deliveryPosts: 3, monitorEvents: 0, monitorSlots: 0 };
 
 	test("91-day finished rows go; 89-day, waiting and pending-approval rows stay; no orphan posts", () => {
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
@@ -2440,6 +2525,7 @@ describe("jabbu-pocket gc: ledger retention", () => {
 			deliveries: 0,
 			deliveryPosts: 0,
 			monitorEvents: 0,
+			monitorSlots: 0,
 		});
 	});
 
@@ -2456,7 +2542,13 @@ describe("jabbu-pocket gc: ledger retention", () => {
 		db.exec("DROP TABLE delivery_posts; DROP TABLE approvals");
 		db.close();
 		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
-		expect(result.ledgerRemoved).toEqual({ inbound: 5, deliveries: 3, deliveryPosts: 0, monitorEvents: 0 });
+		expect(result.ledgerRemoved).toEqual({
+			inbound: 5,
+			deliveries: 3,
+			deliveryPosts: 0,
+			monitorEvents: 0,
+			monitorSlots: 0,
+		});
 		expect(names("inbound")).toEqual(["in-89", "in-old-dispatched", "in-old-pending"]);
 		expect(names("deliveries")).toEqual(["d-89", "d-old-inflight", "d-old-pending"]);
 	});
@@ -2464,7 +2556,9 @@ describe("jabbu-pocket gc: ledger retention", () => {
 	test("`jabbu-pocket gc --dry-run` prints the ledger counts in gc_done", async () => {
 		const dry = await runMain(home.dir, ["gc", "--dry-run"]);
 		expect(dry.code, dry.stderr).toBe(0);
-		expect(dry.stdout).toMatch(/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+\n/);
+		expect(dry.stdout).toMatch(
+			/gc_done .* inbound=\d+ deliveries=\d+ delivery_posts=\d+ monitor_events=\d+ monitor_slots=\d+\n/,
+		);
 		expect(names("inbound")).toHaveLength(8);
 	});
 });

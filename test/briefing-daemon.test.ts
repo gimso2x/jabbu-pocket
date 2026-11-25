@@ -12,6 +12,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import type { InboundRow } from "../src/store/db-rows";
 import { discordBinding, makeHome, OWNER_DM, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { daemonTestOptions } from "./helpers/disk";
 
 const ORIGIN = `discord/dm/${OWNER_DM}`;
 
@@ -138,6 +139,7 @@ async function boot(options: { holdTurns?: boolean; briefingRun?: ProcessRunner 
 	const made = new SignalingDriver({ sessionDir: join(home.dir, "s"), store: sessions, holdTurns: options.holdTurns });
 	driver = made;
 	const d = new Daemon({
+		...daemonTestOptions(),
 		config: home.config,
 		channels: [discordBinding(transport)],
 		clock,

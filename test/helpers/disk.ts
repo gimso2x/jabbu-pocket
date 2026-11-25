@@ -1,4 +1,10 @@
-import type { StatfsReader } from "../../src/ops/host-resources";
+import type { DaemonOptions } from "../../src/daemon/daemon-types";
+import { IDLE_HOST_LOAD } from "../../src/ops/host-resources";
+import { ROOMY_STATFS } from "../../src/ops/test-host-hooks";
 
-/** 50 of 100 GiB free (4 KiB blocks): a daemon test never meets `disk_low` because of the machine's real disk. */
-export const ROOMY_STATFS: StatfsReader = () => ({ bavail: 50 * 262_144, blocks: 100 * 262_144, bsize: 4096 });
+export { ROOMY_STATFS };
+
+/** Host-independent defaults for `new Daemon(...)` in tests; spread first so explicit `hostLoad`/`statfs` overrides. */
+export function daemonTestOptions(): Pick<DaemonOptions, "hostLoad" | "statfs"> {
+	return { hostLoad: IDLE_HOST_LOAD, statfs: ROOMY_STATFS };
+}

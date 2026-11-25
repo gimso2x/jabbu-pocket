@@ -13,6 +13,7 @@ import { acceptanceItems } from "../src/tasks/docs";
 import { openTaskLedger, TaskLedger } from "../src/tasks/ledger";
 import { discordBinding, makeHome, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
 import { runCliCapture } from "./helpers/daemon-process";
+import { daemonTestOptions, ROOMY_STATFS } from "./helpers/disk";
 
 let home: TestHome;
 const stops: Array<() => void> = [];
@@ -162,7 +163,7 @@ describe("status (qa-j n15, n16)", () => {
 			 VALUES ('m1', 'bad', 'not json', 'x', 0, 0, 0)`,
 		);
 		db.close();
-		const report = readStatusFromDb(dbPath, "v", "Asia/Seoul", {}, IDLE_HOST_LOAD);
+		const report = readStatusFromDb(dbPath, "v", "Asia/Seoul", {}, IDLE_HOST_LOAD, ROOMY_STATFS);
 		expect(report.openGates.map((gate) => gate.name)).not.toContain("ledger_unreadable");
 		expect(report.monitors.count).toBe(1);
 		expect(report.monitors.next).toBeNull();
@@ -188,6 +189,7 @@ describe("inject origin ids (qa-j n26)", () => {
 		ownerHome = makeHome("jabbu-inject-ids-");
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
+			...daemonTestOptions(),
 			config: ownerHome.config,
 			channels: [discordBinding(new WaitingDiscordTransport())],
 			clock: { now: () => Date.now() },
