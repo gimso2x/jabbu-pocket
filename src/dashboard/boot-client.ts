@@ -1,8 +1,6 @@
-/**
- * The page wiring of the dashboard's inline script (`SCRIPT` in html.ts): `boot()` and its call. Plain browser
- * JavaScript, shipped as text after the renderers it calls.
- */
-export const BOOT_CLIENT = `function boot() {
+import { TASK_WORK_CLIENT } from "./task-work-client";
+/** The page wiring of the inline script (`SCRIPT` in html.ts): `boot()` and its call, shipped after its renderers. */
+export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	const main = document.getElementById("main");
 	const stale = document.getElementById("stale");
 	const search = document.getElementById("search");
@@ -573,7 +571,7 @@ export const BOOT_CLIENT = `function boot() {
 			return;
 		}
 		const focused = document.activeElement && document.activeElement.id === "detail-title";
-		head.innerHTML = html;
+		taskWork.paint(head, html);
 		drawnHead = html;
 		scrollToHere(head);
 		syncBarTitle();

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import type { ActionButton, MessageRef } from "../channel/port";
+import { type ActionButton, type MessageRef, renderMentions } from "../channel/port";
 import { cutCodePointSafe, escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
 import { parseThreadRef, platformOfThreadRef, threadRefOf } from "../core/normalize";
@@ -2927,7 +2927,7 @@ export class LaneManager {
 		const route = this.#deps.channels.forThreadRef(reservation.threadRef);
 		if (route === undefined) return false;
 		try {
-			await route.port.post(route.target, message);
+			await route.port.post(route.target, { ...message, text: renderMentions(message.text, route.port) });
 			return true;
 		} catch (error) {
 			this.#deps.log.warn("lane_reservation_post_failed", { reservation: reservation.id, error: String(error) });

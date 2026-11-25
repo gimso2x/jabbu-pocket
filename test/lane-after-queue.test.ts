@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import type { ChannelPort, OutboundMessage } from "../src/channel/port";
 import type { JabbuConfig } from "../src/config";
+import { openBotStore } from "../src/core/origin";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordBinding } from "../src/discord/binding";
 import { DiscordChannel } from "../src/discord/channel";
+import { LaneManager } from "../src/lanes/manager";
 import { LaneInputError } from "../src/lanes/manager-constants";
 import { RESERVATION_TTL_MS, reservationActionId } from "../src/lanes/reservations";
 import type { LaneRow } from "../src/lanes/status";
@@ -13,6 +16,7 @@ import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { CHANNEL, makeHome, OWNER, type TestHome, WaitingDiscordTransport } from "./helpers/bot-home";
+import { registryOf } from "./helpers/channels";
 import type { FakeDiscordCall } from "./helpers/discord-fake-transport";
 import { daemonTestOptions } from "./helpers/disk";
 import { git, makeRepo } from "./helpers/git-fixtures";
@@ -378,6 +382,75 @@ describe("reservations over the lane manager", () => {
 		await tick();
 		expect(cards()).toHaveLength(1);
 	});
+
+	test("qa-ac #43: #postReservation renders {{mention:...}} through route.port.mentionUser", async () => {
+		const posted: OutboundMessage[] = [];
+		const fakePort: ChannelPort = {
+			platform: "discord",
+			post: async (target, msg) => {
+				posted.push(msg);
+				return { platform: "discord", conversationId: target.conversationId, messageId: `m-${posted.length}` };
+			},
+			edit: async () => undefined,
+			react: async () => undefined,
+			uploadFile: async () => ({ fileId: "f-1" }),
+			permalink: async () => undefined,
+			mentionUser: (userId) => `[mention:${userId}]`,
+		};
+		const now = 1_800_000_000_000;
+		const clock = { now: () => now };
+		const store = openBotStore(join(home.dir, "mention-regression.db"), clock, "Asia/Seoul");
+		try {
+			store.insertLane({
+				name: "first",
+				title: "first",
+				threadRef: `${CHANNEL}:-`,
+				originKey: "jabbu/work/first",
+				cwd: repo,
+				sessionDir: join(home.dir, "sessions", "first"),
+				meta: { startedAt: now, lastProgressAt: now, steerSeq: 0, repo },
+			});
+			store.transitionLane("first", "done-claimed", { event: "claimed" });
+			store.transitionLane("first", "closed", { event: "landed" }, { land: { state: "landed", attempts: 0 } });
+			store.insertLaneReservation({
+				originKey: "discord/dm/1",
+				threadRef: `${CHANNEL}:-`,
+				repo,
+				after: ["first"],
+				startArgs: { title: "next step", cwd: repo, channel: CHANNEL, brief: "do next" },
+				expiresAt: now + RESERVATION_TTL_MS,
+			});
+			const manager = new LaneManager({
+				store,
+				channels: registryOf(fakePort),
+				clock,
+				timezone: "Asia/Seoul",
+				log: createLogger({ sink: () => undefined, clock, redact }),
+				sessionsRoot: join(home.dir, "sessions"),
+				ownerUserId: OWNER,
+				route: async () => undefined,
+				stopWhenIdle: async () => undefined,
+				pauseTurn: async () => {
+					throw new Error("unused");
+				},
+				resumePending: async () => undefined,
+				sessionDirFor: (origin) => join(home.dir, "sessions", origin),
+				session: {
+					openFile: async () => undefined,
+					whenTurnEnds: async () => undefined,
+					release: async () => undefined,
+					childRunning: () => false,
+				},
+			});
+			await manager.tick();
+			expect(posted).toHaveLength(1);
+			expect(posted[0]?.text).not.toContain("{{mention:");
+			expect(posted[0]?.text).toContain(`[mention:${OWNER}]`);
+			expect(posted[0]?.text).toContain("▶ 시작 가능");
+		} finally {
+			store.close();
+		}
+	});
 });
 
 describe("reservations inside the daemon: the tool and the buttons", () => {
@@ -471,6 +544,8 @@ describe("reservations inside the daemon: the tool and the buttons", () => {
 		expect(daemon.store.getLaneReservation(1)?.state).toBe("ready");
 		const card = discord.posts((text) => text.includes("시작 가능"))[0] as unknown as Post;
 		expect(card.channelId).toBe(DM);
+		expect(card.content ?? "").not.toContain("{{mention:");
+		expect(card.content ?? "").toContain(`<@${OWNER}>`);
 		expect(customIds(card.components)).toEqual([reservationActionId(1, "start"), reservationActionId(1, "cancel")]);
 
 		await click(reservationActionId(1, "start"), card, STRANGER);

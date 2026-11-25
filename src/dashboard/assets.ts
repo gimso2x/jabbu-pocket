@@ -1,7 +1,8 @@
 import { STYLE } from "./style";
+import { TASK_WORK_STYLE } from "./task-work-client";
 
 /** The page's stylesheet: the shared style plus the card-link rules only the page uses. */
-export const PAGE_CSS = `${STYLE}.card-thread{position:relative}.card-link{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}.card-link::after{content:"";position:absolute;inset:0;border-radius:var(--r-m)}.card-job{position:relative;z-index:1}.card-job:hover{text-decoration:underline}`;
+export const PAGE_CSS = `${STYLE}${TASK_WORK_STYLE}.card-thread{position:relative}.card-link{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}.card-link::after{content:"";position:absolute;inset:0;border-radius:var(--r-m)}.card-job{position:relative;z-index:1}.card-job:hover{text-decoration:underline}`;
 
 /** Web app manifest for "install as app" in Chrome/Edge; URLs are relative so any tunnel prefix keeps working. */
 export const WEB_MANIFEST = JSON.stringify({

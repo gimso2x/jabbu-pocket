@@ -24,6 +24,7 @@ import {
 	resolveWebBots,
 	slugOfBotHome,
 	summarizeWebBots,
+	WEB_IPC_TIMEOUT_MS,
 	type WebBotTarget,
 } from "./bots";
 import { renderWebMessageHtml } from "./card-html";
@@ -38,7 +39,7 @@ export { serveWebChatAsset };
 export interface WebDashboardOptions {
 	homeDir: string;
 	auth: WebAuthConfig;
-	callDaemon: (request: unknown) => Promise<unknown>;
+	callDaemon: WebBotTarget["callDaemon"];
 	bots?: readonly WebBotTarget[] | undefined;
 	botName?: string | undefined;
 	/** Interval between `web_messages` change polls on open SSE streams (default 1000 ms). */
@@ -55,6 +56,13 @@ export interface WebRouterContext {
 }
 
 const MAX_POST_BODY_BYTES = 64 * 1024;
+/**
+ * `POST api/web/task/<TASK-ID>/followup|pause|resume`: the dashboard's 작업 내역 panel. The main bot's [TASK]s only
+ * (the panel's `api/thread/*` reads are the main home's), each a daemon IPC op that waits like `jabbu-pocket tasks`.
+ */
+const WEB_TASK_OP = /^\/(?:.*\/)?api\/web\/task\/(T-\d{8}-\d{2,})\/(followup|pause|resume)$/;
+/** The [TASK] ops' IPC wait (`IPC_TIMEOUT_MS` of `src/cli/tasks.ts`): a pause waits for the worker's turn to stop. */
+const WEB_TASK_IPC_TIMEOUT_MS = 60_000;
 
 export function createWebRouterContext(options: WebDashboardOptions | undefined): WebRouterContext | undefined {
 	if (options === undefined) return undefined;
@@ -92,7 +100,7 @@ export function webDashboardOptionsFor(
 			accessAud: webConfig.accessAud,
 			localTokenPath: join(homeDir, "state", "web-local.token"),
 		},
-		callDaemon: (request) => callDaemon(sockPath, request, 5_000),
+		callDaemon: (request, timeoutMs = WEB_IPC_TIMEOUT_MS) => callDaemon(sockPath, request, timeoutMs),
 		...(bots === undefined ? {} : { bots }),
 		...(config?.channels.discord?.displayName === undefined ? {} : { botName: config.channels.discord.displayName }),
 	};
@@ -111,7 +119,11 @@ function jsonReply(
 	});
 }
 
-async function readJsonBody(request: Request): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false }> {
+/** The POST body as a JSON object; `allowEmpty` reads an empty body as `{}` (a pause or resume carries nothing). */
+async function readJsonBody(
+	request: Request,
+	allowEmpty = false,
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false }> {
 	let raw: string;
 	try {
 		raw = await request.text();
@@ -119,6 +131,7 @@ async function readJsonBody(request: Request): Promise<{ ok: true; value: Record
 		return { ok: false };
 	}
 	if (Buffer.byteLength(raw, "utf8") > MAX_POST_BODY_BYTES) return { ok: false };
+	if (allowEmpty && raw.trim() === "") return { ok: true, value: {} };
 	try {
 		const parsed = JSON.parse(raw) as unknown;
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { ok: false };
@@ -200,23 +213,27 @@ export async function webChatPageResponse(
 }
 
 async function forwardDaemonOp(
-	callDaemon: (request: unknown) => Promise<unknown>,
+	callDaemon: WebBotTarget["callDaemon"],
 	opPayload: Record<string, unknown>,
 	commonHeaders: Record<string, string>,
+	timeoutMs: number = WEB_IPC_TIMEOUT_MS,
 ): Promise<Response> {
 	let answer: unknown;
 	try {
-		answer = await callDaemon(opPayload);
+		answer = await callDaemon(opPayload, timeoutMs);
 	} catch {
 		return jsonReply({ error: "daemon_unreachable" }, 503, false, commonHeaders);
 	}
 	if (typeof answer !== "object" || answer === null || !("ok" in answer)) {
 		return jsonReply({ error: "daemon_invalid_response" }, 502, false, commonHeaders);
 	}
-	const record = answer as { ok?: unknown; error?: unknown };
+	const record = answer as { ok?: unknown; error?: unknown; text?: unknown };
 	if (record.ok !== true) {
 		return jsonReply(
-			{ error: typeof record.error === "string" ? record.error : "request_failed" },
+			{
+				error: typeof record.error === "string" ? record.error : "request_failed",
+				...(typeof record.text === "string" ? { text: record.text } : {}),
+			},
 			400,
 			false,
 			commonHeaders,
@@ -250,11 +267,23 @@ export async function handleWebRequest(
 				? jsonReply(uploaded, 200, false, commonHeaders)
 				: jsonReply({ error: uploaded.error }, uploaded.status, false, commonHeaders);
 		}
-		const body = await readJsonBody(request);
+		const taskOp = WEB_TASK_OP.exec(pathname);
+		const body = await readJsonBody(request, taskOp !== null);
 		if (!body.ok) return jsonReply({ error: "invalid_json" }, 400, false, commonHeaders);
 		const rawBot = typeof body.value.bot === "string" ? body.value.bot : url.searchParams.get("bot");
 		const target = resolveBotTarget(ctx.bots, rawBot);
 		if (target === undefined) return jsonReply({ error: "invalid_bot" }, 400, false, commonHeaders);
+
+		if (taskOp !== null) {
+			// A peer bot's [TASK] is not intervened in from here (its sessions are not this dashboard's to show).
+			if (target !== ctx.bots[0]) return jsonReply({ error: "invalid_bot" }, 400, false, commonHeaders);
+			const [, id, action] = taskOp;
+			const payload =
+				action === "followup"
+					? { op: "task_followup", id, text: body.value.text }
+					: { op: action === "pause" ? "tasks_pause" : "tasks_resume", id, source: "web" };
+			return forwardDaemonOp(target.callDaemon, payload, commonHeaders, WEB_TASK_IPC_TIMEOUT_MS);
+		}
 
 		if (route.WEB_NEW.test(pathname)) {
 			return forwardDaemonOp(target.callDaemon, { op: "web_new", title: body.value.title }, commonHeaders);

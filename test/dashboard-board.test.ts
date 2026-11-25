@@ -203,6 +203,7 @@ const SNAPSHOT: DashboardSnapshot = {
 				status: "working",
 				host: "local",
 				agent: "t-20261104-07",
+				runtime: "herdr",
 				branch: "task/T-20261104-07",
 				open: true,
 				updatedAt: "2026-11-04T09:00:00+09:00",

@@ -17,9 +17,10 @@ import {
 	taskSummaryLine,
 } from "../tasks/dispatch";
 import { parseTaskSpecInput, TASK_ID_PATTERN } from "../tasks/docs";
+import { followupTask } from "../tasks/followup";
 import type { TaskRow } from "../tasks/ledger";
 import { applyRiskFloor } from "../tasks/risk-floor";
-import { releaseHold, runtimeFor } from "../tasks/runtime";
+import { runtimeFor } from "../tasks/runtime";
 import { resolveAgyWorker, resolveWorkerTier, type WorkerTier } from "../tasks/worker-tier";
 import { auditContext } from "./audit";
 import { type BoardLinkResolver, boardCardLink, type HerdrBoardConfig } from "./board";
@@ -120,6 +121,51 @@ function takeWorkerKind(raw: unknown): { worker: "agy" | undefined; rest: unknow
 	const { worker, ...rest } = raw as Record<string, unknown>;
 	if (worker !== "agy") throw new Error(`taskSpec.worker는 agy만 받습니다: ${String(worker)}`);
 	return { worker, rest };
+}
+
+/**
+ * Handoff risk scan of a brief about to go to a worker or an `omp -p` run. clear/advisory pass (advisory adds a
+ * result line); high_risk passes only on an `approved` owner card (no `approve` → refused as `no_approver`), anything
+ * else throws before a worker is touched. `afterApproval` runs once a card came back approved (the freeze re-check).
+ */
+export async function gateHandoff(
+	deps: Pick<DispatchToolDeps, "originKey" | "approve" | "log"> & { afterApproval?: () => void },
+	text: string,
+	signal: AbortSignal,
+): Promise<{ suffix: string; approved: boolean }> {
+	const scan = scanHandoffBrief(text);
+	const origin = deps.originKey;
+	if (scan.verdict === "clear") return CLEAR_GATE;
+	if (scan.verdict === "advisory") {
+		const rules = [...new Set(scan.findings.map((finding) => finding.rule)), ...(scan.truncated ? ["truncated"] : [])];
+		deps.log.info("dispatch_risk_advisory", { origin, rules });
+		return { suffix: `\n위험 검사: advisory (${rules.join(", ")})`, approved: false };
+	}
+	const high = scan.findings.filter((finding) => finding.severity === "high_risk");
+	const rest = scan.findings.filter((finding) => finding.severity !== "high_risk");
+	const rules = [...new Set(high.map((finding) => finding.rule))];
+	deps.log.warn("dispatch_risk_high", { origin, rules });
+	const detail: ApprovalDetail = {
+		action: [...high, ...rest]
+			.slice(0, 5)
+			.map((finding) => `L${finding.line} ${finding.rule}: ${redact(finding.excerpt)}`)
+			.join("\n"),
+		impact: "승인하면 이 지시문이 사람 없이 워커에서 실행됩니다",
+	};
+	const answer =
+		deps.approve === undefined
+			? "no_approver"
+			: await deps.approve("herdr 위임 지시문에 고위험 명령이 있습니다", detail, signal);
+	if (answer === "approved") {
+		deps.afterApproval?.();
+		deps.log.info("dispatch_risk_approved", { origin, rules });
+		return { suffix: `\n위험 검사: high_risk 승인됨 (${rules.join(", ")})`, approved: true };
+	}
+	const outcome = typeof answer === "object" ? "replied" : answer;
+	deps.log.warn("dispatch_risk_refused", { origin, outcome });
+	throw new Error(
+		`위험 검사에서 막혔습니다(${outcome}): ${rules.join(", ")}. 지시문에서 해당 명령을 빼거나 금지 문장으로 바꾸고 다시 시도하세요`,
+	);
 }
 
 /** The `jabbu_dispatch` host tool for chat origins; `undefined` when the omp binary is not provided. */
@@ -260,50 +306,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	 * Only a high_risk brief asks the owner; a peer bot having written in the thread asks nothing more (owner, 11-09).
 	 */
 	function gateWork(text: string | undefined, signal: AbortSignal): Promise<{ suffix: string; approved: boolean }> {
-		return text === undefined || text === "" ? Promise.resolve(CLEAR_GATE) : gateHandoff(text, signal);
-	}
-
-	/**
-	 * Handoff risk scan of a brief about to go to a herdr worker or an `omp -p` run. clear/advisory pass (advisory adds
-	 * a result line); high_risk passes only on an `approved` owner card, anything else throws before a worker is touched.
-	 */
-	async function gateHandoff(text: string, signal: AbortSignal): Promise<{ suffix: string; approved: boolean }> {
-		const scan = scanHandoffBrief(text);
-		const origin = deps.originKey;
-		if (scan.verdict === "clear") return CLEAR_GATE;
-		if (scan.verdict === "advisory") {
-			const rules = [
-				...new Set(scan.findings.map((finding) => finding.rule)),
-				...(scan.truncated ? ["truncated"] : []),
-			];
-			deps.log.info("dispatch_risk_advisory", { origin, rules });
-			return { suffix: `\n위험 검사: advisory (${rules.join(", ")})`, approved: false };
-		}
-		const high = scan.findings.filter((finding) => finding.severity === "high_risk");
-		const rest = scan.findings.filter((finding) => finding.severity !== "high_risk");
-		const rules = [...new Set(high.map((finding) => finding.rule))];
-		deps.log.warn("dispatch_risk_high", { origin, rules });
-		const detail: ApprovalDetail = {
-			action: [...high, ...rest]
-				.slice(0, 5)
-				.map((finding) => `L${finding.line} ${finding.rule}: ${redact(finding.excerpt)}`)
-				.join("\n"),
-			impact: "승인하면 이 지시문이 사람 없이 워커에서 실행됩니다",
-		};
-		const answer =
-			deps.approve === undefined
-				? "no_approver"
-				: await deps.approve("herdr 위임 지시문에 고위험 명령이 있습니다", detail, signal);
-		if (answer === "approved") {
-			refuseIfFrozen();
-			deps.log.info("dispatch_risk_approved", { origin, rules });
-			return { suffix: `\n위험 검사: high_risk 승인됨 (${rules.join(", ")})`, approved: true };
-		}
-		const outcome = typeof answer === "object" ? "replied" : answer;
-		deps.log.warn("dispatch_risk_refused", { origin, outcome });
-		throw new Error(
-			`위험 검사에서 막혔습니다(${outcome}): ${rules.join(", ")}. 지시문에서 해당 명령을 빼거나 금지 문장으로 바꾸고 다시 시도하세요`,
-		);
+		return text === undefined || text === ""
+			? Promise.resolve(CLEAR_GATE)
+			: gateHandoff({ ...deps, afterApproval: refuseIfFrozen }, text, signal);
 	}
 
 	async function executeDispatch(params: Record<string, unknown>, signal: AbortSignal): Promise<string> {
@@ -504,25 +509,18 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				const summary = await taskSummaryLine(taskDeps, name, null);
 				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
-			if (row.status === "done" || row.status === "cancelled")
-				throw new Error(`${row.taskId}는 이미 ${row.status}로 닫힌 작업입니다`);
-			const gate = await gateWork(task, signal);
-			const existing = await runtime.exists(row);
-			if (!existing.ok) return `전달 실패: ${existing.error}`;
-			if (!existing.exists) throw new Error(`${name} 워커가 없습니다. taskSpec:{id:"${row.taskId}"}로 재개하세요`);
-			releaseHold(taskDeps.ledger, row);
-			const follow = await runtime.prompt(row, task);
-			const check = `진행 확인: jabbu_dispatch {mode:"worker", name:"${name}"}`;
-			if (follow.ok || follow.unconfirmed === true) {
-				notePrompt(deps, { host: null, agent: name, kind: "followup", text: task, originKey: deps.originKey });
-			}
-			if (follow.unconfirmed === true) {
-				deps.log.warn("dispatch_prompt_unconfirmed", { agent: name, error: follow.error });
-				return `전달은 했지만 작업 시작이 확인되지 않았습니다(${follow.error?.replace("agent prompt unconfirmed: ", "")}). ${check}${gate.suffix}`;
-			}
-			if (!follow.ok) return `전달 실패: ${follow.error ?? "unknown"}`;
-			deps.log.info("dispatch_prompted", { agent: name });
-			return `후속 지시를 ${name}에 전달했습니다. ${check}${gate.suffix}`;
+			const follow = await followupTask(
+				{
+					ledger: taskDeps.ledger,
+					runtime: () => runtime,
+					gate: (text) => gateWork(text, signal),
+					originKey: deps.originKey,
+					...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
+					log: deps.log,
+				},
+				{ id: row.taskId, text: task, source: "tool" },
+			);
+			return follow.text;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");

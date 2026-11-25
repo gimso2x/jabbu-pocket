@@ -144,8 +144,8 @@ export function gcSessions(options: GcOptions): GcResult {
 	}
 	// The read-only handle is closed before the cleanup pass opens, so the writable short-lived connection
 	// never fights a lock. busy_timeout mirrors the ledger's open options: a turn committing at the same
-	// moment must not fail the gc with an immediate SQLITE_BUSY. Only expired thread origins delete rows;
-	// everything else stays read-only. A dry run opens it read-only, only to count the turn snapshots.
+	// moment must not fail the gc with an immediate SQLITE_BUSY. Expired origins and `gcLedger` delete rows.
+	// A dry run opens it read-only, only to count.
 	const write = new Database(dbPath, options.dryRun ? { readonly: true, strict: true } : { strict: true });
 	write.run("PRAGMA busy_timeout = 5000");
 	const removeRow = options.dryRun ? undefined : write.query(REMOVE_IDLE);
