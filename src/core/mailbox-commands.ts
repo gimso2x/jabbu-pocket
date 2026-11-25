@@ -75,7 +75,7 @@ export async function restartCommand(host: MailboxHost, threadRef: string): Prom
 	const { originKey, restartProvider } = host.deps;
 	if (host.deps.isDraining?.()) return RESTART_DRAINING_TEXT;
 	const platform = platformOfThreadRef(threadRef);
-	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform !== "discord") return RESTART_REFUSED_TEXT;
+	if (originKey.startsWith(MONITOR_ORIGIN_PREFIX) || platform === undefined) return RESTART_REFUSED_TEXT;
 	if (restartProvider === undefined) return "재시작이 연결되지 않았습니다";
 	return await restartProvider(originKey, threadRef);
 }

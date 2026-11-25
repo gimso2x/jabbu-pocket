@@ -17,10 +17,16 @@ const MARK_LIMIT = 1000;
 export function wantsThreadSplit(line: string): boolean {
 	const text = line.trim();
 	if (text === "" || text.includes("\n")) return false;
-	if (/[?？"'“”‘’「」『』`]/.test(text)) return false;
-	if (/말고|말아|하지\s*마|없이|않|싫|\b(?:don't|do not|not|never|without|no need)\b/i.test(text)) return false;
+	// "이건 따로 빼줘: <작업>": the task after the colon is the owner's subject, not part of the request; only the request is judged.
+	const head = SPLIT_WITH_TASK.exec(text)?.[1] ?? text;
+	if (/[?？"'“”‘’「」『』`]/.test(head)) return false;
+	if (/말고|말아|하지\s*마|없이|않|싫|\b(?:don't|do not|not|never|without|no need)\b/i.test(head)) return false;
 	return SPLIT_REQUESTS.some((pattern) => pattern.test(text));
 }
+
+/** The request part of a "<따로 빼줘>: <작업>" line (the task after the colon is free text). */
+const SPLIT_WITH_TASK =
+	/^((?:이건|이거|이거는)?\s*(?:따로|별도로)\s*(?:빼|빼서\s*해|분리해)\s*(?:줘|주세요|줘요))\s*[:：]\s*\S/;
 
 const THREAD_WORD = "(?:스레드|쓰레드)";
 const ASK = "(?:줘|주세요|줘요)";
