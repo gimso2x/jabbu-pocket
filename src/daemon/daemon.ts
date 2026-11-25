@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
-import { escapeMrkdwn } from "../channel/text";
+import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import type { ThreadSource } from "../core/mailbox-thread-context";
@@ -1286,7 +1286,7 @@ export class Daemon {
 				?.replace(/\s+/g, " ")
 				.trim() ?? "",
 		);
-		const preview = firstLine.length > 120 ? `${firstLine.slice(0, 120)}…` : firstLine;
+		const preview = firstLine.length > 120 ? `${cutCodePointSafe(firstLine, 120)}…` : firstLine;
 		const { outcome, markerTs } = await ingestOwnerText(
 			this.#ctx,
 			{ channel, threadTs: request.thread, kind: ref.kind, injected: true },
@@ -1397,4 +1397,4 @@ export class Daemon {
 			this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 		}
 	}
-}
+			}
