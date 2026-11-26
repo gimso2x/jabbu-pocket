@@ -21,6 +21,7 @@ import {
 } from "../src/dispatch/omp";
 import { buildDispatchTool, type DispatchToolDeps } from "../src/dispatch/tool";
 import type { ApprovalResult } from "../src/safety/approval";
+import { HANDOFF_SCAN_BYTES } from "../src/safety/handoff-risk";
 import { openStore } from "../src/store/db";
 import { localTask } from "./helpers/local-task";
 
@@ -318,6 +319,23 @@ describe("simple mode risk gate", () => {
 		expect(await built.execute({ task: "빌드 상태 요약" }, { signal })).toBe("결과 요약");
 		expect(runs).toHaveLength(1);
 		expect(approvals).toEqual([]);
+	});
+
+	test("a brief past the scan window asks the owner instead of passing silently", async () => {
+		const long = `${"빌드 로그 정리해줘\n".repeat(2600)}git reset --hard HEAD`;
+		const bytes = new TextEncoder().encode(long).length;
+		// The gap the old code passed silently: past the scan window, still inside the task-size cap.
+		expect(bytes).toBeGreaterThan(HANDOFF_SCAN_BYTES);
+		expect(bytes).toBeLessThan(100_000);
+		const refused = simpleTool("denied");
+		await expect(refused.built.execute({ task: long }, { signal })).rejects.toThrow(
+			"위험 검사에서 막혔습니다(denied): truncated.",
+		);
+		expect(refused.runs).toEqual([]);
+		const approved = simpleTool("approved");
+		const out = await approved.built.execute({ task: long }, { signal });
+		expect(approved.approvals).toEqual(["herdr 위임 지시문이 64KiB를 넘어 끝까지 검사하지 못했습니다"]);
+		expect(out).toEndWith("위험 검사: high_risk 승인됨 (truncated)");
 	});
 
 	test("omp -p has nobody to answer a dialog: its floors forbid `ask` even for a chat origin", async () => {

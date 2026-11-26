@@ -322,9 +322,9 @@ describe("scanHandoffBrief: protected branches", () => {
 });
 
 describe("scanHandoffBrief: size limit", () => {
-	test("input over the limit is truncated and never clear", () => {
+	test("input over the limit is truncated and asks, never passes as advisory", () => {
 		const scan = scanHandoffBrief("가".repeat(HANDOFF_SCAN_BYTES)); // 3 bytes each
-		expect(scan).toEqual({ verdict: "advisory", findings: [], truncated: true });
+		expect(scan).toEqual({ verdict: "high_risk", findings: [], truncated: true });
 	});
 
 	test("a command only past the limit is not reported", () => {
