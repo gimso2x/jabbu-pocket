@@ -729,6 +729,39 @@ test("a child that dies on its own is reported through onExit", async () => {
 	await driver.stop();
 });
 
+test("a stdout line past 1MiB ends the child; the next prompt starts a new one", async () => {
+	const harness = makeHarness();
+	const driver = harness.make();
+	await driver.start();
+	const exited = Promise.withResolvers<OmpExitInfo>();
+	driver.onExit((info) => exited.resolve(info));
+	await driver.prompt("@longline").catch(() => undefined);
+	const info = await exited.promise;
+	expect(info.expected).toBe(false);
+	expect(await driver.state()).toMatchObject({ idle: true });
+	expect(driver.pid).toBeUndefined();
+	const second = nextFinal(driver);
+	await driver.prompt("after");
+	expect(await second).toMatchObject({ status: "completed" });
+	await driver.stop();
+});
+
+test("a completed stdout line past 1MiB (with trailing newline) also ends the child", async () => {
+	const harness = makeHarness();
+	const driver = harness.make();
+	await driver.start();
+	const exited = Promise.withResolvers<OmpExitInfo>();
+	driver.onExit((info) => exited.resolve(info));
+	await driver.prompt("@longline-nl").catch(() => undefined);
+	const info = await exited.promise;
+	expect(info.expected).toBe(false);
+	expect(driver.pid).toBeUndefined();
+	const second = nextFinal(driver);
+	await driver.prompt("after");
+	expect(await second).toMatchObject({ status: "completed" });
+	await driver.stop();
+});
+
 test("compact is refused with rpc_error", async () => {
 	const harness = makeHarness();
 	const driver = harness.make();

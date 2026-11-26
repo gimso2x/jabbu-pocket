@@ -24,7 +24,7 @@ import { createInterface } from "node:readline";
  * - initialize offers `promptCapabilities.image` unless FAKE_AGY_NO_IMAGE=1.
  * - "@lost": the prompt fails like agy's lost trajectory; "@lostload" only on a session opened by `session/load`.
  * - FAKE_AGY_HOLD_NEW=1: `session/new` answers only on `session/cancel` or SIGUSR1.
- * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@full" / "@half": `usage_update` used
+ * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@longline": writes a 2MiB line with no newline, then holds the prompt (the client's line cap must end it). "@full" / "@half": `usage_update` used
  *   800 / 500 of size 1000 before the reply (otherwise 100).
  * - anything else: answers `REPLY<n>:<last line of the prompt>` in two chunks (n = prompts of this process).
  */
@@ -106,6 +106,14 @@ function prompt(id: unknown, text: string): void {
 	update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" } });
 	update({ sessionUpdate: "brand_new_kind" });
 	if (text.includes("@die")) process.exit(3);
+	if (text.includes("@longline-nl")) {
+		process.stdout.write(`${"x".repeat(2 * 1024 * 1024)}\n`);
+		return;
+	}
+	if (text.includes("@longline")) {
+		process.stdout.write("x".repeat(2 * 1024 * 1024));
+		return;
+	}
 	if (text.includes("@refuse")) {
 		finish("", "refusal");
 		return;
