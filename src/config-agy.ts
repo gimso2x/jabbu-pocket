@@ -15,6 +15,14 @@ export interface AgyAccountsConfig {
 	appDataPrefix?: string;
 }
 
+/** Commands and optional multi-account dir for the dashboard's "모델 한도" strip. */
+export interface DashboardUsageLimitsConfig {
+	omp?: string[][];
+	agy?: string[];
+	agyAccount?: string[];
+	agyAccountsDir?: string;
+}
+
 /** One stdio MCP server an agy conversation gets (ACP `mcpServers` entry, passed on `session/new|resume`). */
 export interface AgyMcpServer {
 	name: string;
@@ -24,7 +32,17 @@ export interface AgyMcpServer {
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.trim() !== "";
+const argvOk = (value: unknown): value is string[] =>
+	Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string" && part !== "");
 const APP_DATA_PREFIX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
+
+function resolveUserDir(configPath: string, field: string, raw: unknown): string {
+	if (!nonEmpty(raw) || /\p{Cc}/u.test(raw)) invalid(configPath, field);
+	if (raw === "~") return resolve(homedir());
+	if (raw.startsWith("~/")) return resolve(join(homedir(), raw.slice(1)));
+	if (raw.startsWith("~") || !isAbsolute(raw)) invalid(configPath, field);
+	return resolve(raw);
+}
 
 /** `agyExecutable`: optional absolute path to the agy CLI binary. */
 export function agyExecutableOf(configPath: string, root: Record<string, unknown>): string | undefined {
@@ -41,13 +59,7 @@ export function agyAccountsOf(configPath: string, value: unknown): AgyAccountsCo
 	for (const key of Object.keys(record)) {
 		if (key !== "dir" && key !== "appDataPrefix") invalid(configPath, `agyAccounts.${key}`);
 	}
-	const rawDir = record.dir;
-	if (!nonEmpty(rawDir) || /\p{Cc}/u.test(rawDir)) invalid(configPath, "agyAccounts.dir");
-	let dir: string;
-	if (rawDir === "~") dir = resolve(homedir());
-	else if (rawDir.startsWith("~/")) dir = resolve(join(homedir(), rawDir.slice(1)));
-	else if (rawDir.startsWith("~") || !isAbsolute(rawDir)) invalid(configPath, "agyAccounts.dir");
-	else dir = resolve(rawDir);
+	const dir = resolveUserDir(configPath, "agyAccounts.dir", record.dir);
 	const appDataPrefix = record.appDataPrefix;
 	if (
 		appDataPrefix !== undefined &&
@@ -56,6 +68,35 @@ export function agyAccountsOf(configPath: string, value: unknown): AgyAccountsCo
 		invalid(configPath, "agyAccounts.appDataPrefix");
 	}
 	return { dir, ...(appDataPrefix === undefined ? {} : { appDataPrefix }) };
+}
+
+/** `dashboard.usageLimits`: validates `omp`, `agy`, `agyAccount`, and optional `agyAccountsDir` (`~/` expanded). */
+export function usageLimitsOf(configPath: string, value: unknown): DashboardUsageLimitsConfig | undefined {
+	if (value === undefined) return undefined;
+	const limits = asRecord(value);
+	if (limits === undefined) invalid(configPath, "dashboard.usageLimits");
+	if (limits.omp !== undefined && !(Array.isArray(limits.omp) && limits.omp.every(argvOk))) {
+		invalid(configPath, "dashboard.usageLimits.omp");
+	}
+	if (limits.agy !== undefined && !argvOk(limits.agy)) invalid(configPath, "dashboard.usageLimits.agy");
+	if (limits.agyAccount !== undefined && !argvOk(limits.agyAccount)) {
+		invalid(configPath, "dashboard.usageLimits.agyAccount");
+	}
+	const agyAccountsDir =
+		limits.agyAccountsDir === undefined
+			? undefined
+			: resolveUserDir(configPath, "dashboard.usageLimits.agyAccountsDir", limits.agyAccountsDir);
+	for (const key of Object.keys(limits)) {
+		if (key !== "omp" && key !== "agy" && key !== "agyAccount" && key !== "agyAccountsDir") {
+			invalid(configPath, `dashboard.usageLimits.${key}`);
+		}
+	}
+	return {
+		...(limits.omp === undefined ? {} : { omp: limits.omp as string[][] }),
+		...(limits.agy === undefined ? {} : { agy: limits.agy as string[] }),
+		...(limits.agyAccount === undefined ? {} : { agyAccount: limits.agyAccount as string[] }),
+		...(agyAccountsDir === undefined ? {} : { agyAccountsDir }),
+	};
 }
 
 /** `workerAgy`: `{ model }` only; the model goes to agy as one argument (no blank, no leading `-`). */

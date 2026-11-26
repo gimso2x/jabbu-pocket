@@ -409,8 +409,8 @@ a.flow-box:hover { background: var(--c-hover); }
   .limits-trigger .limit-chip { display: none; }
   .limits-trigger .limit-sum { display: inline-flex; }
 }
-.limit-chip .dot, .limit-head .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-success-tint-text); }
-.limits-panel { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: 380px; max-width: calc(100vw - 2 * var(--page-x)); flex-direction: column; gap: var(--stack-s); padding: var(--stack-s); border: 1px solid var(--c-line-strong); border-radius: var(--r-l); background: var(--c-bg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); } .limits-pop.is-open .limits-panel { display: flex; }
+.limit-chip .dot, .limit-head .dot, .limit-acct-name .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c-success-tint-text); }
+.limits-panel { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: 380px; max-width: calc(100vw - 2 * var(--page-x)); max-height: calc(100vh - 64px); overflow-y: auto; flex-direction: column; gap: var(--stack-s); padding: var(--stack-s); border: 1px solid var(--c-line-strong); border-radius: var(--r-l); background: var(--c-bg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); } .limits-pop.is-open .limits-panel { display: flex; }
 @media (hover: hover) and (min-width: 641px) { .limits-pop:hover .limits-panel, .limits-pop:focus-within .limits-panel { display: flex; } }
 @media (max-width: 640px) {
   .topbar { position: relative; }
@@ -425,13 +425,13 @@ a.flow-box:hover { background: var(--c-hover); }
 .dot.is-warn { background: var(--c-warning-tint-text); }
 .dot.is-danger { background: var(--c-danger); }
 .dot.is-muted { background: var(--c-line-strong); }
-.limit-acct { margin-left: auto; padding: 0 var(--sp-2); border-radius: var(--r-s); background: var(--c-bg); color: var(--c-text-3); font-size: var(--fs-caption); }
+.limit-acct { margin-left: auto; padding: 0 var(--sp-2); border-radius: var(--r-s); background: var(--c-bg); color: var(--c-text-3); font-size: var(--fs-caption); } .limit-accts { display: flex; flex-direction: column; gap: 3px; } .limit-acct-head, .limit-acct-row { display: grid; grid-template-columns: minmax(0, 1fr) 3.4em 3.4em 4.5em; align-items: center; gap: var(--sp-2); font-size: var(--fs-sub); font-variant-numeric: tabular-nums; } .limit-acct-head { font-size: var(--fs-caption); color: var(--c-text-3); padding: 0 var(--sp-1); } .limit-acct-head span:not(:first-child) { text-align: right; } .limit-acct-row { padding: 2px var(--sp-1); border-radius: var(--r-s); } .limit-acct-row.is-active { background: var(--c-bg); font-weight: 600; } .limit-acct-name { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-2); } .limit-acct-row.is-active .limit-acct-name { color: var(--c-text-1); } .limit-acct-err { grid-column: 2 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-3); font-size: var(--fs-caption); text-align: right; }
 .limit-row { display: grid; grid-template-columns: 9em minmax(40px, 1fr) 3em 4.5em; align-items: center; gap: var(--sp-2); font-size: var(--fs-sub); font-variant-numeric: tabular-nums; }
 .limit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--c-text-2); }
 .limit-row .meter { max-width: none; height: 8px; border-radius: var(--r-pill); }
 .limit-row.is-warn .meter i { background: var(--c-warning-tint-text); } .limit-row.is-danger .meter i { background: var(--c-danger); }
 .limit-pct { text-align: right; font-weight: 700; }
-.limit-row.is-warn .limit-pct { color: var(--c-warning-tint-text); } .limit-row.is-danger .limit-pct { color: var(--c-danger); }
+.limit-row.is-warn .limit-pct, .limit-pct.is-warn { color: var(--c-warning-tint-text); } .limit-row.is-danger .limit-pct, .limit-pct.is-danger { color: var(--c-danger); }
 .limit-reset { text-align: right; color: var(--c-text-3); font-size: var(--fs-caption); white-space: nowrap; }
 .limit-error { font-size: var(--fs-sub); } [data-card="cost"] .limit-row { grid-template-columns: 4.5em minmax(40px, 1fr) minmax(4.5em, max-content); } [data-card="cost"] .limit-pct { white-space: nowrap; }
 .card-meta .limit-row { display: inline-flex; gap: var(--sp-1); max-width: 100%; font-size: var(--fs-caption); }

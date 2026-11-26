@@ -3,6 +3,9 @@ import { isRecord } from "../omp/type-guards";
 import { redact } from "../redact";
 import { cleanError, sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
+import { clampPct, collectAgyAccounts, parseAgy, type UsageAccount, type UsageRow } from "./usage-limits-agy";
+
+export { parseAgy, type UsageAccount, type UsageRow };
 
 /**
  * The "모델 한도" card's data: config `dashboard.usageLimits` lists commands, each
@@ -16,17 +19,8 @@ export const USAGE_LIMITS_TTL_MS = 15 * 60_000;
 const COMMAND_TIMEOUT_MS = 20_000;
 const STDOUT_CAP = 1_000_000;
 
-export interface UsageRow {
-	label: string;
-	window: "5h" | "weekly" | "other";
-	windowLabel: string;
-	remainingPct: number;
-	/** Epoch ms of the window's reset, when the source tells. */
-	resetsAt?: number;
-}
-
 /** `account`: the Antigravity account label from config `agyAccount` (the agy output names none). */
-export type UsageSource = { name: string; account?: string } & (
+export type UsageSource = { name: string; account?: string; accounts?: UsageAccount[] } & (
 	| { ok: true; rows: UsageRow[] }
 	| { ok: false; error: string }
 );
@@ -40,6 +34,8 @@ export interface UsageLimitsConfig {
 	agy?: string[];
 	/** A command printing the logged-in agy account's label on its first line (e.g. `cat ~/.agy-accounts/current`). */
 	agyAccount?: string[];
+	/** Directory containing `order` and `<name>.token` files; queries all listed accounts in parallel. */
+	agyAccountsDir?: string;
 }
 
 type Kind = "omp" | "agy";
@@ -63,19 +59,41 @@ export function readUsageLimits(
 	}));
 }
 
+async function readAgySource(config: UsageLimitsConfig, run: ProcessRunner): Promise<UsageSource | undefined> {
+	if (config.agy === undefined) return undefined;
+	const activeLabel = config.agyAccount === undefined ? undefined : await readAccount(config.agyAccount, run);
+	if (config.agyAccountsDir !== undefined) {
+		const multi = await collectAgyAccounts(config.agy, config.agyAccountsDir, activeLabel, run);
+		if (multi !== undefined) {
+			const primary = multi.accounts.find((entry) => entry.active) ?? multi.accounts[0];
+			const account = multi.account ?? primary?.name;
+			const acctField = account === undefined ? {} : { account };
+			if (primary === undefined || !primary.ok) {
+				return {
+					name: "Antigravity",
+					...acctField,
+					ok: false,
+					error: primary?.error ?? "유효한 계정 없음",
+					accounts: multi.accounts,
+				};
+			}
+			return {
+				name: "Antigravity",
+				...acctField,
+				ok: true,
+				rows: primary.rows,
+				accounts: multi.accounts,
+			};
+		}
+	}
+	const source = await readSource("agy", config.agy, run);
+	return activeLabel === undefined ? source : { ...source, account: activeLabel };
+}
+
 async function collect(config: UsageLimitsConfig, run: ProcessRunner): Promise<UsageSource[]> {
-	const jobs: Array<{ kind: Kind; argv: string[] }> = [
-		...(config.omp ?? []).map((argv) => ({ kind: "omp" as const, argv })),
-		...(config.agy === undefined ? [] : [{ kind: "agy" as const, argv: config.agy }]),
-	];
-	const account =
-		config.agy === undefined || config.agyAccount === undefined ? undefined : readAccount(config.agyAccount, run);
-	return Promise.all(
-		jobs.map(async (job) => {
-			const source = await readSource(job.kind, job.argv, run);
-			return job.kind === "agy" && account !== undefined ? { ...source, account: await account } : source;
-		}),
-	);
+	const ompJobs = (config.omp ?? []).map((argv) => readSource("omp", argv, run));
+	const [ompSources, agySource] = await Promise.all([Promise.all(ompJobs), readAgySource(config, run)]);
+	return agySource === undefined ? ompSources : [...ompSources, agySource];
 }
 
 const ACCOUNT_CHARS = 40;
@@ -167,36 +185,4 @@ export function parseOmp(value: unknown): UsageRow[] | string {
 		}
 	}
 	return rows.length === 0 ? "reports" : rows;
-}
-
-/**
- * `agy -p /usage` lines `group\tlimit name\tremaining %\tISO time`. Assumes non-TTY pipe output (a terminal run draws a
- * different layout). Blank lines are skipped; any other line that is not four fields with a numeric percent makes the
- * whole source a mismatch, so a changed output is never drawn wrongly.
- */
-export function parseAgy(stdout: string): UsageRow[] | string {
-	const rows: UsageRow[] = [];
-	for (const [i, line] of stdout.split("\n").entries()) {
-		if (line.trim() === "") continue;
-		const cols = line.replace(/\r$/, "").split("\t");
-		const [group, limit, pct, time] = cols;
-		if (cols.length !== 4 || group === undefined || limit === undefined || pct === undefined || time === undefined) {
-			return `${i + 1}번째 줄 칸 수`;
-		}
-		const match = /^(\d{1,3}(?:\.\d+)?)%$/.exec(pct.trim());
-		if (match?.[1] === undefined) return `${i + 1}번째 줄 남은 %`;
-		const resetsAt = Date.parse(time.trim());
-		rows.push({
-			label: group,
-			window: /five hour/i.test(limit) ? "5h" : /weekly/i.test(limit) ? "weekly" : "other",
-			windowLabel: limit,
-			remainingPct: clampPct(Math.round(Number(match[1]))),
-			...(Number.isNaN(resetsAt) ? {} : { resetsAt }),
-		});
-	}
-	return rows.length === 0 ? "빈 출력" : rows;
-}
-
-function clampPct(pct: number): number {
-	return Math.min(100, Math.max(0, pct));
 }

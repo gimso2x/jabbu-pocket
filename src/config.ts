@@ -8,6 +8,8 @@ import {
 	agyAccountsOf,
 	agyExecutableOf,
 	agyMcpServersOf,
+	type DashboardUsageLimitsConfig,
+	usageLimitsOf,
 	type WorkerAgyConfig,
 	workerAgyOf,
 } from "./config-agy";
@@ -319,7 +321,7 @@ export interface JabbuConfig {
 	 * loopback address; the default is 127.0.0.1. Absent = the command needs `--port`. `herdrWebUrl` is herdr-web-ui's
 	 * address for the agent board's "herdr에서 답하기" links (absent = no link). `opsStatus` is a command printing the
 	 * ops-status JSON for the system view's "호스트 점검" card and a `!brief` line (absent = no card, no command run);
-	 * `url` links the card head. `usageLimits` lists the commands of the "모델 한도" card (`omp`: argv per provider, `agy`: one argv, `agyAccount`: argv printing the agy account label; absent = no card, no command run). `peerHomes`: other installs on this host (`name` one word, no `:`; `home` absolute)
+	 * `url` links the card head. `usageLimits` lists the commands of the "모델 한도" card (`omp`: argv per provider, `agy`: one argv, `agyAccount`: argv printing the agy account label, `agyAccountsDir`: multi-account dir; absent = no card, no command run). `peerHomes`: other installs on this host (`name` one word, no `:`; `home` absolute)
 	 * whose enabled monitors the monitors view lists read-only beside this install's own.
 	 */
 	dashboard?: {
@@ -329,7 +331,7 @@ export interface JabbuConfig {
 		/** Extra `Host` names the page answers (a tunnel's public name); `localhost`, `127.0.0.1` and `::1` always pass. */
 		allowedHosts?: string[];
 		opsStatus?: { command: string[]; url?: string };
-		usageLimits?: { omp?: string[][]; agy?: string[]; agyAccount?: string[] };
+		usageLimits?: DashboardUsageLimitsConfig;
 		peerHomes?: Array<{ name: string; home: string }>;
 	};
 	/**
@@ -1071,6 +1073,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	}
 
 	const dashboard = root.dashboard;
+	let dashboardUsageLimits: DashboardUsageLimitsConfig | undefined;
 	if (dashboard !== undefined) {
 		const record = asRecord(dashboard);
 		if (record === undefined) invalid(configPath, "dashboard");
@@ -1107,20 +1110,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			}
 		}
 		if (record.usageLimits !== undefined) {
-			const limits = asRecord(record.usageLimits);
-			if (limits === undefined) invalid(configPath, "dashboard.usageLimits");
-			const argvOk = (value: unknown): boolean =>
-				Array.isArray(value) && value.length > 0 && value.every((part) => typeof part === "string" && part !== "");
-			if (limits.omp !== undefined && !(Array.isArray(limits.omp) && limits.omp.every(argvOk))) {
-				invalid(configPath, "dashboard.usageLimits.omp");
-			}
-			if (limits.agy !== undefined && !argvOk(limits.agy)) invalid(configPath, "dashboard.usageLimits.agy");
-			if (limits.agyAccount !== undefined && !argvOk(limits.agyAccount)) {
-				invalid(configPath, "dashboard.usageLimits.agyAccount");
-			}
-			for (const key of Object.keys(limits)) {
-				if (key !== "omp" && key !== "agy" && key !== "agyAccount") invalid(configPath, `dashboard.usageLimits.${key}`);
-			}
+			dashboardUsageLimits = usageLimitsOf(configPath, record.usageLimits);
 		}
 		if (record.peerHomes !== undefined) {
 			if (!Array.isArray(record.peerHomes)) invalid(configPath, "dashboard.peerHomes");
@@ -1208,7 +1198,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (briefing !== undefined) config.briefing = briefing;
 	if (candidates !== undefined) config.candidates = candidates;
 	if (apply !== undefined) config.apply = apply;
-	if (dashboard !== undefined) config.dashboard = dashboard as NonNullable<JabbuConfig["dashboard"]>;
+	if (dashboard !== undefined) {
+		const dash = dashboard as NonNullable<JabbuConfig["dashboard"]>;
+		config.dashboard = dashboardUsageLimits === undefined ? dash : { ...dash, usageLimits: dashboardUsageLimits };
+	}
 	if (herdr !== undefined) config.herdr = herdr;
 	if (dispatchHosts !== undefined) config.dispatchHosts = dispatchHosts;
 	if (workerOmpArgs !== undefined) config.workerOmpArgs = workerOmpArgs;

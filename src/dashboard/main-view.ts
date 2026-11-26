@@ -3,7 +3,7 @@ import type { BoardPanel } from "./board";
 import { discordThreadHref, renderFlowChain } from "./detail";
 import { hostChecksLevel, repoCountsText } from "./host-checks";
 import { byAttention, type InboxEntry, inboxEntries, isStale } from "./inbox";
-import { contextBar, costCardBody, resetIn, usageLevel } from "./load-view";
+import { contextBar, costCardBody, renderLimitsPop } from "./load-view";
 import type { DashboardSnapshot, JobInfo, MonitorInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -1395,87 +1395,6 @@ export function renderDashboardMain(
 		: "";
 	const themeBtn = (mode: string, text: string): string =>
 		`<button type="button" class="seg-item" data-theme-set="${mode}" aria-pressed="${theme === mode}">${text}</button>`;
-	// Model limits (config `dashboard.usageLimits`) in the top bar: a chip per source with its lowest five-hour and weekly
-	// remaining share; hover or focus opens a panel with a tile per source (five-hour and weekly windows only, other
-	// windows left out). 20% remaining warns, 5% is danger.
-	const limitsPop = (): string => {
-		const usage = s.usageLimits;
-		if (usage === undefined) return "";
-		const wrap = (chips: string, tiles: string): string =>
-			`<div class="limits-pop"><button type="button" class="limits-trigger" aria-label="모델 한도 자세히" aria-expanded="false">${chips}</button><div class="limits-panel" role="tooltip">${tiles}</div></div>`;
-		if (!usage.ok) {
-			return wrap(
-				`<span class="limit-chip is-muted"><i class="dot is-muted" aria-hidden="true"></i>한도 ?</span>`,
-				`<div class="limit-tile is-failed"><div class="limit-head"><b>모델 한도</b></div><p class="limit-error">읽지 못했어요: ${esc(usage.error)}</p></div>`,
-			);
-		}
-		const best = { label: "", pct: 101 };
-		const parts = usage.sources.map((source) => {
-			const shortName = source.name === "Antigravity" ? "AG" : source.name;
-			const headOf = (tone: string): string =>
-				`<div class="limit-head"><i class="dot is-${tone}" aria-hidden="true"></i><b>${esc(source.name)}</b>${
-					source.account === undefined ? "" : `<span class="limit-acct">${esc(source.account)}</span>`
-				}</div>`;
-			if (!source.ok) {
-				return {
-					chip: `<span class="limit-chip is-muted" data-source="${esc(source.name)}"><i class="dot is-muted" aria-hidden="true"></i>${esc(source.name)} ?</span>`,
-					tile: `<div class="limit-tile is-failed" data-source="${esc(source.name)}">${headOf("muted")}<p class="limit-error">${esc(source.error)}</p></div>`,
-					tone: "muted",
-				};
-			}
-			// A row's group: the parenthesised part of an omp label ("Claude 7 Day (Fable)"), the model family of an agy
-			// label ("Gemini Models" → "Gemini"), else none; rows keep their group's first place, five-hour first.
-			const groupOf = (label: string): string => {
-				const paren = /\(([^)]+)\)/.exec(label);
-				if (paren) return paren[1] ?? "";
-				if (source.name !== "Antigravity") return "";
-				return label.replace(/\s+models$/i, "").replace(/\s+and\s+/i, "·");
-			};
-			const picked = source.rows.filter((row) => row.window !== "other");
-			const rows = (picked.length === 0 ? source.rows : picked).map((row) => ({ row, group: groupOf(row.label) }));
-			const order = [...new Set(rows.map((r) => r.group))];
-			rows.sort(
-				(a, b) =>
-					order.indexOf(a.group) - order.indexOf(b.group) ||
-					(a.row.window === "5h" ? 0 : 1) - (b.row.window === "5h" ? 0 : 1),
-			);
-			let worst = "ok";
-			const lines = rows.map(({ row, group }) => {
-				const tone = usageLevel(row.remainingPct);
-				if (tone === "danger" || (tone === "warn" && worst === "ok")) worst = tone;
-				const win = row.window === "5h" ? "5시간" : row.window === "weekly" ? "주간" : row.windowLabel;
-				const left = resetIn(row.resetsAt, clock);
-				return `<div class="limit-row is-${tone}" data-window="${row.window}"><span class="limit-name">${esc(
-					group === "" ? win : `${group} ${win}`,
-				)}</span><span class="meter" role="img" aria-label="남은 ${row.remainingPct}%"><i style="width:${row.remainingPct}%"></i></span><b class="limit-pct">${row.remainingPct}%</b><span class="limit-reset"${
-					left === "" ? "" : ` title="${esc(`${left} 뒤 초기화`)}"`
-				}>${esc(left)}</span></div>`;
-			});
-			const lowest = (window: string): string => {
-				const pcts = rows.filter((r) => r.row.window === window).map((r) => r.row.remainingPct);
-				return pcts.length === 0 ? "" : String(Math.min(...pcts));
-			};
-			const short = lowest("5h");
-			const week = lowest("weekly");
-			const least = Math.min(...rows.map((r) => r.row.remainingPct));
-			if (rows.length > 0 && least < best.pct) Object.assign(best, { label: shortName, pct: least });
-			// Wide top bars show both windows (`lc-full`), narrower ones only the least remaining share (`lc-min`).
-			return {
-				chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5h</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
-					week === "" ? "" : `<small>주</small>${roll(`lim:${source.name}:week`, week, "down")}`
-				}</span><span class="lc-min">${rows.length === 0 ? "" : `${roll(`lim:${source.name}:min`, least, "down")}%`}</span></span>`,
-				tile: `<div class="limit-tile is-${worst}" data-source="${esc(source.name)}">${headOf(worst)}${lines.join("")}</div>`,
-				tone: worst,
-			};
-		});
-		// The narrowest desktop bars show one summary instead of the chips: dots plus the lowest source's label and share.
-		const tones = parts.map((part) => part.tone);
-		const sumTone = tones.includes("danger") ? "danger" : tones.some((tone) => tone !== "ok") ? "warn" : "ok";
-		const dots = tones.map((tone) => `<i class="dot is-${tone}" aria-hidden="true"></i>`).join("");
-		const sumVal = best.pct > 100 ? "?" : `${esc(best.label)} ${roll("lim:sum", best.pct, "down")}%`;
-		const summary = `<span class="limit-sum limit-chip is-${sumTone}">${dots}${sumVal}</span>`;
-		return wrap(parts.map((part) => part.chip).join("") + summary, parts.map((part) => part.tile).join(""));
-	};
 	// The test chip: hidden with nothing running or queued; the queue opens on click.
 	const heavy = s.heavyRun;
 	const heavyChip =
@@ -1490,7 +1409,7 @@ export function renderDashboardMain(
 			: "";
 	const topbar = `<header class="topbar"><nav class="crumbs" aria-label="위치"><span>jabbu</span><span aria-hidden="true">/</span><span aria-current="page">${esc(
 		viewLabel,
-	)}</span></nav><div class="status-chips" aria-label="봇 상태">${chips.join("")}</div>${heavyChip}${limitsPop()}<div class="top-tools">${layoutSeg}<div class="seg" role="group" aria-label="테마">${themeBtn("system", "시스템")}${themeBtn("light", "라이트")}${themeBtn("dark", "다크")}</div><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
+	)}</span></nav><div class="status-chips" aria-label="봇 상태">${chips.join("")}</div>${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools">${layoutSeg}<div class="seg" role="group" aria-label="테마">${themeBtn("system", "시스템")}${themeBtn("light", "라이트")}${themeBtn("dark", "다크")}</div><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
 	const content = view === "inbox" ? inboxView() : view === "list" ? listView() : sectionView();
 	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}</nav><main class="view" id="view" aria-label="${esc(
 		viewLabel,
