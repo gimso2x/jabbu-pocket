@@ -1,6 +1,5 @@
-// What the core may ask of a chat platform. Platform ids (Discord ids) only appear as
-// opaque `conversationId`/`messageId`/`threadId` strings; each adapter maps them onto its own API.
 import type { ChatPlatform } from "../core/origin-key";
+import type { CardTone } from "./card";
 
 export interface MessageRef {
 	platform: ChatPlatform;
@@ -36,29 +35,27 @@ export interface OutboundMessage {
 	body?: string;
 	/** Labelled values under the body (a card's fields). */
 	fields?: ReadonlyArray<{ label: string; value: string }>;
+	/** Embed colour tone (`ok` | `warn` | `danger` | `info`) for platforms that support rich cards. */
+	tone?: CardTone;
 }
 
 export interface ChannelPort {
 	readonly platform: ChatPlatform;
 	post(target: PostTarget, msg: OutboundMessage): Promise<MessageRef>;
 	edit(ref: MessageRef, msg: OutboundMessage): Promise<void>;
+	/** Pins `ref` in its channel when the platform supports pinning. */
+	pin?(ref: MessageRef): Promise<void>;
 	/** Adds (`on`) or removes one reaction emoji by name. */
 	react(ref: MessageRef, name: string, on: boolean): Promise<void>;
 	uploadFile(target: PostTarget, file: { path: string; title?: string; comment?: string }): Promise<{ fileId: string }>;
 	/** Link to one message (a thread root links to its thread); `undefined` when the platform has none. */
 	permalink(ref: MessageRef): Promise<string | undefined>;
 	mentionUser(userId: string): string;
-	/**
-	 * Starts the thread of the message `ref` (its id becomes the thread id), for a platform whose replies do not open
-	 * one by themselves (Discord). Absent where a reply to the message is already its thread.
-	 */
+	/** Starts a thread from `ref` (its id becomes the thread id); absent where replies already thread. */
 	openThread?(ref: MessageRef, name: string): Promise<void>;
 	/** Archives the thread of `ref` (Discord: the thread id is `ref.threadId ?? ref.messageId`); absent where there is no such state. */
 	archiveThread?(ref: MessageRef): Promise<void>;
-	/**
-	 * What the platform has already told us about this place (cached, never a network call): channel name, topic and
-	 * thread name for the prompt's context lines. Absent where the platform has none (Discord only).
-	 */
+	/** Cached channel name, topic, and thread name (no network call); absent where the platform has none. */
 	conversationContext?(conversationId: string, threadId?: string): ConversationContext | undefined;
 }
 

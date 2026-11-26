@@ -86,13 +86,7 @@ function secondsToMs(value: unknown): number | undefined {
 
 type RequestBody = { json: unknown } | { form: FormData };
 
-/**
- * Discord REST v10 over the global fetch. Tracks `X-RateLimit-*` per route: a route whose bucket is spent (and every
- * route after a global 429) fails locally with `DiscordRateLimitedError` until its reset, without a request. Errors map
- * onto the delivery ledger's classes: 4xx `definitive`, 5xx/network/timeout `ambiguous`. Nothing is retried here; the
- * caller's ledger decides (401/403 especially must not be repeated: Discord bans clients that pile up invalid
- * requests).
- */
+/** Discord REST v10 over fetch with per-route/global 429 tracking; callers decide retries (4xx definitive, 5xx ambiguous). */
 export class DiscordRest {
 	readonly #token: string;
 	readonly #baseUrl: string;
@@ -272,6 +266,10 @@ export class DiscordRest {
 
 	async archiveThread(args: { threadId: string }): Promise<void> {
 		await this.#request("PATCH", `/channels/${args.threadId}`, { json: { archived: true } });
+	}
+
+	async pinMessage(args: MessageTarget): Promise<void> {
+		await this.#request("PUT", `/channels/${args.channelId}/pins/${args.messageId}`);
 	}
 
 	async getChannel(channelId: string): Promise<DiscordChannelInfo> {

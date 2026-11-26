@@ -30,15 +30,8 @@ export class GateSweep {
 	}
 
 	/**
-	 * Self-diagnosis loop: every `gateSweepMs` the daemon runs the same gate projection as `jabbu-pocket gates` and reports
-	 * transitions to the owner DM. An opening gate notifies once and re-alerts daily while it stands (the same gate
-	 * within 24h stays quiet), and a close after an alerted open sends the recovery notice — so a flapping gate
-	 * cannot spam and a dead backup timer still reaches the only channel the owner watches. Two exceptions: the
-	 * window gates (`turns_failing`, `monitors_failed`) close silently, because an aged-out window is not a fix, and
-	 * `standing` incidents re-seed `alerted` after a restart, so a real recovery still reports across incarnations.
-	 * After an alerted open closes (with the recovery notice, or silently for a window gate) the incident is resolved
-	 * once the gate has stayed closed for `GATE_RESOLVE_CLOSED_SWEEPS` sweeps, so a later recurrence alerts again; a
-	 * gate first seen closed after a restart, window gates included, resolves its leftover incident immediately.
+	 * Self-diagnosis loop: runs `collectGates` every `gateSweepMs`, alerts once per 24h on open gates, and posts
+	 * recovery notices (window gates close silently; `GATE_RESOLVE_CLOSED_SWEEPS` closed sweeps resolve incidents).
 	 */
 	async sweep(): Promise<void> {
 		const interval = this.#ctx.options.gateSweepMs ?? DEFAULT_GATE_SWEEP_MS;
@@ -57,8 +50,8 @@ export class GateSweep {
 			...(this.#ctx.options.hostLoad === undefined ? {} : { hostLoad: this.#ctx.options.hostLoad }),
 			...(this.#ctx.options.statfs === undefined ? {} : { statfs: this.#ctx.options.statfs }),
 		})) {
-			// Nothing to judge (stamp or ledger missing): keep the previous state untouched — no notice, no incident
-			// write or resolve — so a stamp deleted under an open gate never reads as a recovery.
+			if (gate.name === "host_pressure" && config.opsPanel !== undefined) continue;
+			// Nothing to judge (stamp or ledger missing): keep the previous state untouched so a deleted stamp never reads as recovery.
 			if (gate.state === "unknown") continue;
 			const previous = this.#gateStates.get(gate.name);
 			try {

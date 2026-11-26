@@ -13,6 +13,7 @@ import {
 	type WorkerAgyConfig,
 	workerAgyOf,
 } from "./config-agy";
+import { type OpsPanelConfig, opsPanelOf } from "./config-ops-panel";
 import { costCapOf, type QuotaGateConfig, quotaGateOf } from "./config-quota";
 import { SLACK_KEYS } from "./config-removed-keys";
 import {
@@ -140,6 +141,7 @@ const ROOT_KEYS = new Set([
 	"hostSessionCeiling",
 	"costCap",
 	"quotaGate",
+	"opsPanel",
 	"herdr",
 	"workerOmpArgs",
 	"workerAgy",
@@ -246,6 +248,8 @@ export interface JabbuConfig {
 	costCap?: { turnUsd?: number; dailyUsd?: number };
 	/** Per-provider quota gate for new lanes and [TASK] starts (`holdPct`, `pollMinutes`, `providers`). */
 	quotaGate?: QuotaGateConfig;
+	/** Discord `#ops` pinned status panel and hysteresis load-alert settings (`config.opsPanel`). */
+	opsPanel?: OpsPanelConfig;
 	/** herdr switch: `{}` enables herdr/taskSpec and [TASK] sweep (`bin` overrides path). */
 	herdr?: { bin?: string };
 	/**
@@ -753,6 +757,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 
 	const costCap = costCapOf(configPath, root.costCap);
 	const quotaGate = quotaGateOf(configPath, root.quotaGate);
+	const opsPanel = opsPanelOf(configPath, root.opsPanel, channels.discord);
 
 	const lanes = root.lanes;
 	const keptLanes: Record<string, unknown> = {};
@@ -1183,6 +1188,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;
 	if (costCap !== undefined) config.costCap = costCap;
 	if (quotaGate !== undefined) config.quotaGate = quotaGate;
+	if (opsPanel !== undefined) config.opsPanel = opsPanel;
 	if (restartNotice !== undefined) config.restartNotice = restartNotice;
 	if (recallEnabled !== undefined) config.recallEnabled = recallEnabled;
 	if (hostTools !== undefined) config.hostTools = hostTools;
