@@ -560,6 +560,37 @@ describe("dashboard monitors view", () => {
 		expect(filled).toContain("재시도 2회");
 	});
 
+	test("a procedure file past the 64KiB head is never read whole: content past the head stays out", async () => {
+		const workspaceDir = join(home, "workspace");
+		mkdirSync(join(workspaceDir, "procedures"), { recursive: true });
+		// 32 PEM blocks of exactly 2048 bytes fill the 64KiB head; each masks to [REDACTED], so the visible tail
+		// past the head only shows if the whole file is read.
+		const block = `-----BEGIN PRIVATE KEY-----\n${"A".repeat(1993)}\n-----END PRIVATE KEY-----\n`;
+		expect(Buffer.byteLength(block)).toBe(2048);
+		writeFileSync(join(workspaceDir, "procedures", "big.md"), `${block.repeat(32)}\nTAIL-MARKER-12345\n`);
+		addMonitors([
+			{
+				id: "big",
+				name: "큼",
+				trigger: cron("0 9 * * *"),
+				instruction: "점검한다.",
+				procedureFiles: ["procedures/big.md"],
+			},
+		]);
+		const detail = readMonitorDetail(
+			home,
+			{ workspaceDir, scriptsRoot: join(home, "scripts"), timezone: "Asia/Seoul" },
+			"big",
+		);
+		if (!detail.ok) throw new Error(detail.error);
+		expect(detail.procedures).toHaveLength(1);
+		const proc = detail.procedures[0];
+		if (proc === undefined || !("text" in proc)) throw new Error("big.md was not read");
+		expect(proc.text).toBe("[REDACTED]\n".repeat(32));
+		expect(proc.truncated).toBe(false);
+		expect(JSON.stringify(detail)).not.toContain("TAIL-MARKER-12345");
+	});
+
 	test("AC-7: a <script> in the instruction or a procedure file stays text", async () => {
 		const workspaceDir = join(home, "workspace");
 		mkdirSync(join(workspaceDir, "procedures"), { recursive: true });

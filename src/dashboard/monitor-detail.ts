@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { type MonitorSql, toMonitor } from "../monitors/ledger";
 import { resolveProcedureFile } from "../monitors/spec";
@@ -17,6 +17,7 @@ const INSTRUCTION_CHARS = 4000;
 const PROCEDURE_CHARS = 2000;
 const ERROR_CHARS = 160;
 const RUN_LIMIT = 10;
+const PROCEDURE_HEAD_BYTES = 64 * 1024; // the detail shows at most 2000 masked chars; a huge file is never read whole
 
 export interface MonitorDetailRun {
 	slotAt: string;
@@ -53,6 +54,17 @@ function head(text: string, limit: number): { text: string; truncated: boolean }
 	return { text: chars.slice(0, limit).join(""), truncated: chars.length > limit };
 }
 
+/** First 64KiB of a procedure file, like the session preview head (`core/sessions.ts`). */
+function readProcedureHead(file: string): string {
+	const fd = openSync(file, "r");
+	try {
+		const buffer = Buffer.alloc(PROCEDURE_HEAD_BYTES);
+		return buffer.subarray(0, readSync(fd, buffer, 0, PROCEDURE_HEAD_BYTES, 0)).toString("utf8");
+	} finally {
+		closeSync(fd);
+	}
+}
+
 /**
  * One monitor's detail. `<peer name>:<id>` reads that peer install's database and procedure roots (its zone too);
  * a prefix naming no peer is an unknown monitor.
@@ -67,11 +79,8 @@ export function readMonitorDetail(
 	if (colon >= 0) {
 		const peer = peers.find((candidate) => candidate.name === id.slice(0, colon));
 		if (peer === undefined) return { ok: false, error: "unknown_monitor" };
-		return readDetail(
-			peer.home,
-			{ workspaceDir: peer.workspaceDir, scriptsRoot: join(peer.home, "scripts"), timezone: peer.timezone },
-			id.slice(colon + 1),
-		);
+		const { home, workspaceDir, timezone } = peer;
+		return readDetail(home, { workspaceDir, scriptsRoot: join(home, "scripts"), timezone }, id.slice(colon + 1));
 	}
 	return readDetail(homeDir, roots, id);
 }
@@ -107,16 +116,12 @@ function readDetail(homeDir: string, roots: MonitorDetailRoots, id: string): Mon
 	const instruction = head(monitor.instruction, INSTRUCTION_CHARS);
 	return {
 		ok: true,
-		instruction: instruction.truncated
-			? `${Array.from(instruction.text)
-					.slice(0, INSTRUCTION_CHARS - 1)
-					.join("")}…`
-			: instruction.text,
+		instruction: instruction.truncated ? `${head(instruction.text, INSTRUCTION_CHARS - 1).text}…` : instruction.text,
 		procedures: monitor.procedureFiles.map((path): MonitorProcedure => {
 			const name = redact(path.slice(path.lastIndexOf("/") + 1));
 			try {
 				const file = resolveProcedureFile(path, roots.workspaceDir, roots.scriptsRoot);
-				return { name, ...head(readFileSync(file, "utf8"), PROCEDURE_CHARS) };
+				return { name, ...head(readProcedureHead(file), PROCEDURE_CHARS) };
 			} catch {
 				return { name, error: "unreadable" };
 			}
@@ -128,12 +133,7 @@ function readDetail(homeDir: string, roots: MonitorDetailRoots, id: string): Mon
 			manual: event.manual === 1,
 			attempts: event.attempts,
 			durationMs: monitorDurationMs(event.stage, event.slot_at, event.updated_at),
-			error:
-				event.error === null
-					? null
-					: Array.from(redact(event.error).split("\n")[0] ?? "")
-							.slice(0, ERROR_CHARS)
-							.join(""),
+			error: event.error === null ? null : head(redact(event.error).split("\n")[0] ?? "", ERROR_CHARS).text,
 		})),
 	};
 }
