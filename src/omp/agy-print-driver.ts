@@ -10,7 +10,6 @@ import type * as Omp from "./driver";
 import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
-
 // A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn; stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
 
 /** sessionDir file with the latest turn's final assistant text: the task `read` of a driver that is gone. */
@@ -364,7 +363,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			child.proc.stdin.flush();
 		} catch (cause) {
 			this.#retire();
-			this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error: `agy stdin closed: ${String(cause)}` });
+			const error = `agy stdin closed: ${String(cause)}`; // Delivered after prompt() resolves: the mailbox creates its turn only then.
+			setTimeout(() => this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error }), 0);
 		}
 	}
 	/** Ends `turn` once: notes queued steers it drops, clears it and the queue, keeps its answer, sends its final. */

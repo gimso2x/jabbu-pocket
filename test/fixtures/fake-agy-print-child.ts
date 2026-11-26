@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, closeSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 /**
@@ -15,6 +15,8 @@ import { createInterface } from "node:readline";
  * - "@quota": `result` status ERROR with agy's 429 executor error text; "@notice": a text delta carrying agy's quota
  *   retry notice, then the turn hangs. Both keep the child running (the driver must end it).
  * - "@hold": a text delta `working`, then the turn waits for SIGUSR1 (answers `HELD`).
+ * - "@close-stdin": after answering, the child closes its stdin but stays alive (keep-alive timer), so the driver's
+ *   next stdin write hits EPIPE: the stdin-closed path of `#send`.
  * - "@hold-stdout": a detached bun sleeper holding stdout, then the turn never answers: the driver's exit must
  *   settle on the exit code, not on stdout EOF. A text delta `working` goes after the spawn, so a test waiting
  *   for it knows the sleeper already exists.
@@ -50,6 +52,8 @@ else if (wanted !== undefined) process.stderr.write(`warning: conversation "${wa
 let turns = 0;
 let step = 0;
 let held: (() => void) | undefined;
+/** Set by "@close-stdin": stdin is closed but the child stays alive, so the driver's next write hits EPIPE. */
+let stdinClosedAlive = false;
 const out = (event: string, body: Record<string, unknown>): void => {
 	process.stdout.write(`${JSON.stringify({ event, [event]: { conversation_id: conversation, ...body } })}\n`);
 };
@@ -147,9 +151,18 @@ lines.on("line", (line) => {
 	log({ kind: "in", pid: process.pid, line });
 	const message = JSON.parse(line) as { event?: string; message?: { content?: string } };
 	if (message.event !== "user") return;
-	turn(message.message?.content ?? "");
+	const content = message.message?.content ?? "";
+	turn(content);
+	if (content.includes("@close-stdin")) {
+		stdinClosedAlive = true;
+		// Close fd 0 at the OS level: Bun's stdin.destroy() only stops the stream, the pipe stays open.
+		closeSync(0);
+		// Liveness handle, not a sleep: the child must stay up with stdin closed so the next write hits EPIPE.
+		setInterval(() => {}, 1000);
+	}
 });
 lines.on("close", () => {
+	if (stdinClosedAlive) return;
 	log({ kind: "exit", pid: process.pid, signal: null });
 	process.exit(0);
 });

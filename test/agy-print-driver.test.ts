@@ -199,6 +199,33 @@ test("an error turn ends `error` and the child goes on to the next turn", async 
 	await driver.stop();
 });
 
+test("a stdin failure ends the turn after prompt() resolves, never inside it", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	await driver.openSession();
+	expect(await started(driver, "first @close-stdin")).toMatchObject({ status: "completed" });
+	// The mailbox creates its turn only after prompt() resolves, so a final delivered inside prompt() is ignored
+	// (final_ignored) and the turn hangs: record whether the final arrives before prompt() returns.
+	let promptReturned = false;
+	let deliveredBeforeReturn = false;
+	const finalPromise = new Promise<OmpFinal>((resolve) => {
+		const off = driver.onFinal((final) => {
+			off();
+			if (!promptReturned) deliveredBeforeReturn = true;
+			resolve(final);
+		});
+	});
+	const opRef = await driver.prompt("second");
+	promptReturned = true;
+	const final = await finalPromise;
+	expect(final.opRef).toBe(opRef);
+	expect(final).toMatchObject({ status: "error" });
+	expect(final.error).toContain("agy stdin closed");
+	expect(deliveredBeforeReturn).toBe(false);
+	await driver.stop();
+});
+
 test("a quota error ends `agy rate limited (429)` and the driver ends the child itself; the next prompt resumes", async () => {
 	const h = harness();
 	const driver = h.make();
