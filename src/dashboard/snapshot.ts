@@ -52,6 +52,7 @@ import type { TaskHostOps } from "../tasks/host";
 import { type ReadTask, readTaskSql, type TaskRow, type TaskSql, type TaskStatus } from "../tasks/ledger";
 import { headlessStatusFromLedger } from "../tasks/runtime";
 import { formatLocal, localIso } from "../time";
+import { approvalTitle } from "./approval-title";
 import { type BoardPromptRef, type BoardState, type BoardSummary, type BoardTaskRef, summarizeBoard } from "./board";
 import { withContextLoad } from "./context-load";
 import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
@@ -828,19 +829,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
 	const { promise: timeout, reject } = Promise.withResolvers<never>();
 	const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-const APPROVAL_TITLE_CHARS = 80;
-
-/** First sentence (`.`/`!`/`?` before a space, or `。`) of the first line, cut to 80 characters with `…`. */
-function approvalTitle(summary: string): string {
-	const line = summary.split("\n")[0]?.trim() ?? "";
-	const sentence = (/^.*?(?:[.!?](?=\s)|。)/.exec(line)?.[0] ?? line).trim();
-	const title = sentence === "" ? summary.trim() : sentence;
-	if (title.length <= APPROVAL_TITLE_CHARS) return title;
-	const last = title.charCodeAt(APPROVAL_TITLE_CHARS - 2);
-	const cut = last >= 0xd800 && last <= 0xdbff ? APPROVAL_TITLE_CHARS - 2 : APPROVAL_TITLE_CHARS - 1;
-	return `${title.slice(0, cut)}…`;
 }
 
 /** The stored card sections, masked again; null when absent, unparsable or empty. */
