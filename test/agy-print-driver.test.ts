@@ -261,6 +261,7 @@ test("abort ends the turn `aborted` once without a crash; the next prompt restar
 	const held = h.lastPid();
 	await driver.abort();
 	expect(finals.map((final) => final.status)).toEqual(["aborted"]);
+	expect(finals[0]?.error).toBe("cancelled"); // nothing queued: no 미전달 suffix
 	expect(alive(held)).toBe(false);
 	expect((await driver.state()).idle).toBe(true);
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
@@ -282,9 +283,10 @@ test("abort with a steer queued ends the turn `aborted` and says the steer was n
 	await driver.prompt("@hold");
 	await working.promise;
 	await driver.steer("steered");
-	expect((await driver.state()).queuedMessageCount).toBe(1);
+	await driver.steer("more");
+	expect((await driver.state()).queuedMessageCount).toBe(2);
 	await driver.abort();
-	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled (steer 1건 미전달)"]]);
+	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled (steer 2건 미전달)"]]);
 	expect((await driver.state()).queuedMessageCount).toBe(0);
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
 	await driver.stop();
