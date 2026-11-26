@@ -135,7 +135,7 @@ describe("renderUsage", () => {
 
 /** A `usage --json` answer as omp 19 writes it, cut to the fields the formatter reads. */
 const response = (over: Partial<UsageResponse> = {}): UsageResponse => ({
-	generatedAt: Date.UTC(2026, 10, 21, 3, 0, 0),
+	generatedAt: new Date(2026, 10, 21, 3, 0, 0).getTime(),
 	reports: [],
 	...over,
 });
@@ -152,7 +152,7 @@ const limits = (executable: string, run = realProcessRunner) => usageLimitsBlock
 
 describe("formatLimits / limitLine", () => {
 	test("a 5-hour window is named 5시간, an exhausted one says 한도 도달, and today's reset names the hour", () => {
-		const resetsAt = Date.UTC(2026, 10, 21, 8, 30, 0);
+		const resetsAt = new Date(2026, 10, 21, 8, 30, 0).getTime();
 		const text = formatLimits(
 			response({
 				reports: [
@@ -183,7 +183,7 @@ describe("formatLimits / limitLine", () => {
 	});
 
 	test("a weekly window is 주간; a remaining count is shown; expires/tick pick 만료/충전", () => {
-		const resetsAt = Date.UTC(2026, 10, 21, 8, 30, 0);
+		const resetsAt = new Date(2026, 10, 21, 8, 30, 0).getTime();
 		const text = formatLimits(
 			response({
 				reports: [
