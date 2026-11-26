@@ -31,9 +31,9 @@ export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDe
  * as `uncertain` (whether or not a cut record names its turn); a launch-refused row left `dispatched` closes without a
  * notice (it was told).
  */
-export function settleDeadProcessRows(store: MailboxDeps["store"], log: MailboxDeps["log"]): void {
+export function settleDeadProcessRows(store: MailboxDeps["store"], log: MailboxDeps["log"], now?: number): void {
 	parkInterruptedSends(store, log);
-	for (const row of notifyUncertainMissingNotice(store)) {
+	for (const row of notifyUncertainMissingNotice(store, now ?? Date.now())) {
 		log.warn("inbound_uncertain_notice_late", { origin: row.originKey, id: row.platformMessageId });
 	}
 	for (const row of store.listInbound({ state: "dispatched" })) {
