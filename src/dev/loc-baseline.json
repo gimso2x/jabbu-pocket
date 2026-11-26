@@ -209,7 +209,7 @@
 	"src/safety/secret-index.ts": 104,
 	"src/store/db-rows.ts": 340,
 	"src/store/db-schema.ts": 284,
-	"src/store/db.ts": 2387,
+	"src/store/db.ts": 2386,
 	"src/store/schema-version.ts": 38,
 	"src/store/transitions.ts": 117,
 	"src/store/turn-duration.ts": 69,
