@@ -79,7 +79,7 @@ export interface LaneManagerDeps {
 	verify?: (evidence: ClaimEvidence, cwd: string, baseSha?: string, baseBranch?: string) => Promise<VerifyResult>;
 	/** Test seam; default reads the lane's `git diff` from the merge-base with its base branch (`collectLaneDiff`). */
 	collectDiff?: (laneCwd: string, range: LaneDiffRange, sha: string) => Promise<LaneDiff>;
-	/** Test seam; default judges the claim's summary + diff (hermes completion_integrity). */
+	/** Test seam; default judges the claim's summary + diff. */
 	integrity?: (input: IntegrityInput) => IntegrityRefusal[];
 	/** Worktree creation and `[check: …]` runs on this machine (test seam; default `createTaskHostOps()`). */
 	hostOps?: TaskHostOps;

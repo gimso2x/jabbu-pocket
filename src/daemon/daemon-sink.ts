@@ -670,7 +670,7 @@ export function deliverySources(
 			if (outcome === "ambiguous") {
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
 				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
-				// One owner notice per held delivery, into the thread the answer was headed for (Cataly noticeHeld).
+				// One owner notice per held delivery, into the thread the answer was headed for.
 				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
 				return true;
 			}

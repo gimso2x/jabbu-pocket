@@ -1,6 +1,5 @@
 /**
- * Agent message markdown → HTML for the card detail panel. The subset and parser follow the owner's herdr-board
- * shared/markdown.ts: fenced code, headings, lists, quotes, tables, rules and inline code/bold/italic/strike/links.
+ * Agent message markdown → HTML for the card detail panel. Supports fenced code, headings, lists, quotes, tables, rules and inline code/bold/italic/strike/links.
  * Every piece of message text is HTML-escaped before it is wrapped in a fixed tag, links are http(s) only, and there
  * are no images, raw HTML, scripts or iframes: `![x](url)` stays the text `!` plus an ordinary link.
  *

@@ -1,4 +1,4 @@
-// Peer bot input (plan teo-style-companion todo 2): fenced text, no owner authority, per-thread hop cap, lane threads off
+// Peer bot input: fenced text, no owner authority, per-thread hop cap, lane threads off
 // limits, reduced host tools, never steered. The Discord adapter's own peer gate (allowlist, mention required, DM and
 // subtype drops, hop notice) is covered by discord-adapter.test.ts "peer bots"; the daemon tests here run the real
 // ledger with the fake omp driver. Waits are on log lines and posts (bounded), never sleeps.

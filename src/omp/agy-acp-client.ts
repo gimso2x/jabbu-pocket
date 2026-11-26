@@ -7,9 +7,7 @@ import { MAX_RPC_FRAME_BYTES } from "./rpc-client";
 import { isRecord } from "./type-guards";
 
 /*
- * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line). Modelled on omp's
- * antigravity-cli provider (oh-my-pi eca7acfa45, MIT: `packages/ai/src/providers/antigravity-cli/host.ts`,
- * `packages/utils/src/acp/`); written here, nothing imported.
+ * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line).
  * - out requests `initialize`, `session/new|load`, `session/set_config_option`, `session/prompt`; out notification
  *   `session/cancel`.
  * - in  responses (paired by `id`), `session/update` notifications, and agent→client requests: `session/request_permission`
@@ -22,7 +20,7 @@ import { isRecord } from "./type-guards";
 /** The child's arguments after the executable: ACP over stdio, no telemetry, tools without prompts. */
 export const AGY_ACP_ARGS = ["acp", "--disable-telemetry", "--dangerously-skip-permissions"] as const;
 /**
- * Env omp gives agy (`host.ts` startTransport, `credentials.ts` agyCredentialEnv): no self-update mid-session, and a
+ * Env passed to agy: no self-update mid-session, and a
  * non-empty SSH_TTY so agy keeps its login in files instead of probing a desktop keychain.
  */
 const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-auth" };

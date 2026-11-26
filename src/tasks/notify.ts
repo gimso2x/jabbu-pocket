@@ -144,7 +144,7 @@ export const hostLabelOf = (row: Pick<TaskRow, "host">): string => row.host ?? "
 /** `local/t-20261030-01 · T-20261030-01`: where the agent runs and which task it carries. */
 const ownerTag = (row: TaskRow): string => `${hostLabelOf(row)}/${row.agent} · ${row.taskId}`;
 
-/** The board link closes a notice on its own lines (gajae-way hub report rule); no link, no footer. */
+/** The board link closes a notice on its own lines; no link, no footer. */
 const boardFooter = (link: string | undefined): string[] => (link === undefined ? [] : ["", "작업 보드", link]);
 
 /** Button ids of a card's `머지` and `추천대로` buttons; the task id carries no colon. */

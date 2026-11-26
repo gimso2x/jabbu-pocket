@@ -202,10 +202,6 @@ Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다. 대화
 | **보안** | [보안 메모](docs/guide.md#보안-메모) — 오너 게이트, 비밀 마스킹, 격리의 한계 · [취약점 보고](SECURITY.md) |
 | **기여** | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
-## 감사
-
-[omp(oh-my-pi)](https://github.com/can1357/oh-my-pi) 위에서 돌고, 원격 [TASK]와 선택 herdr 워커는 [herdr](https://github.com/herdrdev/herdr)를 씁니다. 첨부 수신·승인 영속화·모니터 wake gate는 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)(MIT)의 설계를, 인젝션 경고 규칙은 [rlaope/deepseek-bot](https://github.com/rlaope/deepseek-bot)(MIT)을 참고해 새로 구현했습니다.
-
 ## 라이선스
 
 [MIT](LICENSE)
