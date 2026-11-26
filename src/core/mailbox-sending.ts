@@ -3,13 +3,14 @@
 // `uncertain` instead of being sent twice. Missing one input beats running it twice.
 import { OmpDriverError } from "../omp/driver";
 import type { InboundRow } from "../store/db-rows";
-import type { MailboxDeps } from "./mailbox-types";
+import { type MailboxDeps, sessionToResume } from "./mailbox-types";
 import {
 	notifyUncertainMissingNotice,
 	notifyUncertainParked,
 	parkUncertainNotified,
 	UNCERTAIN_REASON_TEXT,
 } from "./mailbox-uncertain";
+import { tryCloseToolFreeFromFile } from "./tool-free-recovery";
 
 export { UNCERTAIN_REASON_TEXT };
 
@@ -18,8 +19,13 @@ type SendDeps = Pick<MailboxDeps, "store" | "log" | "originKey">;
 /** Op ref of a discarded row whose fresh-session first prompt `launchRefusal` refused (`refused:<id>`). */
 export const REFUSED_OP_PREFIX = "refused:";
 
-/** `sending` rows of `originKey` (every origin without it) -> `uncertain` (`send_interrupted`): never sent again. */
+/** `sending` rows of `originKey` (every origin without it) -> tool-free closure if proven, else `uncertain` (`send_interrupted`). */
 export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDeps["log"], originKey?: string): void {
+	for (const row of store.listInbound({ originKey, state: "sending" })) {
+		const origin = store.getOrigin(row.originKey);
+		const sessionFile = origin === undefined ? undefined : sessionToResume(origin);
+		tryCloseToolFreeFromFile(store, log, row, sessionFile, "boot_sending");
+	}
 	for (const row of store.parkSending(originKey)) {
 		notifyUncertainParked(store, log, row, "send_interrupted");
 		log.warn("inbound_uncertain", { origin: row.originKey, id: row.platformMessageId, reason: "send_interrupted" });
@@ -59,13 +65,10 @@ export function beginSend(deps: SendDeps, row: InboundRow, entryCursor: string |
 }
 
 /**
- * How a turn start that threw left its row. `unsent`: nothing reached the child — the row never got to `sending`, or
- * the prompt answered `not_started` (the row goes back to pending) — so it may be tried again, writing `sending` anew.
- * `parked`: the prompt ended in `request_timeout` after the write-ahead, so the child may hold it: `uncertain`
- * (`prompt_timeout`), never sent again. `failed`: any other error; the row stays `sending` for the caller's failure
- * notice, which closes it without a resend.
+ * `unsent`: nothing reached the child (`not_started`). `timeout_sending`: `request_timeout` after write-ahead; caller
+ * stops the driver and runs `settleTimedOutSend`. `parked`: write-ahead settle failed. `failed`: other error.
  */
-type FailedSend = "unsent" | "parked" | "failed";
+type FailedSend = "unsent" | "timeout_sending" | "parked" | "failed";
 
 export function settleFailedSend(deps: SendDeps, row: InboundRow, error: unknown): FailedSend {
 	const { store, log, originKey } = deps;
@@ -78,11 +81,42 @@ export function settleFailedSend(deps: SendDeps, row: InboundRow, error: unknown
 			return "unsent";
 		}
 		if (code !== "request_timeout") return "failed";
-		parkUncertainNotified(store, log, row, "prompt_timeout");
-		log.warn("inbound_uncertain", { origin: originKey, id, reason: "prompt_timeout", error: String(error) });
+		return "timeout_sending";
 	} catch (writeError) {
 		// Left `sending`: the next resumePending or restart parks it; it is never sent again.
 		log.warn("send_settle_failed", { origin: originKey, id, error: String(writeError) });
+		return "parked";
 	}
-	return "parked";
+}
+
+/** `request_timeout` 뒤 드라이버를 멈춘 상태에서 세션 저널을 확인해 도구 미호출 실패면 닫고, 아니면 `uncertain`으로 보류한다. */
+export function settleTimedOutSend(
+	deps: Pick<MailboxDeps, "store" | "log" | "originKey" | "onQuotaError">,
+	row: InboundRow,
+	error: unknown,
+	sessionFile?: string,
+	model?: string,
+): void {
+	const { store, log, originKey } = deps;
+	const id = row.platformMessageId;
+	const current = store.getInbound(id);
+	if (current?.state !== "sending") return;
+	const proof = tryCloseToolFreeFromFile(store, log, current, sessionFile, "send_timeout");
+	if (proof !== undefined) {
+		if (proof.failureKind === "provider_limit") {
+			deps.onQuotaError?.({
+				originKey,
+				threadRef: current.threadRef,
+				...(model === undefined ? {} : { model }),
+				reason: proof.reason,
+			});
+		}
+		return;
+	}
+	try {
+		parkUncertainNotified(store, log, current, "prompt_timeout");
+		log.warn("inbound_uncertain", { origin: originKey, id, reason: "prompt_timeout", error: String(error) });
+	} catch (writeError) {
+		log.warn("send_settle_failed", { origin: originKey, id, error: String(writeError) });
+	}
 }

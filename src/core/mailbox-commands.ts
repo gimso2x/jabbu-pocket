@@ -106,6 +106,7 @@ export async function modelCommand(host: MailboxHost, arg: string, threadRef: st
 	const applied = await driver.setModel(picked);
 	host.deps.store.setOriginSettings(host.deps.originKey, { model: applied });
 	host.deps.log.info("model_set", { origin: host.deps.originKey, model: applied });
+	if (waitingRows(host).length > 0 && host.quotaHoldReason() === undefined) host.requestRedrain();
 	return `🔀 모델을 ${applied}(으)로 바꿨습니다. 이 대화방의 다음 작업부터 적용됩니다.`;
 }
 
@@ -221,6 +222,8 @@ export async function queueText(host: MailboxHost): Promise<string> {
 	const lines: string[] = [];
 	if (turn) lines.push(`▶ 진행 중 · ${minutes(clock.now() - turn.startedAt)} 경과`);
 	else lines.push(host.driver() ? "▶ 진행 중인 작업 없음" : "▶ 진행 중인 작업 없음 · omp 프로세스 쉬는 중(세션 유지)");
+	const quotaHold = host.quotaHoldReason();
+	if (quotaHold !== undefined) lines.push(`⏸ ${quotaHold}`);
 	const waiting = waitingRows(host);
 	waiting.forEach(({ row, command, label }, i) => {
 		lines.push(`${i + 1}. [${label}] ${preview(command ? command.arg : row.textRef)}`);
@@ -309,11 +312,7 @@ export function resolveUncertain(
 	return `🔁 전달 불확실 ${number}번을 다시 보냅니다: ${shown}\n이미 처리됐다면 답이 두 번 나올 수 있습니다.`;
 }
 
-/**
- * Records a side question's outcome when it settles. Deliberately NOT on the serial chain (`#serial`,
- * `#background`): the wait can last minutes, and inbound messages, `#onFinal` and `#onExit` must not queue behind
- * it. The store writes are synchronous, so recording from outside the chain is safe.
- */
+/** Records a side question's outcome off the serial chain (`#serial`/`#background`); store writes are synchronous. */
 export function askBtw(
 	deps: MailboxDeps,
 	pending: Promise<string>,
@@ -342,12 +341,7 @@ export function askBtw(
 		});
 }
 
-/**
- * `!brief`: the origin's one-page status picture, uploaded to this thread. Outside
- * the serial chain for the same reason as `#askBtw` — the render takes seconds and the origin's next
- * message must not wait for it; the store writes here are synchronous. The row ends `discarded` (an upload instead
- * of a text answer, no delivery), so the restart settle never reports this success as a failed turn.
- */
+/** `!brief`: renders the origin's one-page status PNG and uploads it off the serial chain. */
 export function startBrief(deps: MailboxDeps, platformMessageId: string, opRef: string, threadRef: string): void {
 	const { store, originKey, log } = deps;
 	const provider = deps.briefingProvider;

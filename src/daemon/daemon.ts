@@ -216,6 +216,7 @@ export class Daemon {
 			},
 			requestIdleSweep: () => daemon.#startIdleSweep(),
 			quotaRefusal: (model) => daemon.#quota.refusalFor(model),
+			isQuotaHeld: (originKey) => daemon.#quota.holdReasonForOrigin(originKey) !== undefined,
 		};
 		this.#inbound = new DaemonInbound(this.#ctx);
 		this.#landing = new DaemonTaskLanding(this.#ctx);
@@ -470,8 +471,7 @@ export class Daemon {
 					.find((binding) => binding.port.platform === "discord")
 					?.port.conversationContext?.(ref.conversationId, ref.threadId);
 			},
-			// Read on every turn: a reload changes the repository list without a restart. The real git runs here: no `run`
-			// is passed, so the daemon never gains a test seam in production.
+			// Reloadable repository list; real git runs here (no test seam in production).
 			turnHeads: {
 				headRepos: () => turnNoteRepos(this.#options.config),
 				onCommitted: (turn) => wikiNotes.recordTurn(turn),
@@ -492,6 +492,8 @@ export class Daemon {
 				}),
 			onEscalate: (info) => escalateTurnFailures(this.#ctx, info),
 			onProviderLimit: (info) => notifyProviderLimit(this.#ctx, info),
+			onQuotaError: (info) => this.#quota.noteQuotaError(info),
+			quotaHoldReason: (originKey) => this.#quota.holdReasonForOrigin(originKey),
 			onCacheMiss: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatCacheMissNotice(info)),
 			onColdCache: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatColdCacheNotice(info)),
 			onSessionMismatch: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatSessionMismatchNotice(info)),
@@ -732,11 +734,7 @@ export class Daemon {
 		else log.warn("last_good_config_skipped", { reason: "config_changed_since_boot" });
 	}
 
-	/**
-	 * Takes one platform out of the daemon — recovery, stop and the delivery pump — and stops it (closing whatever it
-	 * half-opened). Its pending rows are left as they are for the next boot. The daemon runs on with the others, or
-	 * with none: the owner commands and the dashboard stay up.
-	 */
+	/** Stops one detached/failed platform adapter while keeping the remaining platforms and daemon services up. */
 	async #dropAdapter(
 		adapter: ChannelAdapter,
 		event: "adapter_start_failed" | "adapter_detached",
@@ -852,11 +850,7 @@ export class Daemon {
 		}
 	}
 
-	/**
-	 * A first install has no backup stamp until somebody runs `jabbu-pocket backup`, so `backup_age` would open (and DM the
-	 * owner) on the very first gate sweep. `start()` runs the same local backup once instead; a failure is logged and
-	 * left to the gate, which then opens and alerts as before.
-	 */
+	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
 	#bootBackup(): void {
 		const { homeDir, maxBundleBytes } = this.#options.config;
 		if (readStamp(join(homeDir, "backups")) !== undefined) return;
@@ -1313,6 +1307,11 @@ export class Daemon {
 		return this.#opsPanel.idle();
 	}
 
+	/** 진행 중인 쿼터 복구 폴링이 끝날 때까지 기다린다(테스트·종료 동기화용). */
+	quotaIdle(): Promise<void> {
+		return this.#quota.idle();
+	}
+
 	/** SIGTERM path: stop intake, drain bounded turns, wait for background sweeps/panel, stop children, and close store. */
 	async stop(): Promise<void> {
 		if (this.#stopPromise === undefined) {
@@ -1339,6 +1338,7 @@ export class Daemon {
 		await this.#monitors?.idle();
 		await this.#drainRunningTurns();
 		await this.#opsPanel.idle();
+		await this.#quota.idle();
 		await this.#router?.close();
 		this.#store?.close();
 		this.#log.info("daemon_stop", { boot: this.#options.bootId });

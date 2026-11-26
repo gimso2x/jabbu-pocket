@@ -46,7 +46,13 @@ import {
 } from "./mailbox-notices";
 import { markOrPark, parkUncertain } from "./mailbox-park";
 import { purposeBlockOf, runPurposeCommand, setHome } from "./mailbox-purpose";
-import { beginSend, parkInterruptedSends, REFUSED_OP_PREFIX, settleFailedSend } from "./mailbox-sending";
+import {
+	beginSend,
+	parkInterruptedSends,
+	REFUSED_OP_PREFIX,
+	settleFailedSend,
+	settleTimedOutSend,
+} from "./mailbox-sending";
 import {
 	OWN_ANSWER_LINE,
 	ownerThreadRootBlock,
@@ -83,6 +89,7 @@ import { parseChatOrigin } from "./origin-key";
 import { buildRecallBlock } from "./recall";
 import { epochDirIsFresh } from "./sessions";
 import { stuckCancelReason, stuckSteerText } from "./stuck";
+import { tryCloseToolFreeFromFile } from "./tool-free-recovery";
 import {
 	composeTurnPrompt,
 	EVENT_PERSIST_MS,
@@ -118,11 +125,7 @@ export type {
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
 
-/**
- * Serial actor for one origin. Every inbound message, driver final and driver exit is processed on one
- * promise chain, so the ledger writes never interleave. It talks to omp only through the injected driver and
- * to the chat never: replies become delivery rows in the store.
- */
+/** Serial actor per origin: processes inbound messages, driver finals, and exits on one promise chain. */
 export class OriginMailbox {
 	readonly #deps: MailboxDeps & IdleKeepDeps;
 	readonly #idle: IdleKeeper;
@@ -130,6 +133,7 @@ export class OriginMailbox {
 	readonly #idleStopMs: number;
 	#tail: Promise<unknown> = Promise.resolve();
 	#driver: OmpSessionDriver | undefined;
+	#activeModel: string | undefined;
 	readonly #context = new ContextMemory();
 	#unsubscribe: Array<() => void> = [];
 	#turn: ActiveTurn | undefined;
@@ -144,11 +148,7 @@ export class OriginMailbox {
 	#freshSession = false;
 	/** The driver dropped a full conversation after the last turn (agy rotation): the next prompt re-feeds the thread. */
 	#rotatedSession = false;
-	/**
-	 * Whether the live child needs no peer-taint notice: it was started after a peer bot wrote here (reduced host tools,
-	 * told in its system prompt), it has no host tools (`hostTools`), or a prompt carrying `peerTouchedTurnNotice` went
-	 * through. A child started before keeps its full tool list; the daemon refuses the restricted ones when they run.
-	 */
+	/** Whether the live child already knows about peer taint or has no host tools. */
 	#skipPeerNotice = false;
 	/** Host tool calls (approval wait, upload, dispatch) running for this origin's child; no omp events come meanwhile. */
 	#hostToolsRunning = 0;
@@ -157,16 +157,9 @@ export class OriginMailbox {
 	readonly #turnEndWaiters: Array<() => void> = []; // `whenTurnEnds` callers, woken where the turn is dropped (final, exit, `/new`)
 	#acceptingDispatch = true; // cleared at shutdown (`stopDispatching`): pending rows stay pending, the drain awaits running turns only
 	#consecFailures = 0; // failed turns in a row; a completed turn resets it
-	/** Epochs whose session mismatch was already passed to `onSessionMismatch` (memory only: a restart may tell again). */
 	readonly #mismatchNoticed = new Set<number>();
-	/**
-	 * Prompt cache state of this origin's session (re-seeded from the session after a restart); a session change
-	 * (`/new`, `/resume`, a monitor fire's new epoch) starts a fresh one, so its first call is not judged on the old prefix.
-	 */
 	#cache = new CacheMonitor();
-	/** When `onCacheMiss` last fired (memory only: a restart may tell once more). */
 	#cacheNoticedAt: number | undefined;
-	/** The baseline the cold-cache warning was last given for (memory only). */
 	#coldWarned: CacheBaseline | undefined;
 
 	constructor(deps: MailboxDeps & IdleKeepDeps) {
@@ -187,6 +180,7 @@ export class OriginMailbox {
 			requestRedrain: () => {
 				this.#redrain = true;
 			},
+			quotaHoldReason: () => deps.quotaHoldReason?.(),
 		};
 		const idleStopMs = deps.idleStopMs ?? IDLE_STOP_MS;
 		// A monitor child is released after MONITOR_IDLE_STOP_MS (or the shorter configured value); 0 still disables.
@@ -867,14 +861,10 @@ export class OriginMailbox {
 		return true;
 	}
 
-	/**
-	 * Dispatch pending rows in arrival order; a row that cannot be steered stays pending and blocks the ones behind it.
-	 * A `followup` row is never steered: it waits (without blocking later messages) until no turn runs, then starts one.
-	 */
+	/** Dispatch pending rows in arrival order; unsteerable rows wait and block later ones (`followup` waits for idle). */
 	async #drain(): Promise<void> {
 		const { store, originKey } = this.#deps;
-		// A restart drain: rows wait for the next process (or the cancel). A paused lane: rows wait for the owner's
-		// resume. Either way a `!restart` is answered now: held over a drain, the next process would run it once more.
+		// Restart drain or paused lane: pending rows wait, while `!restart` still runs now.
 		if (this.#deps.isDraining?.() || this.#deps.isHeld?.()) {
 			for (const row of store.listInbound({ originKey, state: "pending" })) {
 				const command = row.peerUserId === null ? parseCommand(row.textRef) : undefined;
@@ -895,9 +885,8 @@ export class OriginMailbox {
 				continue;
 			}
 			if (row.peerUserId !== null) {
-				// A peer bot's request is never steered into a running turn (that turn's child may hold owner-grade
-				// tools) and never answers a dialog or runs as a command: it waits like a followup for an idle origin.
-				if (this.#turn) continue;
+				// Peer bot requests never steer a running turn or consume commands; they wait for idle like followup.
+				if (this.#turn || this.#deps.quotaHoldReason?.() !== undefined) continue;
 				if (!(await this.#dispatch(row))) break;
 				continue;
 			}
@@ -907,25 +896,25 @@ export class OriginMailbox {
 			}
 			const command = parseCommand(row.textRef);
 			if (command?.kind === "followup" && command.arg !== "") {
-				if (this.#turn) continue;
+				if (this.#turn || this.#deps.quotaHoldReason?.() !== undefined) continue;
 				if (!(await this.#dispatch(row, command.arg))) break;
 				continue;
 			}
 			if (command?.kind === "btw" && command.arg !== "" && !this.#turn) {
 				// No turn to ask beside: the question itself (without the command word) starts a turn.
+				if (this.#deps.quotaHoldReason?.() !== undefined) continue;
 				if (!(await this.#dispatch(row, command.arg))) break;
 				continue;
 			}
 			if (command) {
+				if (command.kind === "btw" && command.arg !== "" && this.#deps.quotaHoldReason?.() !== undefined) continue;
 				await this.#runCommand(row, command);
 				continue;
 			}
-			// The one place a plain message can answer an open dialog: every path (enqueue, the daemon's
-			// recordInbound + resumePending, the sweep retry) drains here. A restart drain returned above, so its rows
-			// wait; the card's own deadline bounds that wait, no deadlock.
+			// Dialog answer path before steering: every pending drain hits here; drain return above bounds card timeout.
 			if (await this.#answerDialog(row)) continue;
-			// A turn at its steer cap leaves the row pending for the next turn; rows behind it (commands, a card's
-			// answer) are not blocked, so this is a `continue`, not a `break`.
+			if (this.#deps.quotaHoldReason?.() !== undefined) continue;
+			// A turn at its steer cap leaves the row pending for the next turn without blocking commands or dialog answers.
 			const turn = this.#turn;
 			if (turn && turn.progress.steers >= MAX_STEERS) {
 				if (!turn.capDeferred.has(row.platformMessageId)) {
@@ -951,7 +940,7 @@ export class OriginMailbox {
 	/** Returns false when the row was left pending (nothing was sent). */
 	async #dispatch(row: InboundRow, text: string = row.textRef): Promise<boolean> {
 		const { store, log, originKey } = this.#deps;
-		if (this.#deps.isHeld?.()) return false; // a paused lane: the row stays pending for the resume
+		if (this.#deps.isHeld?.() || this.#deps.quotaHoldReason?.() !== undefined) return false;
 		if (this.#frozenHold(row)) return false; // frozen: an autonomous row stays pending for the unfreeze
 		const turn = this.#turn;
 		if (turn && this.#driver) {
@@ -1044,9 +1033,13 @@ export class OriginMailbox {
 			sent = await attempt();
 		}
 		if (typeof sent === "boolean") return sent;
-		if (sent === "parked") {
-			// The child may hold the prompt: stopped, so no run goes on untracked; the owner decides with `/queue`.
+		if (sent === "timeout_sending" || sent === "parked") {
+			const model = this.#turnModel();
+			const origin = store.getOrigin(originKey);
+			const sessionFile = origin === undefined ? undefined : sessionToResume(origin);
+			// The child may hold the prompt: stopped, so no run goes on untracked; close if proven tool-free.
 			await this.#stopDriver().catch(() => undefined);
+			if (sent === "timeout_sending") settleTimedOutSend(this.#deps, row, failure, sessionFile, model);
 			return true;
 		}
 		const rawReason = failureSign(failure);
@@ -1065,6 +1058,7 @@ export class OriginMailbox {
 					? NO_MODEL_NOTICE
 					: failedNotice(code, peer, this.#threadSource(), rawReason),
 		});
+		this.#noteQuotaErrorIfLimit(row.threadRef, rawReason);
 		await this.#noteTurnFailure(row.threadRef, rawReason);
 		return true;
 	}
@@ -1151,6 +1145,8 @@ export class OriginMailbox {
 		}
 		if (!recorded) return true;
 		this.#turn = newActiveTurn(this.#deps.clock, row, { opRef, entryCursor, headsBefore });
+		const turnModel = this.#turnModel();
+		if (turnModel !== undefined) this.#turn.model = turnModel;
 		this.#lastEventAt = this.#deps.clock.now();
 		this.#eventPersistedAt = this.#lastEventAt;
 		this.#stalled = false;
@@ -1328,14 +1324,7 @@ export class OriginMailbox {
 		}
 	}
 
-	/**
-	 * Session-file heal for a restore-model failure (no live driver — `#healStaleModel` cannot run): the file
-	 * omp resumes (`/resume-jabbu`'s pin, else the newest of the session dir — the rule `openOriginSession`
-	 * binds) has the `model_change` omp restores from (the last one; after a `role: "fallback"` retry hop, the last
-	 * one whose role is default) rewritten to the fallback, the same chain `#healStaleModel` uses:
-	 * `#effectiveSettings` → `defaultModel`. The original is backed up under the origin's backup dir first;
-	 * nothing is touched when there is no fallback, no file, or nothing to rewrite (already the fallback).
-	 */
+	/** Rewrites a removed session model to the fallback after backing up the original session file. */
 	async #healSessionFile(): Promise<HealedSessionModel | undefined> {
 		const { store, log, originKey, defaultModel, sessionBackupsRoot } = this.#deps;
 		if (sessionBackupsRoot === undefined) return undefined;
@@ -1366,10 +1355,7 @@ export class OriginMailbox {
 			throw new OmpDriverError("not_started", `${originKey} is attached to a terminal omp`);
 		const origin = store.getOrigin(originKey);
 		if (!origin) throw new OmpDriverError("not_started", `unknown origin ${originKey}`);
-		// Freshness must be read before the child exists: a spawned omp child (and the fake driver's `start()`)
-		// already holds the newest session of the directory, so `openSession()` reports `resumed` even for a
-		// session created moments ago at startup. An epoch dir with no session file is the only trustworthy
-		// "this session will be the first" signal — the one moment thread context may be injected.
+		// Freshness must be read before the child exists: an empty epoch dir means this session is brand-new.
 		this.#freshSession = epochDirIsFresh(origin.sessionDir);
 		const expected = sessionToResume(origin);
 		const peerTouched = store.originHasPeerInbound(originKey);
@@ -1390,6 +1376,7 @@ export class OriginMailbox {
 				this.#deps.onSessionMismatch?.({ originKey, threadRef, expected: check.expected, actual: check.actual });
 			}
 		}
+		this.#activeModel = undefined;
 		await this.#applySettings(driver, origin);
 		await this.#seedCache(driver);
 		this.#cache.markChildRestart();
@@ -1430,28 +1417,26 @@ export class OriginMailbox {
 		return { model: origin.model ?? parent.model, thinking: origin.thinking ?? parent.thinking };
 	}
 
-	/**
-	 * Re-applies the model and thinking level chosen in chat each time a child opens the session (after idle release, a
-	 * restart, `/new-jabbu` or `/resume-jabbu`). A setting omp no longer accepts is logged and left out, never fatal.
-	 */
+	/** Re-applies chat-chosen model/thinking whenever a child opens the session; invalid choices only warn. */
 	async #applySettings(driver: OmpSessionDriver, origin: OriginRow): Promise<void> {
 		const { log, originKey } = this.#deps;
 		const { model, thinking } = this.#effectiveSettings(origin);
-		// One model list for the chosen-model check and the heal below; a failed read falls back to the old
-		// attempt-and-warn behavior for both.
 		const models = await driver.availableModels().catch((error: unknown) => {
 			log.warn("models_list_failed", { origin: originKey, error: String(error) });
 			return undefined;
 		});
 		if (model !== null) {
 			if (models !== undefined && !models.includes(model)) {
-				// The provider removed the chat-chosen model: skip the doomed `setModel` (it would only warn on
-				// every child open) and keep the choice in origin settings — it applies again once the model returns.
 				log.warn("model_apply_unavailable", { origin: originKey, model });
 			} else {
-				await driver.setModel(model).catch((error: unknown) => {
-					log.warn("model_apply_failed", { origin: originKey, model, error: String(error) });
-				});
+				await driver.setModel(model).then(
+					(applied) => {
+						this.#activeModel = applied;
+					},
+					(error: unknown) => {
+						log.warn("model_apply_failed", { origin: originKey, model, error: String(error) });
+					},
+				);
 			}
 		}
 		if (thinking !== null) {
@@ -1464,12 +1449,7 @@ export class OriginMailbox {
 		});
 	}
 
-	/**
-	 * A session restored with a model omp no longer knows (removed provider) fails every turn with
-	 * `Could not restore model` until something switches it. When the session's active model is missing from omp's
-	 * list, switch to the chat-chosen model if that still exists, else to the config default. Never fatal.
-	 * `models` reuses a list `#applySettings` already read for the same child; omitted, it reads its own.
-	 */
+	/** Switches a restored session away from a vanished model to the chat-chosen or config default fallback. */
 	async #healStaleModel(
 		driver: OmpSessionDriver,
 		origin: OriginRow,
@@ -1478,6 +1458,7 @@ export class OriginMailbox {
 		const { log, originKey, defaultModel } = this.#deps;
 		const active = (await driver.state()).model;
 		if (active === undefined) return "noop";
+		this.#activeModel = active;
 		const listed = models ?? (await driver.availableModels());
 		if (listed.includes(active)) return "noop";
 		const inherited = this.#effectiveSettings(origin).model;
@@ -1492,16 +1473,12 @@ export class OriginMailbox {
 			return "no_fallback";
 		}
 		await driver.setModel(fallback);
+		this.#activeModel = fallback;
 		log.warn("model_stale_replaced", { origin: originKey, from: active, to: fallback });
 		return "replaced";
 	}
 
-	/**
-	 * Counts the failed turn. A model-shaped sign re-heals the live driver right away — the session-open heal cannot
-	 * help a child whose model vanished while it ran, and waiting for `escalateAfter` would burn the outage's first
-	 * user messages on failures the very first one could already have fixed. `onEscalate` reports the run to the
-	 * owner at `escalateAfter` consecutive failures (and on every failure past it). A completed turn resets the count.
-	 */
+	/** Counts failed turns, immediately heals missing models, and escalates once `escalateAfter` hits. */
 	async #noteTurnFailure(threadRef: string, reason: string): Promise<void> {
 		this.#consecFailures += 1;
 		const { originKey, log, onEscalate } = this.#deps;
@@ -1525,6 +1502,38 @@ export class OriginMailbox {
 			reason: reason.replace(/\s+/g, " ").slice(0, 160),
 		});
 		onEscalate?.({ originKey, threadRef, failures: this.#consecFailures, reason, modelHealed });
+	}
+
+	#turnModel(): string | undefined {
+		const origin = this.#deps.store.getOrigin(this.#deps.originKey);
+		const configured = origin === undefined ? undefined : (this.#effectiveSettings(origin).model ?? undefined);
+		return this.#activeModel ?? configured ?? this.#deps.defaultModel;
+	}
+
+	#noteQuotaErrorIfLimit(threadRef: string, rawReason: string, model = this.#turnModel()): void {
+		if (classifyFailure(rawReason).kind !== "provider_limit") return;
+		this.#deps.onQuotaError?.({
+			originKey: this.#deps.originKey,
+			threadRef,
+			...(model === undefined ? {} : { model }),
+			reason: rawReason,
+		});
+	}
+
+	#sweepToolFreeUncertain(): void {
+		const { store, originKey, log } = this.#deps;
+		const uncertain = store.listInbound({ originKey, state: "uncertain" }).filter((row) => row.entryCursor !== null);
+		if (uncertain.length === 0) return;
+		const origin = store.getOrigin(originKey);
+		const sessionFile = origin === undefined ? undefined : sessionToResume(origin);
+		if (sessionFile === undefined) return;
+		const model = this.#turnModel();
+		for (const row of uncertain) {
+			const proof = tryCloseToolFreeFromFile(store, log, row, sessionFile, "post_turn");
+			if (proof?.failureKind === "provider_limit") {
+				this.#noteQuotaErrorIfLimit(row.threadRef, proof.reason, model);
+			}
+		}
 	}
 
 	async #stopDriver(): Promise<void> {
@@ -1584,6 +1593,7 @@ export class OriginMailbox {
 				...base,
 				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
 			});
+			this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
 			await this.#noteTurnFailure(turn.threadRef, rawReason);
 		}
 		const error = final.error ?? (final.status === "completed" ? undefined : final.status);
@@ -1594,9 +1604,9 @@ export class OriginMailbox {
 			...(error === undefined ? {} : { error }),
 		});
 		if (stopFirst) await this.#stopDriver();
-		// After the answer is stored and before the next row starts: the drain below may open the next turn, and its
-		// before-heads must already include this turn's commits.
+		// Record heads after saving answer and before draining so any newly opened turn sees this turn's commits.
 		await this.#recordHeadsAfter(turn);
+		this.#sweepToolFreeUncertain();
 		await this.#drain();
 		if (this.#stopAfterTurn && !this.#turn) {
 			this.#stopAfterTurn = false;
@@ -1604,12 +1614,7 @@ export class OriginMailbox {
 		}
 	}
 
-	/**
-	 * Every stop-ended answer since the turn's start cursor, ending with `finalText` (the session's last assistant text
-	 * is never dropped), minus what the turn's interim deliveries already sent (`closingAnswer`: the closing mark when
-	 * nothing is left; `whole` keeps every part). A monitor answer stays the last text only: its NO_REPORT/[SILENT]
-	 * markers are read from the first and last line. When the cursor cannot be read the parts are `finalText` alone.
-	 */
+	/** Collects every stop-ended answer since start cursor ending with `finalText`, minus interim deliveries. */
 	async #turnAnswer(
 		driver: OmpSessionDriver,
 		turn: ActiveTurn,
@@ -1657,8 +1662,10 @@ export class OriginMailbox {
 				threadRef: turn.threadRef,
 				notice: failedNotice(codeReason, turn.peer, this.#threadSource(), classifyReason),
 			});
+			this.#noteQuotaErrorIfLimit(turn.threadRef, classifyReason, turn.model);
 			await this.#noteTurnFailure(turn.threadRef, codeReason);
 		}
+		this.#sweepToolFreeUncertain();
 		await this.#drain();
 	}
 
@@ -1705,6 +1712,7 @@ export class OriginMailbox {
 			store.recordTurnFailure({ originKey, opRef, threadRef, notice });
 			return;
 		}
+		if (command.kind === "model") this.#activeModel = undefined;
 		store.recordAnswer({ originKey, opRef, threadRef, parts: [text] });
 		// `/queue retry` made a row pending after any drain listed its rows: send it now. An enclosing drain skips rows
 		// that are no longer pending, so the nesting cannot send anything twice.
@@ -1736,15 +1744,7 @@ export class OriginMailbox {
 		});
 	}
 
-	/**
-	 * `!stop`: stops the running turn but keeps the session — no new epoch, the child stays. Rows that waited before
-	 * the command (a steer-blocked message, a `!followup`) are cancelled first: the stopped turn's final drains, and
-	 * they must not start the next turn. The abort empties omp's own queue, so a steered message never runs once more;
-	 * a driver without that call (agy-print) reports undelivered steers in its abort final's `droppedSteers`, and the
-	 * answer counts them too. The turn's rows move to the command op (as `/new` does): the command's one answer finishes
-	 * their threads as 🚫 취소됨 and the turn posts nothing. A child whose abort throws — or still holds queued
-	 * messages when no queue-clearing abort exists — is stopped; the next message reopens the same session directory.
-	 */
+	/** Stops running turn while keeping the session; cancels earlier waiting rows and settles the turn on the stop op. */
 	async #stopTurn(row: InboundRow, opRef: string): Promise<void> {
 		const { store, originKey, log } = this.#deps;
 		const pendingIds = store.listInbound({ originKey, state: "pending" }).map((pending) => pending.platformMessageId);
@@ -1793,11 +1793,7 @@ export class OriginMailbox {
 		}
 	}
 
-	/**
-	 * /new: abort the running turn, charge what it spent, stop the child (the next dispatch opens the bumped epoch's
-	 * empty session), bump the epoch (discards pending rows, this command included) and drop the old turn. A wedged
-	 * child whose abort throws — when /new is needed most — is still stopped and the owner still gets the answer.
-	 */
+	/** Aborts running turn, charges spent cost, stops child, bumps epoch (discarding pending rows), and resets cache. */
 	async #newEpoch(opRef: string, threadRef: string): Promise<void> {
 		const { store, originKey, log } = this.#deps;
 		const turn = this.#turn;

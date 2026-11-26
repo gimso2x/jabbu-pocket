@@ -157,8 +157,13 @@ export class PendingDispatchSweep {
 		if (!frozen) this.frozenHeldOrigins.clear();
 		for (const originKey of new Set(stale.map((row) => row.originKey))) {
 			if (router.mailbox(originKey).state.busy) continue;
-			// A paused lane or [TASK] (or one blocked on the owner) holds its rows on purpose; a retry would count the wait as a failure.
-			if (store.getLaneByOrigin(originKey)?.status === "paused" || taskHeld(store.tasks, originKey, true)) continue;
+			// A paused lane or [TASK] (or one blocked on the owner or quota recovery) holds its rows on purpose.
+			if (
+				store.getLaneByOrigin(originKey)?.status === "paused" ||
+				taskHeld(store.tasks, originKey, true) ||
+				this.#ctx.isQuotaHeld?.(originKey) === true
+			)
+				continue;
 			const previous = this.#pendingRetries.get(originKey);
 			if (previous !== undefined && now - previous.at < interval) continue;
 			const oldest = stale
