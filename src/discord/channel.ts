@@ -186,7 +186,7 @@ export class DiscordChannel implements ChannelPort {
 		const context: ConversationContext = {
 			...(channel?.name === undefined ? {} : { channelName: channel.name }),
 			...(channel?.topic === undefined ? {} : { topic: channel.topic }),
-			...(thread !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
+			...(thread?.name !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
 		};
 		return context.channelName === undefined && context.topic === undefined && context.threadName === undefined
 			? undefined
