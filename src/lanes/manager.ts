@@ -2662,9 +2662,7 @@ export class LaneManager {
 			return { handled: false, text: `닫을 상태가 아닙니다 (${lane?.status ?? "레인 없음"}).` };
 		}
 		const worktree = lane.meta.worktree;
-		if (worktree === undefined) {
-			return { handled: false, text: "worktree가 없는 레인입니다." };
-		}
+		if (worktree === undefined) return { handled: false, text: "worktree가 없는 레인입니다." };
 		const checksHead = lane.meta.checks?.head;
 		const failed = failedChecksOf(lane);
 		if (checksHead === undefined || checksHead === "" || failed.length === 0) {
@@ -2673,9 +2671,7 @@ export class LaneManager {
 		if (this.#settling.has(name)) {
 			return { handled: false, text: "레인의 완료 검증이 진행 중입니다. 끝난 뒤 다시 시도해 주세요." };
 		}
-		if (this.#landing.has(name)) {
-			return { handled: false, text: "이미 닫기 또는 머지 처리가 진행 중입니다." };
-		}
+		if (this.#landing.has(name)) return { handled: false, text: "이미 닫기 또는 머지 처리가 진행 중입니다." };
 		if (this.#coreRebasing.has(lane.originKey)) {
 			return { handled: false, text: "코어 rebase가 진행 중입니다. 끝난 뒤 다시 시도해 주세요." };
 		}
@@ -3252,6 +3248,7 @@ export class LaneManager {
 			return;
 		}
 		if ((await laneTreeLeft(defaultGit, { repo, worktree, branch })).length === 0) {
+			if (this.#landing.has(name)) return;
 			log.warn("lane_tree_gone", { lane: name, worktree, branch });
 			await this.#showResult(await this.#sync(closeLaneTreeGone(store, lane), "transition"), false);
 			return;
@@ -3265,9 +3262,12 @@ export class LaneManager {
 		}
 		if (found === undefined) return;
 		// Read again: the owner may have written in the thread (back to working) or the lane claimed again meanwhile.
+		// A landing that started during the git checks holds the lane in #landing while its land state still reads
+		// "pending", so the set is re-checked too — patching landed here would fight its merge and worktree removal.
 		const current = store.getLane(name);
 		if (
 			current === undefined ||
+			this.#landing.has(name) ||
 			current.status !== lane.status ||
 			(wasClosed
 				? current.meta.land?.state !== lane.meta.land?.state
