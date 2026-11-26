@@ -3,6 +3,7 @@
  * Reuses `--c-*` light/dark WCAG AA tokens and keeps all animations gated by `prefers-reduced-motion`.
  */
 export const UX_STYLE = `
+[hidden] { display: none !important; }
 .status-pop { position: relative; flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
 .status-summary {
   display: inline-flex; align-items: center; gap: var(--sp-1); height: 28px;
@@ -102,11 +103,49 @@ export const UX_STYLE = `
 
 .sys-strip { justify-content: space-between; }
 .sys-strip .button { margin-left: auto; }
+.sys-grid { align-items: start; }
 .sys-card.is-bad { order: -3; border-left: 3px solid var(--c-danger); }
 .sys-card.is-warn { order: -2; border-left: 3px solid var(--c-warning-tint-text); }
 .sys-card[data-card="cost"] { order: -1; }
 .sys-card.is-ok .sys-head .status-pill.is-success { background: transparent; color: var(--c-text-3); padding: 0; border-color: transparent; }
 .sys-grid.is-compact-ok .sys-card.is-ok:not([data-card="cost"]) > :not(.sys-head) { display: none; }
+.sys-grid.is-compact-ok .sys-card.is-ok:not([data-card="cost"]) .sys-head { cursor: pointer; }
+@media (min-width: 1440px) {
+  .limit-chip .lc-full { display: inline-flex; align-items: baseline; gap: 2px; }
+}
+.limit-chip .lc-full small { margin: 0 1px 0 4px; }
+.limit-chip .lc-full small:first-child { margin-left: 0; }
+.limit-chip .lc-full .roll-n::after { content: "%"; font-weight: 500; opacity: 0.78; }
+.host-off { padding: 0 var(--sp-1); font-size: var(--fs-caption); color: var(--c-text-3); white-space: nowrap; }
+.groups.is-idle-inbox { display: none; }
+.inbox-pulse, .pulse-sec { display: flex; flex-direction: column; gap: var(--sp-2); }
+.pulse-kpi { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-2); }
+.pulse-stat { display: flex; flex-direction: column; gap: 2px; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface); }
+.pulse-stat:hover { border-color: var(--c-line-strong); background: var(--c-hover); }
+.pulse-stat.is-warn { border-left: 3px solid var(--c-warning-tint-text); }
+.pulse-stat span { font-size: var(--fs-caption); color: var(--c-text-3); }
+.pulse-stat b { font-size: var(--fs-strong); font-weight: 700; color: var(--c-text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pulse-closed { border: 1px solid var(--c-line); border-radius: var(--r-m); background: var(--c-surface); padding: 0 var(--sp-3); }
+.pulse-closed .closed-row:first-child, .pulse-closed .closed { border-top: 0; }
+.pulse-closed .closed { padding: var(--sp-1) 0; }
+.turn-filters { gap: var(--sp-1); }
+.turn-filters .chip { height: 24px; padding: 0 var(--sp-2); font-size: var(--fs-caption); }
+.turn-filters .chip.is-warn[aria-pressed="true"] { border-color: var(--c-warning-tint-text); color: var(--c-warning-tint-text); }
+.mon-chip.is-danger { background: var(--c-danger-tint); color: var(--c-danger-tint-text); border-color: transparent; }
+.ctx-hi { height: 16px; padding: 0 var(--sp-1); font-size: 10.5px; }
+.peer-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.peer-row + .peer-row { padding-top: var(--sp-2); border-top: 1px solid var(--c-line); }
+.peer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+@container (max-width: 639px) {
+  .pulse-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (min-width: 640px) {
+  .inbox:has(> #col-attention[data-empty]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .inbox:has(> #col-attention[data-empty]) > #col-attention { grid-column: 1 / -1; flex-direction: row; align-items: center; justify-content: space-between; padding: var(--sp-1) var(--sp-3); }
+  .inbox:has(> #col-attention[data-empty]) > #col-attention :is(.col-head, .col-empty-wrap) { padding: 0; }
+  .inbox:has(> #col-attention[data-empty]) > #col-attention .col-empty { font-size: var(--fs-caption); font-weight: 400; color: var(--c-text-3); }
+  .inbox:has(> #col-attention[data-empty]) > #col-attention .col-empty-sub { display: none; }
+}
 
 [data-card="cost"] .limit-row { cursor: pointer; padding: 2px var(--sp-1); border-radius: var(--r-s); }
 [data-card="cost"] .limit-row:hover { background: var(--c-hover); }

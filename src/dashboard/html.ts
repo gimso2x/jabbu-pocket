@@ -55,6 +55,8 @@ import {
 	rollLabel,
 	stackHtml,
 } from "./motion";
+import * as ops from "./ops-renderers";
+import * as opsViews from "./ops-views";
 import type { DashboardSnapshot, FlowChainInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -125,7 +127,7 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()}, repoCountsText = ${repoCountsText.toString()};
 const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, monitorModelDetail = ${monitorModelDetail.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()}, renderLimitsPop = ${renderLimitsPop.toString()};
-const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()}, renderFlowCards = ${renderFlowCards.toString()}, renderApprovalCards = ${renderApprovalCards.toString()}, buildTraceRows = ${buildTraceRows.toString()}, renderTraceFilters = ${renderTraceFilters.toString()}, renderTraceInspector = ${renderTraceInspector.toString()}, renderDiffNav = ${renderDiffNav.toString()}, renderSysStrip = ${renderSysStrip.toString()};
+const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()}, renderFlowCards = ${renderFlowCards.toString()}, renderApprovalCards = ${renderApprovalCards.toString()}, buildTraceRows = ${buildTraceRows.toString()}, renderTraceFilters = ${renderTraceFilters.toString()}, renderTraceInspector = ${renderTraceInspector.toString()}, renderDiffNav = ${renderDiffNav.toString()}, renderSysStrip = ${renderSysStrip.toString()}, renderInboxMachines = ${ops.renderInboxMachines.toString()}, renderTurnBotFilters = ${ops.renderTurnBotFilters.toString()}, renderPeerBotsCard = ${ops.renderPeerBotsCard.toString()}, renderSystemMachines = ${ops.renderSystemMachines.toString()}, renderInboxPulse = ${ops.renderInboxPulse.toString()}, renderHerdrAgentsBlock = ${opsViews.renderHerdrAgentsBlock.toString()}, renderHostChecksCard = ${opsViews.renderHostChecksCard.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()}, renderFlowChain = ${renderFlowChain.toString()}, discordThreadHref = ${discordThreadHref.toString()};
 const renderTaskDetail = ${renderTaskDetail.toString()}, renderDetailHead = ${renderDetailHead.toString()}, renderItemDetail = ${renderItemDetail.toString()};

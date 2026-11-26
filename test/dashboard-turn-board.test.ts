@@ -795,7 +795,7 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 describe("turn board peer installs", () => {
 	const THREAD = "discord/ch/300000000000000001/t/100000000000000001";
 
-	test("a peer's open turn joins the board under its install; a finished one and a missing peer db do not", async () => {
+	test("a peer's open and 24h recent turns join the board under its install; older turns and a missing peer db do not", async () => {
 		seed([{ origin: THREAD, text: "송박 요청", state: "answered", createdAt: NOW - 10 * MINUTE }]);
 		const peer = mkdtempSync(join(tmpdir(), "jabbu-turn-board-peer-"));
 		const gone = join(peer, "missing");
@@ -815,6 +815,12 @@ describe("turn board peer installs", () => {
 						state: "answered",
 						createdAt: NOW - HOUR,
 					},
+					{
+						origin: "discord/ch/300000000000000003/t/100000000000000003",
+						text: "오래된 끝난 일",
+						state: "answered",
+						createdAt: NOW - 30 * HOUR,
+					},
 				],
 				peer,
 			);
@@ -833,6 +839,7 @@ describe("turn board peer installs", () => {
 			const peerThreads = snapshot.turns.threads.filter((thread) => thread.install === "서팍");
 			expect(peerThreads.map((thread) => [thread.originKey, thread.column, thread.latest.preview])).toEqual([
 				[`서팍:${THREAD}`, "working", "서팍 WSL 작업"],
+				["서팍:discord/ch/300000000000000002/t/100000000000000002", "done", "끝난 일"],
 			]);
 			expect(snapshot.turns.items.filter((turn) => turn.install === "서팍").map((turn) => turn.blocksRestart)).toEqual([
 				false,
