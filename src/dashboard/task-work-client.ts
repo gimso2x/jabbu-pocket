@@ -60,6 +60,17 @@ const taskWork = (() => {
 	const READ_ONLY = "개입은 웹 대화 인증이 필요합니다(디스코드로 가능)";
 	let head = null;
 	let work = null;
+	let lastHtml = "";
+	let known = null;
+	const PAUSED = '<span class="badge is-warning" title="스윕 재촉·stale 알림·자동 머지 보류 중">멈춤 중</span>';
+	/** The snapshot lags the ledger by up to a poll: until it agrees, the header follows what the pause/resume answer re-read from the ledger. */
+	function withPause(html) {
+		if (!known || Date.now() - known.at > 20000 || html.indexOf('data-task-work="' + known.id + '"') < 0) return html;
+		if ((html.indexOf(PAUSED) >= 0) === known.paused) known = null;
+		else if (known.paused) return html.replace('<button type="button" class="copy-btn"', PAUSED + '<button type="button" class="copy-btn"');
+		else return html.split(PAUSED).join("");
+		return html;
+	}
 	const panelOf = () => {
 		const panel = head && head.querySelector("[data-task-work]");
 		return panel && work && panel.getAttribute("data-task-work") === work.id ? panel : null;
@@ -147,6 +158,10 @@ const taskWork = (() => {
 		if (status === 401 || status === 403 || (status === 404 && answer.error === "web_disabled")) w.writable = false;
 		w.note = answer.text || answer.error || "HTTP " + status;
 		if (status === 200 && action === "followup") w.draft = "";
+		if (status === 200 && typeof answer.paused === "boolean" && lastHtml) {
+			known = { id: w.id, paused: answer.paused, at: Date.now() };
+			paintHead(head, lastHtml);
+		}
 		paint();
 		if (status === 200) load(w);
 	}
@@ -179,7 +194,9 @@ const taskWork = (() => {
 		});
 	}
 	/** Replaces the detail head with html, then starts a new panel's reads or refills the kept one. */
-	function paintHead(target, html) {
+	function paintHead(target, shown) {
+		lastHtml = shown;
+		const html = withPause(shown);
 		if (head !== target) {
 			head = target;
 			listen();
