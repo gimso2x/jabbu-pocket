@@ -7,7 +7,9 @@ import { openBotStore, sessionDirFor } from "../src/core/origin";
 import type { InboundRecord } from "../src/core/types";
 import { recoverDispatched, writeRestartCut } from "../src/daemon/recovery";
 import { buildSnapshot } from "../src/dashboard/snapshot";
+import { taskOriginKey } from "../src/lanes/status";
 import { createLogger, type Logger } from "../src/log";
+import { MONITOR_ORIGIN_PREFIX } from "../src/monitors/ledger";
 import type { OmpSessionDriver } from "../src/omp/driver";
 import { FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
@@ -24,6 +26,7 @@ let dir: string;
 let clock: { now(): number };
 let store: Store;
 let log: Logger;
+let logs: string[];
 let sessions: FakeSessionStore;
 let opened: SendFaultDriver[];
 /** Faults of the next drivers the factory builds, in order. */
@@ -36,7 +39,8 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "jabbu-mailbox-sending-"));
 	clock = { now: () => 1_700_000_000_000 };
 	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
-	log = createLogger({ sink: () => undefined, clock, redact });
+	logs = [];
+	log = createLogger({ sink: (line) => logs.push(line), clock, redact });
 	sessions = new FakeSessionStore();
 	opened = [];
 	faults = [];
@@ -149,7 +153,12 @@ describe("gap 1: the process is cut while a send is in flight", () => {
 				uncertainReason: "send_interrupted",
 			});
 			expect(sent("prompt")).toHaveLength(1);
-			expect(store.listDeliveries({ originKey: ORIGIN })).toEqual([]);
+			// The boot park posts exactly one notice in the row's thread (its only delivery: nothing was answered).
+			const notices = store.listDeliveries({ originKey: ORIGIN });
+			expect(notices).toHaveLength(1);
+			expect(notices[0]).toMatchObject({ opRef: `uncertain:${row.platformMessageId}`, threadRef: row.threadRef });
+			expect(notices[0]?.body).toContain("전달 불확실");
+			expect(notices[0]?.body).toContain(row.text);
 		});
 	}
 
@@ -227,5 +236,98 @@ describe("the owner sees a send-interrupted row where uncertain rows already sho
 		expect(reply).toContain("⚠ 전달 불확실");
 		expect(reply).toContain("1. [전송 중 재시작·중단 · 불확실] 두 번 돌면 안 되는 일");
 		expect(sent("prompt")).toHaveLength(1);
+	});
+});
+
+describe("the crash between a park and its notice (boot reconciliation)", () => {
+	/** A store-level row parked `uncertain` WITHOUT its notice: the state the park/notice crash window leaves. */
+	function parkSilently(text: string, originKey = ORIGIN) {
+		const id = `x${++counter}`;
+		store.ensureOrigin(originKey, join(dir, "sessions", id));
+		store.recordInbound({ originKey, platformMessageId: id, textRef: text, threadRef: `300000000000000001:${id}` });
+		store.markUncertain(id, "steer_threw");
+		return { id, threadRef: `300000000000000001:${id}` };
+	}
+
+	test("a silently parked row is told exactly once on boot, with its reason and retry/close path", async () => {
+		const row = parkSilently("알림 못 받은 일");
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		const notices = store.listDeliveries({ originKey: ORIGIN });
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toMatchObject({ opRef: `uncertain:${row.id}`, threadRef: row.threadRef });
+		expect(notices[0]?.body).toContain("전달 불확실(끼워넣기 전송 오류)");
+		expect(notices[0]?.body).toContain("알림 못 받은 일");
+		expect(notices[0]?.body).toContain("retry");
+		// A second boot posts nothing more: the op is idempotent, and the row is already noticed.
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(1);
+	});
+
+	test("an already-noticed row gets no second notice on boot", async () => {
+		faults = [{ cutAfterDelivery: true }];
+		const row = msg("한 번만 알릴 일");
+		void makeMailbox().enqueue(row);
+		await cut.promise;
+		await nextProcess();
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(1);
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(1);
+	});
+
+	test("a row parked past the ledger retention with no notice left is not re-told (gc may have taken it)", async () => {
+		const realNow = 1_700_000_000_000;
+		clock.now = () => realNow - 91 * 86_400_000;
+		parkSilently("아주 오래 전 파킹된 일");
+		clock.now = () => realNow;
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
+	});
+
+	test("rows the owner already retried or closed, and monitor or [TASK] rows, get no boot notice", async () => {
+		const retried = parkSilently("다시 보낸 일");
+		store.retryUncertain(retried.id);
+		const closed = parkSilently("닫은 일");
+		store.discard(closed.id);
+		const monitorOrigin = `${MONITOR_ORIGIN_PREFIX}test/heartbeat`;
+		const taskOrigin = taskOriginKey("t-1");
+		parkSilently("모니터 행", monitorOrigin);
+		parkSilently("태스크 행", taskOrigin);
+		let recordCalls = 0;
+		const origRecordAnswer = store.recordAnswer.bind(store);
+		store.recordAnswer = (input) => {
+			recordCalls += 1;
+			return origRecordAnswer(input);
+		};
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(recordCalls).toBe(0);
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
+		expect(store.listDeliveries({ originKey: monitorOrigin })).toHaveLength(0);
+		expect(store.listDeliveries({ originKey: taskOrigin })).toHaveLength(0);
+		expect(logs.some((line) => line.includes("event=inbound_uncertain_notice_late"))).toBe(false);
+	});
+
+	test("recordAnswer failure during boot park is isolated across multiple sending rows", async () => {
+		const id1 = `b${++counter}`;
+		const id2 = `b${++counter}`;
+		store.ensureOrigin(ORIGIN, join(dir, "sessions", "boot"));
+		for (const id of [id1, id2]) {
+			store.recordInbound({
+				originKey: ORIGIN,
+				platformMessageId: id,
+				textRef: `보내던 일 ${id}`,
+				threadRef: `300000000000000001:${id}`,
+			});
+			store.markSending(id, null);
+		}
+		store.recordAnswer = () => {
+			throw new Error("sqlite busy");
+		};
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.getInbound(id1)).toMatchObject({ state: "uncertain", uncertainReason: "send_interrupted" });
+		expect(store.getInbound(id2)).toMatchObject({ state: "uncertain", uncertainReason: "send_interrupted" });
+		expect(logs.filter((line) => line.includes("event=uncertain_notice_failed"))).toHaveLength(4);
+		expect(logs.filter((line) => line.includes("event=inbound_uncertain "))).toHaveLength(2);
+		expect(logs.some((line) => line.includes("event=inbound_uncertain_notice_late"))).toBe(false);
 	});
 });
