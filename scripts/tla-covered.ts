@@ -22,7 +22,7 @@ export const BLOBS_FILE = "spec/tla/mailbox/covered.blobs";
 /** `<blob>  <경로>` 줄들 → 경로별 blob. 빈 줄과 `#` 줄은 건너뛴다. */
 export function parseBlobs(text: string): Map<string, string> {
 	const blobs = new Map<string, string>();
-	for (const line of text.split("\n")) {
+	for (const line of text.split(/\r?\n/)) {
 		const trimmed = line.trim();
 		if (trimmed === "" || trimmed.startsWith("#")) continue;
 		const match = /^([0-9a-f]{40,64})\s+(\S+)$/.exec(trimmed);
@@ -55,7 +55,7 @@ function currentBlobs(root: string): Map<string, string> {
 		throw new Error(`덮인 파일이 없습니다: ${missing.join(", ")} — COVERED 목록과 모델을 다시 보세요`);
 	const ids = git(root, ["hash-object", "--", ...COVERED])
 		.trim()
-		.split("\n");
+		.split(/\r?\n/);
 	return new Map(COVERED.map((path, i) => [path, ids[i] ?? ""]));
 }
 
