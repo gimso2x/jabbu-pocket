@@ -1,6 +1,7 @@
+import { CLIENT_UI_HELPERS } from "./client-ui-helpers";
 import { TASK_WORK_CLIENT } from "./task-work-client";
 /** The page wiring of the inline script (`SCRIPT` in html.ts): `boot()` and its call, shipped after its renderers. */
-export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
+export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot() {
 	const main = document.getElementById("main");
 	const stale = document.getElementById("stale");
 	const search = document.getElementById("search");
@@ -167,26 +168,14 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		showToast((label || "값") + (ok ? " 복사됨: " + value : " 복사 실패"));
 	};
 
-	const fromUrl = () => {
-		const query = new URLSearchParams(location.search);
-		const view = query.get("view") || "inbox";
-		const layout = query.get("layout") === "list" ? "list" : "";
-		const stale = query.get("stale") === "1";
-		for (const kind of ["card", "task", "item", "diff"]) {
-			const id = query.get(kind);
-			if (id) return { view, layout, stale, open: { kind, id } };
-		}
-		return { view, layout, stale, open: null };
-	};
-	const toUrl = (target) => {
-		const url = new URL(location.href);
-		for (const name of ["view", "layout", "stale", "card", "task", "item", "diff"]) url.searchParams.delete(name);
-		if (ui.view !== "inbox") url.searchParams.set("view", ui.view);
-		if (ui.view === "turns" && ui.layout === "list") url.searchParams.set("layout", "list");
-		if (ui.stale && (ui.view === "inbox" || ui.view === "list")) url.searchParams.set("stale", "1");
-		if (target) url.searchParams.set(target.kind, target.id);
-		url.hash = "";
-		return url;
+	const fromUrl = () => parseUrlState(location.search);
+	const toUrl = (target) => buildUrlState(location.href, ui, target);
+	const syncUrl = () => history.replaceState(history.state, "", toUrl(open));
+	const clearSearch = (top) => {
+		search.value = "";
+		ui.q = "";
+		syncUrl();
+		drawMain(top);
 	};
 	const cardOf = (key) => {
 		const card = board && board.ok ? board.cards.find((item) => item.key === key) : undefined;
@@ -208,6 +197,13 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	}
 	/** A turn-board conversation is open (any turns-view item but a background job). */
 	const threadOpen = () => !!open && open.kind === "item" && ui.view === "turns" && !open.id.startsWith("job:");
+	const peerThreadOpen = () => {
+		if (!threadOpen()) return false;
+		const thread = threadOf(open.id);
+		return !!thread && thread.install !== undefined;
+	};
+	const localThreadOpen = () => threadOpen() && !peerThreadOpen();
+	const closeLimits = () => closeLimitsPops(document);
 	/** A background job detail is open (\`?view=turns&item=job:<name>\`). */
 	const jobOpen = () => !!open && open.kind === "item" && ui.view === "turns" && open.id.startsWith("job:");
 	const jobOf = (id) => {
@@ -475,9 +471,11 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		const row = active && main.contains(active) && active.closest("[data-row]");
 		const focusRow = row ? row.getAttribute("data-row") : null;
 		const sorter = active && main.contains(active) ? active.getAttribute("data-sort") : null;
-		// Folds with an id (최근 닫힘, 더 보기) stay open across the redraw.
+		// Folds with an id (최근 닫힘, 더 보기) and an open limits popover stay open across the redraw.
 		const folds = Array.from(main.querySelectorAll("details[open][id]"), (fold) => fold.id);
+		const limitsOpen = main.querySelector(".limits-pop.is-open") !== null;
 		main.innerHTML = html;
+		restoreLimitsPop(main, limitsOpen);
 		drawnMain = html;
 		markChanges();
 		drawRolls();
@@ -536,7 +534,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		if (!barTitle) return;
 		const titleEl = document.getElementById("detail-title");
 		const text = open && titleEl ? (titleEl.textContent || "").trim() : "";
-		const tabbed = !!open && (open.kind === "card" || threadOpen() || jobOpen());
+		const tabbed = !!open && (open.kind === "card" || localThreadOpen() || jobOpen());
 		barTitle.textContent = text;
 		barTitle.hidden = !tabbed || tab === "head" || text === "";
 	}
@@ -581,7 +579,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	function setTab(name) {
 		tab = name;
 		const card = !!open && open.kind === "card";
-		const thread = threadOpen();
+		const thread = localThreadOpen();
 		const tabbed = card || thread || jobOpen();
 		for (const button of tabs.querySelectorAll("[data-tab]")) {
 			button.setAttribute("aria-selected", String(button.getAttribute("data-tab") === name));
@@ -596,7 +594,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	}
 	/** A herdr card's pane answer (\`api/pane/*\`), or a conversation's omp session (\`api/thread/conversation\`). */
 	async function readPane(kind, before) {
-		const thread = threadOpen();
+		const thread = localThreadOpen();
 		const query = new URLSearchParams(thread ? { origin: open.id } : { card: open.id });
 		if (before) query.set("before", before);
 		const path = thread ? "api/thread/conversation" : "api/pane/" + kind;
@@ -617,7 +615,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 			const card = cardOf(open.id);
 			const nearEnd = detail.scrollHeight - detail.scrollTop - detail.clientHeight < 40;
 			const height = detail.scrollHeight;
-			const agent = threadOpen() ? "omp" : card ? card.agent : "agent";
+			const agent = localThreadOpen() ? "omp" : card ? card.agent : "agent";
 			// The read that ends "확정 중" swaps the kept block for the final text in this one DOM update.
 			if (ticket >= settleTicket) {
 				liveKept = null;
@@ -729,7 +727,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	 * same conversation counts as the turn ending; another conversation starts clean.
 	 */
 	function syncLive() {
-		const thread = threadOpen() && loadedKey === open.id && tab === "conv" ? threadOf(open.id) : undefined;
+		const thread = localThreadOpen() && loadedKey === open.id && tab === "conv" ? threadOf(open.id) : undefined;
 		const want = thread && thread.openCount > 0 ? open.id : null;
 		if (want === liveOrigin) return;
 		if (liveSource) liveSource.close();
@@ -805,6 +803,12 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 			return;
 		}
 		if (threadOpen()) {
+			if (peerThreadOpen()) {
+				loadedKey = open.id;
+				tabs.hidden = true;
+				if (tab !== "head") setTab("head");
+				return;
+			}
 			// The old one-turn address waits for the snapshot to name its conversation.
 			if (/^\\d+$/.test(open.id)) return;
 			loadedKey = open.id;
@@ -833,7 +837,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	 * tab reads the session again (kept at the bottom if it was there, else where the reader is). No timer of its own.
 	 */
 	function followThread() {
-		if (!threadOpen() || loadedKey !== open.id) return;
+		if (!localThreadOpen() || loadedKey !== open.id) return;
 		const seen = threadSign(threadOf(open.id));
 		if (seen === threadSeen) return;
 		threadSeen = seen;
@@ -867,7 +871,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		drawnHead = "";
 		monitorHtml = null;
 		diffHtml = null;
-		const thread = threadOpen();
+		const thread = localThreadOpen();
 		const job = jobOpen();
 		traceTurn = thread && /^\\d+$/.test(open.id) ? open.id : null;
 		adoptOldTurn();
@@ -932,7 +936,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 				notes: JOB_TRACE_NOTES,
 			});
 		}
-		const on = threadOpen() && tab === "trace";
+		const on = localThreadOpen() && tab === "trace";
 		document.body.classList.toggle("detail-trace", on);
 		const thread = on ? threadOf(open.id) : undefined;
 		const turnId = !on ? null : traceTurn || (thread ? String(thread.latest.inboundId) : null);
@@ -950,6 +954,8 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		if (view !== "inbox" && view !== "list") ui.stale = false;
 		ui.view = view;
 		ui.layout = "";
+		ui.sort = "";
+		ui.desc = false;
 		if (open) show(null, "none");
 		history.pushState(null, "", toUrl(null));
 		drawMain(true);
@@ -1083,6 +1089,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		const target = event.target instanceof Element ? event.target : null;
 		if (!target) return;
 		if (!target.closest("#event-stack")) stackEl.classList.remove("is-open");
+		if (handleLimitsClick(target, event, document)) return;
 		if (target.closest("[data-es-close]")) {
 			event.preventDefault();
 			stack = [];
@@ -1148,9 +1155,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		}
 		if (target.closest("[data-clear-search]")) {
 			event.preventDefault();
-			search.value = "";
-			ui.q = "";
-			drawMain(true);
+			clearSearch(true);
 			search.focus();
 			return;
 		}
@@ -1191,6 +1196,10 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 			// On the turns view Board/List switch its own layout and keep the open conversation.
 			if (layout && ui.view === "turns") {
 				ui.layout = layout === "list" ? "list" : "";
+				if (ui.layout === "") {
+					ui.sort = "";
+					ui.desc = false;
+				}
 				history.pushState(history.state, "", toUrl(open));
 				return drawMain(true);
 			}
@@ -1208,6 +1217,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 				ui.sort = key;
 				ui.desc = false;
 			}
+			syncUrl();
 			return drawMain(false);
 		}
 		const recentTurn = target.closest("button[data-trace-turn]");
@@ -1279,13 +1289,8 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		const typing = event.target instanceof Element && Boolean(event.target.closest("input, textarea, select, [contenteditable]"));
 		if (typing) {
 			if (event.key === "Escape" && event.target === search) {
-				if (search.value !== "") {
-					search.value = "";
-					ui.q = "";
-					drawMain(false);
-				} else {
-					search.blur();
-				}
+				if (search.value !== "") clearSearch(false);
+				else search.blur();
 			}
 			return;
 		}
@@ -1302,13 +1307,14 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 			}
 		}
 		if (event.key === "Escape") {
-			if (open) {
+			if (document.querySelector(".limits-pop.is-open, .limits-pop:focus-within")) {
+				event.preventDefault();
+				closeLimits();
+			} else if (open) {
 				event.preventDefault();
 				close();
 			} else if (search.value !== "") {
-				search.value = "";
-				ui.q = "";
-				drawMain(false);
+				clearSearch(false);
 			}
 			return;
 		}
@@ -1390,14 +1396,12 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 	});
 	search.addEventListener("input", () => {
 		ui.q = search.value;
+		syncUrl();
 		drawMain(true);
 	});
 	window.addEventListener("popstate", () => {
 		const state = fromUrl();
-		const moved = state.view !== ui.view || state.layout !== ui.layout || state.stale !== ui.stale;
-		ui.view = state.view;
-		ui.layout = state.layout;
-		ui.stale = state.stale;
+		const moved = applyUrlStateToUi(ui, search, state);
 		show(state.open, "none");
 		if (moved) drawMain(true);
 	});
@@ -1424,15 +1428,12 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}function boot() {
 		}
 	}
 	const start = fromUrl();
-	ui.view = start.view;
-	ui.layout = start.layout;
-	ui.stale = start.stale;
+	applyUrlStateToUi(ui, search, start);
 	open = start.open;
-	if (threadOpen()) {
+	if (threadOpen() && !tabs.hidden) {
 		traceTurn = /^\\d+$/.test(open.id) ? open.id : null;
 		tab = traceTurn ? "trace" : "conv";
 	}
-	search.value = "";
 	refresh();
 	// A hidden tab skips the poll (each snapshot can run herdr over ssh) and catches up the moment it shows again.
 	setInterval(() => {

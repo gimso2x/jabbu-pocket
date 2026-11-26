@@ -40,9 +40,10 @@ import {
 	unreadIds,
 	unreadReady,
 } from "./inbox";
-import { contextBar, costCardBody } from "./load-view";
+import { contextBar, costCardBody, resetIn, usageLevel } from "./load-view";
 import { renderDashboardMain } from "./main-view";
 import { renderMarkdown } from "./markdown";
+import { monitorModelDetail } from "./monitor-model";
 import {
 	expireStack,
 	freshCards,
@@ -70,7 +71,6 @@ import {
 import { TRACE_CLIENT } from "./trace-client";
 import { flowDoing, renderFlow, renderTrace } from "./trace-view";
 import { turnOf } from "./turn";
-import { resetIn, trendHtml, usageLevel } from "./usage-forecast";
 
 /**
  * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
@@ -113,9 +113,8 @@ const markSeen = ${markSeen.toString()};
 const pruneStore = ${pruneStore.toString()};
 const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
-const hostChecksLevel = ${hostChecksLevel.toString()};
-const repoCountsText = ${repoCountsText.toString()};
-const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, trendHtml = ${trendHtml.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()};
+const hostChecksLevel = ${hostChecksLevel.toString()}, repoCountsText = ${repoCountsText.toString()};
+const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, monitorModelDetail = ${monitorModelDetail.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()};
 const renderFlowChain = ${renderFlowChain.toString()};
@@ -225,7 +224,8 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 				? snapshot.turns.threads.find((entry) => entry.recent.some((turn) => String(turn.inboundId) === open.id))
 				: snapshot.turns.threads.find((entry) => entry.originKey === open.id)
 			: undefined;
-	const tab = open?.kind === "card" || jobDetail ? "head" : thread ? (oldTurn ? "trace" : "conv") : undefined;
+	const ownThread = thread && found?.install === undefined;
+	const tab = open?.kind === "card" || jobDetail ? "head" : ownThread ? (oldTurn ? "trace" : "conv") : undefined;
 	const discordHref =
 		found === undefined ? "" : discordThreadHref(snapshot.discordGuild, found.originKey, found.threadRef);
 	const barTitle = /<h2 class="detail-title"[^>]*>([\s\S]*?)<\/h2>/.exec(headHtml)?.[1] ?? "";
@@ -262,7 +262,7 @@ ${open === undefined ? `<aside id="detail" class="detail" aria-label="${label}" 
 		discordHref === "" ? " hidden" : ' target="_blank" rel="noopener noreferrer"'
 	}>디스코드에서 답하기</a><a class="detail-close" href="${back}" data-close>닫기 <kbd>Esc</kbd></a></div>
 <div id="detail-tabs" class="tabs" role="tablist" aria-label="상세 보기"${tab === undefined ? " hidden" : ""}>${renderDetailTabs(
-		thread ? "thread" : jobDetail ? "job" : "card",
+		ownThread ? "thread" : jobDetail ? "job" : "card",
 		tab ?? "head",
 		open?.kind === "card" && live?.cards.some((entry) => entry.key === open.id && entry.local && entry.agent === "omp"),
 	)}</div>

@@ -40,3 +40,17 @@ export function costCardBody(cost: Section<CostLedgerInfo>): string {
 		.join("");
 	return `${days}${top === "" ? "" : `<ul class="gate-list">${top}</ul>`}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
 }
+
+/** `warn` under 20% remaining, `danger` under 5%; serialized into the page script, so it stays self-contained. */
+export function usageLevel(remainingPct: number): "ok" | "warn" | "danger" {
+	return remainingPct < 5 ? "danger" : remainingPct < 20 ? "warn" : "ok";
+}
+
+/** Time until a reset as `1h46m`, `4d6h`, `12m`; empty once it has passed. Self-contained for the page script. */
+export function resetIn(resetsAt: number | undefined, now: number): string {
+	if (resetsAt === undefined || resetsAt <= now) return "";
+	const minutes = Math.floor((resetsAt - now) / 60_000);
+	const hours = Math.floor(minutes / 60);
+	if (hours >= 24) return `${Math.floor(hours / 24)}d${hours % 24}h`;
+	return hours >= 1 ? `${hours}h${minutes % 60}m` : `${minutes}m`;
+}

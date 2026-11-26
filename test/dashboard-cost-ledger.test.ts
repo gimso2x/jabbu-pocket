@@ -13,6 +13,7 @@ import {
 import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { buildSnapshot, type DashboardSnapshot, type SnapshotDeps } from "../src/dashboard/snapshot";
+import { STYLE } from "../src/dashboard/style";
 
 /** 2026-11-25 12:00 KST. */
 const NOW = Date.parse("2026-11-25T03:00:00Z");
@@ -160,5 +161,15 @@ describe("the system view's 7일 비용 card", () => {
 		expect(cardOf(renderDashboardMain(snapshot, undefined, NOW, { view: "system" }))).toBe("");
 		const failed = { ...snapshot, costLedger: { ok: false as const, error: "boom" } };
 		expect(cardOf(renderDashboardMain(failed, undefined, NOW, { view: "system" }))).toContain("읽지 못했어요: boom");
+	});
+
+	test("UX-005: strips Discord channel context header before [현재 요청] and keeps cost values unwrapped", async () => {
+		const wrapped = "[이 방의 자리와 용도 — Discord 채널 정보]\n```\n자리: #서팍\n```\n\n[현재 요청]\n실제 작업 제목";
+		writeFileSync(session("discord/ch/1/t/99"), user(wrapped) + call(NOW, 77.43, 0));
+		const ledger = await readCostLedger(home, () => NOW, TZ);
+		if (!ledger.ok) throw new Error(ledger.error);
+		expect(ledger.top[0]?.title).toBe("실제 작업 제목");
+		expect(STYLE).toContain('[data-card="cost"] .limit-row');
+		expect(STYLE).toContain('[data-card="cost"] .limit-pct { white-space: nowrap; }');
 	});
 });
