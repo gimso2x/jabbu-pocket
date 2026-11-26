@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
 import { OmpDriverError, type OmpUsage } from "./driver";
+import { MAX_RPC_FRAME_BYTES } from "./rpc-client";
 import { isRecord } from "./type-guards";
 
 /*
@@ -27,6 +28,8 @@ export const AGY_ACP_ARGS = ["acp", "--disable-telemetry", "--dangerously-skip-p
 const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-auth" };
 
 const STDERR_TAIL_BYTES = 4_000;
+/** SIGTERM to SIGKILL grace when a protocol error ends the child (the driver's retire grace). */
+const ACP_KILL_GRACE_MS = 2_000;
 
 /** The agy CLI to spawn: a path must be executable, a name is looked up on the child's PATH. */
 export function resolveAgyExecutable(given: string, env: Record<string, string>): string {
@@ -251,6 +254,14 @@ export class AgyAcpClient {
 					buffer = buffer.slice(newline + 1);
 					newline = buffer.indexOf("\n");
 					this.#handleLine(line);
+				}
+				// A line still without its newline past the RPC frame cap is never a valid frame: end the child
+				// (its exit rejects every pending request and reports `onExit`, like any unexpected death).
+				const bytes = Buffer.byteLength(buffer);
+				if (bytes > MAX_RPC_FRAME_BYTES) {
+					this.#options.log?.warn("agy.acp.line_too_long", { origin: this.#options.originKey, pid: this.pid, bytes });
+					void this.end(ACP_KILL_GRACE_MS);
+					return;
 				}
 			}
 		} catch {

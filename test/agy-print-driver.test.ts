@@ -188,6 +188,24 @@ test("an error turn ends `error` and the child goes on to the next turn", async 
 	await driver.stop();
 });
 
+test("a stdout line past 1MiB ends the turn as a protocol error and the child is retired; the next prompt resumes", async () => {
+	const h = harness();
+	const driver = h.make();
+	const exits: OmpExitInfo[] = [];
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const long = await started(driver, "@longline");
+	expect(long.status).toBe("error");
+	expect(long.error).toBe("agy line over 1MiB");
+	const first = h.lastPid();
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(first)).toBe(false);
+	expect(h.spawns()).toHaveLength(2);
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toStartWith("fake-");
+	expect(exits).toEqual([]);
+	await driver.stop();
+});
+
 test("a quota error ends `agy rate limited (429)` and the driver ends the child itself; the next prompt resumes", async () => {
 	const h = harness();
 	const driver = h.make();

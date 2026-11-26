@@ -9,6 +9,7 @@ import { AgyToolKeepalive } from "./agy-tool-keepalive";
 import type * as Omp from "./driver";
 import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
+import { MAX_RPC_FRAME_BYTES, parseObject } from "./rpc-client";
 import { isRecord } from "./type-guards";
 
 // A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn; stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
@@ -201,9 +202,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const proc = Bun.spawn(command, { cwd: resolve(options.cwd), env, ...io, detached: true });
 		const init = Promise.withResolvers<string>();
 		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false, ready: false };
-		const stdoutDone = this.#pumpStdout(child);
+		child.gone = Promise.all([proc.exited, this.#pumpStdout(child)]).then(([code]) => this.#onExit(child, code));
 		void this.#pumpStderr(child);
-		child.gone = Promise.all([proc.exited, stdoutDone]).then(([code]) => this.#onExit(child, code));
 		this.#child = child;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		const timer = setTimeout(() => init.reject(new Error(`no init in ${timeoutMs}ms`)), timeoutMs);
@@ -255,6 +255,14 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		for await (const chunk of child.proc.stdout) {
 			const lines = (buffer + decoder.decode(chunk, { stream: true })).split("\n");
 			buffer = lines.pop() ?? "";
+			if (Buffer.byteLength(buffer) > MAX_RPC_FRAME_BYTES) {
+				this.#options.log?.warn("agy.print.line_too_long", { origin: this.#options.originKey, pid: child.proc.pid });
+				this.#retire();
+				const turn = this.#turn;
+				if (turn !== undefined)
+					this.#finish(turn, { opRef: turn.opRef, status: "error", text: turn.text, error: "agy line over 1MiB" });
+				return;
+			}
 			for (const line of lines) this.#onLine(child, line);
 		}
 		this.#onLine(child, buffer);
@@ -264,13 +272,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		for await (const chunk of child.proc.stderr) child.stderr = (child.stderr + decoder.decode(chunk)).slice(-4_000);
 	}
 	#onLine(child: Child, line: string): void {
-		let message: unknown;
-		try {
-			message = JSON.parse(line);
-		} catch {
-			return;
-		}
-		if (!isRecord(message)) return;
+		const message = parseObject(line);
+		if (message === undefined) return;
 		const event = str(message.event) ?? "?";
 		const id = str(message.conversation_id);
 		if (event === "init" && id !== undefined && id !== "") {
@@ -304,15 +307,13 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	#onTool(turn: Switch.PendingTurn, step: Record<string, unknown>): void {
 		turn.hadToolCall = true;
 		const info = isRecord(step.tool_info) ? step.tool_info : {};
-		const error = isRecord(info.error) ? str(info.error.message) : undefined;
-		const state = str(step.state);
 		Switch.applyAgyToolUpdate({
 			update: {
 				toolCallId: `${str(step.conversation_id) ?? ""}#${num(step.step_index)}`,
 				name: str(step.tool_name) ?? str(info.name) ?? "tool",
 				rawInput: info.parameters ?? {},
-				status: state === "DONE" ? "completed" : state === "ERROR" ? "failed" : "in_progress",
-				rawOutput: { output: str(info.output) ?? error ?? "" },
+				status: str(step.state) === "DONE" ? "completed" : str(step.state) === "ERROR" ? "failed" : "in_progress",
+				rawOutput: { output: str(info.output) ?? (isRecord(info.error) ? str(info.error.message) : undefined) ?? "" },
 			},
 			entries: this.#entries,
 			nextSeq: () => ++this.#seq,
