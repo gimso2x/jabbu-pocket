@@ -514,6 +514,7 @@ const POWER_COMMAND = new RegExp(
 
 /** `service_control` through a power command (`sudo reboot`, `shutdown -h now`) in command position, not in prose. */
 function powerCommands(line: string): Hit[] {
+	if (!/\b(?:reboot|poweroff|halt|shutdown)\b/i.test(line)) return [];
 	return Array.from(line.matchAll(POWER_COMMAND), (m) => {
 		const end = m.index + m[0].length;
 		return { rule: "service_control", start: end - (m[1] ?? "").length, end };
@@ -539,12 +540,9 @@ type Cwd = string | null;
 /** The label of a line stating a rule (`` `rule`: … ``): what follows it may quote commands, in backticks, or run one. */
 const RULE_DEFINITION = /^[^\S\n]*(?:[-*][^\S\n]*)?`[a-z_]+`\s*:/;
 
-/**
- * The top-level `cd` / `pushd` / `popd` of a line in order: not those in parentheses, `$( )` or backticks (a subshell
- * or a quotation), and not `env -C` (it moves one command). A rule line's label is blanked, so a `cd` right after it
- * is a command in command position and one inside backticks is only quoted.
- */
+/** Top-level `cd` / `pushd` / `popd` (not in parens, `$( )`, backticks or `env -C`); rule-line labels are blanked. */
 function cdEvents(source: string): CdEvent[] {
+	if (!/\b(?:cd|pushd|popd)\b/i.test(source)) return [];
 	const label = RULE_DEFINITION.exec(source)?.[0] ?? "";
 	const line = " ".repeat(label.length) + source.slice(label.length);
 	const { groups } = parenGroups(line);
