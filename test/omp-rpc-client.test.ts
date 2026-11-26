@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createLogger } from "../src/log";
 import { type OmpDialogRequest, OmpDriverError, type OmpExitInfo, type OmpFinal } from "../src/omp/driver";
 import {
+	MAX_RPC_FRAME_BYTES,
 	OmpRpcClient,
 	RPC_CHUNK_PAYLOAD_BYTES,
 	RpcChunkAssembler,
@@ -465,6 +466,20 @@ describe("stdout lines", () => {
 		const lines: string[] = [];
 		for await (const line of readLines(stream)) lines.push(line);
 		expect(lines).toEqual(['{"id":"물음표"}', '{"a":1}']);
+	});
+
+	test("readLines rejects a complete line over the frame cap delivered in one chunk", async () => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode(`${"x".repeat(MAX_RPC_FRAME_BYTES + 1)}\n`));
+				controller.close();
+			},
+		});
+		const lines: string[] = [];
+		await expect(async () => {
+			for await (const line of readLines(stream)) lines.push(line);
+		}).toThrow(RpcProtocolError);
+		expect(lines).toEqual([]);
 	});
 
 	test("non-object lines are reported and skipped; later frames still arrive", async () => {
