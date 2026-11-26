@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AgyAccountsConfig, agyAccountsOf } from "../src/config-agy";
 import { ConfigError } from "../src/config-validate";
@@ -156,6 +156,26 @@ test("AgyAccountPool.prepareAccountDir bootstraps token and settings once withou
 	writeFileSync(dstToken, JSON.stringify({ fake: "refreshed-tok" }), { mode: 0o600 });
 	pool.prepareAccountDir(entry);
 	expect(JSON.parse(readFileSync(dstToken, "utf8"))).toEqual({ fake: "refreshed-tok" });
+
+	// Matching email and newer dstToken preserves refresh; newer srcToken or changed email overwrites dstToken.
+	const srcToken = join(accDir, "acct1.token");
+	writeFileSync(srcToken, JSON.stringify({ id_token_email: "a@example.com", tok: "slot-v1" }), { mode: 0o600 });
+	writeFileSync(dstToken, JSON.stringify({ id_token_email: "a@example.com", tok: "refreshed-v1" }), { mode: 0o600 });
+	utimesSync(srcToken, 1000, 1000);
+	utimesSync(dstToken, 2000, 2000);
+	pool.prepareAccountDir(entry);
+	expect(JSON.parse(readFileSync(dstToken, "utf8"))).toEqual({ id_token_email: "a@example.com", tok: "refreshed-v1" });
+
+	writeFileSync(srcToken, JSON.stringify({ id_token_email: "a@example.com", tok: "relogin-v2" }), { mode: 0o600 });
+	utimesSync(srcToken, 3000, 3000);
+	pool.prepareAccountDir(entry);
+	expect(JSON.parse(readFileSync(dstToken, "utf8"))).toEqual({ id_token_email: "a@example.com", tok: "relogin-v2" });
+
+	writeFileSync(srcToken, JSON.stringify({ id_token_email: "b@example.com", tok: "other-email" }), { mode: 0o600 });
+	utimesSync(srcToken, 1000, 1000);
+	utimesSync(dstToken, 4000, 4000);
+	pool.prepareAccountDir(entry);
+	expect(JSON.parse(readFileSync(dstToken, "utf8"))).toEqual({ id_token_email: "b@example.com", tok: "other-email" });
 });
 
 test("AgyAccountPool logs without leaking emails or tokens", () => {
@@ -195,8 +215,13 @@ test("agyAccountsOf validates dir/prefix and planReload classifies agyAccounts a
 		dir: root,
 		appDataPrefix: "acct-",
 	});
-	const tilde = agyAccountsOf("/c.json", { dir: "~/.test-agy-accounts" });
+	const tilde = agyAccountsOf("/c.json", { dir: "~/.test-agy-accounts", statePath: "~/.test-state.json" });
 	expect(tilde?.dir).toEndWith("/.test-agy-accounts");
+	expect(tilde?.statePath).toBe(join(homedir(), ".test-state.json"));
+	expect(agyAccountsOf("/c.json", { dir: root, statePath: join(root, "quota-state.json") })).toEqual({
+		dir: root,
+		statePath: join(root, "quota-state.json"),
+	});
 
 	for (const bad of [
 		"str",
@@ -206,6 +231,13 @@ test("agyAccountsOf validates dir/prefix and planReload classifies agyAccounts a
 		{ dir: root, extra: 1 },
 		{ dir: root, appDataPrefix: "../bad" },
 		{ dir: root, appDataPrefix: "has/slash" },
+		{ dir: root, statePath: "" },
+		{ dir: root, statePath: "relative.json" },
+		{ dir: root, statePath: "~" },
+		{ dir: root, statePath: join(root, "dir/") },
+		{ dir: root, statePath: "~other/state.json" },
+		{ dir: root, statePath: "/bad\u0000state.json" },
+		{ dir: root, statePath: 123 },
 	]) {
 		expect(() => agyAccountsOf("/c.json", bad)).toThrow(ConfigError);
 	}
@@ -218,6 +250,48 @@ test("agyAccountsOf validates dir/prefix and planReload classifies agyAccounts a
 	expect(plan.changed).toEqual(["agyAccounts"]);
 	expect(plan.restartRequired).toEqual([]);
 	expect(plan.next.agyAccounts).toEqual({ dir: root });
+});
+
+test("AgyAccountPool syncs external JSON state, merges with Math.max on save, and follows reloaded statePath", () => {
+	const root = tempDir("jabbu-pool-shared-");
+	const { accDir, geminiDir } = writeAccountsFixture(
+		root,
+		"acct1 agy/gemini-pro-orchestrator-neon\nacct2 agy/gemini-pro-orchestrator-neon\nacct3 agy/gemini-pro-orchestrator-neon\n",
+		["acct1", "acct2", "acct3"],
+	);
+	const stateA = join(root, "shared-a.json");
+	const stateB = join(root, "shared-b.json");
+	const now = 1_795_500_000_000;
+	let cfg: AgyAccountsConfig = { dir: accDir, statePath: stateA };
+	const pool = new AgyAccountPool({
+		config: () => cfg,
+		statePath: join(root, "fallback.json"),
+		geminiDir,
+		now: () => now,
+	});
+
+	// External script writes a block to stateA -> pool sees it immediately.
+	writeFileSync(stateA, JSON.stringify({ current: "acct1", blocked: { acct1: now + 60_000 } }));
+	expect(pool.isBlocked("acct1")).toBe(true);
+	expect(pool.selectAvailable()?.name).toBe("acct2");
+	expect(pool.status()).toEqual({ current: "acct2", total: 3, blocked: [{ name: "acct1", until: now + 60_000 }] });
+
+	// Another process writes new blocks to stateA right before pool.markExhausted saves -> Math.max merges both.
+	writeFileSync(stateA, JSON.stringify({ current: "acct2", blocked: { acct1: now + 120_000, acct3: now + 90_000 } }));
+	pool.markExhausted("acct2", now + 30_000);
+	const merged = JSON.parse(readFileSync(stateA, "utf8")) as { blocked: Record<string, number> };
+	expect(merged.blocked).toEqual({
+		acct1: now + 120_000,
+		acct2: now + 30_000,
+		acct3: now + 90_000,
+	});
+
+	// Reloading config to statePath B switches active state tracking cleanly.
+	writeFileSync(stateB, JSON.stringify({ current: "acct1", blocked: { acct2: now + 40_000 } }));
+	cfg = { dir: accDir, statePath: stateB };
+	expect(pool.isBlocked("acct1")).toBe(false);
+	expect(pool.isBlocked("acct2")).toBe(true);
+	expect(pool.selectAvailable()?.name).toBe("acct1");
 });
 
 test("renderStatusText formats agyAccounts line with blocked reset time", () => {

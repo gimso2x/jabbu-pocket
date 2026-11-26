@@ -38,6 +38,12 @@ const QUOTA_DIRS = new Set(
 		.map((s) => s.trim())
 		.filter((s) => s !== ""),
 );
+const END_QUOTA_DIRS = new Set(
+	(process.env.FAKE_AGY_END_QUOTA_DIRS ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s !== ""),
+);
 const QUOTA_FILE = process.env.FAKE_AGY_QUOTA_FILE;
 const isQuotaDir = (): boolean => {
 	if (APP_DATA_DIR === undefined) return false;
@@ -51,6 +57,7 @@ const isQuotaDir = (): boolean => {
 		return false;
 	}
 };
+const isEndQuotaDir = (): boolean => APP_DATA_DIR !== undefined && END_QUOTA_DIRS.has(APP_DATA_DIR);
 const ECHO_DIR = process.env.FAKE_AGY_ECHO_DIR === "1";
 const HOLD_INIT_DIR = process.env.FAKE_AGY_HOLD_INIT_DIR;
 const HOLD_INIT_SOCK = process.env.FAKE_AGY_HOLD_INIT_SOCK;
@@ -115,6 +122,18 @@ function prompt(id: unknown, text: string): void {
 			},
 			onCancel: () => reply(id, "cancelled"),
 		};
+		return;
+	}
+	if (text.includes("@tool-end-quota")) {
+		update({ sessionUpdate: "tool_call", ...tool, status: "in_progress", rawInput, args: rawInput });
+		update({ sessionUpdate: "tool_call_update", ...tool, status: "completed", rawOutput: { output: "hi\n" } });
+		finish(
+			"작업 중\n⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.\n",
+		);
+		return;
+	}
+	if (text.includes("@end-quota") || isEndQuotaDir()) {
+		finish("⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.\n");
 		return;
 	}
 	if (text.includes("@tool-quota")) {

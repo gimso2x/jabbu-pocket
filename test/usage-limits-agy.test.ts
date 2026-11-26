@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clampPct, collectAgyAccounts, parseAgy } from "../src/dashboard/usage-limits-agy";
@@ -153,5 +153,41 @@ describe("collectAgyAccounts", () => {
 		expect(result?.account).toBe("two");
 		expect(result?.accounts.find((a) => a.name === "two")?.active).toBe(true);
 		expect(result?.accounts.find((a) => a.name === "one")?.active).toBeUndefined();
+	});
+
+	test("prefers newer isolated app-data-dir token with matching email and ignores mismatched email", async () => {
+		const root = mkdtempSync(join(tmpdir(), "agy-usage-iso-"));
+		dirs.push(root);
+		const accDir = accountsDir("alpha\nbeta\n", {
+			alpha: JSON.stringify({ id_token_email: "a@example.com", tag: "slot-a" }),
+			beta: JSON.stringify({ id_token_email: "b@example.com", tag: "slot-b" }),
+		});
+		utimesSync(join(accDir, "alpha.token"), 1000, 1000);
+		utimesSync(join(accDir, "beta.token"), 1000, 1000);
+		const geminiDir = join(root, "gemini");
+		const isoA = join(geminiDir, "antigravity-cli-acct-alpha", "antigravity-oauth-token");
+		const isoB = join(geminiDir, "antigravity-cli-acct-beta", "antigravity-oauth-token");
+		mkdirSync(join(geminiDir, "antigravity-cli-acct-alpha"), { recursive: true });
+		mkdirSync(join(geminiDir, "antigravity-cli-acct-beta"), { recursive: true });
+		writeFileSync(isoA, JSON.stringify({ id_token_email: "a@example.com", tag: "iso-fresh-a" }));
+		writeFileSync(isoB, JSON.stringify({ id_token_email: "wrong@example.com", tag: "iso-wrong-b" }));
+		utimesSync(isoA, 2000, 2000);
+		utimesSync(isoB, 2000, 2000);
+
+		const seen: Record<string, string> = {};
+		const run: ProcessRunner = async (_cmd, opts) => {
+			const home = opts?.env?.HOME ?? "";
+			const parsed = JSON.parse(
+				await Bun.file(join(home, ".gemini/antigravity-cli/antigravity-oauth-token")).text(),
+			) as { id_token_email: string; tag: string };
+			seen[parsed.id_token_email] = parsed.tag;
+			return { code: 0, stdout: "g\tFive hour limit\t80%\tx", timedOut: false };
+		};
+		const result = await collectAgyAccounts(ARGV, accDir, undefined, run, { geminiDir });
+		expect(result?.accounts.every((a) => a.ok)).toBe(true);
+		expect(seen).toEqual({
+			"a@example.com": "iso-fresh-a",
+			"b@example.com": "slot-b",
+		});
 	});
 });

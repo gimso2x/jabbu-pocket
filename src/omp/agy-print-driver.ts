@@ -2,8 +2,8 @@ import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveAgyExecutable } from "./agy-acp-client";
-import { appendTurnChunk, isQuotaErrorText, quotaRetryNotice, resetTurnText } from "./agy-notice";
-import { clearAgyPointer, parseAgySessionStem, readAgyPointer, setQuotaNotice, writeAgyPointer } from "./agy-quota";
+import { appendTurnChunk, resetTurnText } from "./agy-notice";
+import * as Quota from "./agy-quota";
 import * as Switch from "./agy-switch";
 import { AgyToolKeepalive } from "./agy-tool-keepalive";
 import type * as Omp from "./driver";
@@ -110,7 +110,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		await this.#retiring;
 	}
 	newSession = () => this.#rebind(undefined);
-	switchSession = (sessionFile: string) => this.#rebind(parseAgySessionStem(sessionFile));
+	switchSession = (sessionFile: string) => this.#rebind(Quota.parseAgySessionStem(sessionFile));
 	/** Only the model fixed at registration: the stale-model heal finds it listed and leaves it. */
 	availableModels = async (): Promise<string[]> => [this.#model()];
 	thinkingLevels = async (): Promise<string[]> => [];
@@ -154,8 +154,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	#env = (): Record<string, string> => ({ ...buildChildEnv(this.#options.env, this.#options.baseEnv), ...AGY_ENV });
 	async #rebind(conversationId: string | undefined): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
-		if (conversationId === undefined) clearAgyPointer(this.#pointerPath);
-		else writeAgyPointer(this.#options.sessionDir, this.#pointerPath, conversationId);
+		if (conversationId === undefined) Quota.clearAgyPointer(this.#pointerPath);
+		else Quota.writeAgyPointer(this.#options.sessionDir, this.#pointerPath, conversationId);
 		const turn = this.#turn; // a running turn cannot outlive its child: abort() ends it `aborted`
 		if (turn !== undefined) await this.abort();
 		else this.#retire();
@@ -170,11 +170,11 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	async #ensureChild(): Promise<void> {
 		while (this.#retiring !== undefined) await this.#retiring;
 		if (this.#child !== undefined) return;
-		const wanted = readAgyPointer(this.#pointerPath)?.conversationId;
+		const wanted = Quota.readAgyPointer(this.#pointerPath)?.conversationId;
 		let opened = await this.#spawn(wanted);
 		if (wanted !== undefined && opened !== wanted) {
 			this.#options.log?.warn("agy.print.conversation_lost", { origin: this.#options.originKey, wanted, opened });
-			clearAgyPointer(this.#pointerPath);
+			Quota.clearAgyPointer(this.#pointerPath);
 			this.#retire();
 			while (this.#retiring !== undefined) await this.#retiring;
 			opened = await this.#spawn(undefined);
@@ -182,7 +182,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#resumed = wanted !== undefined && opened === wanted;
 		this.#fresh = !this.#resumed;
 		this.#conversationId = opened;
-		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, opened);
+		Quota.writeAgyPointer(this.#options.sessionDir, this.#pointerPath, opened);
 	}
 	async #spawn(resume: string | undefined): Promise<string> {
 		this.#requireStarted(); // a prompt parked on a retire must not spawn a child under a stopped driver
@@ -328,11 +328,12 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#toolKeepalive.clear();
 		const succeeded = str(result.status) === "SUCCESS";
 		const error = str(result.error) ?? `agy turn failed (${str(result.status) ?? "?"})`;
-		if (!succeeded && isQuotaErrorText(error)) {
-			this.#rateLimited(child, turn, quotaRetryNotice(error) ?? error);
+		const text = str(result.response) || turn.text;
+		const quota = Quota.resultQuotaDetail(succeeded, error, text);
+		if (quota !== undefined) {
+			this.#rateLimited(child, turn, quota);
 			return;
 		}
-		const text = str(result.response) || turn.text;
 		const { model } = this.#options;
 		const entry = { entries: this.#entries, nextSeq: () => ++this.#seq, provider: "agy", model, usage: undefined };
 		Switch.pushAgyAssistantEntry({ ...entry, text, succeeded });
@@ -347,7 +348,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	}
 	/** A quota failure: the turn ends `agy rate limited (429): …` and the child goes; the next prompt starts a new one. */
 	#rateLimited(child: Child, turn: Switch.PendingTurn, detail: string): void {
-		setQuotaNotice(turn, detail);
+		Quota.setQuotaNotice(turn, detail);
 		this.#options.log?.warn("agy.print.rate_limited", { origin: this.#options.originKey, pid: child.proc.pid });
 		this.#retire();
 		this.#finish(turn, { opRef: turn.opRef, status: "error", text: turn.text, error: turn.rateLimit ?? detail });

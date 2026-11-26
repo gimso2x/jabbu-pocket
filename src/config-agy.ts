@@ -13,6 +13,7 @@ export interface WorkerAgyConfig {
 export interface AgyAccountsConfig {
 	dir: string;
 	appDataPrefix?: string;
+	statePath?: string;
 }
 
 /** Commands and optional multi-account dir for the dashboard's "모델 한도" strip. */
@@ -44,6 +45,13 @@ function resolveUserDir(configPath: string, field: string, raw: unknown): string
 	return resolve(raw);
 }
 
+function resolveUserFile(configPath: string, field: string, raw: unknown): string {
+	if (!nonEmpty(raw) || /\p{Cc}/u.test(raw) || raw === "~" || raw.endsWith("/")) invalid(configPath, field);
+	if (raw.startsWith("~/")) return resolve(join(homedir(), raw.slice(2)));
+	if (raw.startsWith("~") || !isAbsolute(raw)) invalid(configPath, field);
+	return resolve(raw);
+}
+
 /** `agyExecutable`: optional absolute path to the agy CLI binary. */
 export function agyExecutableOf(configPath: string, root: Record<string, unknown>): string | undefined {
 	const executable = optionalString(configPath, root, "agyExecutable");
@@ -51,13 +59,13 @@ export function agyExecutableOf(configPath: string, root: Record<string, unknown
 	return executable;
 }
 
-/** `agyAccounts`: `{ dir, appDataPrefix? }`; expands `~/` in `dir` and refuses relative paths or unsafe prefixes. */
+/** `agyAccounts`: `{ dir, appDataPrefix?, statePath? }`; expands `~/` in `dir`/`statePath` and refuses unsafe paths. */
 export function agyAccountsOf(configPath: string, value: unknown): AgyAccountsConfig | undefined {
 	if (value === undefined) return undefined;
 	const record = asRecord(value);
 	if (record === undefined) invalid(configPath, "agyAccounts");
 	for (const key of Object.keys(record)) {
-		if (key !== "dir" && key !== "appDataPrefix") invalid(configPath, `agyAccounts.${key}`);
+		if (key !== "dir" && key !== "appDataPrefix" && key !== "statePath") invalid(configPath, `agyAccounts.${key}`);
 	}
 	const dir = resolveUserDir(configPath, "agyAccounts.dir", record.dir);
 	const appDataPrefix = record.appDataPrefix;
@@ -67,7 +75,13 @@ export function agyAccountsOf(configPath: string, value: unknown): AgyAccountsCo
 	) {
 		invalid(configPath, "agyAccounts.appDataPrefix");
 	}
-	return { dir, ...(appDataPrefix === undefined ? {} : { appDataPrefix }) };
+	const statePath =
+		record.statePath === undefined ? undefined : resolveUserFile(configPath, "agyAccounts.statePath", record.statePath);
+	return {
+		dir,
+		...(appDataPrefix === undefined ? {} : { appDataPrefix }),
+		...(statePath === undefined ? {} : { statePath }),
+	};
 }
 
 /** `dashboard.usageLimits`: validates `omp`, `agy`, `agyAccount`, and optional `agyAccountsDir` (`~/` expanded). */

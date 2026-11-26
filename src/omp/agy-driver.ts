@@ -18,6 +18,7 @@ import {
 	prependRotationContext,
 	QUIET_UPDATES,
 	readAgyPointer,
+	recordFinalQuotaNotice,
 	recordQuotaFailure,
 	setQuotaNotice,
 	writeAgyPointer,
@@ -56,13 +57,7 @@ import { isRecord } from "./type-guards";
 
 export type { AgyOmpDriverOptions };
 
-/*
- * Boundary between jabbu and one Antigravity CLI ACP child (`agy acp`, see `agy-acp-client.ts`), one per origin.
- *
- * Start: `initialize`, then `session/load` of `<sessionDir>/agy-conversation.json` or `session/new`.
- * Turn: `session/prompt`; `session/update` notifications become omp events, reply becomes `OmpFinal`.
- * Rotation: `usage_update` at or over `AGY_ROTATE_RATIO` drops the pointer and child after turn end.
- */
+// Antigravity CLI ACP child (`agy acp`) boundary per origin: initialize/load|new, prompt/update -> OmpFinal, rotate on usage_update.
 
 export const AGY_PROVIDER = "agy";
 /** `thought_level` values of agy 1.5.16; a model may offer fewer, or none. */
@@ -740,7 +735,9 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		if (this.#turn !== turn || this.#ended.has(client)) return;
 		turn.promptReplied.resolve();
 		this.#toolKeepalive.clear();
+		const stopReason = str(result?.stopReason);
 		recordQuotaFailure(turn, failure);
+		recordFinalQuotaNotice(turn, stopReason, turn.text);
 		if (turn.rateLimit !== undefined) {
 			void this.#handleQuotaSwitch(turn, client);
 			return;
@@ -751,7 +748,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 		const usage = acpUsageOf(result?.usage);
 		addAgyUsage(turn.usage, usage);
-		const stopReason = str(result?.stopReason);
 		const succeeded = stopReason === "end_turn";
 		if (succeeded) this.#loadedUnanswered = false;
 		pushAgyAssistantEntry({
