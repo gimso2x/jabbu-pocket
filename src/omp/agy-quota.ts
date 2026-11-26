@@ -116,12 +116,15 @@ export function allAccountsExhaustedError(accounts: AgyAccountPool, now: number,
 	);
 }
 
+/** The head of every agy quota failure's turn error (the daemon blocks a headless agy task on it). */
+export const AGY_RATE_LIMIT_HEAD = "agy rate limited (429)";
+
 /** Records a quota retry notice detail (`RESOURCE_EXHAUSTED …`) onto the active turn. */
 export function setQuotaNotice(
 	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number },
 	detail: string,
 ): void {
-	turn.rateLimit = `agy rate limited (429): ${detail}`;
+	turn.rateLimit = `${AGY_RATE_LIMIT_HEAD}: ${detail}`;
 	turn.rateLimitDetail = detail;
 	turn.rateLimitResetMs = parseResetDurationMs(detail);
 }

@@ -188,7 +188,7 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 		cutTurns ??= readRestartCut(homeDir, (deps.now ?? Date.now)(), log);
 		return cutTurns;
 	};
-	settleDeadProcessRows(store, log);
+	settleDeadProcessRows(store, log, (deps.now ?? Date.now)());
 	const byOrigin = new Map<string, Map<string, InboundRow[]>>();
 	for (const row of store.listInbound({ state: "dispatched" })) {
 		const opRef = row.opRef ?? `row:${row.platformMessageId}`;

@@ -1,14 +1,19 @@
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { sessionToResume } from "../core/mailbox-types";
+import { sessionToResume, type TurnSettledInfo } from "../core/mailbox-types";
 import { sessionDirFor } from "../core/origin";
 import type { HerdrRunnerOptions } from "../dispatch/omp";
 import { isTaskOrigin, TASK_ORIGIN_PREFIX } from "../lanes/status";
+import { AGY_LAST_ANSWER_FILE, AgyPrintDriver } from "../omp/agy-print-driver";
+import { AGY_RATE_LIMIT_HEAD } from "../omp/agy-quota";
+import type { OmpSessionDriver } from "../omp/driver";
 import { RpcOmpDriver } from "../omp/rpc-driver";
 import { buildWorkerFloorsPrompt } from "../safety/prompt";
 import type { TaskDispatchDeps } from "../tasks/dispatch";
 import type { TaskLedger, TaskRow } from "../tasks/ledger";
+import { agyWorkspacesOf } from "../tasks/records";
 import { runtimeFor, type TaskMailboxPort, type TaskRuntime } from "../tasks/runtime";
-import { withWorkerModel } from "../tasks/worker-tier";
+import { agyModelOf, agySecretsDirs, agySettings, withWorkerModel } from "../tasks/worker-tier";
 import { type DaemonContext, startedStore } from "./daemon-context";
 
 /** The ledger row of a [TASK] worker origin `jabbu/task/<agent>`; undefined for any other origin or a row that is gone. */
@@ -33,6 +38,11 @@ export function taskMailboxPort(ctx: DaemonContext): TaskMailboxPort {
 			const origin = startedStore(ctx).getOrigin(originKey);
 			return origin === undefined ? undefined : sessionToResume(origin);
 		},
+		lastAgyAnswer: (originKey) => {
+			const origin = startedStore(ctx).getOrigin(originKey);
+			const path = origin === undefined ? undefined : join(origin.sessionDir, AGY_LAST_ANSWER_FILE);
+			return path !== undefined && existsSync(path) ? readFileSync(path, "utf8") : undefined;
+		},
 		pauseTurn: (originKey) => mailbox(originKey).pauseTurn(),
 		stopWhenIdle: (originKey) => mailbox(originKey).stopWhenIdle(),
 		resumePending: (originKey) => mailbox(originKey).resumePending(),
@@ -46,18 +56,40 @@ export interface TaskRpcEnv {
 }
 
 /**
- * The omp child of a [TASK] worker origin, whatever the bot's own `agent`: headless `--mode rpc` (no dialog answerer,
- * so `ask` is cancelled), no jabbu host tools, the worker floors as system prompt, the model fixed at registration.
+ * The child of a [TASK] worker origin, whatever the bot's own `agent`, with the model fixed at registration. An agy row
+ * (`agy:<model>`) gets the agy print driver: the herdr worker's `--settings` deny rules, the worker floors ahead of each
+ * new conversation. Any other row gets headless omp `--mode rpc` (no dialog answerer, so `ask` is cancelled), no jabbu
+ * host tools, the worker floors as system prompt.
  */
 export function taskDriver(
 	ctx: DaemonContext,
 	originKey: string,
 	sessionDir: string,
 	rpcEnv: TaskRpcEnv,
-): RpcOmpDriver {
+): OmpSessionDriver {
 	const row = taskOfOrigin(ctx.store?.tasks, originKey);
 	if (row === undefined) throw new Error(`task_row_missing: ${originKey}`);
 	const { config } = ctx.options;
+	const secretsDir = join(config.homeDir, "secrets");
+	const agy = agyModelOf(row.workerModel);
+	if (agy !== undefined) {
+		const workspaces = agyWorkspacesOf(row);
+		return new AgyPrintDriver({
+			agyExecutable: config.agyExecutable ?? "agy",
+			cwd: row.worktree,
+			sessionDir,
+			model: agy,
+			settings: agySettings(workspaces, agySecretsDirs(secretsDir)),
+			addDirs: workspaces.filter((dir) => dir !== row.worktree),
+			workerFloors: buildWorkerFloorsPrompt(secretsDir, row),
+			logName: row.agent,
+			// The worker's session note would repeat the brief, as for a herdr worker (`startHerdrAgent`).
+			env: { ...rpcEnv.env, OMP_WIKI_NOTE_DISABLE: "1" },
+			...(rpcEnv.baseEnv === undefined ? {} : { baseEnv: rpcEnv.baseEnv }),
+			log: ctx.log,
+			originKey,
+		});
+	}
 	return new RpcOmpDriver({
 		ompExecutable: config.ompExecutable,
 		cwd: row.worktree,
@@ -66,11 +98,37 @@ export function taskDriver(
 		...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
 		extraArgs: [
 			"--append-system-prompt",
-			buildWorkerFloorsPrompt(join(config.homeDir, "secrets"), row),
+			buildWorkerFloorsPrompt(secretsDir, row),
 			...(withWorkerModel(config.workerOmpArgs, row.workerModel) ?? []),
 		],
 		hostTools: [],
 		log: ctx.log,
+	});
+}
+
+/**
+ * A headless agy [TASK] turn that ended on agy's limit (the print driver already ended its child): the task is blocked
+ * with one owner card, as the sweep does on a herdr agy screen. Run in the background: the turn's settlement never waits
+ * on the ledger or a post.
+ */
+export function noteAgyTaskLimit(ctx: DaemonContext, info: TurnSettledInfo): void {
+	const error = info.error;
+	if (error === undefined || !error.startsWith(AGY_RATE_LIMIT_HEAD)) return;
+	const row = taskOfOrigin(ctx.store?.tasks, info.originKey);
+	if (
+		row === undefined ||
+		row.runtime !== "headless" ||
+		agyModelOf(row.workerModel) === undefined ||
+		(row.status !== "working" && row.status !== "blocked")
+	)
+		return;
+	const sweeper = ctx.taskSweeper;
+	if (sweeper === undefined) {
+		ctx.log.warn("task_agy_limit_unhandled", { task: row.taskId, reason: "no task sweeper" });
+		return;
+	}
+	sweeper.blockOnAgyLimit(row, error).catch((cause: unknown) => {
+		ctx.log.warn("task_agy_limit_failed", { task: row.taskId, error: String(cause) });
 	});
 }
 

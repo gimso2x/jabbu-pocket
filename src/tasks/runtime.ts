@@ -19,6 +19,7 @@ import type { LogFields } from "../log";
 import { lastAnswerOf, readLastAssistant } from "../omp/session-tail";
 import { redact } from "../redact";
 import type { TaskLedger, TaskRow } from "./ledger";
+import { agyModelOf } from "./worker-tier";
 
 /**
  * What the headless runtime needs of the daemon's Mailbox (`daemon-task-resume.ts` builds it): one origin per task,
@@ -37,6 +38,8 @@ export interface TaskMailboxPort {
 	busy(originKey: string): boolean;
 	/** The origin's omp session jsonl, when it has one. */
 	sessionFile(originKey: string): string | undefined;
+	/** An agy origin's last answer (the print driver's `agy-last-answer.txt`, kept past the driver); undefined: none. */
+	lastAgyAnswer(originKey: string): string | undefined;
 	/** Aborts the turn: final error `lane_paused`, no failure notice and no failure count. */
 	pauseTurn(originKey: string): Promise<PauseCheck>;
 	/** Closes the child without cutting a turn. */
@@ -130,8 +133,12 @@ export function headlessRuntime(
 			return { ok: true };
 		},
 		async read(row) {
-			const path = port.sessionFile(taskOriginKey(row.agent));
+			const origin = taskOriginKey(row.agent);
+			const path = port.sessionFile(origin);
 			try {
+				// An agy worker has no omp session: its print driver keeps the last answer in the origin's session dir.
+				if (agyModelOf(row.workerModel) !== undefined)
+					return { ok: true, output: redact(port.lastAgyAnswer(origin) ?? "").slice(-READ_TAIL_CHARS) };
 				const found = path === undefined ? undefined : readLastAssistant(path);
 				return {
 					ok: true,

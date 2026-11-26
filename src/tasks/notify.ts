@@ -684,14 +684,12 @@ export function agyLimitLine(screen: string): string | undefined {
 	return cardTailLines(screen).find((line) => AGY_LIMIT_PATTERN.test(line));
 }
 
-/**
- * The task's agy worker stopped on its (free, shared) limit: the task is blocked and the bot stops prompting
- * it, so only the owner moves it on — a resume once the limit lifts.
- */
+/** The agy worker stopped on its (free, shared) limit: the task is blocked, unprompted until the owner resumes it. */
 export function buildAgyLimitCard(row: TaskRow, line: string, ownerUserId: string, link?: string): TaskCard {
-	const stopped = `agy 한도: herdr 에이전트 \`${row.agent}\`가 agy 사용 한도에 걸려 멈췄습니다. 이 작업을 blocked로 두고 독촉을 멈췄습니다.`;
+	const who = row.runtime === "herdr" ? `herdr 에이전트 \`${row.agent}\`` : `헤드리스 agy 워커 \`${row.agent}\``;
+	const stopped = `agy 한도: ${who}가 agy 사용 한도에 걸려 멈췄습니다. 이 작업을 blocked로 두고 독촉을 멈췄습니다.`;
 	const details = [
-		"*화면*:",
+		row.runtime === "herdr" ? "*화면*:" : "*턴 오류*:",
 		"```",
 		line,
 		"```",
