@@ -3,19 +3,12 @@
 // `uncertain` instead of being sent twice. Missing one input beats running it twice.
 import { OmpDriverError } from "../omp/driver";
 import type { InboundRow } from "../store/db-rows";
-import type { UncertainReason } from "../store/transitions";
 import type { MailboxDeps } from "./mailbox-types";
+import { notifyUncertainParked, parkUncertainNotified, UNCERTAIN_REASON_TEXT } from "./mailbox-uncertain";
+
+export { UNCERTAIN_REASON_TEXT };
 
 type SendDeps = Pick<MailboxDeps, "store" | "log" | "originKey">;
-
-/** Why an `uncertain` row was parked, in the owner's words (`/queue`). */
-export const UNCERTAIN_REASON_TEXT: Record<UncertainReason, string> = {
-	steer_threw: "끼워넣기 전송 오류",
-	turn_ended_after_steer: "전송 직후 턴 종료",
-	dispatch_record_failed: "전송 후 장부 기록 실패",
-	prompt_timeout: "전송 응답 시간 초과",
-	send_interrupted: "전송 중 재시작·중단",
-};
 
 /** Op ref of a discarded row whose fresh-session first prompt `launchRefusal` refused (`refused:<id>`). */
 export const REFUSED_OP_PREFIX = "refused:";
@@ -23,6 +16,7 @@ export const REFUSED_OP_PREFIX = "refused:";
 /** `sending` rows of `originKey` (every origin without it) -> `uncertain` (`send_interrupted`): never sent again. */
 export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDeps["log"], originKey?: string): void {
 	for (const row of store.parkSending(originKey)) {
+		notifyUncertainParked(store, row, "send_interrupted");
 		log.warn("inbound_uncertain", { origin: row.originKey, id: row.platformMessageId, reason: "send_interrupted" });
 	}
 }
@@ -76,7 +70,7 @@ export function settleFailedSend(deps: SendDeps, row: InboundRow, error: unknown
 			return "unsent";
 		}
 		if (code !== "request_timeout") return "failed";
-		store.markUncertain(id, "prompt_timeout");
+		parkUncertainNotified(store, row, "prompt_timeout");
 		log.warn("inbound_uncertain", { origin: originKey, id, reason: "prompt_timeout", error: String(error) });
 	} catch (writeError) {
 		// Left `sending`: the next resumePending or restart parks it; it is never sent again.
