@@ -41,7 +41,7 @@ export function renderNavExtras(view: string, moreWarn: boolean, theme: string, 
 	const moreBtn = `<button type="button" class="nav-item nav-more-btn" data-nav-more aria-expanded="false" aria-label="더보기 메뉴"${
 		moreCurrent ? ' aria-current="page"' : ""
 	}><span>더보기</span>${
-		moreWarn ? '<span class="nav-count is-warn">!</span>' : ""
+		moreWarn ? '<span class="nav-count is-warn" aria-hidden="true"></span>' : ""
 	}<svg class="ico nav-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="8" r="1" fill="currentColor"/><circle cx="8" cy="8" r="1" fill="currentColor"/><circle cx="12" cy="8" r="1" fill="currentColor"/></svg></button>`;
 	const themeBtn = (mode: string, text: string): string =>
 		`<button type="button" class="seg-item" data-theme-set="${mode}" aria-pressed="${theme === mode}">${text}</button>`;

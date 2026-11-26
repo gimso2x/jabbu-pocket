@@ -111,6 +111,7 @@ describe("P0 & P1 dashboard UX improvements", () => {
 		const html = renderDashboardMain(snap, boardOf(), NOW, { view: "inbox" });
 		expect(html).toContain('<details class="status-pop"><summary class="status-summary">');
 		expect(html).toContain("data-nav-more");
+		expect(html).not.toContain('class="nav-count is-warn">!<');
 		expect(html).toContain('<div class="nav-sheet">');
 		expect(html).toContain('<span class="view-tools">');
 		expect(html).toContain('<div class="next-line is-single">');
