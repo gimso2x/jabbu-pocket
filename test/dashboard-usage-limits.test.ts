@@ -9,6 +9,7 @@ import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { buildSnapshot, type DashboardConfig, type SnapshotDeps } from "../src/dashboard/snapshot";
 import { assembleSnapshotDeps } from "../src/dashboard/snapshot-assembly";
+import { STYLE } from "../src/dashboard/style";
 import {
 	clearUsageLimitsCache,
 	parseAgy,
@@ -364,9 +365,9 @@ describe("AC-1: html strip", () => {
 		);
 		expect(shares(chipOf(html, "Claude"))).toMatch(/limit-chip is-ok[\s\S]*<small>5h<\/small>93<small>주<\/small>31/);
 		expect(chipOf(html, "GLM")).toMatch(/limit-chip is-muted[\s\S]*GLM \?/);
-		// The narrow-bar summary: one dot per source in source order and the least share overall.
+		// The narrow-bar summary: one dot per source in source order plus the lowest source name and share.
 		expect(shares(html)).toContain(
-			'<span class="limit-sum limit-chip is-danger"><i class="dot is-ok" aria-hidden="true"></i><i class="dot is-muted" aria-hidden="true"></i><i class="dot is-danger" aria-hidden="true"></i>3%</span></button>',
+			'<span class="limit-sum limit-chip is-danger"><i class="dot is-ok" aria-hidden="true"></i><i class="dot is-muted" aria-hidden="true"></i><i class="dot is-danger" aria-hidden="true"></i>AG 3%</span></button>',
 		);
 		expect(html).not.toContain(EMAIL);
 		expect(renderDashboardMain(snapshot, undefined, NOW, { view: "system" })).not.toContain('data-card="usage"');
@@ -429,8 +430,11 @@ describe("AC-1: html strip", () => {
 		) as typeof renderDashboardMain;
 		expect(() => client(snapshot, undefined, NOW, { view: "system" })).not.toThrow();
 		expect(strip(server)).not.toBe("");
-		// T-20261125-08: the trend line (`trendHtml`) ships with the script.
-		expect(strip(server)).toContain('<span class="limit-trend" title="최근 90분 · 표본 1개');
+		// Trend lines are removed; popover uses explicit toggle state and hover/focus-within is desktop-only.
+		expect(strip(server)).not.toContain("limit-trend");
+		expect(strip(server)).toContain('aria-expanded="false"');
+		expect(STYLE).toContain(".limits-pop.is-open .limits-panel");
+		expect(STYLE).toContain("@media (hover: hover) and (min-width: 641px)");
 		expect(strip(client(snapshot, undefined, NOW, { view: "system" }))).toBe(strip(server));
 	});
 });
