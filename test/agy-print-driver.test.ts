@@ -305,27 +305,6 @@ test("abort ends the turn `aborted` once without a crash; the next prompt restar
 	await driver.stop();
 });
 
-test("abort with a steer queued ends the turn `aborted` and says the steer was not delivered", async () => {
-	const h = harness();
-	const driver = h.make();
-	const finals: OmpFinal[] = [];
-	driver.onFinal((final) => finals.push(final));
-	await driver.start();
-	const working = Promise.withResolvers<void>();
-	driver.onEvent((event) => event.type === "message_update" && working.resolve());
-	await driver.prompt("@hold");
-	await working.promise;
-	await driver.steer("steered");
-	await driver.steer("more");
-	expect((await driver.state()).queuedMessageCount).toBe(2);
-	await driver.abort();
-	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled (steer 2건 미전달)"]]);
-	expect(finals[0]?.droppedSteers).toBe(2);
-	expect((await driver.state()).queuedMessageCount).toBe(0);
-	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
-	await driver.stop();
-});
-
 test("newSession mid-turn ends the turn `aborted` with cancelled=true and the next prompt runs", async () => {
 	const h = harness();
 	const driver = h.make();
@@ -438,5 +417,26 @@ test("an empty result.response preserves streamed text in final and agy-last-ans
 	const final = await started(driver, "@empty-res");
 	expect(final).toMatchObject({ status: "completed", text: "STREAMED-OK" });
 	expect(readFileSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE), "utf8")).toBe("STREAMED-OK");
+	await driver.stop();
+});
+
+test("abort with a steer queued ends the turn `aborted` and says the steer was not delivered", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	await driver.steer("steered");
+	await driver.steer("more");
+	expect((await driver.state()).queuedMessageCount).toBe(2);
+	await driver.abort();
+	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled (steer 2건 미전달)"]]);
+	expect(finals[0]?.droppedSteers).toBe(2);
+	expect((await driver.state()).queuedMessageCount).toBe(0);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
 	await driver.stop();
 });
