@@ -76,6 +76,7 @@ import {
 import { answerDialogsFor, cwdFor, floorsSurfaceFor, hostToolsFor, peerTouched } from "./daemon-host-tools";
 import { handleIpc } from "./daemon-ipc";
 import { escalateTurnFailures, notifyProviderLimit } from "./daemon-owner-post";
+import { DaemonQuotaGate } from "./daemon-quota";
 import { DaemonSkillReview } from "./daemon-review";
 import { DaemonInbound, deliverySources } from "./daemon-sink";
 import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
@@ -158,6 +159,7 @@ export class Daemon {
 	readonly #review: DaemonSkillReview;
 	readonly #gates: GateSweep;
 	readonly #pending: PendingDispatchSweep;
+	readonly #quota: DaemonQuotaGate;
 
 	constructor(options: DaemonOptions) {
 		const daemon = this;
@@ -211,12 +213,14 @@ export class Daemon {
 				return daemon.#taskSweeper;
 			},
 			requestIdleSweep: () => daemon.#startIdleSweep(),
+			quotaRefusal: (model) => daemon.#quota.refusalFor(model),
 		};
 		this.#inbound = new DaemonInbound(this.#ctx);
 		this.#landing = new DaemonTaskLanding(this.#ctx);
 		this.#review = new DaemonSkillReview(this.#ctx, (originKey, sessionDir) => this.#makeDriver(originKey, sessionDir));
 		this.#gates = new GateSweep(this.#ctx);
 		this.#pending = new PendingDispatchSweep(this.#ctx);
+		this.#quota = new DaemonQuotaGate(this.#ctx);
 		this.#options = options;
 		const channels = new ChannelRegistry();
 		for (const binding of options.channels) channels.register(binding.port);
@@ -604,6 +608,7 @@ export class Daemon {
 				ceiling: resolvedCeiling(gateOptionsFromConfig(config).hostSessionCeiling),
 				onPressure: () => this.#startIdleSweep(),
 			},
+			quotaRefusal: (model) => this.#quota.refusalFor(model),
 			...(this.#options.hostLoad === undefined ? {} : { hostLoad: this.#options.hostLoad }),
 			...(this.#options.statfs === undefined ? {} : { statfs: this.#options.statfs }),
 			...(this.#options.verifyClaim === undefined ? {} : { verify: this.#options.verifyClaim }),
@@ -766,11 +771,7 @@ export class Daemon {
 		setImmediate(() => void this.pump());
 	}
 
-	/**
-	 * One sweep of the interval chain; never rejects (a rejection would reach the process-level fatal handler and take
-	 * every omp child down with the daemon). A step that throws ends the sweep with `sweep_failed` and skips the beat:
-	 * a sweep that keeps failing then ages the stamp until `sweep_stalled` opens for `jabbu-pocket gates` outside the daemon.
-	 */
+	/** One sweep of the interval chain; never rejects so a failed step only skips the beat and logs `sweep_failed`. */
 	async sweep(): Promise<void> {
 		try {
 			await this.pump();
@@ -786,6 +787,7 @@ export class Daemon {
 			this.#maybeSweepTasks();
 			this.#maybeFlushWikiTurns();
 			this.#pending.sweep();
+			this.#quota.maybePoll();
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
@@ -808,11 +810,7 @@ export class Daemon {
 		}
 	}
 
-	/**
-	 * A lane verdict can wait on an owner approval card (30 minutes) and a mailbox idle stop queues behind its serial
-	 * chain (`/compact-jabbu`, a child start): run each in the background, one at a time, so gates, approval expiry
-	 * and the heartbeat keep their cadence. A tick still running when the next sweep comes is skipped, not stacked.
-	 */
+	/** Run lane tick in the background so gates, approval expiry, and heartbeat keep their cadence. */
 	#startLaneTick(): void {
 		const lanes = this.#lanes;
 		if (lanes === undefined || this.#laneTicking || this.#stopped) return;
@@ -1121,6 +1119,7 @@ export class Daemon {
 		this.#store?.setLogChannel({ discord: plan.next.channels.discord?.logChannelId });
 		this.#store?.setAlertChannel({ discord: plan.next.channels.discord?.alertChannelId });
 		if (plan.changed.includes("peerSilenceAlert")) this.#store?.setPeerCallPolicy(peerCallPolicyOf(plan.next));
+		if (plan.changed.includes("quotaGate")) this.#quota.maybePoll();
 		this.#broker?.setEscalationChannel({ discord: plan.next.channels.discord?.escalationChannelId });
 		// Of the top-level keys only the peer hop cap reaches the adapter (its own policy is under `channels.discord`).
 		this.#adapters

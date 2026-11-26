@@ -8,6 +8,7 @@ import type { LaneModelTiers } from "../model-tiers";
 import type { FreezeState } from "../ops/freeze";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
 import type { SessionCeilingGate } from "../ops/host-sessions";
+import type { QuotaRefusalCheck } from "../ops/quota-gate";
 import type { LaneAttachOutcome, LaneSessionOps } from "./manager-session";
 
 export type { LaneAttachOutcome, LaneSessionOps };
@@ -126,13 +127,12 @@ export interface LaneManagerDeps {
 	wikiNotes?: Pick<WikiNotes, "laneDraft" | "laneDropDraft" | "laneLanded">;
 	/** Git for the core's rebase of a lane whose landing was not fast-forward (test seam; default `defaultGit`). */
 	rebaseGit?: GitRunner;
-	/** `lanes.models`, read at each start (a live setting): the tiers `start({model})` may pick. */
+	/** `lanes.models`, read at each start (live setting). */
 	laneModels?: () => LaneModelTiers | undefined;
 	ownerSilenceConfig?: () => Pick<JabbuConfig, "ownerSilenceFallbackMinutes">;
-	/** Test seam for the start-capacity gate's memory readers (default this machine's own); a refusal throws, `force` passes. */
+	/** Start-capacity memory reader test seam; a refusal throws, `force` passes. */
 	hostLoad?: Partial<HostLoadReader>;
-	/** `statfs` for the start-capacity gate's disk floor (test seam; default the real one). */
 	statfs?: StatfsReader;
-	/** The host-wide omp session ceiling the start gate judges (`hostSessionCeiling`); absent → not judged. */
 	hostSessions?: SessionCeilingGate;
+	quotaRefusal?: QuotaRefusalCheck;
 }
