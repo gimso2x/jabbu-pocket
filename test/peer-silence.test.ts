@@ -231,6 +231,12 @@ describe("AC-3: what is never a call", () => {
 		expect(calls()).toEqual([]);
 	});
 
+	test("a thread answer that mentions a peer and only quotes the failure mark mid-body is still a call", () => {
+		const store = open();
+		answer(store, `<@${PEER}> 아까 여기서 응답 실패(boom)라고 떴길래 확인해 봤어`, { opRef: "quoted-mark" });
+		expect(calls().map((c) => [c.thread_ref, c.peer_user_id])).toEqual([[`${CONV}:${THREAD}`, PEER]]);
+	});
+
 	test("a channel-body answer (channel origin, no thread) records nothing while a thread origin's answer is a call", () => {
 		const store = open();
 		answer(store, `<@${PEER}> 본문`, {
