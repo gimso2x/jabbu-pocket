@@ -49,6 +49,30 @@ export function notifyUncertainParked(store: UncertainNoticeStore, row: InboundR
 	});
 }
 
+/**
+ * The boot sweep for rows a crash parked between the park and the notice (the two are not one transaction): every
+ * `uncertain` row with no `uncertain:<id>` delivery yet is told — exactly once. Rows the owner already retried or
+ * closed left `uncertain`, so they are not here; monitor origins have no owner thread. Returns the rows told.
+ */
+export function notifyUncertainMissingNotice(
+	store: UncertainNoticeStore & Pick<Store, "listInbound" | "listDeliveries">,
+): InboundRow[] {
+	const seenByOrigin = new Map<string, Set<string | null>>();
+	const told: InboundRow[] = [];
+	for (const row of store.listInbound({ state: "uncertain" })) {
+		if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) continue;
+		let seen = seenByOrigin.get(row.originKey);
+		if (!seen) {
+			seen = new Set(store.listDeliveries({ originKey: row.originKey }).map((delivery) => delivery.opRef));
+			seenByOrigin.set(row.originKey, seen);
+		}
+		if (seen.has(`uncertain:${row.platformMessageId}`)) continue;
+		notifyUncertainParked(store, row, row.uncertainReason ?? "send_interrupted");
+		told.push(row);
+	}
+	return told;
+}
+
 /** Parks the row and posts its notice: the only `uncertain` path an owner-facing origin should take. */
 export function parkUncertainNotified(store: UncertainNoticeStore, row: InboundRow, reason: UncertainReason): void {
 	store.markUncertain(row.platformMessageId, reason);
