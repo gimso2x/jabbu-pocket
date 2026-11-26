@@ -8,7 +8,7 @@ import { laneDeclared, planPathsIn } from "../src/lanes/declared";
 import { classifyLaneCompletion, LaneDiffUnavailable, laneDiffUnavailableRefusal } from "../src/lanes/integrity";
 import { collectLaneDiff } from "../src/lanes/lane-diff";
 import type { LaneRow } from "../src/lanes/status";
-import { gitRunner } from "../src/lanes/verify";
+import { GitOutputCapError, gitRunner } from "../src/lanes/verify";
 import { taskChangedPaths } from "../src/tasks/progress-evidence";
 
 const DIFF = (file: string, ...lines: string[]): string =>
@@ -406,6 +406,22 @@ describe("lane and task diffs never run diff.external (qa-d M-3)", () => {
 		} finally {
 			reader.kill("SIGKILL");
 		}
+	});
+
+	test("gitRunner caps stderr like stdout: a clone's progress rejects with GitOutputCapError", async () => {
+		// Clone progress goes to stderr while stdout stays empty, so only the stderr cap can trip.
+		// `--no-local` forces the transport path: a plain local clone hardlinks and stays quiet.
+		const root = mkdtempSync(join(tmpdir(), "jabbu-stderrcap-"));
+		roots.push(root);
+		const src = join(root, "src");
+		mkdirSync(src);
+		git(src, "init", "-q", "-b", "main");
+		writeFileSync(join(src, "f.txt"), "one\n");
+		git(src, "add", "f.txt");
+		git(src, "commit", "-q", "-m", "one");
+		await expect(
+			gitRunner(10_000, 100)(["clone", "--progress", "--no-local", src, join(root, "dst")]),
+		).rejects.toBeInstanceOf(GitOutputCapError);
 	});
 });
 
