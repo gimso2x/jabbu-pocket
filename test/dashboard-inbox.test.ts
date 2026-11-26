@@ -272,7 +272,7 @@ describe("dashboard inbox", () => {
 		expect(html).toMatch(/<input[^>]*type="search"/);
 		const nav = /<nav class="sidenav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
 		for (const [view, label, count] of [
-			["inbox", "인박스", 1],
+			["inbox", "인박스", 2],
 			["turns", "턴", 1],
 			["lanes", "레인", 0],
 			["approvals", "승인 대기", 1],
@@ -652,6 +652,25 @@ describe("dashboard polish", () => {
 		expect(md).toContain('<li class="md-d0">첫 단계</li>');
 		expect(md).toContain('<li class="md-d1">하위 A</li>');
 		expect(md).toContain('<li class="md-d0" value="2">둘째 단계</li>');
+
+		// UX-004: attention > 0 with 0 working shows confirmation count (not 0) on the inbox nav badge.
+		const attnOnly: DashboardSnapshot = {
+			...SNAPSHOT,
+			tasks: { ok: true, items: [task("T-20261104-01", { title: "리뷰만 있음", status: "review", open: true })] },
+		};
+		const attnNav =
+			/<nav class="sidenav"[^>]*>([\s\S]*?)<\/nav>/.exec(
+				renderDashboardMain(attnOnly, undefined, NOW, { view: "inbox" }),
+			)?.[1] ?? "";
+		expect(attnNav).toMatch(/data-view="inbox"[^>]*><span>인박스<\/span><span class="nav-count is-warn">1<\/span>/);
+
+		// UX-003: .t2 flex children keep fixed chips non-shrinking and ellipsize the trailing reason span.
+		expect(STYLE).toContain(".t2 > * { flex: none; }");
+		expect(STYLE).toContain(
+			".t2 > span:last-of-type { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }",
+		);
+		expect(STYLE).toContain(".tw[data-trace] {");
+		expect(STYLE).not.toMatch(/(?:^|\n)\.tw \{/);
 	});
 
 	test("unreachable board banner shows configured herdrBoard.api origin or default 127.0.0.1:7317", async () => {

@@ -3,7 +3,6 @@ import { isRecord } from "../omp/type-guards";
 import { redact } from "../redact";
 import { cleanError, sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
-import { type TrendOptions, type UsageTrend, withTrends } from "./usage-forecast";
 
 /**
  * The "모델 한도" card's data: config `dashboard.usageLimits` lists commands, each
@@ -24,8 +23,6 @@ export interface UsageRow {
 	remainingPct: number;
 	/** Epoch ms of the window's reset, when the source tells. */
 	resetsAt?: number;
-	/** Five-hour and weekly rows of a run that records samples (`usage-forecast.ts`). */
-	trend?: UsageTrend;
 }
 
 /** `account`: the Antigravity account label from config `agyAccount` (the agy output names none). */
@@ -54,17 +51,16 @@ const cache = sectionCache<UsageLimitsInfo>(USAGE_LIMITS_TTL_MS);
 /** Test only: forget every cached run. */
 export const clearUsageLimitsCache = (): void => cache.clear();
 
-/** The card's section, one run per config within {@link USAGE_LIMITS_TTL_MS}; `samples` adds trends. Never rejects. */
+/** The card's section, one run per config within {@link USAGE_LIMITS_TTL_MS}. Never rejects. */
 export function readUsageLimits(
 	config: UsageLimitsConfig,
 	run: ProcessRunner,
 	now: () => number,
-	samples?: TrendOptions,
 ): Promise<Section<UsageLimitsInfo>> {
-	return cache.read(JSON.stringify(config), now, async () => {
-		const sources = await collect(config, run);
-		return { ok: true, sources: samples === undefined ? sources : withTrends(sources, samples, now()) };
-	});
+	return cache.read(JSON.stringify(config), now, async () => ({
+		ok: true,
+		sources: await collect(config, run),
+	}));
 }
 
 async function collect(config: UsageLimitsConfig, run: ProcessRunner): Promise<UsageSource[]> {

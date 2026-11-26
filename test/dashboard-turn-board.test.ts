@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildUrlState, parseUrlState } from "../src/dashboard/client-ui-helpers";
 import { renderConversation, renderItemDetail } from "../src/dashboard/detail";
-import { SCRIPT } from "../src/dashboard/html";
+import { renderDashboardPage, SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { renderMarkdown } from "../src/dashboard/markdown";
 import { resolvePeers } from "../src/dashboard/peers";
@@ -845,6 +846,30 @@ describe("turn board peer installs", () => {
 			const page = renderDashboardMain(snapshot, undefined, NOW, { view: "turns" });
 			expect(page).toContain("서팍 · 서팍 WSL 작업");
 			expect(page).toContain("Discord 300000000000000001");
+
+			// UX-002: opening a peer thread suppresses detail tabs (only 개요 + 최근 턴), while own thread keeps them.
+			const peerHtml = renderDashboardPage(snapshot, { view: "turns", item: `서팍:${THREAD}` });
+			expect(peerHtml).toMatch(/id="detail-tabs"[^>]*hidden/);
+			expect(peerHtml).toMatch(/id="detail-conv"[^>]*hidden/);
+			expect(peerHtml).toContain("피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.");
+			const ownHtml = renderDashboardPage(snapshot, { view: "turns", item: THREAD });
+			expect(ownHtml).not.toMatch(/id="detail-tabs"[^>]*hidden/);
+
+			// UX-007: search updates view-sum count and URL helpers round-trip q, sort, and desc.
+			const missed = renderDashboardMain(snapshot, undefined, NOW, { view: "turns", q: "없는검색어" });
+			expect(missed).toContain('<span class="view-sum">검색 결과 <b>0</b>건</span>');
+			const built = buildUrlState(
+				"http://127.0.0.1:7331/",
+				{ view: "turns", layout: "list", stale: false, q: "서팍", sort: "turns", desc: true },
+				null,
+			);
+			expect(parseUrlState(built.search)).toMatchObject({
+				view: "turns",
+				layout: "list",
+				q: "서팍",
+				sort: "turns",
+				desc: true,
+			});
 		} finally {
 			rmSync(peer, { recursive: true, force: true });
 		}

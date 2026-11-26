@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderItemDetail, renderMonitorDetail } from "../src/dashboard/detail";
+import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { readMonitorDetail } from "../src/dashboard/monitor-detail";
 import { resolvePeers } from "../src/dashboard/peers";
@@ -844,5 +845,25 @@ describe("dashboard peer monitors", () => {
 		} finally {
 			server.stop(true);
 		}
+	});
+
+	test("UX-001: page SCRIPT evaluates monitor renderItemDetail without monitorModelDetail ReferenceError", async () => {
+		addMonitors([
+			{
+				id: "m1",
+				name: "정기 점검",
+				trigger: cron("0 9 * * *"),
+				model: "openai-codex/gpt-5.4",
+				thinking: "medium",
+			},
+		]);
+		const snapshot = await buildSnapshot(deps());
+		const clientDetail = new Function("document", "setInterval", `${SCRIPT}\nreturn renderItemDetail;`)(
+			{ getElementById: () => ({}) },
+			() => 0,
+		) as typeof renderItemDetail;
+		const html = clientDetail(snapshot, "monitors", "m1");
+		expect(html).toContain("정기 점검");
+		expect(html).toContain("openai-codex/gpt-5.4 · thinking medium");
 	});
 });

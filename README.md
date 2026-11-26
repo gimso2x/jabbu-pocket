@@ -1,5 +1,6 @@
 <div align="center">
-
+<img src="docs/assets/jabbu-pocket-mascot.svg" alt="jabbu-pocket 마스코트: 공구를 든 짙은 캔버스 주머니" width="200">
+       
 <h1>jabbu-pocket</h1>
 
 **Discord에서 부리는, 나만의 상주 코딩 에이전트**

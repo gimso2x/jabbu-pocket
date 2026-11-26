@@ -1463,8 +1463,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const opsStatus = config?.dashboard?.opsStatus;
 		const hostChecks = opsStatus === undefined ? undefined : readHostChecks(opsStatus.command, deps.run, deps.now);
 		const usageConfig = deps.usageLimits === true ? config?.dashboard?.usageLimits : undefined;
-		const samples = { home: deps.homeDir, timezone: deps.timezone };
-		const usageLimits = usageConfig && readUsageLimits(usageConfig, deps.run, deps.now, samples);
+		const usageLimits = usageConfig && readUsageLimits(usageConfig, deps.run, deps.now);
 
 		const targets = herdrTargets(config);
 		// Run on first use only: with a live board and no open TASK on a host, that host's `herdr agent list` is not needed.
