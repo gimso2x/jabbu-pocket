@@ -155,6 +155,61 @@ describe("renderDiscordParts", () => {
 			}
 		}
 	});
+
+	test("an emoji right before an inline construct straddling 2000 chars never splits a surrogate pair", () => {
+		const budget = MESSAGE_CONTENT_LIMIT - FENCE_RESERVE;
+		const constructs = [
+			"[긴 링크 라벨](https://example.com/some/very/long/path?x=1)",
+			"<t:1764057600:R>",
+			"||스포일러 내용||",
+		];
+		for (const construct of constructs) {
+			for (let at = budget - construct.length - 6; at <= budget; at++) {
+				const body = `${"a".repeat(at)}😀${construct}${"b".repeat(100)}`;
+				const parts = renderDiscordParts(body, false);
+				expect(parts.length, `${construct} at ${at}`).toBeGreaterThan(1);
+				for (const part of parts) {
+					expect(part.length).toBeLessThanOrEqual(2000);
+					expect(LONE_SURROGATE.test(part)).toBe(false);
+				}
+				expect(parts.some((part) => part.includes(construct))).toBe(true);
+				expect(parts.join("")).toBe(body);
+			}
+		}
+	});
+
+	test("adjacent inline constructs straddling 2000 chars keep both whole", () => {
+		const budget = MESSAGE_CONTENT_LIMIT - FENCE_RESERVE;
+		const second = "[second](https://b.com/very/long/path)";
+		for (const first of ["[first](https://a.com)", "||secret||"]) {
+			for (let at = budget - first.length - second.length - 4; at <= budget - first.length + 2; at++) {
+				const body = `${"a".repeat(at)}${first}${second}${"b".repeat(100)}`;
+				const parts = renderDiscordParts(body, false);
+				expect(parts.length, `${first} at ${at}`).toBeGreaterThan(1);
+				for (const part of parts) expect(part.length).toBeLessThanOrEqual(2000);
+				expect(parts.some((part) => part.includes(first))).toBe(true);
+				expect(parts.some((part) => part.includes(second))).toBe(true);
+				expect(parts.join("")).toBe(body);
+			}
+		}
+	});
+
+	test("logical || operators ~1500 chars apart inside a ts code fence do not force a mid-line split", () => {
+		const lead = Array.from({ length: 25 }, (_, i) => `const lead_${String(i).padStart(2, "0")} = ${i};`).join("\n");
+		const gap = Array.from({ length: 80 }, (_, i) => `const line_${String(i).padStart(2, "0")} = ${i};`).join("\n");
+		const tail = Array.from({ length: 30 }, (_, i) => `const tail_${String(i).padStart(2, "0")} = ${i};`).join("\n");
+		const body = `\`\`\`ts\n${lead}\nif (a || b) step1();\n${gap}\nif (c || d) step2();\n${tail}\n\`\`\``;
+		expect(gap.length).toBeGreaterThan(1450);
+		const parts = renderDiscordParts(body, false);
+		expect(parts.length).toBeGreaterThan(1);
+		expect((parts[0] ?? "").length).toBeGreaterThanOrEqual(1500);
+		for (const part of parts) {
+			expect(part.length).toBeLessThanOrEqual(2000);
+			expect((part.match(/```/g) ?? []).length % 2).toBe(0);
+		}
+		expect(parts.some((part) => part.includes("if (a || b) step1();"))).toBe(true);
+		expect(parts.some((part) => part.includes("if (c || d) step2();"))).toBe(true);
+	});
 });
 
 describe("renderDiscordMessages", () => {

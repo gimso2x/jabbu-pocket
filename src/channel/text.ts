@@ -100,8 +100,7 @@ export function chunkText(
 	// The backtick count of the fence open at a chunk's end: 0 when none. A fence opened at a line's head closes only on
 	// a line of at least as many backticks alone; any other ``` (mid-line, or a run too long to track) toggles a
 	// three-backtick fence as before.
-	let open = 0;
-	let lineHead = false;
+	let [open, lineHead] = [0, false];
 	const scan = (chunk: string, from: { open: number; lineHead: boolean }): { open: number; lineHead: boolean } => {
 		let state = { ...from };
 		for (const line of chunk.split("\n")) {
@@ -120,32 +119,27 @@ export function chunkText(
 	while (rest.length > 0) {
 		const base = text.length - rest.length;
 		// A chunk too long once its fences are added is cut again, shorter by the overflow.
-		let room = budget;
-		let head: string;
-		let tail: string;
-		let out: string;
+		let [room, head, tail, out] = [budget, "", "", ""];
 		for (;;) {
 			if (room < 1) {
 				head = cutCodePointSafe(rest, limit);
 				if (head === "") head = String.fromCodePoint(rest.codePointAt(0) ?? 0);
 				tail = rest.slice(head.length);
 				out = head;
-				open = 0;
-				lineHead = false;
+				[open, lineHead] = [0, false];
 				break;
 			}
 			[head, tail] = splitAt(rest, room, (cut) => {
 				const span = keepWhole.find(([start, end]) => start < base + cut && base + cut < end);
 				if (span === undefined) return cut;
-				const before = span[0] - base - 1;
+				const before = span[0] - base - (rest[span[0] - base - 1] === "\n" ? 1 : 0);
 				return before > 0 ? before : span[1] - base;
 			});
 			const next = scan(head, { open, lineHead: open > 0 });
 			out = open > 0 ? `${"`".repeat(open)}\n${head}` : head;
 			if (next.open > 0) out = `${out}\n${"`".repeat(next.open)}`;
 			if (out.length <= limit) {
-				open = next.open;
-				lineHead = next.lineHead;
+				[open, lineHead] = [next.open, next.lineHead];
 				break;
 			}
 			room -= out.length - limit;
@@ -158,8 +152,7 @@ export function chunkText(
 			const closer = /^(`{3,})[ \t]*(?:\n+|$)/.exec(rest);
 			if (closer !== null && (closer[1]?.length ?? 0) >= open) {
 				rest = rest.slice(closer[0].length);
-				open = 0;
-				lineHead = false;
+				[open, lineHead] = [0, false];
 			}
 		}
 	}
@@ -172,17 +165,13 @@ export function chunkText(
  * The backtick count of a line opening a fence (up to 3 spaces, 3+ backticks, an info string without backticks);
  * `undefined` when the line opens none. The one line-head rule every renderer's fence handling shares.
  */
-export function fenceOpenRun(line: string): number | undefined {
-	return /^ {0,3}(`{3,})[^`]*$/.exec(line)?.[1]?.length;
-}
+export const fenceOpenRun = (line: string): number | undefined => /^ {0,3}(`{3,})[^`]*$/.exec(line)?.[1]?.length;
 
 /**
  * The backtick count of a line closing a fence (up to 3 spaces, backticks alone, optional trailing spaces and CR);
  * `undefined` when the line closes none. A fence closes only on a line at least as long as its opening run.
  */
-export function fenceCloseRun(line: string): number | undefined {
-	return /^ {0,3}(`+)[ \t]*\r?$/.exec(line)?.[1]?.length;
-}
+export const fenceCloseRun = (line: string): number | undefined => /^ {0,3}(`+)[ \t]*\r?$/.exec(line)?.[1]?.length;
 
 /**
  * `fenceOpenRun` capped to a chunk budget: up to `max(16, limit / 4)` backticks, the longest mark a chunk can close
@@ -374,16 +363,24 @@ export function tableEndAt(lines: readonly string[], i: number, minDashes = 1): 
 const INLINE_SPAN =
 	/!?\[[^\]\n]{1,512}\]\((?:[^()\n]|\([^()\n]{0,512}\)){0,1024}\)|<t:\d{1,20}(?::[dDfFtTR])?>|\|\|[^|]{1,4096}\|\||<(?:https?|mailto):[^>\s]{1,512}>/g;
 
-/**
- * `[start, end)` spans of the inline constructs a chunk cut must not split. A span inside a code fence is kept whole
- * too: the cut only moves, and the fence handling does not depend on where it lands.
- */
+/** `[start, end)` spans of markdown links, timestamps, spoilers and autolinks outside code fences. */
 export function inlineSpans(text: string): Array<readonly [number, number]> {
 	const spans: Array<readonly [number, number]> = [];
-	for (const match of text.matchAll(INLINE_SPAN)) {
-		const start = match.index ?? 0;
-		spans.push([start, start + match[0].length]);
+	let [fence, offset, from] = [0, 0, 0];
+	const flush = (to: number): void => {
+		for (const m of text.slice(from, to).matchAll(INLINE_SPAN)) {
+			const start = from + (m.index ?? 0);
+			spans.push([start, start + m[0].length]);
+		}
+	};
+	for (const line of text.split("\n")) {
+		if (fence === 0) {
+			fence = fenceOpenRun(line) ?? 0;
+			if (fence > 0) flush(offset);
+		} else if ((fenceCloseRun(line) ?? 0) >= fence) [fence, from] = [0, offset + line.length + 1];
+		offset += line.length + 1;
 	}
+	if (fence === 0) flush(text.length);
 	return spans;
 }
 

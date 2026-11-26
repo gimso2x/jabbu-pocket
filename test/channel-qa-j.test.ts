@@ -35,6 +35,24 @@ describe("channel text qa-j", () => {
 			"<https://x.y>",
 		]);
 	});
+
+	test("31: inlineSpans ignores || and links inside 3-backtick and 4-backtick fences, keeps outside links and multiline spoilers", () => {
+		const text = [
+			"앞 [링크](https://a.test) <t:1764057600:R> ||앞||",
+			"```ts",
+			"if (a || b) return '[ignored](https://b.test)';",
+			"if (c || d) return '<https://c.test>';",
+			"```",
+			"````md",
+			"```",
+			"x || y && z || w [inner](https://inner.test)",
+			"```",
+			"````",
+			"||line1\nline2|| 그리고 ||뒤||",
+		].join("\n");
+		const found = inlineSpans(text).map(([start, end]) => text.slice(start, end));
+		expect(found).toEqual(["[링크](https://a.test)", "<t:1764057600:R>", "||앞||", "||line1\nline2||", "||뒤||"]);
+	});
 });
 
 describe("discord qa-j", () => {
