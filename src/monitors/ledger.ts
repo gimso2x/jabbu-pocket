@@ -199,12 +199,8 @@ export function migrateMonitorSchema(db: Database): void {
 	if (!columns.some((column) => column.name === "channel")) db.run("ALTER TABLE monitors ADD COLUMN channel TEXT");
 	if (!columns.some((column) => column.name === "copy_channel"))
 		db.run("ALTER TABLE monitors ADD COLUMN copy_channel TEXT");
-	if (!columns.some((column) => column.name === "model")) {
-		db.run("ALTER TABLE monitors ADD COLUMN model TEXT");
-	}
-	if (!columns.some((column) => column.name === "thinking")) {
-		db.run("ALTER TABLE monitors ADD COLUMN thinking TEXT");
-	}
+	if (!columns.some((column) => column.name === "model")) db.run("ALTER TABLE monitors ADD COLUMN model TEXT");
+	if (!columns.some((column) => column.name === "thinking")) db.run("ALTER TABLE monitors ADD COLUMN thinking TEXT");
 	// Monitors that predate verbatim delivery keep running turns.
 	if (!columns.some((column) => column.name === "deliver")) {
 		db.run(
@@ -548,8 +544,10 @@ export class MonitorLedger {
 		})();
 	}
 
-	setCursor(id: string, at: number): void {
-		this.#db.query("UPDATE monitors SET cursor_at = ? WHERE id = ?").run(at, id);
+	/** With `ifStillAt`, the cursor advances only when the stored one still equals it — a concurrent edit's reset wins. */
+	setCursor(id: string, at: number, ifStillAt?: number): void {
+		if (ifStillAt === undefined) this.#db.query("UPDATE monitors SET cursor_at = ? WHERE id = ?").run(at, id);
+		else this.#db.query("UPDATE monitors SET cursor_at = ? WHERE id = ? AND cursor_at = ?").run(at, id, ifStillAt);
 	}
 
 	setEnabled(id: string, enabled: boolean): void {

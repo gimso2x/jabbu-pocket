@@ -756,6 +756,33 @@ function createFakeIntervals() {
 	};
 }
 
+test("AgyToolKeepalive: an entry whose end was lost does not disable keepalive for later tools", () => {
+	let now = 1_000_000;
+	const intervals = createFakeIntervals();
+	const events: OmpEvent[] = [];
+	const keepalive = new AgyToolKeepalive((event) => events.push(event), {
+		intervalMs: 60_000,
+		maxMs: 180_000,
+		now: () => now,
+		setIntervalFn: intervals.setIntervalFn,
+		clearIntervalFn: intervals.clearIntervalFn,
+	});
+
+	keepalive.start("lost", "run_command");
+	now += 240_000; // past maxMs with no end(): the entry is spent
+	intervals.tickAll();
+	expect(events).toEqual([]);
+	expect(intervals.active.size).toBe(0);
+
+	keepalive.start("fresh", "read_file");
+	now += 60_000;
+	intervals.tickAll();
+	expect(events).toEqual([
+		{ type: AGY_TOOL_KEEPALIVE_EVENT, toolCallId: "fresh", toolName: "read_file", elapsedMs: 60_000 },
+	]);
+	keepalive.clear();
+});
+
 test("AgyToolKeepalive emits bounded keepalive events and clears timer on end, clear, or invalid config", () => {
 	let now = 1_000_000;
 	const intervals = createFakeIntervals();

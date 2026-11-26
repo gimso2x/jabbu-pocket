@@ -72,7 +72,6 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			if (this.#turn !== undefined) this.#emit(event);
 		}, options.toolKeepalive);
 	}
-
 	async start(): Promise<void> {
 		if (this.#started) throw new OmpDriverError("already_started", "driver already started");
 		resolveAgyExecutable(this.#options.agyExecutable, this.#env());
@@ -148,7 +147,6 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#retire();
 		await this.#retiring;
 	}
-
 	#requireStarted(): void {
 		if (!this.#started) throw new OmpDriverError("not_started", "driver not started");
 	}
@@ -187,6 +185,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	}
 	async #spawn(resume: string | undefined): Promise<string> {
 		this.#requireStarted(); // a prompt parked on a retire must not spawn a child under a stopped driver
+		this.#tools.clear(); // tool-call ids restart at step 0 in a new child; stale states would suppress its first calls
 		const { log, originKey, ...options } = this.#options;
 		const env = this.#env();
 		const logDir = options.logDir ?? join(env.HOME ?? homedir(), ".gemini", "antigravity-cli", "log");
@@ -263,7 +262,6 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const decoder = new TextDecoder();
 		for await (const chunk of child.proc.stderr) child.stderr = (child.stderr + decoder.decode(chunk)).slice(-4_000);
 	}
-
 	#onLine(child: Child, line: string): void {
 		let message: unknown;
 		try {
@@ -354,7 +352,6 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#retire();
 		this.#finish(turn, { opRef: turn.opRef, status: "error", text: turn.text, error: turn.rateLimit ?? detail });
 	}
-
 	/** One stream-json input line; a new conversation's first one carries the worker floors. */
 	#send(child: Child, turn: Switch.PendingTurn, text: string): void {
 		this.#entries.push({ id: `agp-${++this.#seq}`, type: "message", message: { role: "user", content: text } });
