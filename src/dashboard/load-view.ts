@@ -181,8 +181,8 @@ export function renderLimitsPop(
 		const least = Math.min(...rows.map((r) => r.row.remainingPct));
 		if (rows.length > 0 && least < best.pct) Object.assign(best, { label: shortName, pct: least });
 		return {
-			chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5h</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
-				week === "" ? "" : `<small>주</small>${roll(`lim:${source.name}:week`, week, "down")}`
+			chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5시간</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
+				week === "" ? "" : `<small>주간</small>${roll(`lim:${source.name}:week`, week, "down")}`
 			}</span><span class="lc-min">${rows.length === 0 ? "" : `${roll(`lim:${source.name}:min`, least, "down")}%`}</span></span>`,
 			tile: `<div class="limit-tile is-${worst}" data-source="${esc(source.name)}">${headOf(worst)}${hasAccounts ? acctsHtml : lines.join("")}</div>`,
 			tone: worst,

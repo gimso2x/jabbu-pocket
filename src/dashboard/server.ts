@@ -504,13 +504,6 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 		}
 		const kind = isPage ? "page" : url.searchParams.get("hidden") === "1" ? "snapshot_hidden" : "snapshot";
 		heard(kind, url.searchParams.get("view") || undefined);
-		let snapshot: DashboardSnapshot;
-		try {
-			snapshot = await options.snapshot();
-		} catch (error) {
-			options.onError?.(error);
-			return reply("snapshot failed\n", "text/plain; charset=utf-8", {}, 500);
-		}
 		const param = (name: string): string | undefined => url.searchParams.get(name) || undefined;
 		const [view, card, task, item, diff, layout, stale] = [
 			"view",
@@ -522,6 +515,13 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			"stale",
 		].map(param);
 		if (isPage && view === "chat") return webRouter.page(request, url, head, PAGE_CSP);
+		let snapshot: DashboardSnapshot;
+		try {
+			snapshot = await options.snapshot();
+		} catch (error) {
+			options.onError?.(error);
+			return reply("snapshot failed\n", "text/plain; charset=utf-8", {}, 500);
+		}
 		return isPage
 			? reply(
 					renderDashboardPage(snapshot, {

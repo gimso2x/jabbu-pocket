@@ -337,13 +337,15 @@ function listWebThreadsDb(db: Database, conversation: string): WebThreadSummary[
 }
 
 function withReadonlyDb<T>(homeDir: string, fallback: T, read: (db: Database) => T): T {
-	const dbPath = join(homeDir, "jabbu.db");
-	if (!existsSync(dbPath)) return fallback;
-	const db = new Database(dbPath, { readonly: true, strict: true });
+	if (!existsSync(join(homeDir, "jabbu.db"))) return fallback;
+	let db: Database | undefined;
 	try {
+		db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
 		return hasWebMessagesTable(db) ? read(db) : fallback;
+	} catch {
+		return fallback;
 	} finally {
-		db.close();
+		db?.close();
 	}
 }
 
