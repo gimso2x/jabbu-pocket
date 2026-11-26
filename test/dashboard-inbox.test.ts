@@ -669,6 +669,8 @@ describe("dashboard polish", () => {
 		expect(STYLE).toContain(
 			".t2 > span:last-of-type { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }",
 		);
+		expect(STYLE).toContain(".tw[data-trace] {");
+		expect(STYLE).not.toMatch(/(?:^|\n)\.tw \{/);
 	});
 
 	test("unreachable board banner shows configured herdrBoard.api origin or default 127.0.0.1:7317", async () => {

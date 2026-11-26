@@ -614,7 +614,7 @@ body:has(.modal-backdrop:not([hidden])) .event-stack { display: none; }
 
 #detail-trace { padding-top: var(--stack-s); }
 #detail-trace[hidden] { display: none; }
-.tw { display: flex; flex-direction: column; gap: var(--stack-s); container-type: inline-size; --tw-cols: minmax(0, 42%) minmax(0, 1fr) 4.4em 4em; }
+.tw[data-trace] { display: flex; flex-direction: column; gap: var(--stack-s); container-type: inline-size; --tw-cols: minmax(0, 42%) minmax(0, 1fr) 4.4em 4em; }
 .tw-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--stack-s); }
 .tw-state { display: inline-flex; align-items: center; gap: var(--sp-1); height: 20px; padding: 0 var(--sp-2); border-radius: var(--r-pill); font-size: var(--fs-caption); font-weight: 600; background: var(--c-bg); color: var(--c-text-2); }
 .tw-state.is-info { background: var(--c-info-tint); color: var(--c-info-tint-text); }
