@@ -1,11 +1,10 @@
 /**
- * Agent message markdown → HTML for the card detail panel. The subset and parser follow the owner's herdr-board
- * shared/markdown.ts: fenced code, headings, lists, quotes, tables, rules and inline code/bold/italic/strike/links.
- * Every piece of message text is HTML-escaped before it is wrapped in a fixed tag, links are http(s) only, and there
- * are no images, raw HTML, scripts or iframes: `![x](url)` stays the text `!` plus an ordinary link.
- *
- * Self-contained on purpose (no imports, no module-level helpers): the page ships this function's source as part of
- * its inline script, so the browser renders conversations with this very code.
+ * Agent message markdown → HTML (the owner's herdr-board shared/markdown.ts subset): fenced code, headings, lists,
+ * quotes, tables, rules and inline code/bold/italic/strike/links. Message text is escaped before it is wrapped in a
+ * fixed tag, links are http(s) only, and there are no images, raw HTML, scripts or iframes. Inline spans are capped (link
+ * text 512, emphasis 1,000 chars, like the discord renderer's labels) and quotes nest at most MAX_QUOTE_DEPTH deep, so
+ * one message cannot scan quadratically or overflow the stack. Self-contained: the page ships this source in its inline
+ * script and renders conversations with this very code.
  */
 export function renderMarkdown(source: string): string {
 	const esc = (value: string): string =>
@@ -22,7 +21,8 @@ export function renderMarkdown(source: string): string {
 	const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 	const TABLE_SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 	const INLINE =
-		/(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|\*\*(?=\S)([\s\S]*?\S)\*\*|__(?=\S)([\s\S]*?\S)__(?!\w)|~~(?=\S)([\s\S]*?\S)~~|(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<![\w_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![\w_])/g;
+		/(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]{1,512})\]\((https?:\/\/[^\s)]+)\)|\*\*(?=\S)([\s\S]{0,999}?\S)\*\*|__(?=\S)([\s\S]{0,999}?\S)__(?!\w)|~~(?=\S)([\s\S]{0,999}?\S)~~|(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<![\w_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![\w_])/g;
+	const MAX_QUOTE_DEPTH = 16; // a deeper `>` mark stays text: a `>` run must not recurse once per character
 
 	const inline = (text: string): string => {
 		let out = "";
@@ -55,7 +55,7 @@ export function renderMarkdown(source: string): string {
 	const tableStart = (line: string, next: string | undefined): boolean =>
 		line.includes("|") && TABLE_SEPARATOR.test(next ?? "");
 
-	const blocks = (text: string): string => {
+	const blocks = (text: string, quoteDepth = 0): string => {
 		const lines = text.replace(/\r\n?/g, "\n").split("\n");
 		const out: string[] = [];
 		let i = 0;
@@ -88,10 +88,10 @@ export function renderMarkdown(source: string): string {
 				i++;
 				continue;
 			}
-			if (QUOTE.test(line)) {
+			if (QUOTE.test(line) && quoteDepth < MAX_QUOTE_DEPTH) {
 				const inner: string[] = [];
 				while (i < lines.length && QUOTE.test(lines[i] ?? "")) inner.push(QUOTE.exec(lines[i++] ?? "")?.[1] ?? "");
-				out.push(`<blockquote>${blocks(inner.join("\n"))}</blockquote>`);
+				out.push(`<blockquote>${blocks(inner.join("\n"), quoteDepth + 1)}</blockquote>`);
 				continue;
 			}
 			if (tableStart(line, lines[i + 1])) {
