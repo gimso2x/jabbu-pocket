@@ -233,7 +233,7 @@ export async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGener
 }
 
 /** A line as one JSON object; undefined for anything else (broken JSON, `null`, an array, a number). */
-function parseObject(line: string): Record<string, unknown> | undefined {
+export function parseObject(line: string): Record<string, unknown> | undefined {
 	try {
 		const value: unknown = JSON.parse(line);
 		return isRecord(value) && !Array.isArray(value) ? value : undefined;
