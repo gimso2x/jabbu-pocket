@@ -244,6 +244,17 @@ function uxHandleClick(target, event, doc, helpers) {
 		}
 		return true;
 	}
+	const compactHead = target.closest('.sys-grid.is-compact-ok .sys-card.is-ok:not([data-card="cost"]) .sys-head');
+	if (compactHead && !target.closest("a, button")) {
+		const btn = doc.querySelector("[data-sys-ok-toggle]");
+		if (btn) { event.preventDefault(); btn.click(); return true; }
+	}
+	const botBtn = target.closest("[data-turn-bot]");
+	if (botBtn && helpers && helpers.setBot) {
+		event.preventDefault();
+		helpers.setBot(botBtn.getAttribute("data-turn-bot") || "");
+		return true;
+	}
 	const costReset = target.closest("[data-cost-day-reset]");
 	if (costReset) {
 		event.preventDefault();
