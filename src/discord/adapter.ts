@@ -481,8 +481,14 @@ export class DiscordAdapter implements ChannelAdapter {
 			const oldest = this.#seenInteractions.values().next().value;
 			if (oldest !== undefined) this.#seenInteractions.delete(oldest);
 		}
+		const userId = (interaction.member?.user ?? interaction.user)?.id ?? "";
+		const actionContext = {
+			customId: interaction.data?.custom_id,
+			user: userId,
+			channel: interaction.message?.channel_id,
+			messageTs: interaction.message?.id,
+		};
 		try {
-			const userId = (interaction.member?.user ?? interaction.user)?.id ?? "";
 			const respond = (response: { type: number; data?: Record<string, unknown> }) =>
 				this.#transport.respondInteraction({ interactionId: interaction.id, token: interaction.token, response });
 			if (!isOwner(userId, this.#owner)) {
@@ -513,11 +519,11 @@ export class DiscordAdapter implements ChannelAdapter {
 					interactionId: interaction.id,
 				});
 			} catch (err) {
-				this.#log.error("action_failed", { error: errorText(err) });
+				this.#log.error("action_failed", { error: errorText(err), ...actionContext });
 				await this.#actionFailureNotice(interaction);
 			}
 		} catch (err) {
-			this.#log.error("action_failed", { error: errorText(err) });
+			this.#log.error("action_failed", { error: errorText(err), ...actionContext });
 		}
 	}
 
@@ -559,17 +565,15 @@ export class DiscordAdapter implements ChannelAdapter {
 			const { type, content, author, edited_timestamp: editedAt } = update;
 			const drop = (reason: string) =>
 				this.#log.info("inbound_dropped", { reason, channel: update.channel_id, id: update.id });
-			if (type === undefined || content === undefined || author === undefined || typeof editedAt !== "string") {
+			if (type === undefined || content === undefined || author === undefined || typeof editedAt !== "string")
 				return drop("edit_partial");
-			}
 			const event: DiscordMessageEvent = { ...update, type, content, author, edited_timestamp: editedAt };
 			if (!isOwner(author.id, this.#owner)) return drop("not_owner");
 			const editedMs = Date.parse(editedAt);
 			if (Number.isNaN(editedMs)) return drop("edit_partial");
 			if (editedMs - snowflakeTime(event.id) > EDIT_WINDOW_MS) return drop("edit_too_late");
-			if (parseCommand(content) !== undefined || parsePurposeCommand(content) !== undefined) {
+			if (parseCommand(content) !== undefined || parsePurposeCommand(content) !== undefined)
 				return drop("edit_command");
-			}
 			await this.#processMessage(event, [], false, undefined, editedAt);
 		});
 	}
@@ -631,15 +635,13 @@ export class DiscordAdapter implements ChannelAdapter {
 		// The owner gate comes before any lookup, so a stranger's message costs no API call.
 		if (!isOwner(event.author.id, this.#owner)) return this.#drop(event, "not_owner");
 		const dm = event.guild_id === undefined;
-		if (!dm && this.#guildIds !== undefined && !this.#guildIds.has(event.guild_id ?? "")) {
+		if (!dm && this.#guildIds !== undefined && !this.#guildIds.has(event.guild_id ?? ""))
 			return this.#drop(event, "guild_not_allowed");
-		}
 		// The core's ids: the conversation is the channel (a thread's parent), the thread the Discord thread id.
 		let conversationId = event.channel_id;
 		let threadId: string | undefined;
-		if (dm) {
-			this.#port.remember({ id: event.channel_id, type: DM_CHANNEL });
-		} else {
+		if (dm) this.#port.remember({ id: event.channel_id, type: DM_CHANNEL });
+		else {
 			const info = await this.#port.channelInfo(event.channel_id);
 			if (info === undefined) throw new Error(`unknown channel ${event.channel_id}`);
 			if (info.parentId !== undefined && info.type !== 0) {
@@ -662,9 +664,8 @@ export class DiscordAdapter implements ChannelAdapter {
 			if (
 				originalText !== undefined &&
 				(parseCommand(originalText) !== undefined || parsePurposeCommand(originalText) !== undefined)
-			) {
+			)
 				return this.#drop(event, "edit_command");
-			}
 		}
 		const spot: MessageSpot = { channelId: event.channel_id, messageId: event.id };
 		let text = event.content;
@@ -1185,9 +1186,8 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	async #send(delivery: DeliveryItem): Promise<DeliverySendResult> {
 		const target = parseThreadRef(delivery.threadRef);
-		if (target === undefined) {
+		if (target === undefined)
 			return { kind: "failed", error: `invalid thread_ref ${delivery.threadRef}`, outcome: "definitive", sentParts: 0 };
-		}
 		const topLevel = target.threadTs === TOP_LEVEL_TS;
 		const footer = answerFooter(delivery, (ref, origin, outcome) => this.#status.footer(ref, origin, outcome));
 		let sent = delivery.sentParts ?? 0;

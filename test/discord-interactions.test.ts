@@ -235,7 +235,12 @@ describe("owner clicks", () => {
 		]);
 		// The card is not patched: a deferred update's @original is the card itself.
 		expect(transport.count("editMessage")).toBe(editsBefore);
-		expect(logs.some((line) => line.includes("event=action_failed"))).toBe(true);
+		const failed = logs.find((line) => line.includes("event=action_failed"));
+		expect(failed).toBeDefined();
+		expect(failed).toContain(`customId=${RECOMMEND_ID}`);
+		expect(failed).toContain(`user=${OWNER}`);
+		expect(failed).toContain(`channel=${THREAD}`);
+		expect(failed).toContain(`messageTs=${card}`);
 	});
 
 	test("a failed follow-up is one warn line and nothing else", async () => {
