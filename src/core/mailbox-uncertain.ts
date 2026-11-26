@@ -25,8 +25,9 @@ export const UNCERTAIN_REASON_TEXT: Record<UncertainReason, string> = {
 	send_interrupted: "전송 중 재시작·중단",
 };
 
-/** One masked line of the held request: secrets redacted, whitespace collapsed, cut to 80 chars. Kept local because
- * core must not import the dashboard's `previewLine` (the layer gate rejects the edge). */
+/** One masked line of the held request: secrets redacted, whitespace collapsed, cut to 80 chars. Plain on purpose:
+ * `previewLine` (`core/preview-line`) also folds jabbu's quote wrapping and marks a cut line with an ellipsis, while this
+ * notice shows the request as it was held. */
 const noticePreview = (text: string): string => {
 	const line = redact(text).replace(/\s+/g, " ").trim();
 	return [...line].slice(0, 80).join("");

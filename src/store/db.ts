@@ -11,8 +11,8 @@ import {
 	parseChatOrigin,
 	platformOfConversationId,
 } from "../core/origin-key";
+import { previewLine } from "../core/preview-line";
 import { COMMAND_OP_REF, parseCommand, parsePurposeCommand } from "../core/types";
-import { previewLine } from "../dashboard/preview-line";
 import type { LaneReservation, ReservationState } from "../lanes/reservations";
 import {
 	assertLaneTransition,
@@ -23,7 +23,6 @@ import {
 	type LaneRow,
 	type LaneStatus,
 } from "../lanes/status";
-import { countIncident, resolveIncidents } from "../monitors/incidents";
 import {
 	type CheckErrorAlert,
 	MONITOR_ORIGIN_PREFIX,
@@ -72,6 +71,7 @@ import {
 	SCHEMA,
 } from "./db-schema";
 import { columnsOf, migrateInbound } from "./db-sending";
+import { countIncident, resolveIncidents } from "./incidents";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { dropRemovedTables } from "./removed-tables";
 import { migrateOldNames } from "./rename-migration";
@@ -1418,7 +1418,7 @@ export class Store {
 
 	/**
 	 * Counts one occurrence of an alert condition and decides whether the owner should be told (the shared incident
-	 * state machine — see `monitors/incidents`): the first occurrence alerts, the same (scope, normalized sign) within
+	 * state machine — see `store/incidents`): the first occurrence alerts, the same (scope, normalized sign) within
 	 * `repeatMs` stays quiet, a still-standing condition re-alerts after `repeatMs`, and a resolved condition that
 	 * comes back reopens loudly (monitor incident semantics, used by the turn-failure escalation and the daemon's
 	 * gate sweep). `standing` reports the row's pre-call state, so a restarting daemon can rebuild "the owner was

@@ -2,9 +2,9 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { QUOTED_HEADER } from "../src/core/normalize";
+import { previewLine } from "../src/core/preview-line";
 import { discordThreadHref, renderFlowChain, renderTaskFacts } from "../src/dashboard/detail";
 import { renderDashboardPage } from "../src/dashboard/html";
-import { previewLine } from "../src/dashboard/preview-line";
 import {
 	buildSnapshot,
 	type DashboardSnapshot,

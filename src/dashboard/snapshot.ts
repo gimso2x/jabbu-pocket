@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import type { JabbuConfig } from "../config";
 import { parseChatOrigin } from "../core/origin-key";
+import { previewLine } from "../core/preview-line";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { pidAlive } from "../daemon/lock";
 import {
@@ -67,7 +68,6 @@ import {
 	readPeerHealth,
 } from "./peer-health";
 import type { PeerInstall } from "./peers";
-import { previewLine } from "./preview-line";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
 import { type TaskRuntimeField, withoutTaskThreads } from "./task-work-client";

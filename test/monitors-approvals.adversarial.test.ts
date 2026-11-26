@@ -7,7 +7,6 @@ import { join } from "node:path";
 import { DiscordChannel } from "../src/discord/channel";
 import type { EditMessageArgs } from "../src/discord/transport";
 import { createLogger } from "../src/log";
-import { normalizeIncidentError } from "../src/monitors/incidents";
 import { type ClaimResult, MONITOR_INCIDENT_REPEAT_MS } from "../src/monitors/ledger";
 import { MonitorScheduler } from "../src/monitors/scheduler";
 import { isWakeGateOff, runScript } from "../src/monitors/script";
@@ -22,6 +21,7 @@ import {
 	parseApprovalActionId,
 } from "../src/safety/approval";
 import { openStore, type Store } from "../src/store/db";
+import { normalizeIncidentError } from "../src/store/incidents";
 import { CHANNEL, hasButtons, OWNER, OWNER_DM } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";

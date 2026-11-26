@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig } from "../src/config";
+import { previewLine } from "../src/core/preview-line";
+import { extractPeerPreview } from "../src/core/preview-peer";
 import type { BoardView } from "../src/dashboard/board";
 import { renderItemDetail } from "../src/dashboard/detail";
 import { SCRIPT } from "../src/dashboard/html";
@@ -11,8 +13,6 @@ import { contextBar } from "../src/dashboard/load-view";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { readPeerAlerts, readPeerHealth } from "../src/dashboard/peer-health";
 import type { PeerInstall } from "../src/dashboard/peers";
-import { previewLine } from "../src/dashboard/preview-line";
-import { extractPeerPreview } from "../src/dashboard/preview-peer";
 import { buildSnapshot, type DashboardSnapshot, type MonitorInfo, type SnapshotDeps } from "../src/dashboard/snapshot";
 import { openStore } from "../src/store/db";
 
