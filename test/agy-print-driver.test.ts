@@ -210,6 +210,38 @@ test("a quota error ends `agy rate limited (429)` and the driver ends the child 
 	await driver.stop();
 });
 
+test("a replacement child's first tool call emits its start and end (tool state resets on spawn)", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const types: string[] = [];
+	driver.onEvent((event) => types.push(event.type));
+	expect(await started(driver, "@tool")).toMatchObject({ status: "completed" });
+	expect(types).toContain("tool_execution_start");
+	expect(types).toContain("tool_execution_end");
+	expect((await started(driver, "@quota")).status).toBe("error");
+	types.length = 0;
+	expect(await started(driver, "@tool")).toMatchObject({ status: "completed", text: "REPLY1:@tool" });
+	expect(h.spawns()).toHaveLength(2);
+	expect(types).toContain("tool_execution_start");
+	expect(types).toContain("tool_execution_end");
+	await driver.stop();
+});
+
+test("stop during a retire: a parked prompt rejects instead of spawning a child under the stopped driver", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	await driver.prompt("@hold");
+	const aborting = driver.abort();
+	const parked = driver.prompt("next");
+	const stopping = driver.stop();
+	await expect(parked).rejects.toThrow("driver not started");
+	await stopping;
+	await aborting;
+	expect(h.spawns()).toHaveLength(1);
+});
+
 test("the conversation id is kept and a new driver resumes it with --conversation, without floors", async () => {
 	const h = harness();
 	const one = h.make();

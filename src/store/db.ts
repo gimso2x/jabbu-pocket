@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { failureNoticeBody } from "../channel/failure-notice";
 import { mentionToken } from "../channel/port";
 import { cutCodePointSafe } from "../channel/text";
 import { parseThreadRef, platformOfThreadRef, THREAD_LINK_PREFIX, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
@@ -10,7 +11,7 @@ import {
 	parseChatOrigin,
 	platformOfConversationId,
 } from "../core/origin-key";
-import { COMMAND_OP_REF, PEER_FAILURE_MARK, parseCommand, parsePurposeCommand } from "../core/types";
+import { COMMAND_OP_REF, parseCommand, parsePurposeCommand } from "../core/types";
 import { previewLine } from "../dashboard/preview-line";
 import type { LaneReservation, ReservationState } from "../lanes/reservations";
 import {
@@ -102,8 +103,6 @@ const STEER_NOTICE_SUFFIX = ":steer:";
 const STEER_NOTICE_HEAD = "↪ 이 요청은 진행 중이던 작업에 합쳐져서 답을 다른 스레드에 올렸어";
 /** Op ref infix of a text a running turn sent before its end (`<opRef>:interim:<n>`); it never finishes the status. */
 export const INTERIM_INFIX = ":interim:";
-/** Head of a failed-turn notice delivery (`failedNotice` in the mailbox); never recall material. */
-const TURN_FAILED_HEAD = "[turn failed]";
 /** How far back recall candidates reach. */
 const RECALL_WINDOW_MS = 90 * 24 * 60 * 60_000;
 /** Expired rows kept for `takeExpired` at most (a platform without an adapter never takes its rows). */
@@ -870,7 +869,7 @@ export class Store {
 					? parseCommand(row.text) !== undefined || parsePurposeCommand(row.text) !== undefined
 					: (row.op_ref !== null && COMMAND_OP_REF.test(row.op_ref)) ||
 						row.text.startsWith(STEER_NOTICE_HEAD) ||
-						row.text.startsWith(TURN_FAILED_HEAD);
+						failureNoticeBody(row.text);
 			if (bookkeeping) continue;
 			candidates.push({
 				kind: row.kind,
@@ -1761,7 +1760,7 @@ export class Store {
 	 */
 	private recordPeerCalls(row: DeliveryRow, now: number): void {
 		const policy = this.peerCallPolicy;
-		if (policy === undefined || row.opRef.endsWith(LOG_COPY_SUFFIX) || row.body.includes(PEER_FAILURE_MARK)) return;
+		if (policy === undefined || row.opRef.endsWith(LOG_COPY_SUFFIX) || failureNoticeBody(row.body)) return;
 		const thread = parseThreadRef(row.threadRef);
 		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) return;
 		if (platformOfThreadRef(row.threadRef) !== "discord" || policy.skipConversations.includes(thread.channel)) return;

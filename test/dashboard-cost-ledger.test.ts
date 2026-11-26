@@ -99,6 +99,16 @@ describe("AC-5: the card", () => {
 		expect(info.cacheWritePct).toBe(29);
 	});
 
+	test("the window walks calendar days: the 23-hour DST spring-forward day is not skipped", () => {
+		// 2026-03-09 00:30 in New York (EDT); 2026-03-08 is the 23-hour day the clocks jump over.
+		const nyNow = Date.parse("2026-03-09T04:30:00Z");
+		writeFileSync(session("discord/ch/1/t/2"), call(Date.parse("2026-03-08T12:00:00Z"), 7));
+		const { info } = updateCostLedger(home, nyNow, "America/New_York");
+		expect(info.days.map((d) => d.day)).toEqual(["03-03", "03-04", "03-05", "03-06", "03-07", "03-08", "03-09"]);
+		expect(info.days.map((d) => d.cost)).toEqual([0, 0, 0, 0, 0, 7, 0]);
+		expect(info.total).toBeCloseTo(7);
+	});
+
 	test("one computation per 15 minutes", async () => {
 		const file = session("discord/ch/1/t/2");
 		writeFileSync(file, call(NOW, 1));

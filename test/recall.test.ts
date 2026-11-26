@@ -331,6 +331,19 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		expect(texts.sort()).toEqual(["delivery:합친 답 1부", "inbound:첫 요청 본문", "inbound:합쳐진 요청 본문"]);
 	});
 
+	test("(9b) a peer failure notice (mention-first) is not a candidate either", () => {
+		store.ensureOrigin("discord/ch/300000000000000001/t/1000002", join(dir, "sessions", "p"));
+		store.recordTurnFailure({
+			originKey: "discord/ch/300000000000000001/t/1000002",
+			opRef: "op-pf",
+			threadRef: "300000000000000001:1000002",
+			notice: "<@222222222222222222> <@111111111111111111> 응답 실패(rpc_error) — 다시 요청하거나 직접 검토해 주세요",
+		});
+		const row = store.claimDue().at(-1);
+		if (row !== undefined) store.confirmDelivery(row.deliveryId);
+		expect(candidatesOf("300000000000000001")).toEqual([]);
+	});
+
 	test("(10) a candidate that only shares attachment note lines scores 0", () => {
 		inbound(
 			"discord/ch/300000000000000001/t/1000001",
