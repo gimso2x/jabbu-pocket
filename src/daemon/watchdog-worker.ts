@@ -9,11 +9,11 @@ import { workerData } from "node:worker_threads";
 const { beats, stallMs, logPath } = workerData as { beats: SharedArrayBuffer; stallMs: number; logPath?: string };
 const counter = new Int32Array(beats);
 let seen = Atomics.load(counter, 0);
-let movedAt = Date.now();
+let movedAt = performance.now(); // monotonic clock: a wall-clock step (NTP, suspend/resume) must not read as a stall
 const KILL_GRACE_MS = 500;
 
 const timer = setInterval(() => {
-	const now = Date.now();
+	const now = performance.now();
 	const value = Atomics.load(counter, 0);
 	if (value !== seen) {
 		seen = value;
@@ -21,7 +21,7 @@ const timer = setInterval(() => {
 		return;
 	}
 	if (now - movedAt < stallMs) return;
-	const line = `${JSON.stringify({ ts: new Date(now).toISOString(), level: "error", event: "watchdog_kill", stalled_ms: now - movedAt, pid: process.pid })}\n`;
+	const line = `${JSON.stringify({ ts: new Date().toISOString(), level: "error", event: "watchdog_kill", stalled_ms: Math.round(now - movedAt), pid: process.pid })}\n`;
 	clearInterval(timer);
 	// The record goes through the thread pool: a write that blocks (a FIFO log path, a full stderr pipe) must not keep
 	// the kill from happening, so SIGKILL follows when the writes settle or after KILL_GRACE_MS.
