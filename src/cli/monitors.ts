@@ -9,7 +9,6 @@ import {
 	type MonitorRow,
 	monitorOptionSuffixes,
 	nextFireOf,
-	openMonitorLedger,
 } from "../monitors/ledger";
 import {
 	applyMonitors,
@@ -24,6 +23,7 @@ import { runScript } from "../monitors/script";
 import { MonitorSpecError, mergeMonitorSpec, parseMonitorSpec } from "../monitors/spec";
 import { readFreeze } from "../ops/freeze";
 import { formatLocal, hostTimezone } from "../time";
+import { monitorsLedger } from "./monitors-ledger";
 
 export const MONITORS_USAGE = `  monitors add --json <spec>     create a monitor ({name, trigger (cron|at|script; a cron with command [+timeoutMs] runs that script per slot and needs deliver "verbatim"), instruction, overlap?, enabled?, channel?, copyChannel?, model?, thinking?, deliver?, procedureFiles? (<=5 files in the workspace or scripts dir, re-read on every fire)}
   monitors list [--json]         monitors with effective time zone and next fire
@@ -111,7 +111,7 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 		return 2;
 	}
 	const dir = resolve(values.dir);
-	const ledger = openMonitorLedger(join(homeDir, "jabbu.db"));
+	const ledger = monitorsLedger(sub, homeDir, values["dry-run"] === true);
 	try {
 		if (sub === "export") {
 			const result = exportMonitors(ledger, dir, ctx, { withFiles: values["with-files"] === true });
@@ -184,7 +184,7 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		process.stderr.write(`monitors ${sub}: too many arguments\n`);
 		return 2;
 	}
-	const ledger = openMonitorLedger(join(homeDir, "jabbu.db"));
+	const ledger = monitorsLedger(sub ?? "", homeDir);
 	try {
 		const out = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 		if (sub === "add") {
