@@ -78,6 +78,12 @@ function turn(content: string): void {
 		result("SUCCESS", "");
 		return;
 	}
+	if (content.includes("@end-quota")) {
+		answer(
+			"작업 중\n⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.\n",
+		);
+		return;
+	}
 	if (content.includes("@quota")) {
 		const detail = "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 1h7m20s.";
 		result("ERROR", "", `generating and executing: transport error (ResourceExhausted, HTTP 429): ${detail}`);

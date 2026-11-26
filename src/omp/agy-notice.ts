@@ -4,6 +4,9 @@ const RETRY_NOTICE = /(?:^|\n)[^\S\n]*(?:⚠\uFE0F?[^\S\n]*)?API error \(attempt
 const QUOTA_EXHAUSTED = /\bRESOURCE_EXHAUSTED\b|\bcode 429\b/;
 const NOTICE_HEAD = "API error (attempt ";
 const NOTICE_ATTEMPT = /^\d*$|^\d+\)(?::.*)?$/;
+const QUOTE_OPEN = /^<<<quoted-([^>\n]*)>>>$/;
+const FINAL_QUOTA_LINE =
+	/^⚠\uFE0F?[^\S\n]+(Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in \d+(?:\.\d+)?[hms](?:\s*\d+(?:\.\d+)?[hms])*\.?)$/;
 
 function parseFenceOpen(line: string): { char: "`" | "~"; len: number } | undefined {
 	const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -46,6 +49,43 @@ export function quotaRetryNotice(text: string): string | undefined {
 /** True when an agy error/text directly indicates a 429 / RESOURCE_EXHAUSTED quota failure. */
 export function isQuotaErrorText(text: string): boolean {
 	return QUOTA_EXHAUSTED.test(text);
+}
+
+/**
+ * Quota detail when the final non-empty line outside code fences and `<<<quoted-…>>>` blocks is agy's
+ * standalone `⚠ Individual quota reached… Resets in …` notice, else undefined.
+ */
+export function finalLineQuotaNotice(text: string): string | undefined {
+	let fence: { char: "`" | "~"; len: number } | undefined;
+	let quoteEnd: string | undefined;
+	let lastNonEmpty: string | undefined;
+	for (const line of text.split("\n")) {
+		const raw = line.replace(/\r$/, "");
+		const trimmed = raw.trim();
+		if (quoteEnd !== undefined) {
+			if (trimmed === quoteEnd) quoteEnd = undefined;
+			continue;
+		}
+		if (fence !== undefined) {
+			if (isFenceClose(raw, fence.char, fence.len)) fence = undefined;
+			continue;
+		}
+		const open = parseFenceOpen(raw);
+		if (open !== undefined) {
+			fence = open;
+			lastNonEmpty = undefined;
+			continue;
+		}
+		const quote = QUOTE_OPEN.exec(trimmed);
+		if (quote !== null) {
+			quoteEnd = `<<<end-quoted-${quote[1]}>>>`;
+			lastNonEmpty = undefined;
+			continue;
+		}
+		if (trimmed !== "") lastNonEmpty = trimmed;
+	}
+	if (fence !== undefined || quoteEnd !== undefined || lastNonEmpty === undefined) return undefined;
+	return FINAL_QUOTA_LINE.exec(lastNonEmpty)?.[1];
 }
 
 /** Incremental cursor state for streaming `agent_message_chunk` scans in O(chunk) time. */

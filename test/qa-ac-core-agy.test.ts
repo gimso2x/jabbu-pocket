@@ -6,7 +6,13 @@ import { dirname, join } from "node:path";
 import { purposeScopes } from "../src/core/mailbox-purpose";
 import { isThreadOrigin, threadRefOfOrigin } from "../src/core/normalize";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
-import { appendTurnChunk, type NoticeScanState, quotaRetryNotice, resetTurnText } from "../src/omp/agy-notice";
+import {
+	appendTurnChunk,
+	finalLineQuotaNotice,
+	type NoticeScanState,
+	quotaRetryNotice,
+	resetTurnText,
+} from "../src/omp/agy-notice";
 import { gcSessions } from "../src/ops/gc";
 import { openStore } from "../src/store/db";
 import { makeHome } from "./helpers/bot-home";
@@ -138,5 +144,32 @@ describe("qa-ac core·store·agy 수정", () => {
 			expect(appendTurnChunk(perf, unit).quota).toBeUndefined();
 		}
 		expect(performance.now() - t0).toBeLessThan(200);
+	});
+
+	test("finalLineQuotaNotice는 펜스·인용 밖 마지막 비공백 줄의 단독 한도 문구만 감지한다", () => {
+		const line =
+			"⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.";
+		const expected =
+			"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.";
+		expect(finalLineQuotaNotice(line)).toBe(expected);
+		expect(finalLineQuotaNotice(`앞 본문\n\n${line}\n`)).toBe(expected);
+		expect(finalLineQuotaNotice(`앞 본문\r\n${line}\r\n  \r\n`)).toBe(expected);
+		expect(finalLineQuotaNotice(["```txt", "코드", "```", line].join("\n"))).toBe(expected);
+
+		// Code fences, <<<quoted-...>>> blocks, unclosed markers, trailing prose, mid-line quotes, and ellipses stay ignored.
+		expect(finalLineQuotaNotice(["```", line, "```"].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice(["~~~", line, "~~~"].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice(["```", line].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice(["<<<quoted-abc>>>", line, "<<<end-quoted-abc>>>"].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice(["<<<quoted-abc>>>", line].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice([line, "```txt", "code", "```"].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice([line, "<<<quoted-abc>>>", "인용", "<<<end-quoted-abc>>>"].join("\n"))).toBeUndefined();
+		expect(finalLineQuotaNotice(`${line}\n정상 결론`)).toBeUndefined();
+		expect(finalLineQuotaNotice(`설명: ${line}`)).toBeUndefined();
+		expect(
+			finalLineQuotaNotice(
+				"⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in ...",
+			),
+		).toBeUndefined();
 	});
 });

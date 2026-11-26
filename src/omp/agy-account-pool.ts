@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +20,30 @@ export const DEFAULT_APP_DATA_PREFIX = "antigravity-cli-acct-";
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
 /** The last instant a Date holds; a block past it cannot be logged or shown. */
 const MAX_DATE_MS = 8.64e15;
+
+function tokenEmail(path: string): string | undefined {
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+		const email = (parsed as Record<string, unknown>).id_token_email;
+		return typeof email === "string" && email !== "" ? email : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function shouldSyncToken(src: string, dst: string): boolean {
+	if (!existsSync(src)) return false;
+	if (!existsSync(dst)) return true;
+	const srcEmail = tokenEmail(src);
+	const dstEmail = tokenEmail(dst);
+	if (srcEmail !== undefined && dstEmail !== undefined && srcEmail !== dstEmail) return true;
+	try {
+		return statSync(src).mtimeMs > statSync(dst).mtimeMs;
+	} catch {
+		return false;
+	}
+}
 
 export interface AgyAccountEntry {
 	name: string;
@@ -59,21 +84,28 @@ interface QuotaStateFile {
  */
 export class AgyAccountPool {
 	readonly #config: () => AgyAccountsConfig | undefined;
-	readonly #statePath: string;
+	readonly #defaultStatePath: string;
 	readonly #geminiDir: string;
 	readonly #now: () => number;
 	readonly #log: Logger | undefined;
+	#loadedPath: string | undefined;
 	#current: string | undefined;
 	#blocked: Record<string, number> = {};
 	#lastOrderError: string | undefined;
 
 	constructor(options: AgyAccountPoolOptions) {
 		this.#config = options.config;
-		this.#statePath = options.statePath;
+		this.#defaultStatePath = options.statePath;
 		this.#geminiDir = options.geminiDir ?? join(homedir(), ".gemini");
 		this.#now = options.now ?? (() => Date.now());
 		this.#log = options.log;
-		this.#loadState();
+		// Defer `options.config()` until first method call: callers like `run.ts` pass a getter referencing a `const` initialized after `new AgyAccountPool(...)`.
+		const disk = this.#readDiskState(options.statePath);
+		if (disk !== undefined) {
+			this.#blocked = disk.blocked;
+			if (disk.current !== undefined) this.#current = disk.current;
+		}
+		this.#loadedPath = options.statePath;
 	}
 
 	/**
@@ -81,6 +113,7 @@ export class AgyAccountPool {
 	 * Primary tier beats fallback tier, so a reset primary account promotes automatically on the next check.
 	 */
 	selectAvailable(now = this.#now()): AgyAccountEntry | null | undefined {
+		this.#syncStateFromDisk();
 		const entries = this.#entries();
 		if (entries.length === 0) return undefined;
 		const primary = entries.filter((entry) => entry.tier === "primary");
@@ -89,14 +122,14 @@ export class AgyAccountPool {
 			if (tier.length === 0) return undefined;
 			const index = this.#current === undefined ? -1 : tier.findIndex((entry) => entry.name === this.#current);
 			if (index !== -1) {
-				if (!this.isBlocked(tier[index]?.name ?? "", now)) return tier[index];
+				if (!this.#isBlockedMem(tier[index]?.name ?? "", now)) return tier[index];
 				for (let offset = 1; offset < tier.length; offset += 1) {
 					const candidate = tier[(index + offset) % tier.length];
-					if (candidate && !this.isBlocked(candidate.name, now)) return candidate;
+					if (candidate && !this.#isBlockedMem(candidate.name, now)) return candidate;
 				}
 				return undefined;
 			}
-			return tier.find((entry) => !this.isBlocked(entry.name, now));
+			return tier.find((entry) => !this.#isBlockedMem(entry.name, now));
 		};
 		const chosen = pick(primary) ?? pick(fallback);
 		if (chosen === undefined) return null;
@@ -108,6 +141,7 @@ export class AgyAccountPool {
 	}
 
 	soonestReset(now = this.#now()): AgyBlockedAccount | undefined {
+		this.#syncStateFromDisk();
 		let soonest: AgyBlockedAccount | undefined;
 		for (const entry of this.#entries()) {
 			const until = this.#blocked[entry.name];
@@ -118,6 +152,7 @@ export class AgyAccountPool {
 	}
 
 	markExhausted(name: string, untilMs: number, detail?: string): void {
+		this.#syncStateFromDisk();
 		const now = this.#now();
 		// A reset past the Date range (agy's text is outside input) is no reset to wait for: the default block applies.
 		const valid = Number.isFinite(untilMs) && untilMs <= MAX_DATE_MS;
@@ -135,6 +170,11 @@ export class AgyAccountPool {
 	}
 
 	isBlocked(name: string, now = this.#now()): boolean {
+		this.#syncStateFromDisk();
+		return this.#isBlockedMem(name, now);
+	}
+
+	#isBlockedMem(name: string, now: number): boolean {
 		const until = this.#blocked[name];
 		return until !== undefined && until > now;
 	}
@@ -144,8 +184,8 @@ export class AgyAccountPool {
 	}
 
 	/**
-	 * Ensures `~/.gemini/<appDataDir>` exists with mode 0700 and bootstraps its `antigravity-oauth-token` once from
-	 * `<dir>/<name>.token` (never overwriting an already-bootstrapped file so `agy`'s OAuth refreshes stay intact).
+	 * Ensures `~/.gemini/<appDataDir>` exists with mode 0700 and copies `<dir>/<name>.token` when missing, email changed,
+	 * or the source token is newer (preserving in-place OAuth refreshes when the target is at least as new).
 	 */
 	prepareAccountDir(entry: AgyAccountEntry): string {
 		const cfg = this.#config();
@@ -153,9 +193,9 @@ export class AgyAccountPool {
 		mkdirSync(target, { recursive: true, mode: 0o700 });
 		chmodSync(target, 0o700);
 		const dstToken = join(target, "antigravity-oauth-token");
-		if (!existsSync(dstToken) && cfg !== undefined) {
+		if (cfg !== undefined) {
 			const srcToken = join(cfg.dir, `${entry.name}.token`);
-			if (existsSync(srcToken)) {
+			if (shouldSyncToken(srcToken, dstToken)) {
 				copyFileSync(srcToken, dstToken);
 				chmodSync(dstToken, 0o600);
 			}
@@ -170,6 +210,7 @@ export class AgyAccountPool {
 	}
 
 	status(now = this.#now()): AgyAccountsStatus | undefined {
+		this.#syncStateFromDisk();
 		const { configured, entries, error } = this.#readEntries();
 		if (!configured) return undefined;
 		if (error !== undefined) {
@@ -261,52 +302,77 @@ export class AgyAccountPool {
 		};
 	}
 
-	#loadState(): void {
+	#resolveStatePath(): string {
+		return this.#config()?.statePath ?? this.#defaultStatePath;
+	}
+
+	#readDiskState(path: string): QuotaStateFile | undefined {
 		let text: string;
 		try {
-			text = readFileSync(this.#statePath, "utf8");
+			text = readFileSync(path, "utf8");
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException | undefined)?.code;
-			if (code !== "ENOENT") {
+			if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
 				this.#log?.warn("agy.account.state_load_failed", { error: String(error) });
 			}
-			return;
+			return undefined;
 		}
 		try {
 			const parsed = JSON.parse(text) as unknown;
-			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
 			const record = parsed as Record<string, unknown>;
-			if (typeof record.current === "string" && ACCOUNT_NAME.test(record.current)) {
-				this.#current = record.current;
-			}
+			const current =
+				typeof record.current === "string" && ACCOUNT_NAME.test(record.current) ? record.current : undefined;
+			const blocked: Record<string, number> = {};
 			if (typeof record.blocked === "object" && record.blocked !== null && !Array.isArray(record.blocked)) {
 				for (const [name, until] of Object.entries(record.blocked as Record<string, unknown>)) {
 					if (ACCOUNT_NAME.test(name) && typeof until === "number" && until > 0 && until <= MAX_DATE_MS) {
-						this.#blocked[name] = until;
+						blocked[name] = until;
 					}
 				}
 			}
+			return { ...(current === undefined ? {} : { current }), blocked };
 		} catch (error) {
 			this.#log?.warn("agy.account.state_load_failed", { error: String(error) });
+			return undefined;
 		}
 	}
 
+	#syncStateFromDisk(): void {
+		const path = this.#resolveStatePath();
+		const disk = this.#readDiskState(path);
+		if (this.#loadedPath !== undefined && this.#loadedPath !== path) {
+			this.#blocked = {};
+			this.#current = undefined;
+		}
+		if (disk !== undefined) {
+			this.#blocked = disk.blocked;
+			if (disk.current !== undefined) this.#current = disk.current;
+		}
+		this.#loadedPath = path;
+	}
+
 	#saveState(now: number): void {
+		const path = this.#resolveStatePath();
+		const disk = this.#readDiskState(path);
 		const blocked: Record<string, number> = {};
-		for (const [name, until] of Object.entries(this.#blocked)) {
+		for (const [name, until] of Object.entries(disk?.blocked ?? {})) {
 			if (until > now) blocked[name] = until;
 		}
+		for (const [name, until] of Object.entries(this.#blocked)) {
+			if (until > now) blocked[name] = Math.max(blocked[name] ?? 0, until);
+		}
 		this.#blocked = blocked;
+		this.#loadedPath = path;
 		const payload: QuotaStateFile = {
 			...(this.#current === undefined ? {} : { current: this.#current }),
 			blocked,
 		};
-		const tmp = `${this.#statePath}.${process.pid}.tmp`;
+		const tmp = `${path}.${process.pid}.tmp`;
 		try {
-			mkdirSync(dirname(this.#statePath), { recursive: true });
+			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
 			chmodSync(tmp, 0o600);
-			renameSync(tmp, this.#statePath);
+			renameSync(tmp, path);
 		} catch (error) {
 			rmSync(tmp, { force: true });
 			this.#log?.warn("agy.account.state_save_failed", { error: String(error) });

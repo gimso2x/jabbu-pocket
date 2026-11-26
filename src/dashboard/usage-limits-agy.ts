@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchEnv, type ProcessRunner } from "../dispatch/omp";
@@ -9,6 +9,7 @@ const AGY_ACCOUNT_TIMEOUT_MS = 30_000;
 const STDOUT_CAP = 1_000_000;
 const ACCOUNT_CHARS = 40;
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
+const DEFAULT_APP_DATA_PREFIX = "antigravity-cli-acct-";
 
 export interface UsageRow {
 	label: string;
@@ -101,14 +102,41 @@ function tokenEmail(path: string): string | undefined {
 	}
 }
 
-/** Uses live `~/.gemini/antigravity-cli/antigravity-oauth-token` for the active slot only when its email matches. */
-function pickTokenSource(accountsDir: string, name: string, active: boolean): string {
+function mtimeMsOf(path: string): number {
+	try {
+		return statSync(path).mtimeMs;
+	} catch {
+		return -1;
+	}
+}
+
+/** Prefers an isolated `--app-data-dir` token or active live token over `<name>.token` when its email matches and mtime is newer. */
+function pickTokenSource(
+	accountsDir: string,
+	name: string,
+	active: boolean,
+	geminiDir: string,
+	appDataPrefix: string,
+): string {
 	const slot = join(accountsDir, `${name}.token`);
-	if (!active) return slot;
-	const live = join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token");
-	if (!existsSync(live)) return slot;
-	const liveEmail = tokenEmail(live);
-	return liveEmail !== undefined && liveEmail === tokenEmail(slot) ? live : slot;
+	const slotEmail = tokenEmail(slot);
+	let best = slot;
+	let bestMtime = mtimeMsOf(slot);
+	const isolated = join(geminiDir, `${appDataPrefix}${name}`, "antigravity-oauth-token");
+	if (existsSync(isolated) && slotEmail !== undefined && tokenEmail(isolated) === slotEmail) {
+		const mtime = mtimeMsOf(isolated);
+		if (mtime > bestMtime) {
+			best = isolated;
+			bestMtime = mtime;
+		}
+	}
+	if (active) {
+		const live = join(geminiDir, "antigravity-cli", "antigravity-oauth-token");
+		if (existsSync(live) && slotEmail !== undefined && tokenEmail(live) === slotEmail) {
+			if (best === slot || mtimeMsOf(live) > bestMtime) best = live;
+		}
+	}
+	return best;
 }
 
 async function queryAgyAccount(
@@ -117,6 +145,8 @@ async function queryAgyAccount(
 	name: string,
 	active: boolean,
 	run: ProcessRunner,
+	geminiDir: string,
+	appDataPrefix: string,
 ): Promise<UsageAccount> {
 	const fail = (error: string): UsageAccount => ({
 		name,
@@ -133,7 +163,7 @@ async function queryAgyAccount(
 			mkdirSync(cliDir, { recursive: true, mode: 0o700 });
 			chmodSync(cliDir, 0o700);
 			const dst = join(cliDir, "antigravity-oauth-token");
-			copyFileSync(pickTokenSource(accountsDir, name, active), dst);
+			copyFileSync(pickTokenSource(accountsDir, name, active, geminiDir, appDataPrefix), dst);
 			chmodSync(dst, 0o600);
 			out = await run(argv, {
 				timeoutMs: AGY_ACCOUNT_TIMEOUT_MS,
@@ -164,12 +194,17 @@ export async function collectAgyAccounts(
 	accountsDir: string,
 	activeName: string | undefined,
 	run: ProcessRunner,
+	options?: { geminiDir?: string; appDataPrefix?: string },
 ): Promise<{ account?: string; accounts: UsageAccount[] } | undefined> {
 	const names = readOrderAccounts(accountsDir);
 	if (names === undefined) return undefined;
 	const resolvedActive = activeName ?? readCurrentFile(accountsDir);
+	const geminiDir = options?.geminiDir ?? join(homedir(), ".gemini");
+	const appDataPrefix = options?.appDataPrefix ?? DEFAULT_APP_DATA_PREFIX;
 	const accounts = await Promise.all(
-		names.map((name) => queryAgyAccount(argv, accountsDir, name, name === resolvedActive, run)),
+		names.map((name) =>
+			queryAgyAccount(argv, accountsDir, name, name === resolvedActive, run, geminiDir, appDataPrefix),
+		),
 	);
 	return { ...(resolvedActive === undefined ? {} : { account: resolvedActive }), accounts };
 }
