@@ -1,0 +1,289 @@
+import { afterAll, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AGY_LAST_ANSWER_FILE, AgyPrintDriver } from "../src/omp/agy-print-driver";
+import { OmpDriverError, type OmpEvent, type OmpExitInfo, type OmpFinal } from "../src/omp/driver";
+import { agySettings } from "../src/tasks/worker-tier";
+
+const tempDirs: string[] = [];
+const FAKE_SCRIPT = join(import.meta.dir, "helpers", "fake-agy-print.ts");
+const FLOORS = "FLOORS-TEST";
+const SETTINGS = agySettings(["/w/tree", "/w/docs"], ["/w/secrets"]);
+
+afterAll(() => {
+	for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+interface LogEntry {
+	kind: "argv" | "env" | "in" | "exit";
+	pid?: number;
+	argv?: string[];
+	env?: Record<string, string | undefined>;
+	line?: string;
+}
+
+function harness() {
+	const root = mkdtempSync(join(tmpdir(), "jabbu-agy-print-"));
+	tempDirs.push(root);
+	const executable = join(root, "bin", "agy");
+	mkdirSync(join(root, "bin"));
+	writeFileSync(executable, `#!/bin/sh\nexec "${process.execPath}" "${FAKE_SCRIPT}" "$@"\n`);
+	chmodSync(executable, 0o755);
+	const logFile = join(root, "fake.log");
+	writeFileSync(logFile, "");
+	const sessionDir = join(root, "sessions", "e1");
+	const logDir = join(root, "agy-log");
+	const make = () =>
+		new AgyPrintDriver({
+			agyExecutable: executable,
+			cwd: root,
+			sessionDir,
+			model: "gemini-test",
+			settings: SETTINGS,
+			addDirs: ["/w/docs"],
+			workerFloors: FLOORS,
+			logName: "t-1",
+			logDir,
+			env: { FAKE_AGY_LOG: logFile, OMP_WIKI_NOTE_DISABLE: "1" },
+			baseEnv: { HOME: root, PATH: process.env.PATH ?? "/usr/bin:/bin", SLACK_BOT_TOKEN: "xoxb-TEST-0" },
+			startupTimeoutMs: 10_000,
+		});
+	const entries = (): LogEntry[] =>
+		readFileSync(logFile, "utf8")
+			.split("\n")
+			.filter((line) => line !== "")
+			.map((line) => JSON.parse(line) as LogEntry);
+	const spawns = () => entries().filter((entry) => entry.kind === "argv");
+	/** The `content` of every stdin line, in order. */
+	const inputs = () =>
+		entries()
+			.filter((entry) => entry.kind === "in")
+			.map((entry) => (JSON.parse(entry.line ?? "{}") as { message: { content: string } }).message.content);
+	const lastPid = (): number => {
+		const pid = spawns().at(-1)?.pid;
+		if (pid === undefined) throw new Error("no agy child");
+		return pid;
+	};
+	return { root, sessionDir, logDir, make, entries, spawns, inputs, lastPid };
+}
+
+function nextFinal(driver: AgyPrintDriver): Promise<OmpFinal> {
+	const { promise, resolve } = Promise.withResolvers<OmpFinal>();
+	const off = driver.onFinal((final) => {
+		off();
+		resolve(final);
+	});
+	return promise;
+}
+
+/** Prompts `text` and resolves with that turn's final (subscribed before the prompt goes out). */
+async function started(driver: AgyPrintDriver, text: string): Promise<OmpFinal> {
+	const final = nextFinal(driver);
+	await driver.prompt(text);
+	return final;
+}
+
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+const flagOf = (argv: string[] | undefined, name: string): string | undefined => {
+	const at = argv?.indexOf(name) ?? -1;
+	return at === -1 ? undefined : argv?.[at + 1];
+};
+
+test("two turns on one child: floors on the first only, --settings, env, log file, last answer each turn", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const opened = await driver.openSession();
+	expect(opened.resumed).toBe(false);
+	expect(opened.sessionId).toStartWith("fake-");
+	const first = await started(driver, "first task");
+	expect(first).toMatchObject({ status: "completed", text: "REPLY1:first task" });
+	expect(first.usage).toMatchObject({ calls: 1, input: 100, cacheRead: 40, output: 7, contextTokens: 140 });
+	expect(readFileSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE), "utf8")).toBe("REPLY1:first task");
+	const second = await started(driver, "second");
+	expect(second).toMatchObject({ status: "completed", text: "REPLY2:second" });
+	expect(readFileSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE), "utf8")).toBe("REPLY2:second");
+
+	expect(h.spawns()).toHaveLength(1);
+	expect(h.inputs()).toEqual([`${FLOORS}\n\nfirst task`, "second"]);
+	const argv = h.spawns()[0]?.argv;
+	expect(flagOf(argv, "--settings")).toBe(SETTINGS);
+	expect(flagOf(argv, "--model")).toBe("gemini-test");
+	expect(flagOf(argv, "--add-dir")).toBe("/w/docs");
+	expect(argv).toContain("--disable-slash-commands");
+	expect(argv).toContain("--dangerously-skip-permissions");
+	expect(argv).not.toContain("--conversation");
+	expect(flagOf(argv, "--log-file")).toStartWith(join(h.logDir, "cli-task-t-1-"));
+	expect(h.entries().find((entry) => entry.kind === "env")?.env).toEqual({
+		AGY_CLI_DISABLE_AUTO_UPDATE: "1",
+		SSH_TTY: "jabbu-agy-file-auth",
+		OMP_WIKI_NOTE_DISABLE: "1",
+	});
+	await driver.stop();
+});
+
+test("a steer mid-turn waits for the turn's result and goes as the next line of the same opRef", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const events: OmpEvent[] = [];
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => {
+		events.push(event);
+		if (event.type === "message_update") working.resolve();
+	});
+	const final = nextFinal(driver);
+	const opRef = await driver.prompt("@hold");
+	await working.promise;
+	await driver.steer("steered");
+	expect(h.inputs()).toHaveLength(1);
+	expect((await driver.state()).queuedMessageCount).toBe(1);
+	process.kill(h.lastPid(), "SIGUSR1");
+	expect(await final).toMatchObject({ opRef, status: "completed", text: "REPLY2:steered" });
+	expect(h.inputs()).toEqual([`${FLOORS}\n\n@hold`, "steered"]);
+	await driver.stop();
+});
+
+test("stream and tool events reach onEvent; an unknown step kind is logged, not dropped", async () => {
+	const h = harness();
+	const lines: string[] = [];
+	const driver = new AgyPrintDriver({
+		...{ agyExecutable: join(h.root, "bin", "agy"), cwd: h.root, sessionDir: h.sessionDir, model: "m" },
+		...{ settings: SETTINGS, workerFloors: FLOORS, logName: "t-1", logDir: h.logDir, startupTimeoutMs: 10_000 },
+		env: { FAKE_AGY_LOG: join(h.root, "fake.log") },
+		baseEnv: { HOME: h.root, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		log: { debug: () => {}, info: (event) => lines.push(event), warn: () => {}, error: () => {} },
+	});
+	await driver.start();
+	const types: string[] = [];
+	driver.onEvent((event) => types.push(event.type));
+	expect(await started(driver, "@tool")).toMatchObject({ status: "completed", text: "REPLY1:@tool" });
+	expect(types).toEqual(["tool_execution_start", "tool_execution_end", "message_update", "message_update"]);
+	const denied = await started(driver, "@denied");
+	expect(denied.status).toBe("completed");
+	const { entries } = await driver.entriesSince();
+	const results = entries.filter((entry) => entry.message?.role === "toolResult");
+	expect(JSON.stringify(results.at(-1))).toContain("Matches user-configured deny rule");
+	expect(lines).toContain("agy.print.unknown_event");
+	await driver.stop();
+});
+
+test("an error turn ends `error` and the child goes on to the next turn", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	expect(await started(driver, "@error")).toMatchObject({ status: "error", error: "model exploded" });
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY2:after" });
+	expect(h.spawns()).toHaveLength(1);
+	await driver.stop();
+});
+
+test("a quota error ends `agy rate limited (429)` and the driver ends the child itself; the next prompt resumes", async () => {
+	const h = harness();
+	const driver = h.make();
+	const exits: OmpExitInfo[] = [];
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const quota = await started(driver, "@quota");
+	expect(quota.status).toBe("error");
+	expect(quota.error).toStartWith("agy rate limited (429): ");
+	expect(quota.error).toContain("RESOURCE_EXHAUSTED (code 429): Individual quota reached");
+	const first = h.lastPid();
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(first)).toBe(false);
+	expect(h.spawns()).toHaveLength(2);
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toStartWith("fake-");
+	expect(h.inputs().at(-1)).toBe("after"); // same conversation: no floors again
+	const notice = await started(driver, "@notice");
+	expect(notice.error).toStartWith("agy rate limited (429): RESOURCE_EXHAUSTED (code 429)");
+	expect(exits).toEqual([]);
+	await driver.stop();
+});
+
+test("the conversation id is kept and a new driver resumes it with --conversation, without floors", async () => {
+	const h = harness();
+	const one = h.make();
+	await one.start();
+	await started(one, "hello");
+	const id = (await one.state()).sessionId;
+	await one.stop();
+	const pointer = JSON.parse(readFileSync(join(h.sessionDir, "agy-conversation.json"), "utf8"));
+	expect(pointer).toEqual({ conversationId: id });
+	const two = h.make();
+	await two.start();
+	expect(await two.openSession()).toEqual({ resumed: true, sessionId: id });
+	await started(two, "again");
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toBe(id);
+	expect(h.inputs()).toEqual([`${FLOORS}\n\nhello`, "again"]);
+	const logs = h.spawns().map((spawn) => flagOf(spawn.argv, "--log-file"));
+	expect(new Set(logs).size).toBe(2);
+	await two.stop();
+});
+
+test("an unknown conversation: the pointer goes and one new child starts a new conversation with floors", async () => {
+	const h = harness();
+	mkdirSync(h.sessionDir, { recursive: true });
+	writeFileSync(join(h.sessionDir, "agy-conversation.json"), `${JSON.stringify({ conversationId: "lost-123" })}\n`);
+	const driver = h.make();
+	await driver.start();
+	const opened = await driver.openSession();
+	expect(opened.resumed).toBe(false);
+	expect(h.spawns().map((spawn) => flagOf(spawn.argv, "--conversation"))).toEqual(["lost-123", undefined]);
+	expect(await started(driver, "go")).toMatchObject({ status: "completed" });
+	expect(h.inputs()).toEqual([`${FLOORS}\n\ngo`]);
+	const pointer = JSON.parse(readFileSync(join(h.sessionDir, "agy-conversation.json"), "utf8"));
+	expect(pointer.conversationId).toBe(opened.sessionId);
+	await driver.stop();
+});
+
+test("abort ends the turn `aborted` once without a crash; the next prompt restarts on the same conversation", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	const exits: OmpExitInfo[] = [];
+	driver.onFinal((final) => finals.push(final));
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	const held = h.lastPid();
+	await driver.abort();
+	expect(finals.map((final) => final.status)).toEqual(["aborted"]);
+	expect(alive(held)).toBe(false);
+	expect((await driver.state()).idle).toBe(true);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	expect(finals.map((final) => final.status)).toEqual(["aborted", "completed"]);
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toStartWith("fake-");
+	expect(h.inputs().at(-1)).toBe("next");
+	expect(exits).toEqual([]);
+	await driver.stop();
+});
+
+test("the model list is the fixed model the state reports; another model and unknown cursors are refused", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	expect(await driver.availableModels()).toEqual(["agy/gemini-test"]);
+	expect((await driver.state()).model).toBe("agy/gemini-test");
+	expect(await driver.setModel("agy/gemini-test")).toBe("agy/gemini-test");
+	expect(driver.setModel("agy/other")).rejects.toBeInstanceOf(OmpDriverError);
+	expect(driver.entriesSince("no-such")).rejects.toMatchObject({ code: "unknown_since" });
+	await started(driver, "one");
+	const { entries, leafId } = await driver.entriesSince();
+	expect(leafId).toBe(entries.at(-1)?.id ?? null);
+	const after = await driver.entriesSince(entries[0]?.id);
+	expect(after.entries).toHaveLength(entries.length - 1);
+	await driver.stop();
+	expect(existsSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE))).toBe(true);
+});
