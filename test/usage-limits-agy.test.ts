@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ProcessRunner } from "../src/dispatch/omp";
 import { clampPct, collectAgyAccounts, parseAgy } from "../src/dashboard/usage-limits-agy";
+import type { ProcessRunner } from "../src/dispatch/omp";
 
 const ARGV = ["agy", "-p", "/usage"];
 
@@ -49,7 +49,12 @@ describe("parseAgy", () => {
 		expect(Array.isArray(rows)).toBe(true);
 		if (typeof rows === "string") throw new Error(rows);
 		expect(rows).toHaveLength(3);
-		expect(rows[0]).toMatchObject({ label: "gemini", window: "5h", remainingPct: 42, resetsAt: Date.parse("2026-11-26T20:00:00Z") });
+		expect(rows[0]).toMatchObject({
+			label: "gemini",
+			window: "5h",
+			remainingPct: 42,
+			resetsAt: Date.parse("2026-11-26T20:00:00Z"),
+		});
 		expect(rows[1]).toMatchObject({ window: "weekly", remainingPct: 88 });
 		expect(rows[1]?.resetsAt).toBeUndefined();
 		expect(rows[2]).toMatchObject({ window: "other", remainingPct: 0 });
@@ -83,9 +88,13 @@ describe("collectAgyAccounts", () => {
 	test("no order file (or no valid names) means no agy section at all", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "agy-usage-test-"));
 		dirs.push(dir);
-		expect(await collectAgyAccounts(ARGV, dir, undefined, async () => ({ code: 0, stdout: "", timedOut: false }))).toBeUndefined();
+		expect(
+			await collectAgyAccounts(ARGV, dir, undefined, async () => ({ code: 0, stdout: "", timedOut: false })),
+		).toBeUndefined();
 		const onlyBad = accountsDir("# comment\n../evil\na/b\nok-but-no-token\n", {});
-		expect(await collectAgyAccounts(ARGV, onlyBad, undefined, async () => ({ code: 0, stdout: "", timedOut: false }))).toBeUndefined();
+		expect(
+			await collectAgyAccounts(ARGV, onlyBad, undefined, async () => ({ code: 0, stdout: "", timedOut: false })),
+		).toBeUndefined();
 	});
 
 	test("names failing ACCOUNT_NAME or lacking a token file are skipped; duplicates collapse", async () => {
