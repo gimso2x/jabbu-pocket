@@ -225,7 +225,6 @@ export class MonitorScheduler {
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them.
 		const skip = this.#skipReason();
-		if (skip !== FROZEN_SKIP) this.#heldAt.clear();
 		for (const monitor of monitors) {
 			if (!monitor.enabled) continue;
 			try {
@@ -238,6 +237,7 @@ export class MonitorScheduler {
 				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, error: String(error) });
 			}
 		}
+		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
 		summary.dispatched = this.#dispatchReady();
 		return summary;
 	}
@@ -301,8 +301,8 @@ export class MonitorScheduler {
 		// A stored `at` is always a UTC ISO string (`…Z`), so the fallback zone is never consulted.
 		const slotAt = parseAt(at, "UTC");
 		if (slotAt > now) return;
-		if (skip === FROZEN_SKIP && now - slotAt <= CATCHUP_MAX_AGE_MS) {
-			// Not claimed and not disabled: a claimed slot could never fire again, and the one-shot would be lost.
+		if (skip === FROZEN_SKIP) {
+			// Not claimed and not disabled, however old: the freeze delayed it, so it is held to fire once after unfreeze.
 			summary.skippedFrozen += 1;
 			if (!this.#heldAt.has(monitor.id)) {
 				this.#heldAt.add(monitor.id);
@@ -310,7 +310,7 @@ export class MonitorScheduler {
 			}
 			return;
 		}
-		if (now - slotAt > CATCHUP_MAX_AGE_MS) {
+		if (now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
