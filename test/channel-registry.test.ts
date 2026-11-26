@@ -206,3 +206,21 @@ describe("qa50b K-14: button labels and values", () => {
 		expect(received.map((m) => m.buttons)).toEqual([[button], [button]]);
 	});
 });
+
+describe("DiscordChannel message routing memory", () => {
+	test("bounded at 1000: the oldest remembered post is forgotten and its edit re-resolves the destination", async () => {
+		const transport = new FakeDiscordTransport();
+		const channel = new DiscordChannel(transport, { ownerUserId: OWNER });
+		for (let i = 0; i <= 1000; i++) channel.rememberMessage(`m${i}`, DISCORD_THREAD);
+		const editChannel = async (messageId: string): Promise<string> => {
+			await channel.edit(
+				{ platform: "discord", conversationId: DISCORD_CHANNEL, messageId, threadId: "999999999999999999" },
+				{ text: "x" },
+			);
+			const call = transport.calls.filter((c) => c.method === "editMessage").at(-1);
+			return (call as { channelId: string }).channelId;
+		};
+		expect(await editChannel("m1000")).toBe(DISCORD_THREAD);
+		expect(await editChannel("m0")).toBe(DISCORD_CHANNEL);
+	});
+});

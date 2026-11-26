@@ -832,6 +832,35 @@ describe("collectGates", () => {
 		expect(gateState("turns_failing")).toEqual({ state: "closed", detail: "recent=2" });
 	});
 
+	test("recent peer failure notices open turns_failing; quoting or discussing the mark does not", () => {
+		writeStamp(0);
+		const peer = (op: string, head: string) => [
+			op,
+			`${head} 응답 실패(rpc_error) — 다시 요청하거나 직접 검토해 주세요`,
+			now,
+			now - 600_000,
+		];
+		seedDb((db) => {
+			const insert =
+				"INSERT INTO deliveries (origin_key, op_ref, part, thread_ref, body, state, next_at, created_at) VALUES ('discord/ch/300000000000000001/t/1', ?, 0, 't', ?, 'confirmed', ?, ?)";
+			db.run(insert, peer("pf1", "<@222222222222222222> <@111111111111111111>"));
+			db.run(insert, peer("pf2", "{{mention:222222222222222222}}"));
+			db.run(insert, peer("pf3", "<@222222222222222222>"));
+			// Not failure notices: an answer quoting the mark mid-body, a code block about it, a bare mention head.
+			db.run(insert, ["q1", "방금 거기서 응답 실패(rpc_error)가 떴다고 하던데", now, now - 600_000]);
+			db.run(insert, ["q2", "```\n<@222222222222222222> 응답 실패(x)\n```", now, now - 600_000]);
+			db.run(insert, ["q3", "<@222222222222222222> 확인했어", now, now - 600_000]);
+			db.run(insert, [
+				"q4",
+				"<@222222222222222222> 아까 <@111111111111111111> 응답 실패(rpc_error) 봤어?",
+				now,
+				now - 600_000,
+			]);
+			db.run(insert, ["q5", "<@222222222222222222> 확인\n> 응답 실패(500)", now, now - 600_000]);
+		});
+		expect(gateState("turns_failing")).toEqual({ state: "open", detail: "recent=3" });
+	});
+
 	test("inbound_identity_conflicts reports the last 24h and never opens; a ledger without the table reads zero", () => {
 		writeStamp(0);
 		seedDb(() => {});

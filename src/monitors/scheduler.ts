@@ -225,7 +225,6 @@ export class MonitorScheduler {
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them.
 		const skip = this.#skipReason();
-		if (skip !== FROZEN_SKIP) this.#heldAt.clear();
 		for (const monitor of monitors) {
 			if (!monitor.enabled) continue;
 			try {
@@ -238,6 +237,7 @@ export class MonitorScheduler {
 				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, error: String(error) });
 			}
 		}
+		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
 		summary.dispatched = this.#dispatchReady();
 		return summary;
 	}
@@ -249,11 +249,9 @@ export class MonitorScheduler {
 
 	/** A claim made while held is a forced skip (`frozen`), so it counts as held back, not as claimed. */
 	#count(claim: ClaimResult, summary: TickSummary, skip: string | undefined): void {
-		if (skip !== undefined) {
-			if (claim.status !== "skipped_overlap") return;
-			summary.skippedFrozen += 1;
-		} else if (claim.status === "admitted") summary.claimed += 1;
-		else if (claim.status === "skipped_overlap") summary.skippedOverlap += 1;
+		if (skip !== undefined && claim.status === "skipped_overlap") summary.skippedFrozen += 1;
+		else if (skip === undefined && claim.status === "admitted") summary.claimed += 1;
+		else if (skip === undefined && claim.status === "skipped_overlap") summary.skippedOverlap += 1;
 	}
 
 	#claimCron(
@@ -303,8 +301,8 @@ export class MonitorScheduler {
 		// A stored `at` is always a UTC ISO string (`…Z`), so the fallback zone is never consulted.
 		const slotAt = parseAt(at, "UTC");
 		if (slotAt > now) return;
-		if (skip === FROZEN_SKIP && now - slotAt <= CATCHUP_MAX_AGE_MS) {
-			// Not claimed and not disabled: a claimed slot could never fire again, and the one-shot would be lost.
+		if (skip === FROZEN_SKIP) {
+			// Not claimed and not disabled, however old: the freeze delayed it, so it is held to fire once after unfreeze.
 			summary.skippedFrozen += 1;
 			if (!this.#heldAt.has(monitor.id)) {
 				this.#heldAt.add(monitor.id);
@@ -312,7 +310,7 @@ export class MonitorScheduler {
 			}
 			return;
 		}
-		if (now - slotAt > CATCHUP_MAX_AGE_MS) {
+		if (now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -352,13 +350,13 @@ export class MonitorScheduler {
 							? "unmet"
 							: "error";
 					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
-					if (
+					const logIt =
 						result.fired ||
 						outcome !== (store.monitors.getMonitor(monitor.id)?.lastScriptState ?? null) ||
 						result.timedOut ||
 						result.error !== undefined ||
-						result.stderr !== ""
-					) {
+						result.stderr !== "";
+					if (logIt) {
 						log.info("monitor_script", {
 							monitor: monitor.id,
 							fired: result.fired,
@@ -372,6 +370,7 @@ export class MonitorScheduler {
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
+						ranTrigger: monitor.trigger,
 						outcome,
 						...(outcome === "error"
 							? { error: result.error ?? (result.timedOut ? "timed out" : "killed before exiting") }

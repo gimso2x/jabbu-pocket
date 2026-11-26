@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { failureNoticeBody } from "../channel/failure-notice";
 import type { JabbuConfig } from "../config";
 import { isAutonomousRow } from "../core/mailbox";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
@@ -355,8 +356,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 		}
 	}
 
-	// Filesystem-based like backup_age, so it reports even when the ledger is unreadable. No stamp at all means no
-	// daemon has ever swept here (fresh install): unknown, the same "cannot judge" stance as db=missing, not health.
+	// Filesystem-based like backup_age: reports even with an unreadable ledger. No stamp ever (fresh install) is unknown, the "cannot judge" stance, not health.
 	const heartbeat = readSweepHeartbeat(homeDir);
 	if (heartbeat === undefined) {
 		gates.push(unknownGate("sweep_stalled", "stamp=missing"));
@@ -513,8 +513,7 @@ export function collectGates(options: GatesOptions): Gate[] {
 		);
 		ledger.push(gate("deliveries_overdue", overdue > 0, `overdue=${overdue}`));
 
-		// The owner's manual path exists (`jabbu-pocket deliveries`), so a held row that even a restart can no longer requeue
-		// (older than the 24h freshness window) is a stuck one, not a state that resolves itself.
+		// The owner's manual path exists (`jabbu-pocket deliveries`): a held row past the 24h freshness window (no restart requeue) is stuck, not self-resolving.
 		const stuckAmbiguous = columnExists(db, "deliveries", "created_at")
 			? scalar(
 					db,
@@ -583,18 +582,18 @@ export function collectGates(options: GatesOptions): Gate[] {
 		ledger.push(monitorsStalled(db, heartbeat, now, freeze !== undefined, readUnfrozenAt(homeDir)));
 
 		// Monitor failures never write a `[turn failed]` delivery (their notices are `⏰ …`), so this counts chat turns
-		// only. The columns are guarded like `last_event_at`: a pre-migration ledger must stay readable, never throw.
+		// only. Uses `failureNoticeBody` directly (single source of truth for owner + peer shapes). Columns guarded as above.
 		const failedTurns =
 			columnExists(db, "deliveries", "body") && columnExists(db, "deliveries", "created_at")
-				? scalar(
-						db,
-						`SELECT COUNT(*) AS n FROM deliveries WHERE body LIKE '[turn failed]%' AND created_at > ${now - TURNS_FAILING_WINDOW_MS}`,
-					)
+				? (
+						db.query(`SELECT body FROM deliveries WHERE created_at > ${now - TURNS_FAILING_WINDOW_MS}`).all() as Array<{
+							body: string;
+						}>
+					).filter((row) => failureNoticeBody(row.body)).length
 				: 0;
 		ledger.push(gate("turns_failing", failedTurns >= TURNS_FAILING_THRESHOLD, `recent=${failedTurns}`));
 
-		// Only reported, never open: a re-received id keeps its first row, so nothing is stuck. A ledger from before
-		// the table reads as zero.
+		// Only reported, never open: a re-received id keeps its first row, so nothing is stuck. A pre-table ledger reads zero.
 		const conflicts = tableExists(db, "inbound_conflicts")
 			? scalar(db, `SELECT COUNT(*) AS n FROM inbound_conflicts WHERE created_at > ${now - INBOUND_CONFLICT_WINDOW_MS}`)
 			: 0;
