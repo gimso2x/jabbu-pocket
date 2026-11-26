@@ -4,10 +4,11 @@ import type { Logger } from "../log";
 import type { Store } from "../store/db";
 import type { InboundRow } from "../store/db-rows";
 import type { UncertainReason } from "../store/transitions";
+import { parkUncertainNotified } from "./mailbox-uncertain";
 
 /** The slice of the mailbox's deps the park helpers read (`store`, `log`, `originKey`). */
 export interface ParkDeps {
-	store: Pick<Store, "markDispatched" | "markUncertain">;
+	store: Pick<Store, "markDispatched" | "markUncertain" | "recordAnswer">;
 	log: Logger;
 	originKey: string;
 }
@@ -18,7 +19,7 @@ export interface ParkDeps {
  * later rows still go out; the owner closes or retries it with `/queue`.
  */
 export function parkUncertain(deps: ParkDeps, row: InboundRow, reason: UncertainReason, error?: unknown): boolean {
-	deps.store.markUncertain(row.platformMessageId, reason);
+	parkUncertainNotified(deps.store, row, reason);
 	deps.log.warn("inbound_uncertain", {
 		origin: deps.originKey,
 		id: row.platformMessageId,
