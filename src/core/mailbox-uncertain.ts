@@ -2,8 +2,8 @@
 // that never comes: the row showed only in `/queue` or on the dashboard, and nothing said so in the thread. The
 // notice is one delivery per row (op `uncertain:<id>`), so a repeated park cannot post it twice; its text mirrors
 // the `/queue` section and carries the retry reply's double-answer warning, so the owner acts with full context.
-import { previewLine } from "../dashboard/preview-line";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
+import { redact } from "../redact";
 import type { Store } from "../store/db";
 
 /** The store slice the uncertain notice needs (kept narrow so tests stub it cheaply). */
@@ -22,10 +22,17 @@ export const UNCERTAIN_REASON_TEXT: Record<UncertainReason, string> = {
 	send_interrupted: "전송 중 재시작·중단",
 };
 
+/** One masked line of the held request: secrets redacted, whitespace collapsed, cut to 80 chars. Kept local because
+ * core must not import the dashboard's `previewLine` (the layer gate rejects the edge). */
+const noticePreview = (text: string): string => {
+	const line = redact(text).replace(/\s+/g, " ").trim();
+	return [...line].slice(0, 80).join("");
+};
+
 /** What was held, why, and the `/queue` retry/close path (`recordAnswer` redacts and stores the body). */
 export function uncertainNoticeText(row: InboundRow, reason: UncertainReason): string {
 	return (
-		`⚠️ 전달 불확실(${UNCERTAIN_REASON_TEXT[reason]}) — "${previewLine(row.textRef)}"은(는) 이미 처리됐을 수 있어 ` +
+		`⚠️ 전달 불확실(${UNCERTAIN_REASON_TEXT[reason]}) — "${noticePreview(row.textRef)}"은(는) 이미 처리됐을 수 있어 ` +
 		`자동으로 다시 보내지 않습니다. \`${COMMAND_TEXT.queue}\`에서 \`retry <번호>\`(한 번 다시 보내기 · 이미 처리됐다면 ` +
 		`답이 두 번 나올 수 있습니다) 또는 \`close <번호>\`(다시 보내지 않고 닫기)를 고르세요.`
 	);
