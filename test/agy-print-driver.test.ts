@@ -7,7 +7,7 @@ import { OmpDriverError, type OmpEvent, type OmpExitInfo, type OmpFinal } from "
 import { agySettings } from "../src/tasks/worker-tier";
 
 const tempDirs: string[] = [];
-const FAKE_SCRIPT = join(import.meta.dir, "helpers", "fake-agy-print.ts");
+const FAKE_SCRIPT = join(import.meta.dir, "fixtures", "fake-agy-print-child.ts");
 const FLOORS = "FLOORS-TEST";
 const SETTINGS = agySettings(["/w/tree", "/w/docs"], ["/w/secrets"]);
 

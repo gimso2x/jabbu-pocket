@@ -29,7 +29,7 @@ const QUIET_STEPS: Record<string, true> = { user_input: true, system_message: tr
  * `model`: the agy model id fixed at registration. `settings`: `--settings` JSON (`agySettings()`). `addDirs`: `--add-dir`
  * besides `cwd`. `workerFloors`: ahead of the first prompt of every new conversation (agy has no system prompt flag).
  * Each child logs to its own `<logDir>/cli-task-<logName>-<ms>-<pid>-<n>.log` (the account switch timer reads the first
- * auth line of each file); `logDir` defaults to `~/.gemini/antigravity-cli/log`. `startupTimeoutMs`: wait for `init`.
+ * auth line of each file); `logDir` defaults to the child HOME's `.gemini/antigravity-cli/log`. `startupTimeoutMs`: wait for `init`.
  */
 export interface AgyPrintDriverOptions extends Pick<Switch.AgyOmpDriverOptions, SharedOption | "startupTimeoutMs"> {
 	model: string;
@@ -160,7 +160,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	}
 	#refuse = (message: string) => new OmpDriverError("rpc_error", message);
 	#model = () => `agy/${this.#options.model}`;
-	#env = () => ({ ...buildChildEnv(this.#options.env, this.#options.baseEnv), ...AGY_ENV });
+	#env = (): Record<string, string> => ({ ...buildChildEnv(this.#options.env, this.#options.baseEnv), ...AGY_ENV });
 	async #rebind(conversationId: string | undefined): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
 		if (conversationId === undefined) clearAgyPointer(this.#pointerPath);
@@ -194,7 +194,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	async #spawn(resume: string | undefined): Promise<string> {
 		const { log, originKey, ...options } = this.#options;
 		const env = this.#env();
-		const logDir = options.logDir ?? join(homedir(), ".gemini", "antigravity-cli", "log");
+		const logDir = options.logDir ?? join(env.HOME ?? homedir(), ".gemini", "antigravity-cli", "log");
 		mkdirSync(logDir, { recursive: true });
 		const logFile = join(logDir, `cli-task-${options.logName}-${Date.now()}-${process.pid}-${++this.#spawns}.log`);
 		const args = [...STREAM_ARGS, "--settings", options.settings, "--disable-slash-commands", "--log-file", logFile];

@@ -3,8 +3,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DaemonContext } from "../src/daemon/daemon-context";
+import { taskMailboxPort } from "../src/daemon/daemon-task-resume";
 import { buildDispatchTool } from "../src/dispatch/tool";
 import { isTaskOrigin, taskOriginKey } from "../src/lanes/status";
+import { AGY_LAST_ANSWER_FILE } from "../src/omp/agy-print-driver";
 import { TaskLedger } from "../src/tasks/ledger";
 import { TASK_SCHEMA } from "../src/tasks/ledger-schema";
 import { headlessRuntime, runtimeFor } from "../src/tasks/runtime";
@@ -155,6 +158,24 @@ describe("headlessRuntime (AC-2)", () => {
 		expect(read.output).not.toContain(token);
 	});
 
+	test("AC-6: an agy row reads the print driver's last answer from the session dir, with no driver alive", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-headless-agy-"));
+		dirs.push(dir);
+		const token = ["xox", "b-TEST-0-fakefake"].join("");
+		writeFileSync(join(dir, AGY_LAST_ANSWER_FILE), `PROGRESS S2 끝 ${token}`);
+		// The daemon's real port: the store's origin row only, no router (an idle-stopped origin has no driver).
+		const origins = new Map([[origin, { sessionDir: dir }]]);
+		const ctx = { store: { getOrigin: (key: string) => origins.get(key) } } as unknown as DaemonContext;
+		const port = taskMailboxPort(ctx);
+		const agyRow = { ...row, workerModel: "agy:gemini-4-hydrogen-high" };
+		const read = await headlessRuntime(port).read(agyRow);
+		expect(read.ok).toBe(true);
+		expect(read.output).toContain("PROGRESS S2 끝");
+		expect(read.output).not.toContain(token);
+		origins.set(origin, { sessionDir: join(dir, "empty") });
+		expect(await headlessRuntime(port).read(agyRow)).toEqual({ ok: true, output: "" });
+	});
+
 	test("interrupt pauses the turn and says whether it stopped; close lets the child end without cutting the turn", async () => {
 		const mailbox = fakeMailbox();
 		const runtime = headlessRuntime(mailbox.port);
@@ -176,5 +197,28 @@ describe("headlessRuntime (AC-2)", () => {
 		expect(headless).toBeDefined();
 		const herdrRow = { ...row, runtime: "herdr" as const };
 		expect(runtimeFor(herdrRow, options)).toBeDefined();
+	});
+
+	test("AC-7: a herdr agy row's status, follow-up and close go to herdr even with the headless port", async () => {
+		const mailbox = fakeMailbox();
+		const calls: string[] = [];
+		const run = async (cmd: string[]) => {
+			calls.push(cmd.slice(1, 3).join(" "));
+			return {
+				code: 0,
+				stdout: JSON.stringify({ result: { agents: [{ name: row.agent, status: "idle" }] } }),
+				timedOut: false,
+			};
+		};
+		const agyRow = { ...row, runtime: "herdr" as const, workerModel: "agy:gemini-4-hydrogen-high" };
+		const runtime = runtimeFor(agyRow, { herdr: () => ({ run }), headless: mailbox.port });
+		await runtime.status(agyRow);
+		await runtime.prompt(agyRow, "다음");
+		await runtime.close(agyRow);
+		expect(calls.some((call) => call.startsWith("agent"))).toBe(true);
+		expect(calls.length).toBeGreaterThanOrEqual(3);
+		expect(mailbox.calls.routed).toEqual([]);
+		expect(mailbox.calls.stopped).toEqual([]);
+		expect(mailbox.calls.ensured).toEqual([]);
 	});
 });

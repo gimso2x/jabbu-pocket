@@ -288,7 +288,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					host: row.host,
 					agy: deps.workerAgy?.(),
 					busy: agyOccupant(taskDeps.ledger, row.taskId),
-					herdr: herdrOn && row.runtime === "herdr", // a headless row is never turned into an agy one
+					runtime: row.runtime === "herdr" ? herdrOn : taskDeps.headless !== undefined, // the row keeps its runtime
 				})
 			: omp;
 	}
@@ -408,7 +408,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 							host: host ?? null,
 							agy: deps.workerAgy?.(),
 							busy: agyOccupant(taskDeps.ledger),
-							herdr: herdrOn,
+							runtime: herdrOn || taskDeps.headless !== undefined,
 						})
 					: tier;
 			const started = await startTask(taskDeps, {

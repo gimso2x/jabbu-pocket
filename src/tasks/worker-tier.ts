@@ -133,13 +133,13 @@ interface AgyAsk {
 	host: string | null;
 	agy: WorkerAgyConfig | undefined;
 	busy: string | undefined;
-	herdr: boolean; // herdr is configured: an agy worker is a herdr TUI, never headless
+	runtime: boolean; // a worker runtime for the row: the daemon's headless port (print driver) or herdr
 }
 
 /** Why a requested agy worker was not given; `undefined` when it was. */
 function agyRefusal(input: AgyAsk): string | undefined {
 	if (input.agy === undefined) return "설정 workerAgy 없음";
-	if (!input.herdr) return "herdr 없음";
+	if (!input.runtime) return "herdr·헤드리스 포트 없음";
 	if (input.risk !== "L0" && input.risk !== "L1") return `위험 ${input.risk}`;
 	if (input.host !== null) return `host ${input.host}`;
 	if (input.busy !== undefined) return `${input.busy} 점유 중`;
@@ -148,7 +148,7 @@ function agyRefusal(input: AgyAsk): string | undefined {
 
 /**
  * The worker of a new task that asked for agy (`taskSpec.worker: "agy"`): only a local L0·L1 task, one at a time
- * (`busy`), with `workerAgy` and herdr set, gets `agy:<model>` on low; outside that the omp worker, with a line why.
+ * (`busy`), with `workerAgy` and a runtime (headless port or herdr), gets `agy:<model>` on low; outside that the omp worker, with a line why.
  */
 export function resolveAgyWorker(omp: WorkerTier, input: AgyAsk): WorkerTier {
 	const refusal = agyRefusal(input);

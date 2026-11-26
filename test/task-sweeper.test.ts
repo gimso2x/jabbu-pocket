@@ -161,7 +161,7 @@ function rig(
 			| "landsViaPr"
 		>
 	> = {},
-	task: Partial<Pick<TaskRow, "host" | "risk">> & { workerModel?: string } = {},
+	task: Partial<Pick<TaskRow, "host" | "risk" | "runtime">> & { workerModel?: string } = {},
 ): Rig {
 	const clock = { ms: T0 };
 	const db = new Database(":memory:", { strict: true });
@@ -174,6 +174,7 @@ function rig(
 		host: task.host ?? null,
 		repo: "/r/repo",
 		acceptance: acceptanceItems(["하나", "둘"]),
+		...(task.runtime === undefined ? {} : { runtime: task.runtime }),
 		...(task.workerModel === undefined
 			? {}
 			: { worker: { tier: "low" as const, tierReason: "기본값", model: task.workerModel } }),
@@ -3128,6 +3129,28 @@ describe("agy worker limit", () => {
 		}
 		expect(unread.infos.some((entry) => entry.event === "task_agy_screen_read_failed")).toBe(true);
 		expect(omp.readCalls.count).toBe(0);
+	});
+
+	test("AC-5: a headless agy row's screen is never read; its 429 turn end blocks it with one card and no herdr word", async () => {
+		const r = rig({}, { risk: "L0", runtime: "headless", workerModel: "agy:gemini-4-hydrogen-high" });
+		r.screen.value = { ok: true, output: LIMIT_SCREEN };
+		await r.sweeper.sweep();
+		expect(r.readCalls.count).toBe(0);
+		expect(r.ledger.require(r.row.taskId).status).toBe("working");
+		const error = "agy rate limited (429): RESOURCE_EXHAUSTED (code 429): Individual quota reached.";
+		await r.sweeper.blockOnAgyLimit(r.row, error);
+		await r.sweeper.blockOnAgyLimit(r.row, error);
+		expect(r.ledger.require(r.row.taskId).status).toBe("blocked");
+		const cards = texts(r).filter((text) => text.includes("agy 한도"));
+		expect(cards).toHaveLength(1);
+		expect(cards[0]).toContain("헤드리스 agy 워커");
+		expect(cards[0]).not.toContain("herdr");
+		expect(cards[0]).toContain("RESOURCE_EXHAUSTED");
+		const reminded = r.reminders.length;
+		r.clock.ms += 120 * MIN;
+		await r.sweeper.sweep();
+		expect(r.reminders).toHaveLength(reminded);
+		expect(r.ledger.require(r.row.taskId).status).toBe("blocked");
 	});
 });
 

@@ -27,7 +27,6 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { MonitorScheduler } from "../monitors/scheduler";
 import { latestRotationContext } from "../omp/agy-quota";
 import type { OmpDialogAnswerer, OmpSessionDriver } from "../omp/driver";
-import type { RpcOmpDriver } from "../omp/rpc-driver";
 import {
 	applyPathEnv,
 	isExecutableFile,
@@ -83,7 +82,7 @@ import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
 import { GateSweep, PendingDispatchSweep } from "./daemon-sweeps";
 import { DaemonTaskLanding } from "./daemon-task-land";
 import { ingestOwnerText } from "./daemon-task-land-entry";
-import { type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
+import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
@@ -253,8 +252,8 @@ export class Daemon {
 		return cwdFor(this.#ctx, originKey);
 	}
 
-	/** The child of a [TASK] worker origin (`driverFactory`): always the headless omp RPC driver. */
-	taskDriver(originKey: string, sessionDir: string, rpcEnv: TaskRpcEnv): RpcOmpDriver {
+	/** The child of a [TASK] worker origin (`driverFactory`): the agy print driver for an agy row, else omp RPC. */
+	taskDriver(originKey: string, sessionDir: string, rpcEnv: TaskRpcEnv): OmpSessionDriver {
 		return taskDriver(this.#ctx, originKey, sessionDir, rpcEnv);
 	}
 
@@ -508,7 +507,10 @@ export class Daemon {
 			launchRefusal: (originKey, driver) =>
 				isLaneOrigin(originKey) ? this.#lanes?.launchRefusal(originKey, driver) : undefined,
 			onLaunchRefused: (originKey, reason) => this.#lanes?.failLaunch(originKey, reason) ?? Promise.resolve(),
-			onTurnSettled: (info) => this.#approval.dropInput(info.originKey, "turn_ended"),
+			onTurnSettled: (info) => {
+				this.#approval.dropInput(info.originKey, "turn_ended");
+				noteAgyTaskLimit(this.#ctx, info); // a headless agy 429: blocked + one card, in the background
+			},
 			onStallEscalate: (info) => {
 				const owner = ownerTarget(this.#ctx, "stall");
 				void owner?.adapter.postNotice(owner.channel, formatStallNotice(info));
@@ -892,9 +894,8 @@ export class Daemon {
 	}
 
 	/**
-	 * `!brief`: the same status the page shows, drawn as one PNG and uploaded to the
-	 * asking thread — no model call. The snapshot is assembled the way the dashboard CLI assembles it, except that the
-	 * daemon answers its own `status` op instead of calling its socket, and no herdr board is started here.
+	 * `!brief`: the status the page shows, as one PNG uploaded to the asking thread — no model call. Assembled like the
+	 * dashboard CLI's snapshot, except the daemon answers its own `status` op and no herdr board is started here.
 	 */
 	async #brief(originKey: string, threadRef: string): Promise<void> {
 		const store = this.#store;
@@ -1269,9 +1270,8 @@ export class Daemon {
 	}
 
 	/**
-	 * IPC `notify` (`apply --report-plain`): one bot post in `thread` (or at the top
-	 * level) of a report origin, put on the delivery ledger like an answer under `notify:<stamp>` — no inbound row, no
-	 * turn, no omp session. The same stamp again is a no-op.
+	 * IPC `notify` (`apply --report-plain`): one bot post in `thread` (or at the top level) of a report origin, put on the
+	 * delivery ledger like an answer under `notify:<stamp>` — no inbound row, no turn, no omp session; a same stamp no-ops.
 	 */
 	notify(request: {
 		origin: string;

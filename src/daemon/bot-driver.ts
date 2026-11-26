@@ -45,7 +45,7 @@ export interface BotDriverFactoryDeps {
 export function createBotDriverFactory(deps: BotDriverFactoryDeps): DriverFactory {
 	return (origin: string, sessionDir: string): OmpSessionDriver => {
 		const config = deps.getConfig();
-		if (isTaskOrigin(origin)) return deps.taskDriver(origin, sessionDir, deps.botRpcEnv(config.ompProfile)); // never agy
+		if (isTaskOrigin(origin)) return deps.taskDriver(origin, sessionDir, deps.botRpcEnv(config.ompProfile)); // the row picks it
 		const omp = config.agent !== "agy";
 		const overlayConfig = config.ompConfigOverlay;
 		const answerDialog = omp ? deps.answerDialogsFor(origin) : undefined;
