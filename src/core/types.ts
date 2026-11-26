@@ -67,7 +67,7 @@ export const PEER_FAILURE_MARK = "응답 실패(";
 
 /** Ledger op refs of chat commands, bookkeeping answers and refused launches: not a prompt that reached omp. */
 export const COMMAND_OP_REF = new RegExp(
-	`^(failed|lane|task|home|purpose|notify|refused|${(Object.keys(COMMAND_TEXT) as CommandKind[]).join("|")}):`,
+	`^(failed|lane|task|home|purpose|notify|refused|uncertain|${(Object.keys(COMMAND_TEXT) as CommandKind[]).join("|")}):`,
 );
 
 /**
