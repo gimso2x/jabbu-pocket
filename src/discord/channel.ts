@@ -38,6 +38,7 @@ const DM_TYPES: ReadonlySet<number> = new Set([1, 3]);
 const ROW_BUTTONS = 5;
 const LABEL_MAX = 80;
 const CUSTOM_ID_MAX = 100;
+const MESSAGE_CHANNELS_MAX = 1000; // posts remembered for edit routing; bounded, oldest forgotten first
 const BUTTON_STYLE = { primary: 1, danger: 4 } as const;
 /** SECONDARY: a button without a style. */
 const DEFAULT_STYLE = 2;
@@ -153,6 +154,8 @@ export class DiscordChannel implements ChannelPort {
 	/** Records the channel a message is in (a click names it), so later edits of that message go there. */
 	rememberMessage(messageId: string, channelId: string): void {
 		this.#messageChannels.set(messageId, channelId);
+		const oldest = this.#messageChannels.keys().next().value;
+		if (this.#messageChannels.size > MESSAGE_CHANNELS_MAX && oldest !== undefined) this.#messageChannels.delete(oldest);
 	}
 
 	/** Replaces the stored values of `messageId`'s buttons with those of `buttons` (none: the keys go away). */
@@ -161,9 +164,8 @@ export class DiscordChannel implements ChannelPort {
 		if (ledger === undefined) return;
 		const prefix = buttonKeyPrefix(messageId);
 		for (const key of ledger.listCursorKeys(prefix)) ledger.deleteCursor(key);
-		for (const button of buttons) {
+		for (const button of buttons)
 			if (button.value !== undefined) ledger.setCursor(`${prefix}${button.actionId}`, button.value);
-		}
 	}
 
 	/** Records what the adapter learnt without asking (an inbound DM, a thread it started). */
@@ -181,15 +183,14 @@ export class DiscordChannel implements ChannelPort {
 		const channel = this.#channels.get(conversationId) ?? undefined;
 		const thread =
 			threadId === undefined || threadId === TOP_LEVEL_TS ? undefined : (this.#channels.get(threadId) ?? undefined);
-		const channelName = channel?.name;
-		const topic = channel?.topic;
-		const threadName = thread !== undefined && THREAD_TYPES.has(thread.type) ? thread.name : undefined;
-		if (channelName === undefined && topic === undefined && threadName === undefined) return undefined;
-		return {
-			...(channelName === undefined ? {} : { channelName }),
-			...(topic === undefined ? {} : { topic }),
-			...(threadName === undefined ? {} : { threadName }),
+		const context: ConversationContext = {
+			...(channel?.name === undefined ? {} : { channelName: channel.name }),
+			...(channel?.topic === undefined ? {} : { topic: channel.topic }),
+			...(thread !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
 		};
+		return context.channelName === undefined && context.topic === undefined && context.threadName === undefined
+			? undefined
+			: context;
 	}
 
 	/** The channel behind `id`, cached; `undefined` on 404 (cached too unless `remember404` is false). Other errors throw. */
@@ -211,8 +212,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Whether `conversationId` is known to be a DM (learnt from an inbound message or a lookup). */
 	isDirect(conversationId: string): boolean {
-		const info = this.#channels.get(conversationId);
-		return info !== undefined && info !== null && DM_TYPES.has(info.type);
+		return DM_TYPES.has(this.#channels.get(conversationId)?.type ?? -1);
 	}
 
 	/** Where a post for `<conversationId>:<threadId>` goes: no thread (or `-`) → the channel; a thread → it; else a reply. */
@@ -231,8 +231,8 @@ export class DiscordChannel implements ChannelPort {
 	async #messageChannel(ref: MessageRef): Promise<string> {
 		const known = this.#messageChannels.get(ref.messageId);
 		if (known !== undefined) return known;
-		if (ref.threadId === undefined || ref.threadId === ref.messageId) return ref.conversationId;
-		return (await this.destination(ref.conversationId, ref.threadId)).channelId;
+		const plain = ref.threadId === undefined || ref.threadId === ref.messageId;
+		return plain ? ref.conversationId : (await this.destination(ref.conversationId, ref.threadId)).channelId;
 	}
 
 	/** No `@everyone`, role or user pings from content; only a mention of the owner or a peer bot notifies that user. */
@@ -256,7 +256,7 @@ export class DiscordChannel implements ChannelPort {
 			...(embeds === undefined ? {} : { embeds }),
 			...(components === undefined ? {} : { components }),
 		});
-		this.#messageChannels.set(id, destination.channelId);
+		this.rememberMessage(id, destination.channelId);
 		if (buttons.length > 0) this.#storeButtonValues(id, buttons);
 		return {
 			platform: "discord",
