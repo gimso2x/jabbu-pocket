@@ -105,6 +105,28 @@ function start(
 				...(body === undefined ? {} : { body: JSON.stringify(body) }),
 			});
 		},
+		/** POST with a streamed body (chunked, no Content-Length): the cap must be enforced while reading. */
+		async postStream(path: string, body: string): Promise<Response> {
+			const token = await this.csrf();
+			const stream = new ReadableStream({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode(body));
+					controller.close();
+				},
+			});
+			return fetch(`${base}${path}`, {
+				method: "POST",
+				headers: {
+					...auth,
+					"sec-fetch-site": "same-origin",
+					cookie: `jabbu_csrf=${token}`,
+					"x-jabbu-csrf": token,
+					"content-type": "application/json",
+				},
+				body: stream,
+				duplex: "half",
+			});
+		},
 	};
 }
 
@@ -196,6 +218,24 @@ describe("dashboard 작업 내역: POST api/web/task/<id>/followup|pause|resume"
 		});
 		expect(crossSite.status).toBe(403);
 		expect(app.calls).toEqual([]);
+	});
+
+	test("a POST body past 64KiB is 413 whether the length is declared or streamed — the daemon is never called", async () => {
+		const app = start();
+		const big = JSON.stringify({ text: "x".repeat(70 * 1024) });
+		// Declared length: rejected before the body is read.
+		const declared = await app.post(`/api/web/task/${TASK}/followup`, { text: "x".repeat(70 * 1024) });
+		expect(declared.status).toBe(413);
+		expect(await declared.json()).toEqual({ error: "body_too_large" });
+		// Streamed (no Content-Length): the cap is enforced while reading, chunk by chunk.
+		const streamed = await app.postStream(`/api/web/task/${TASK}/followup`, big);
+		expect(streamed.status).toBe(413);
+		expect(await streamed.json()).toEqual({ error: "body_too_large" });
+		expect(app.calls).toEqual([]);
+		// Just under the cap still goes through.
+		const ok = await app.post(`/api/web/task/${TASK}/followup`, { text: "x".repeat(60 * 1024) });
+		expect(ok.status).toBe(200);
+		expect(app.calls).toHaveLength(1);
 	});
 
 	test("AC-3: a peer bot's TASK is refused invalid_bot 400 (body or query), the main bot named explicitly passes", async () => {
