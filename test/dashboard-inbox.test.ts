@@ -274,7 +274,6 @@ describe("dashboard inbox", () => {
 		for (const [view, label, count] of [
 			["inbox", "인박스", 2],
 			["turns", "턴", 1],
-			["lanes", "레인", 0],
 			["approvals", "승인 대기", 1],
 			["monitors", "모니터", 0],
 			["system", "시스템", 0],
@@ -283,6 +282,31 @@ describe("dashboard inbox", () => {
 				new RegExp(`data-view="${view}"[^>]*><span>${label}</span><span class="nav-count[^"]*">${count}</span>`),
 			);
 		}
+		expect(nav).not.toContain('data-view="lanes"');
+		expect(renderDashboardMain(SNAPSHOT, BOARD, NOW, { view: "lanes" })).toContain('data-view="lanes"');
+		expect(
+			renderDashboardMain(
+				{
+					...SNAPSHOT,
+					lanes: {
+						ok: true,
+						items: [
+							{
+								name: "l1",
+								title: "레인",
+								originKey: "discord/dm/1",
+								status: "working",
+								cwd: "/w",
+								updatedAt: "2026-11-04T09:00:00+09:00",
+								uncertainCount: 0,
+							},
+						],
+					},
+				},
+				BOARD,
+				NOW,
+			),
+		).toContain('data-view="lanes"');
 		// The one alert is a record, not an open gate: the alerts item carries no number.
 		expect(nav).toMatch(/data-view="alerts"[^>]*><span>알림<\/span><svg/);
 		// Without a board: the blocked TASK and the TASK in review are the owner's; the working one is 진행 중.

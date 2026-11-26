@@ -724,10 +724,16 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 		}
 	}
 	if (view === "alerts" && s.alerts.ok) {
-		const alert = s.alerts.items.find((item) => String(item.incidentId) === id);
+		const alert = s.alerts.items.find(
+			(item) =>
+				String(item.incidentId) === id || (item.install !== undefined && `${item.install}:${item.incidentId}` === id),
+		);
 		if (alert) {
 			const text = alertText(alert.scope);
-			const gate = text.gate === undefined || !s.gates.ok ? undefined : s.gates.items.find((g) => g.name === text.gate);
+			const gate =
+				alert.install !== undefined || text.gate === undefined || !s.gates.ok
+					? undefined
+					: s.gates.items.find((g) => g.name === text.gate);
 			const state =
 				alert.gateState === "open"
 					? "지금 열림"
@@ -737,6 +743,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 							? "상태 모름"
 							: "기록만 남음";
 			const rows: Array<[string, string]> = [
+				...(alert.install === undefined ? [] : [["봇", esc(alert.install)] as [string, string]]),
 				["상태", `${esc(state)} · 기록 ${esc(alert.status)}`],
 				["할 일", esc(text.todo).replace(/`([^`]+)`/g, "<code>$1</code>")],
 				["범위", `<code>${esc(alert.scope)}</code>`],
