@@ -61,7 +61,13 @@ class QueuedAbortDriver extends FakeOmpDriver {
 		const queued = this.steersQueued;
 		this.steersQueued = 0;
 		const error = queued === 0 ? "cancelled" : `cancelled (steer ${queued}건 미전달)`;
-		this.#emit({ opRef: this.lastOpRef ?? "", status: "aborted", text: "", error });
+		this.#emit({
+			opRef: this.lastOpRef ?? "",
+			status: "aborted",
+			text: "",
+			error,
+			...(queued === 0 ? {} : { droppedSteers: queued }),
+		});
 	}
 	/** A provider-side failure (a 429): the turn ends `error` with the undelivered-steer note appended. */
 	failTurn(error: string): void {
@@ -140,7 +146,7 @@ describe("mailbox: owner visibility of the undelivered-steer note", () => {
 		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(2); // no duplicate notice
 	});
 
-	test("owner !stop with a steer still queued: the note is masked, the waiting-row count skips the steer, no failure notice", async () => {
+	test("owner !stop counts the still-queued steer in its answer, apart from the waiting rows, with no failure notice", async () => {
 		const mailbox = router.mailbox(ORIGIN);
 		const lead = msg("긴 작업");
 		const steer = msg("보충 지시");
@@ -155,15 +161,34 @@ describe("mailbox: owner visibility of the undelivered-steer note", () => {
 		await mailbox.sweepIdle(); // runs the driver's abort final queued behind the stop
 		// The driver did report the undelivered steer…
 		expect(driver.emitted).toEqual([
-			{ opRef: driver.lastOpRef ?? "", status: "aborted", text: "", error: "cancelled (steer 1건 미전달)" },
+			{
+				opRef: driver.lastOpRef ?? "",
+				status: "aborted",
+				text: "",
+				error: "cancelled (steer 1건 미전달)",
+				droppedSteers: 1,
+			},
 		]);
-		// …but the mailbox had already settled the turn with its own owner-stop final, so that final is ignored…
+		// …and the mailbox still settles the turn with its own owner-stop final (the driver's final is ignored)…
 		expect(logLines.some((line) => line.includes("final_ignored"))).toBe(true);
-		// …and the owner hears only the stop answer: the waiting row is counted, the steered row leaves no trace.
+		// …but its stop answer now counts the undelivered steer too, apart from the waiting rows.
 		expect(store.listDeliveries({ originKey: ORIGIN }).map((d) => d.body)).toEqual([
-			`${OWNER_STOPPED_TEXT} 대기 1개를 취소했습니다.`,
+			`${OWNER_STOPPED_TEXT} 대기 1개를 취소했습니다. 아직 모델에 전달되지 않은 steer 1건도 취소했습니다.`,
 		]);
 		expect(store.getInbound(steer.platformMessageId)?.state).toBe("discarded");
+	});
+
+	test("a driver with abortAndClearQueue (real omp shape): the plain stop answer, no steer count", async () => {
+		const mailbox = router.mailbox(ORIGIN);
+		await router.route(msg("긴 작업"));
+		await router.route(msg("보충 지시"));
+		const driver = drivers[0] as QueuedAbortDriver;
+		driver.abortAndClearQueue = FakeOmpDriver.prototype.abortAndClearQueue.bind(driver);
+		await router.route(msg("!stop"));
+		await mailbox.sweepIdle();
+		expect(driver.calls).toContain("abortAndClearQueue");
+		expect(driver.calls).not.toContain("abort");
+		expect(store.listDeliveries({ originKey: ORIGIN }).map((d) => d.body)).toEqual([OWNER_STOPPED_TEXT]);
 	});
 
 	test("owner !stop with nothing queued: a bare cancelled, no note anywhere", async () => {
