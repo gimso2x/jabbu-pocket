@@ -2111,4 +2111,4 @@ export function createSnapshotCache(
 		}
 		return pending;
 	};
-	}
+}
