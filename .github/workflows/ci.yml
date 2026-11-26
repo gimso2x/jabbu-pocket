@@ -125,6 +125,126 @@ jobs:
       - if: always() && !cancelled()
         uses: ./.github/actions/check-clean-worktree
 
+  # OCI aarch64 환경의 실제 omp RPC 계약 e2e (비필수).
+  e2e-omp-mock-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Install gitleaks 8.28.0
+        run: |
+          bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"
+          echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"
+      - id: omp-host-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/jabbu-omp-host-bun
+          key: ${{ runner.os }}-${{ runner.arch }}-omp-host-${{ hashFiles('test/fixtures/omp-host/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-omp-host-
+      - name: Install pinned omp test host
+        run: |
+          cd test/fixtures/omp-host
+          if ! bun install --frozen-lockfile --cache-dir="$HOME/.cache/jabbu-omp-host-bun"; then
+            echo "::warning::omp-host cache install failed; retrying with a clean cache dir"
+            retry_cache="$(mktemp -d "${RUNNER_TEMP:-/tmp}/omp-host-retry.XXXXXX")"
+            bun install --frozen-lockfile --cache-dir="$retry_cache"
+          fi
+          echo "JABBU_OMP_EXECUTABLE=$GITHUB_WORKSPACE/test/fixtures/omp-host/node_modules/.bin/omp" >> "$GITHUB_ENV"
+      - if: github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main' && steps.omp-host-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/jabbu-omp-host-bun
+          key: ${{ steps.omp-host-cache.outputs.cache-primary-key }}
+      - name: Check test fixtures
+        run: bun src/dev/check-test-fixtures.ts
+      - name: omp mock e2e
+        env:
+          JABBU_E2E_OMP_MOCK: "1"
+        run: bun test test/omp-mock.e2e.test.ts test/omp-rpc.contract.test.ts
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  # WSL2 Ubuntu 24.04(systemd=true) 환경의 정적 게이트와 전체 테스트 (비필수).
+  test-wsl:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Vampire/setup-wsl@4c48163d9f981914dd8caa0fc335fe19cca5bff4 # v7.2.0
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: "2"
+          use-cache: "false"
+          wsl-shell-user: runner
+          additional-packages: curl git unzip ca-certificates
+          wsl-conf: |
+            [boot]
+            systemd=true
+      - name: Prepare WSL2 ext4 workspace and install Bun and gitleaks
+        shell: wsl-bash {0}
+        run: |
+          uname -a
+          pid1="$(ps -p 1 -o comm= | tr -d '[:space:]')"
+          echo "wsl pid1=${pid1}"
+          test "$pid1" = "systemd"
+          timeout 30s systemctl is-system-running --wait || true
+          src_dir="$PWD"
+          rm -rf "$HOME/repo"
+          mkdir -p "$HOME/repo" "$HOME/.local/bin"
+          git config --global --add safe.directory "$src_dir"
+          git init --quiet "$HOME/repo"
+          git -C "$HOME/repo" fetch --quiet --depth=1 "$src_dir" HEAD
+          git -C "$HOME/repo" checkout --quiet FETCH_HEAD
+          cd "$HOME/repo"
+          bash scripts/ci-install-bun.sh "$HOME/.local/bin"
+          bash scripts/ci-install-gitleaks.sh "$HOME/.local/bin"
+      - name: Install dependencies and run checks and tests in WSL2
+        shell: wsl-bash {0}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          export JABBU_GITLEAKS="$HOME/.local/bin/gitleaks"
+          cd "$HOME/repo"
+          bun install --frozen-lockfile
+          bun run check
+          bun run knip
+          bun scripts/check-repo-hygiene.ts
+          bun test --parallel=3
+      - name: Check for a clean worktree in WSL2
+        if: always() && !cancelled()
+        shell: wsl-bash {0}
+        run: |
+          cd "$HOME/repo"
+          status="$(git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none)"
+          if [[ -n "${status}" ]]; then
+            echo "::error::WSL2 CI job left tracked changes or untracked files in $HOME/repo"
+            printf '%s\n' "${status}"
+            exit 1
+          fi
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
+  # Windows 네이티브 환경의 정적 게이트와 OS 무관 스모크 테스트 (비필수).
+  test-windows-smoke:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: bun run check
+      - run: bun run knip
+      - run: bun scripts/check-repo-hygiene.ts
+      - run: bun scripts/windows-smoke-tests.ts
+      - if: always() && !cancelled()
+        uses: ./.github/actions/check-clean-worktree
+
   # 필수 체크 집계 게이트: 브랜치 보호에서 하위 잡 대신 이 단일 이름만 요구할 수 있다.
   ci-required:
     name: ci-required

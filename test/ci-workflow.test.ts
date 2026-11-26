@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkRepoHygiene, MAX_BLOB_BYTES } from "../scripts/check-repo-hygiene";
 import { TLC } from "../scripts/tla-check";
+import { WINDOWS_SMOKE_TESTS } from "../scripts/windows-smoke-tests";
 
 type Step = {
 	id?: string;
@@ -17,8 +18,9 @@ type Step = {
 	env?: Record<string, string>;
 	with?: Record<string, unknown>;
 };
-const CORE_JOB_IDS = ["test", "test-arm64", "e2e-omp-mock"] as const;
-const JOB_IDS = [...CORE_JOB_IDS, "ci-required"] as const;
+const LINUX_CORE_JOB_IDS = ["test", "test-arm64", "e2e-omp-mock", "e2e-omp-mock-arm64"] as const;
+const WORKTREE_GUARDED_JOB_IDS = [...LINUX_CORE_JOB_IDS, "test-wsl", "test-windows-smoke"] as const;
+const JOB_IDS = [...WORKTREE_GUARDED_JOB_IDS, "ci-required"] as const;
 type JobId = (typeof JOB_IDS)[number];
 type Job = {
 	name?: string;
@@ -124,7 +126,7 @@ describe("ci.yml", () => {
 	});
 
 	test.each(JOB_IDS)("job %s runs on a pinned runner image with a timeout", (job) => {
-		expect(workflow.jobs[job]["runs-on"]).toMatch(/^ubuntu-\d+\.\d+(-arm)?$/);
+		expect(workflow.jobs[job]["runs-on"]).toMatch(/^(?:ubuntu-\d+\.\d+(?:-arm)?|windows-\d+)$/);
 		expect(workflow.jobs[job]["timeout-minutes"]).toBeGreaterThan(0);
 	});
 
@@ -163,12 +165,15 @@ describe("ci.yml", () => {
 	});
 
 	test("gitleaks comes only from the checksum-verifying installer, never a piped download", () => {
-		for (const job of CORE_JOB_IDS) {
+		for (const job of LINUX_CORE_JOB_IDS) {
 			const steps = workflow.jobs[job].steps.filter((step) => step.run?.includes("gitleaks"));
 			expect(steps.length).toBe(1);
 			expect(steps[0]?.run).toContain('bash scripts/ci-install-gitleaks.sh "$RUNNER_TEMP/bin"');
 			expect(steps[0]?.run).toContain('echo "JABBU_GITLEAKS=$RUNNER_TEMP/bin/gitleaks" >> "$GITHUB_ENV"');
 		}
+		const wslInstall = workflow.jobs["test-wsl"].steps.find((step) => step.run?.includes("ci-install-gitleaks.sh"));
+		expect(wslInstall?.run).toContain('bash scripts/ci-install-gitleaks.sh "$HOME/.local/bin"');
+		expect(wslInstall?.run).toContain('bash scripts/ci-install-bun.sh "$HOME/.local/bin"');
 		for (const wf of [workflow, ompLatest, workflowLint, dependencyAudit]) {
 			for (const job of Object.values(wf.jobs)) {
 				for (const step of job.steps) expect(step.run ?? "").not.toContain("curl");
@@ -176,11 +181,22 @@ describe("ci.yml", () => {
 		}
 	});
 
-	test("test, test-arm64, e2e-omp-mock and ci-required keep their structure, hygiene gate and clean-worktree guard", () => {
-		expect(Object.keys(workflow.jobs)).toEqual(["test", "test-arm64", "e2e-omp-mock", "ci-required"]);
+	test("all CI jobs keep their structure, hygiene gate, multi-env coverage and clean-worktree guard", () => {
+		expect(Object.keys(workflow.jobs)).toEqual([
+			"test",
+			"test-arm64",
+			"e2e-omp-mock",
+			"e2e-omp-mock-arm64",
+			"test-wsl",
+			"test-windows-smoke",
+			"ci-required",
+		]);
 		expect(workflow.jobs["test-arm64"]["runs-on"]).toBe("ubuntu-24.04-arm");
 		expect(workflow.jobs.test["runs-on"]).toBe("ubuntu-24.04");
 		expect(workflow.jobs["e2e-omp-mock"]["runs-on"]).toBe("ubuntu-24.04");
+		expect(workflow.jobs["e2e-omp-mock-arm64"]["runs-on"]).toBe("ubuntu-24.04-arm");
+		expect(workflow.jobs["test-wsl"]["runs-on"]).toBe("windows-2025");
+		expect(workflow.jobs["test-windows-smoke"]["runs-on"]).toBe("windows-2025");
 		expect(workflow.jobs["ci-required"]["runs-on"]).toBe("ubuntu-24.04");
 		expect(workflow.jobs.test.steps.map((step) => step.run ?? step.uses)).toEqual([
 			expect.stringContaining("actions/checkout@"),
@@ -200,7 +216,35 @@ describe("ci.yml", () => {
 			...workflow.jobs.test.steps.slice(0, 7),
 			workflow.jobs.test.steps.at(-1) as Step,
 		]);
-		for (const job of CORE_JOB_IDS) {
+		expect(workflow.jobs["e2e-omp-mock-arm64"].steps).toEqual(workflow.jobs["e2e-omp-mock"].steps);
+
+		const wslSteps = workflow.jobs["test-wsl"].steps;
+		const setupWsl = wslSteps.find((step) => step.uses?.startsWith("Vampire/setup-wsl@"));
+		expect(setupWsl?.with).toMatchObject({
+			distribution: "Ubuntu-24.04",
+			"wsl-version": "2",
+			"use-cache": "false",
+			"wsl-shell-user": "runner",
+		});
+		expect(String(setupWsl?.with?.["wsl-conf"])).toContain("systemd=true");
+		const wslRuns = wslSteps.map((step) => step.run ?? "");
+		expect(wslRuns.some((run) => run.includes("ci-install-bun.sh"))).toBe(true);
+		expect(wslRuns.some((run) => run.includes("ci-install-gitleaks.sh"))).toBe(true);
+		for (const cmd of ["bun run check", "bun run knip", "bun scripts/check-repo-hygiene.ts", "bun test --parallel=3"]) {
+			expect(wslRuns.some((run) => run.includes(cmd))).toBe(true);
+		}
+
+		expect(workflow.jobs["test-windows-smoke"].steps.map((step) => step.run ?? step.uses)).toEqual([
+			expect.stringContaining("actions/checkout@"),
+			"./.github/actions/setup",
+			"bun run check",
+			"bun run knip",
+			"bun scripts/check-repo-hygiene.ts",
+			"bun scripts/windows-smoke-tests.ts",
+			"./.github/actions/check-clean-worktree",
+		]);
+
+		for (const job of WORKTREE_GUARDED_JOB_IDS) {
 			const clean = workflow.jobs[job].steps.at(-1);
 			expect(clean?.uses).toBe("./.github/actions/check-clean-worktree");
 			expect(clean?.if).toBe("always() && !cancelled()");
@@ -229,7 +273,7 @@ describe("ci.yml", () => {
 		expect(save?.if).toContain("refs/heads/main");
 		expect(save?.if).toContain("pull_request");
 		expect(save?.if).toContain("tla-cache.outputs.cache-hit != 'true'");
-		for (const job of ["test-arm64", "e2e-omp-mock"] as const)
+		for (const job of ["test-arm64", "e2e-omp-mock", "e2e-omp-mock-arm64", "test-wsl", "test-windows-smoke"] as const)
 			expect(workflow.jobs[job].steps.some((step) => step.run?.includes("tla-check"))).toBe(false);
 	});
 
@@ -247,9 +291,24 @@ describe("ci.yml", () => {
 		expect(save?.if).toContain("omp-host-cache.outputs.cache-hit != 'true'");
 	});
 
-	test("every core job installs dependencies through the shared setup action", () => {
-		for (const job of CORE_JOB_IDS)
+	test("every setup-action job installs dependencies through the shared setup action", () => {
+		for (const job of ["test", "test-arm64", "e2e-omp-mock", "e2e-omp-mock-arm64", "test-windows-smoke"] as const)
 			expect(workflow.jobs[job].steps.some((step) => step.uses === "./.github/actions/setup")).toBe(true);
+	});
+
+	test("ci-install-bun.sh pins the same Bun version as package.json", () => {
+		const installer = readFileSync(join(root, "scripts/ci-install-bun.sh"), "utf8");
+		expect(installer).toContain(`VERSION=${bunPin}\n`);
+	});
+
+	test("WINDOWS_SMOKE_TESTS is non-empty, sorted, deduplicated, and points to existing test files", () => {
+		expect(WINDOWS_SMOKE_TESTS.length).toBeGreaterThan(0);
+		expect([...WINDOWS_SMOKE_TESTS]).toEqual([...WINDOWS_SMOKE_TESTS].sort());
+		expect(new Set(WINDOWS_SMOKE_TESTS).size).toBe(WINDOWS_SMOKE_TESTS.length);
+		for (const file of WINDOWS_SMOKE_TESTS) {
+			expect(file).toMatch(/^test\/.*\.test\.ts$/);
+			expect(existsSync(join(root, file)), file).toBe(true);
+		}
 	});
 
 	test("the e2e-omp-mock job checks its fixtures before running the real omp e2e", () => {
