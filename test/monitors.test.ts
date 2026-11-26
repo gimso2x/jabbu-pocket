@@ -286,6 +286,27 @@ describe("monitors: freeze switch", () => {
 		expect(prompts()).toHaveLength(1);
 		expect(store.monitors.getMonitor(monitor.id)?.enabled).toBe(false);
 	});
+
+	test("a one-shot held by a freeze longer than the catch-up age still fires once after unfreeze", async () => {
+		const monitor = store.monitors.addMonitor({
+			name: "once-long-freeze",
+			trigger: { kind: "at", at: new Date(T0 + MINUTE).toISOString() },
+			instruction: "do it",
+			overlap: "queue",
+			enabled: true,
+		});
+		frozenState = FREEZE;
+		clock.advance(25 * HOUR);
+		expect(await run()).toMatchObject({ claimed: 0, skippedFrozen: 1, skippedCatchUp: 0 });
+		expect(store.monitors.getMonitor(monitor.id)?.enabled).toBe(true);
+		expect(store.monitors.listSlots(monitor.id)).toEqual([]);
+
+		frozenState = undefined;
+		expect((await run()).claimed).toBe(1);
+		await until(() => store.monitors.listEvents().filter(answered).length === 1);
+		expect(prompts()).toHaveLength(1);
+		expect(store.monitors.getMonitor(monitor.id)?.enabled).toBe(false);
+	});
 });
 
 describe("monitors: restart catch-up", () => {
