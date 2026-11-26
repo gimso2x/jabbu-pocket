@@ -22,7 +22,6 @@ import type { TaskRow } from "../tasks/ledger";
 import { applyRiskFloor } from "../tasks/risk-floor";
 import { runtimeFor } from "../tasks/runtime";
 import { resolveAgyWorker, resolveWorkerTier, type WorkerTier } from "../tasks/worker-tier";
-import { auditContext } from "./audit";
 import { type BoardLinkResolver, boardCardLink, type HerdrBoardConfig } from "./board";
 import {
 	herdrAgentExists,
@@ -265,7 +264,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		},
 		async execute(params, context) {
 			refuseIfFrozen();
-			return auditContext.run({ origin: deps.originKey }, () => executeDispatch(params, context.signal));
+			return executeDispatch(params, context.signal); // audited under the origin by the daemon's `runHostTool`
 		},
 	};
 	return workerOn ? tool : { ...tool, description: SIMPLE_ONLY_DESCRIPTION, parameters: SIMPLE_ONLY_PARAMETERS };
