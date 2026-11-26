@@ -534,7 +534,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		if (!barTitle) return;
 		const titleEl = document.getElementById("detail-title");
 		const text = open && titleEl ? (titleEl.textContent || "").trim() : "";
-		const tabbed = !!open && (open.kind === "card" || localThreadOpen() || jobOpen());
+		const tabbed = !!open && (open.kind === "card" || threadOpen() || jobOpen());
 		barTitle.textContent = text;
 		barTitle.hidden = !tabbed || tab === "head" || text === "";
 	}
@@ -579,7 +579,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 	function setTab(name) {
 		tab = name;
 		const card = !!open && open.kind === "card";
-		const thread = localThreadOpen();
+		const thread = threadOpen();
 		const tabbed = card || thread || jobOpen();
 		for (const button of tabs.querySelectorAll("[data-tab]")) {
 			button.setAttribute("aria-selected", String(button.getAttribute("data-tab") === name));
@@ -594,7 +594,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 	}
 	/** A herdr card's pane answer (\`api/pane/*\`), or a conversation's omp session (\`api/thread/conversation\`). */
 	async function readPane(kind, before) {
-		const thread = localThreadOpen();
+		const thread = threadOpen();
 		const query = new URLSearchParams(thread ? { origin: open.id } : { card: open.id });
 		if (before) query.set("before", before);
 		const path = thread ? "api/thread/conversation" : "api/pane/" + kind;
@@ -615,7 +615,8 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 			const card = cardOf(open.id);
 			const nearEnd = detail.scrollHeight - detail.scrollTop - detail.clientHeight < 40;
 			const height = detail.scrollHeight;
-			const agent = localThreadOpen() ? "omp" : card ? card.agent : "agent";
+			const cur = threadOpen() ? threadOf(open.id) : undefined;
+			const agent = threadOpen() ? (cur && cur.install) || "omp" : card ? card.agent : "agent";
 			// The read that ends "확정 중" swaps the kept block for the final text in this one DOM update.
 			if (ticket >= settleTicket) {
 				liveKept = null;
@@ -727,7 +728,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 	 * same conversation counts as the turn ending; another conversation starts clean.
 	 */
 	function syncLive() {
-		const thread = localThreadOpen() && loadedKey === open.id && tab === "conv" ? threadOf(open.id) : undefined;
+		const thread = threadOpen() && loadedKey === open.id && tab === "conv" ? threadOf(open.id) : undefined;
 		const want = thread && thread.openCount > 0 ? open.id : null;
 		if (want === liveOrigin) return;
 		if (liveSource) liveSource.close();
@@ -803,12 +804,6 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 			return;
 		}
 		if (threadOpen()) {
-			if (peerThreadOpen()) {
-				loadedKey = open.id;
-				tabs.hidden = true;
-				if (tab !== "head") setTab("head");
-				return;
-			}
 			// The old one-turn address waits for the snapshot to name its conversation.
 			if (/^\\d+$/.test(open.id)) return;
 			loadedKey = open.id;
@@ -837,7 +832,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 	 * tab reads the session again (kept at the bottom if it was there, else where the reader is). No timer of its own.
 	 */
 	function followThread() {
-		if (!localThreadOpen() || loadedKey !== open.id) return;
+		if (!threadOpen() || loadedKey !== open.id) return;
 		const seen = threadSign(threadOf(open.id));
 		if (seen === threadSeen) return;
 		threadSeen = seen;
@@ -871,9 +866,10 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		drawnHead = "";
 		monitorHtml = null;
 		diffHtml = null;
-		const thread = localThreadOpen();
+		const thread = threadOpen();
+		const local = localThreadOpen();
 		const job = jobOpen();
-		traceTurn = thread && /^\\d+$/.test(open.id) ? open.id : null;
+		traceTurn = local && /^\\d+$/.test(open.id) ? open.id : null;
 		adoptOldTurn();
 		detail.hidden = !open;
 		detail.classList.toggle("is-open", !!open);
@@ -884,7 +880,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		tabs.innerHTML = renderDetailTabs(
 			thread ? "thread" : job ? "job" : "card",
 			thread ? (traceTurn ? "trace" : "conv") : "head",
-			cardTrace,
+			thread ? local : cardTrace,
 		);
 		const back = toUrl(null);
 		closer.setAttribute("href", back.search || "./");
