@@ -58,23 +58,29 @@ const state = (pid: number, label: string, kind: "waiting" | "running", agoMs: n
 describe("heavy-run chip", () => {
 	test("one running, two waiting and a dead pid: the chip reads `<label> … · 대기 2`, with no opsStatus configured", async () => {
 		const paths = heavyRunPaths();
-		writeHeavyRunState(paths, state(process.pid, "jabbu-t-run", "running", 125_000));
-		writeHeavyRunState(paths, state(process.ppid, "jabbu-t-wait-a", "waiting", 60_000));
-		writeHeavyRunState(paths, state(1, "jabbu-t-wait-b", "waiting", 30_000));
-		writeHeavyRunState(paths, state(2 ** 22 + 99, "jabbu-t-dead", "waiting", 10_000));
+		// A pid the test owns: full-suite process topology can leave process.ppid dead before the snapshot runs.
+		const alive = Bun.spawn(["sleep", "30"], { stdio: ["ignore", "ignore", "ignore"] });
+		try {
+			writeHeavyRunState(paths, state(process.pid, "jabbu-t-run", "running", 125_000));
+			writeHeavyRunState(paths, state(alive.pid, "jabbu-t-wait-a", "waiting", 60_000));
+			writeHeavyRunState(paths, state(1, "jabbu-t-wait-b", "waiting", 30_000));
+			writeHeavyRunState(paths, state(2 ** 22 + 99, "jabbu-t-dead", "waiting", 10_000));
 
-		const snapshot = await buildSnapshot(deps());
-		expect(snapshot.hostChecks).toBeUndefined();
-		expect(snapshot.heavyRun?.ok && snapshot.heavyRun.waiting.map((w) => w.label)).toEqual([
-			"jabbu-t-wait-a",
-			"jabbu-t-wait-b",
-		]);
+			const snapshot = await buildSnapshot(deps());
+			expect(snapshot.hostChecks).toBeUndefined();
+			expect(snapshot.heavyRun?.ok && snapshot.heavyRun.waiting.map((w) => w.label)).toEqual([
+				"jabbu-t-wait-a",
+				"jabbu-t-wait-b",
+			]);
 
-		const html = renderDashboardMain(snapshot, undefined, NOW, { view: "inbox" });
-		expect(html).toContain("🧪 jabbu-t-run");
-		expect(html).toMatch(/🧪 jabbu-t-run [^<]*· 대기 2</);
-		expect(html).toContain("jabbu-t-wait-a");
-		expect(html).not.toContain("jabbu-t-dead");
+			const html = renderDashboardMain(snapshot, undefined, NOW, { view: "inbox" });
+			expect(html).toContain("🧪 jabbu-t-run");
+			expect(html).toMatch(/🧪 jabbu-t-run [^<]*· 대기 2</);
+			expect(html).toContain("jabbu-t-wait-a");
+			expect(html).not.toContain("jabbu-t-dead");
+		} finally {
+			alive.kill();
+		}
 	});
 
 	test("nothing running or waiting: no chip", async () => {
