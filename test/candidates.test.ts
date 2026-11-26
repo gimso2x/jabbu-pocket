@@ -329,6 +329,29 @@ describe("ledger append and config", () => {
 		expect(parseLedger(readFileSync(path, "utf8"))).toHaveLength(2);
 	});
 
+	test("appendEvent adds no blank line when the ledger already ends with a newline", () => {
+		const path = join(dir, "candidates.jsonl");
+		writeFileSync(path, `${JSON.stringify(seen("a", "2026-11-10"))}\n`);
+		appendEvent(path, seen("a", "2026-11-11"));
+		expect(readFileSync(path, "utf8").split("\n")).toHaveLength(3);
+		expect(parseLedger(readFileSync(path, "utf8"))).toHaveLength(2);
+	});
+
+	test("appendEvent on an empty ledger writes one line", () => {
+		const path = join(dir, "candidates.jsonl");
+		writeFileSync(path, "");
+		appendEvent(path, seen("a", "2026-11-11"));
+		expect(parseLedger(readFileSync(path, "utf8"))).toHaveLength(1);
+	});
+
+	test("appendEvent keeps a large ledger without its final newline separate", () => {
+		const path = join(dir, "candidates.jsonl");
+		const lines = Array.from({ length: 2000 }, (_, i) => JSON.stringify(seen(`k-${i}`, "2026-11-10")));
+		writeFileSync(path, lines.join("\n"));
+		appendEvent(path, seen("a", "2026-11-11"));
+		expect(parseLedger(readFileSync(path, "utf8"))).toHaveLength(2001);
+	});
+
 	function writeHome(candidates: unknown): string {
 		const home = join(dir, "home");
 		rmSync(home, { recursive: true, force: true });

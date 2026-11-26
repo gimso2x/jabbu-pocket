@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import type { Logger } from "../log";
 import { redact } from "../redact";
 
@@ -70,9 +70,7 @@ const KEY = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const KINDS: Record<string, true> = { rule: true, fix: true, persona: true };
 
-function str(value: unknown): value is string {
-	return typeof value === "string";
-}
+const str = (value: unknown): value is string => typeof value === "string";
 
 /** One line to an event, or undefined for anything malformed (wrong `v`, unknown event, missing field). */
 function parseLine(line: string): LedgerEvent | undefined {
@@ -116,8 +114,7 @@ function parseLine(line: string): LedgerEvent | undefined {
 export function parseLedger(text: string): LedgerEvent[] {
 	const events: LedgerEvent[] = [];
 	for (const line of text.split("\n")) {
-		if (line.trim() === "") continue;
-		const event = parseLine(line);
+		const event = line.trim() === "" ? undefined : parseLine(line);
 		if (event !== undefined) events.push(event);
 	}
 	return events;
@@ -137,7 +134,7 @@ export function foldCandidates(
 	const byKey = new Map<string, Candidate & { daySet: Set<string>; hasSeen: boolean }>();
 	for (const event of events) {
 		let cand = byKey.get(event.key);
-		if (cand === undefined) {
+		if (cand === undefined)
 			cand = {
 				key: event.key,
 				kind: "fix",
@@ -150,8 +147,7 @@ export function foldCandidates(
 				daySet: new Set(),
 				hasSeen: false,
 			};
-			byKey.set(event.key, cand);
-		}
+		byKey.set(event.key, cand);
 		if (cand.status === "approved") continue;
 		const at = Date.parse(event.ts);
 		switch (event.event) {
@@ -219,8 +215,14 @@ export function dueCandidates(
 export function appendEvent(path: string, event: LedgerEvent): void {
 	let prefix = "";
 	if (existsSync(path)) {
-		const text = readFileSync(path, "utf8");
-		if (text.length > 0 && !text.endsWith("\n")) prefix = "\n";
+		const fd = openSync(path, "r");
+		try {
+			const { size } = fstatSync(fd);
+			const last = Buffer.alloc(1);
+			if (size > 0 && readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a) prefix = "\n";
+		} finally {
+			closeSync(fd);
+		}
 	}
 	appendFileSync(path, `${prefix}${JSON.stringify(event)}\n`);
 }
@@ -236,17 +238,14 @@ export function buildCandidateNote(cand: Candidate): string {
 }
 
 /** `YYYY-MM-DD` of `ms` in `timeZone`. */
-function dateIn(ms: number, timeZone: string): string {
-	return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
-}
+const dateIn = (ms: number, timeZone: string): string =>
+	new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
 
 /** The next free `E-YYYYMMDD-NN` of that date in experiments.md text. */
 export function nextExperimentId(text: string, date: string): string {
 	const compact = date.replaceAll("-", "");
 	let max = 0;
-	for (const match of text.matchAll(new RegExp(`^## E-${compact}-(\\d+)`, "gm"))) {
-		max = Math.max(max, Number(match[1]));
-	}
+	for (const match of text.matchAll(new RegExp(`^## E-${compact}-(\\d+)`, "gm"))) max = Math.max(max, Number(match[1]));
 	return `E-${compact}-${String(max + 1).padStart(2, "0")}`;
 }
 
