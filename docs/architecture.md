@@ -113,5 +113,5 @@ PR이 아래 중 하나를 깨면 기능이 맞아 보여도 받지 않는다. "
 
 ## 7. 알려진 구조 부채
 
-- 파일 단위 import 순환은 0건이지만(I13), 기존 코드에는 디렉터리 단위 역참조 9건(`src/dev/layer-baseline.json`: 예 `store/db.ts`의 `dashboard/preview-line.ts`·`lanes/status.ts`·`monitors/ledger.ts`·`tasks/ledger.ts` import)이 남아 있다. `src/dev/check-layers.ts`가 이 9건 외의 새 역참조를 차단하고, 해소된 항목만 `--update`로 내린다.
+- 파일 단위 import 순환은 0건이지만(I13), 기존 코드에는 디렉터리 단위 역참조 7건(`src/dev/layer-baseline.json`: 예 `store/db.ts`의 `lanes/status.ts`·`monitors/ledger.ts`·`tasks/ledger.ts` import)이 남아 있다. `src/dev/check-layers.ts`가 이 7건 외의 새 역참조를 차단하고, 해소된 항목만 `--update`로 내린다.
 - 새 코드는 이 얽힘을 늘리지 않는다. 특히 `store`·`channel`·`omp`에서 `daemon`·`dashboard`·`lanes`·`tasks` 쪽으로 새 import를 더하지 않는다. 필요하면 공용 타입·순수 함수를 아래층으로 옮긴다.

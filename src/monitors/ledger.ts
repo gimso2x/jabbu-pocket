@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { redact } from "../redact";
+import { countIncident, resolveIncidents } from "../store/incidents";
 import { checkSchemaVersion } from "../store/schema-version";
 import { type CronSchedule, nextFire, parseCron } from "./cron";
-import { countIncident, resolveIncidents } from "./incidents";
 import {
 	type MonitorDeliver,
 	type MonitorOverlap,
@@ -701,7 +701,7 @@ export class MonitorLedger {
 
 	/**
 	 * Counts one terminal monitor failure and decides whether the owner should be told (the shared incident state
-	 * machine — see `monitors/incidents`): the first occurrence alerts, the same (monitor, normalized error) within
+	 * machine — see `store/incidents`): the first occurrence alerts, the same (monitor, normalized error) within
 	 * `repeatMs` stays quiet, a re-alert refreshes the window, and a resolved incident that comes back reopens loudly.
 	 */
 	recordMonitorIncident(

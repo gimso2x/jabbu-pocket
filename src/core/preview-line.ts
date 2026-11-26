@@ -1,6 +1,6 @@
-import { QUOTED_HEADER } from "../core/normalize";
 import { redact } from "../redact";
 import { INJECTION_WARNING_HEAD } from "../safety/injection";
+import { QUOTED_HEADER } from "./normalize";
 
 /** Longest request line a turn shows. */
 export const PREVIEW_CHARS = 80;

@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
+import { previewLine } from "../core/preview-line";
 import { CURRENT_REQUEST_MARKER } from "../core/types";
 import { LANE_ORIGIN_PREFIX, TASK_ORIGIN_PREFIX } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
@@ -17,7 +18,6 @@ import { isRecord } from "../omp/type-guards";
 import { allSessionFiles, usageOf } from "../ops/usage";
 import { localDay } from "../time";
 import { iterJsonlRecords } from "./jsonl";
-import { previewLine } from "./preview-line";
 import { sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
 

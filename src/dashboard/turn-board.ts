@@ -2,13 +2,13 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { TOP_LEVEL_TS } from "../core/normalize";
+import { previewLine } from "../core/preview-line";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { INBOUND_STARVATION_MS } from "../ops/gates";
 import { redact } from "../redact";
 import type { ContextLoad } from "./context-load";
 import type { PeerInstall } from "./peers";
-import { previewLine } from "./preview-line";
 import type { SessionModel } from "./session-model";
 
 const TURN_LIMIT = 200;
