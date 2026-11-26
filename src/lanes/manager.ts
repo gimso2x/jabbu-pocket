@@ -144,11 +144,7 @@ import { type ClaimEvidence, defaultGit, resolveBaseSha, type VerifyResult, veri
 import { advertisedWorkflow, isUlwWorkflow } from "./workflow";
 import { DEFAULT_LANE_RISK, laneBranchOf, laneIdsOnBranches, nextLaneId, resolveLaneRepo } from "./worktree";
 
-/**
- * Work lanes: one omp session per long task with its own thread, a registry row and a verified end.
- * The root message reads `🔄 title` while the lane is open and `✅ title` once a done claim passed the
- * core's own git check; `⏳ title · mm:ss` in the thread is the status message edited in place.
- */
+/** Work lanes: one omp session per long task with its own thread, registry row and verified end. */
 export class LaneManager {
 	readonly #deps: LaneManagerDeps;
 	readonly #max: number;
@@ -442,11 +438,13 @@ export class LaneManager {
 			const { repo, baseBranch, sub } = found.value;
 			const disks = [diskHeadroom(repo, this.#deps.statfs)];
 			const capacity = startCapacity(this.#deps.hostLoad, disks, this.#deps.hostSessions);
-			if (capacity.refusals.length > 0 && input.force !== true) {
-				log.warn("lane_start_refused_capacity", { channel: input.channel, repo, refusals: [...capacity.refusals] });
-				throw new LaneInputError(`시작 거부: ${capacity.refusals.join(", ")}`);
+			const quotaHold = this.#deps.quotaRefusal?.(model?.model);
+			const refusals = quotaHold === undefined ? capacity.refusals : [...capacity.refusals, quotaHold];
+			if (refusals.length > 0 && input.force !== true) {
+				log.warn("lane_start_refused_capacity", { channel: input.channel, repo, refusals: [...refusals] });
+				throw new LaneInputError(`시작 거부: ${refusals.join(", ")}`);
 			}
-			if (capacity.refusals.length > 0) log.info("lane_start_forced", { channel: input.channel, repo });
+			if (refusals.length > 0) log.info("lane_start_forced", { channel: input.channel, repo });
 			const branchIds = await laneIdsOnBranches(repo);
 			if (store.countOpenLanes() + this.#starting >= this.#max) throw new LaneCapError(this.#max);
 
