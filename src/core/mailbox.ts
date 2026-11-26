@@ -25,7 +25,7 @@ import { captureHeads } from "../ops/turn-heads";
 import { byteLength, redact } from "../redact";
 import { injectionWarning, scanForInjection } from "../safety/injection";
 import { peerTouchedTurnNotice } from "../safety/prompt";
-import type { InboundRow, OriginRow } from "../store/db-rows";
+import type { InboundRow } from "../store/db-rows";
 import { typicalTurnDuration } from "../store/turn-duration";
 import { classifyFailure } from "./failure-kind";
 import { type IdleKeepDeps, IdleKeeper, type IdleSweepContext } from "./idle-keep";
@@ -54,6 +54,13 @@ import {
 	settleTimedOutSend,
 } from "./mailbox-sending";
 import {
+	applyOriginSettings,
+	effectiveOriginSettings,
+	healStaleSessionModel,
+	isPickerCommand,
+	runPickerCommand,
+} from "./mailbox-settings";
+import {
 	OWN_ANSWER_LINE,
 	ownerThreadRootBlock,
 	peerThreadContextBlock,
@@ -64,23 +71,25 @@ import {
 	type ThreadSource,
 	threadContextBlock,
 } from "./mailbox-thread-context";
+import type {
+	ActiveTurn,
+	MailboxDeps,
+	MailboxHost,
+	MailboxState,
+	PauseCheck,
+	SessionOpenCheck,
+	StallEscalation,
+} from "./mailbox-types";
 import {
-	type ActiveTurn,
 	DEFAULT_ESCALATE_AFTER,
 	failureSign,
 	isAutonomousRow,
 	isModelFailureSign,
 	isProviderLimit,
 	MAX_STEERS,
-	type MailboxDeps,
-	type MailboxHost,
-	type MailboxState,
 	minutes,
 	openOriginSession,
-	type PauseCheck,
 	RECENT_TOOLS,
-	type SessionOpenCheck,
-	type StallEscalation,
 	sessionToResume,
 	todoProgress,
 } from "./mailbox-types";
@@ -767,8 +776,7 @@ export class OriginMailbox {
 	}
 
 	#wakeTurnEndWaiters(): void {
-		if (this.#turn !== undefined) return;
-		for (const wake of this.#turnEndWaiters.splice(0)) wake();
+		if (this.#turn === undefined) for (const wake of this.#turnEndWaiters.splice(0)) wake();
 	}
 
 	/**
@@ -1330,7 +1338,7 @@ export class OriginMailbox {
 		if (sessionBackupsRoot === undefined) return undefined;
 		const origin = store.getOrigin(originKey);
 		if (origin === undefined) return undefined;
-		const fallback = this.#effectiveSettings(origin).model ?? defaultModel;
+		const fallback = effectiveOriginSettings(store, originKey, origin).model ?? defaultModel;
 		if (fallback === undefined) return undefined;
 		const file = origin.sessionFile ?? newestSessionFile(origin.sessionDir);
 		if (file === undefined) return undefined;
@@ -1376,8 +1384,14 @@ export class OriginMailbox {
 				this.#deps.onSessionMismatch?.({ originKey, threadRef, expected: check.expected, actual: check.actual });
 			}
 		}
-		this.#activeModel = undefined;
-		await this.#applySettings(driver, origin);
+		this.#activeModel = await applyOriginSettings({
+			driver,
+			store,
+			originKey,
+			origin,
+			defaultModel: this.#deps.defaultModel,
+			log,
+		});
 		await this.#seedCache(driver);
 		this.#cache.markChildRestart();
 		this.#unsubscribe = [
@@ -1395,89 +1409,6 @@ export class OriginMailbox {
 		return driver;
 	}
 
-	/**
-	 * Effective chat-chosen settings. A thread origin (`…/t/<ts>`) with no choice of its own inherits the parent
-	 * channel's choice, so a new thread follows the channel's `/model-jabbu`·`/thinking-jabbu` until the thread
-	 * sets its own. Every other origin kind never inherits.
-	 */
-	#effectiveSettings(origin: OriginRow): { model: string | null; thinking: string | null } {
-		const { originKey, store } = this.#deps;
-		if (originKey.startsWith(MONITOR_ORIGIN_PREFIX)) {
-			// A monitor's own pinned model/thinking beat the origin row field by field; an unpinned field (or a removed
-			// monitor) falls back to the origin row.
-			const monitor = store.monitors.getMonitor(originKey.slice(MONITOR_ORIGIN_PREFIX.length));
-			return { model: monitor?.model ?? origin.model, thinking: monitor?.thinking ?? origin.thinking };
-		}
-		const threadMark = originKey.indexOf("/t/");
-		if (threadMark === -1 || (origin.model !== null && origin.thinking !== null)) {
-			return { model: origin.model, thinking: origin.thinking };
-		}
-		const parent = store.getOrigin(originKey.slice(0, threadMark));
-		if (parent === undefined) return { model: origin.model, thinking: origin.thinking };
-		return { model: origin.model ?? parent.model, thinking: origin.thinking ?? parent.thinking };
-	}
-
-	/** Re-applies chat-chosen model/thinking whenever a child opens the session; invalid choices only warn. */
-	async #applySettings(driver: OmpSessionDriver, origin: OriginRow): Promise<void> {
-		const { log, originKey } = this.#deps;
-		const { model, thinking } = this.#effectiveSettings(origin);
-		const models = await driver.availableModels().catch((error: unknown) => {
-			log.warn("models_list_failed", { origin: originKey, error: String(error) });
-			return undefined;
-		});
-		if (model !== null) {
-			if (models !== undefined && !models.includes(model)) {
-				log.warn("model_apply_unavailable", { origin: originKey, model });
-			} else {
-				await driver.setModel(model).then(
-					(applied) => {
-						this.#activeModel = applied;
-					},
-					(error: unknown) => {
-						log.warn("model_apply_failed", { origin: originKey, model, error: String(error) });
-					},
-				);
-			}
-		}
-		if (thinking !== null) {
-			await driver.setThinking(thinking).catch((error: unknown) => {
-				log.warn("thinking_apply_failed", { origin: originKey, thinking, error: String(error) });
-			});
-		}
-		await this.#healStaleModel(driver, origin, models).catch((error: unknown) => {
-			log.warn("model_heal_failed", { origin: originKey, error: String(error) });
-		});
-	}
-
-	/** Switches a restored session away from a vanished model to the chat-chosen or config default fallback. */
-	async #healStaleModel(
-		driver: OmpSessionDriver,
-		origin: OriginRow,
-		models?: string[],
-	): Promise<"noop" | "replaced" | "no_fallback"> {
-		const { log, originKey, defaultModel } = this.#deps;
-		const active = (await driver.state()).model;
-		if (active === undefined) return "noop";
-		this.#activeModel = active;
-		const listed = models ?? (await driver.availableModels());
-		if (listed.includes(active)) return "noop";
-		const inherited = this.#effectiveSettings(origin).model;
-		const fallback =
-			inherited !== null && listed.includes(inherited)
-				? inherited
-				: defaultModel !== undefined && listed.includes(defaultModel)
-					? defaultModel
-					: undefined;
-		if (fallback === undefined) {
-			log.warn("model_stale_no_fallback", { origin: originKey, model: active });
-			return "no_fallback";
-		}
-		await driver.setModel(fallback);
-		this.#activeModel = fallback;
-		log.warn("model_stale_replaced", { origin: originKey, from: active, to: fallback });
-		return "replaced";
-	}
-
 	/** Counts failed turns, immediately heals missing models, and escalates once `escalateAfter` hits. */
 	async #noteTurnFailure(threadRef: string, reason: string): Promise<void> {
 		this.#consecFailures += 1;
@@ -1486,11 +1417,19 @@ export class OriginMailbox {
 		if (this.#driver !== undefined && isModelFailureSign(reason)) {
 			const origin = this.#deps.store.getOrigin(originKey);
 			if (origin) {
-				const healed = await this.#healStaleModel(this.#driver, origin).catch((error: unknown) => {
+				const healed = await healStaleSessionModel({
+					driver: this.#driver,
+					store: this.#deps.store,
+					originKey,
+					origin,
+					defaultModel: this.#deps.defaultModel,
+					log,
+				}).catch((error: unknown) => {
 					log.warn("model_heal_failed", { origin: originKey, error: String(error) });
-					return "error" as const;
+					return undefined;
 				});
-				modelHealed = healed === "replaced";
+				if (healed?.activeModel !== undefined) this.#activeModel = healed.activeModel;
+				modelHealed = healed?.outcome === "replaced";
 			}
 		}
 		const threshold = this.#deps.escalateAfter ?? DEFAULT_ESCALATE_AFTER;
@@ -1506,7 +1445,10 @@ export class OriginMailbox {
 
 	#turnModel(): string | undefined {
 		const origin = this.#deps.store.getOrigin(this.#deps.originKey);
-		const configured = origin === undefined ? undefined : (this.#effectiveSettings(origin).model ?? undefined);
+		const configured =
+			origin === undefined
+				? undefined
+				: (effectiveOriginSettings(this.#deps.store, this.#deps.originKey, origin).model ?? undefined);
 		return this.#activeModel ?? configured ?? this.#deps.defaultModel;
 	}
 
@@ -1692,6 +1634,25 @@ export class OriginMailbox {
 		}
 		// Mark first so a failing command can never leave its text pending for a later prompt.
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
+		if (command.arg === "" && this.#deps.commandPicker !== undefined && isPickerCommand(command.kind)) {
+			const kind = command.kind;
+			const handled = await this.#deps
+				.commandPicker({
+					kind,
+					originKey,
+					threadRef,
+					busy: this.#turn !== undefined,
+					ensureDriver: () => this.#ensureDriver(threadRef),
+				})
+				.catch((error: unknown) => {
+					log.warn("command_picker_failed", { origin: originKey, command: kind, error: String(error) });
+					return false;
+				});
+			if (handled) {
+				store.discard(row.platformMessageId, opRef);
+				return;
+			}
+		}
 		if (command.kind === "btw" && command.arg !== "" && this.#driver?.btw !== undefined) {
 			askBtw(this.#deps, this.#driver.btw(command.arg), row.platformMessageId, opRef, threadRef);
 			return;
@@ -1720,6 +1681,26 @@ export class OriginMailbox {
 			this.#redrain = false;
 			await this.#drain();
 		}
+	}
+
+	/** Applies one confirmed SelectMenu picker choice on this origin's serial actor chain. */
+	applyPickerCommand(
+		command: ParsedCommand,
+		threadRef: string,
+	): Promise<{ ok: boolean; busy?: boolean; text: string }> {
+		return this.#serial(() =>
+			runPickerCommand(
+				this.#host,
+				command,
+				(cmd, opRef) => commandReply(this.#host, cmd, opRef, threadRef),
+				async () => {
+					this.#activeModel = undefined;
+					if (!this.#redrain) return;
+					this.#redrain = false;
+					await this.#drain();
+				},
+			),
+		);
 	}
 
 	/**

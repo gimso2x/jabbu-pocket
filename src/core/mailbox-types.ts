@@ -20,7 +20,10 @@ import type { ChatPlatform } from "./origin-key";
 import type { StuckDetector } from "./stuck";
 import { CONTINUE_ID_PREFIX, type MailboxClock, type RestartProvider, type StatusProvider } from "./types";
 
-/** Injected so tests use `FakeOmpDriver`; production builds an `RpcOmpDriver` for (origin, sessionDir). */
+/** Commands that offer an interactive SelectMenu picker when invoked without arguments on Discord. */
+export type PickerCommandKind = "model" | "thinking" | "fast" | "usage-reset";
+
+/** What the mailbox (`OriginMailbox`) needs from the daemon. */
 export type DriverFactory = (originKey: string, sessionDir: string) => OmpSessionDriver;
 
 /** Consecutive failed turns (dispatch, failed final, mid-turn exit) before the owner escalation fires. */
@@ -193,11 +196,7 @@ export interface MailboxDeps {
 	escalateAfter?: number;
 	/** Owner escalation of a stalled turn: at most once per turn (`opRef`). */
 	onStallEscalate?: (info: StallEscalation) => void;
-	/**
-	 * The status text of a turn switches to stalled on its first stall (`stalled: true`) and back (`stalled: false`)
-	 * only once the turn has run `STALL_RELEASE_MS` past a stall-clearing event without stalling again; further stalls
-	 * of the same turn do not call it.
-	 */
+	/** Status text switches to stalled on first stall and back after `STALL_RELEASE_MS` without another stall. */
 	onStall?: (info: { originKey: string; threadRef: string; stalled: boolean; silentMs: number }) => void;
 	/**
 	 * The running turn's progress changed (a tool started, a to-do list result, a steer delivered, a model retry); `progress`
@@ -277,12 +276,19 @@ export interface MailboxDeps {
 	briefingProvider?: (originKey: string, threadRef: string) => Promise<void>;
 	/** `!restart`: called with the row's origin and thread, its line becomes the answer. Absent = not wired. */
 	restartProvider?: RestartProvider;
+	/** `/usage-reset-jabbu`: resets quota holds/usage blocks; absent = not wired. */
+	usageResetProvider?: (arg: string, originKey: string) => Promise<string>;
+	/** Interactive command picker for bare commands (`/model`, `/thinking`, `/fast`, `/usage-reset`). */
+	commandPicker?: (info: {
+		kind: PickerCommandKind;
+		originKey: string;
+		threadRef: string;
+		busy: boolean;
+		ensureDriver: () => Promise<OmpSessionDriver>;
+	}) => Promise<boolean>;
 }
 
-/**
- * What the turn HEAD reading needs from the daemon: the repositories, where a commit goes and the git runner. The
- * mailbox only decides *when* the HEADs are read.
- */
+/** What the turn HEAD reading needs from the daemon (the mailbox only decides when to read). */
 export interface TurnHeadsDeps {
 	/**
 	 * Read on every conversation turn (a config reload changes it without a restart): the repositories whose HEAD is
@@ -291,10 +297,7 @@ export interface TurnHeadsDeps {
 	headRepos: () => readonly string[];
 	/** Git runner (tests inject one that counts or fails); absent = the real git. */
 	run?: GitRunner;
-	/**
-	 * A turn left a repository at another head (it committed): its before and after heads per repository. The wiki
-	 * result notes (`src/wiki`) keep the turn from here. Must not throw; a failure never costs the turn anything.
-	 */
+	/** Commits observed around a turn (`src/wiki` turns); must not throw. */
 	onCommitted?: (turn: {
 		originKey: string;
 		opRef: string;
@@ -440,10 +443,7 @@ export interface ActiveTurn {
 	costRecorded: boolean;
 	/** Leaf read right before the prompt; the turn's answers are the entries after it. */
 	entryCursor: string | null;
-	/**
-	 * The child sent this turn's final; set at once, while its `#onFinal` still waits on the actor's chain. A steer then
-	 * would land after the run, so the dispatch leaves the row for the drain that follows the final.
-	 */
+	/** Child sent this turn's final while `#onFinal` waits on the actor chain; steers defer to next drain. */
 	finalArrived: boolean;
 	/** Stalls of this turn (one per silence); the first logs `stall_alert`, the rest `stall_repeat`. */
 	stallCount: number;

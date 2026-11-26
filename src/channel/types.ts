@@ -55,18 +55,14 @@ export interface CoreSink {
 	onAction(action: {
 		actionId: string;
 		value?: string | undefined;
+		values?: readonly string[] | undefined;
 		userId: string;
 		channel?: string | undefined;
 		messageTs?: string | undefined;
 		interactionId?: string | undefined;
 		replyEphemeral?: ((text: string) => Promise<void>) | undefined;
 	}): Promise<void> | void;
-	/**
-	 * An owner reply in a thread: if that thread is an approval card's, the core settles the card with the reply
-	 * (`settled`), recognises a replay (`duplicate`) or names the asking conversation the reply must reach (`route`).
-	 * `undefined`: not an approval card thread — the reply takes the normal inbound path. An `injected` message in a
-	 * card's thread is `injected_rejected`: the card is neither answered nor routed.
-	 */
+	/** Owner thread reply to an approval card: settled, duplicate, routed to asking origin, or injected_rejected. */
 	onCardReply?(reply: {
 		threadRef: string;
 		platformMessageId: string;

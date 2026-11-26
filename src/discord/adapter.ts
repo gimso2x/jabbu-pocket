@@ -466,11 +466,7 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	// ---- button clicks ----
 
-	/**
-	 * A button click (INTERACTION_CREATE type 3). Discord voids the interaction unless it is answered within 3 s, so
-	 * the answer goes out first: a stranger gets an ephemeral denial, the owner a deferred update (type 6) — then the
-	 * core's onAction runs, like any card action, and edits the card itself if it needs to.
-	 */
+	/** Component interaction (button/select): ACK within 3s (ephemeral denial or type 6), then dispatch `core.onAction`. */
 	async handleInteraction(interaction: DiscordInteraction): Promise<void> {
 		if (interaction.type !== MESSAGE_COMPONENT) return;
 		if (this.#seenInteractions.has(interaction.id)) {
@@ -514,6 +510,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				await this.#core.onAction({
 					actionId: customId,
 					value: this.#port.buttonValue(message.id, customId),
+					...(Array.isArray(interaction.data?.values) ? { values: interaction.data.values } : {}),
 					userId,
 					channel,
 					messageTs: message.id,

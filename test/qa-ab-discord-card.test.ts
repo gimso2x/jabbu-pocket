@@ -22,12 +22,11 @@ afterEach(() => {
 });
 
 describe("qa-ab Discord·백필·카드·서식·선택지 수정", () => {
-	test("#9: fenceTables wraps a table containing ``` cells in a longer fence", () => {
+	test("#9: renderStackedTables neutralizes ``` runs inside cells so Discord does not open a fence", () => {
 		const body = "| col | code |\n|---|---|\n| a | ``` |";
 		const [part] = renderDiscordParts(body, false);
-		expect(part).toStartWith("````\n");
-		expect(part).toEndWith("\n````");
-		expect(part).toContain("a   | ```");
+		expect(part).toBe("**col**: a\n- code: ``\u200B`");
+		expect(part).not.toContain("```");
 	});
 
 	test("#27: outsideCode preserves 3-backtick lines inside a 4-backtick fence and keeps inline spans untouched", () => {

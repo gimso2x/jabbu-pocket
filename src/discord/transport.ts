@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-
 // Every Discord call the adapter makes goes through DiscordTransport; tests use FakeDiscordTransport.
 
 /** GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT. */
@@ -67,6 +66,7 @@ export interface DiscordInteraction {
 		| {
 				custom_id?: string | undefined;
 				component_type?: number | undefined;
+				values?: readonly string[] | undefined;
 		  }
 		| undefined;
 	/** Guild interactions carry the user under `member`, DM interactions under `user`. */

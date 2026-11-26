@@ -1,5 +1,6 @@
 import type { ChatPlatform } from "../core/origin-key";
 import type { CardTone } from "./card";
+import type { ActionSelectMenu } from "./components";
 
 export interface MessageRef {
 	platform: ChatPlatform;
@@ -20,22 +21,21 @@ export interface ActionButton {
 	/** Payload the platform hands back with the click. */
 	value?: string;
 	style?: "primary" | "danger";
+	disabled?: boolean;
 }
 
 export interface OutboundMessage {
-	/** The text as the core writes it today (mrkdwn); P1 does no format conversion. */
 	text: string;
 	/** Buttons under the text. `[]` on an edit removes the buttons an earlier version had. */
 	buttons?: readonly ActionButton[];
-	/** One small line under the buttons (a deadline); a plain message shows it only with buttons, a card on its own too. */
+	/** Select menus under/over the text. `[]` on an edit removes menus an earlier version had. */
+	selectMenus?: readonly ActionSelectMenu[];
+	/** One small line under components; a plain message shows it only with components, a card on its own too. */
 	buttonsNote?: string;
-	/** Card title (a port without cards ignores it and `text` carries everything. */
 	title?: string;
-	/** Card body in place of `text`, which then only serves notifications and clients that cannot show the card. */
+	/** Card body in place of `text` (notifications and plain-text fallback still read `text`). */
 	body?: string;
-	/** Labelled values under the body (a card's fields). */
 	fields?: ReadonlyArray<{ label: string; value: string }>;
-	/** Embed colour tone (`ok` | `warn` | `danger` | `info`) for platforms that support rich cards. */
 	tone?: CardTone;
 }
 

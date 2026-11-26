@@ -8,7 +8,7 @@ import type { PrTools } from "../lanes/pr";
 import type { PrLandSeams } from "../lanes/pr-land-steps";
 import type { ClaimEvidence, VerifyResult } from "../lanes/verify";
 import type { Logger } from "../log";
-import type { AgyAccountsStatus } from "../omp/agy-account-pool";
+import type { AgyAccountPool, AgyAccountsStatus } from "../omp/agy-account-pool";
 import type { BackupOptions, BackupResult } from "../ops/backup";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
 import type { TaskLandDeps, TaskLandResult } from "../tasks/land";
@@ -37,17 +37,11 @@ export interface DaemonOptions {
 	hostLoad?: Partial<HostLoadReader>;
 	/** Test seam for the `disk_low` gate in sweeps and status and for a [TASK] start's disk check (default `statfsSync`). */
 	statfs?: StatfsReader;
-	/**
-	 * The backup `start()` runs once when the home has no backup stamp yet (a first install), before the first gate
-	 * sweep; default {@link runBackup}. Tests inject a failing one.
-	 */
+	/** `start()` first-install backup runner; default {@link runBackup}. */
 	bootBackup?: (options: BackupOptions) => BackupResult;
 	/** [TASK] sweep cadence (default 1 minute); 0 disables it (tests call `sweepTasks()` directly). */
 	taskSweepMs?: number;
-	/**
-	 * Sweep retry cadence for stranded pending rows (default {@link PENDING_RETRY_MS}); a pending row older than
-	 * this gets its origin's `resumePending` re-run when the origin is idle; 0 disables it.
-	 */
+	/** Sweep retry cadence for stranded pending rows (default {@link PENDING_RETRY_MS}); 0 disables it. */
 	pendingRetryMs?: number;
 	/** Approval buttons unanswered for this long count as denied (default 30 minutes). */
 	approvalTimeoutMs?: number;
@@ -82,6 +76,8 @@ export interface DaemonOptions {
 	usageLimitsRun?: ProcessRunner;
 	/** Live `agy` account pool status when `agent: "agy"` uses an account pool. */
 	agyStatus?: () => AgyAccountsStatus | undefined;
+	/** Shared `agy` account pool for `/usage-reset-jabbu` unblock actions. */
+	agyPool?: AgyAccountPool | undefined;
 }
 
 export interface InjectRequest {

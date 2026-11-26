@@ -60,6 +60,11 @@ const FORWARDED_SESSION_EVENTS: ReadonlySet<string> = new Set([
 	"retry_fallback_applied",
 ]);
 
+function listen<T>(s: Set<T>, f: T): () => void {
+	s.add(f);
+	return () => s.delete(f);
+}
+
 /** A finite number of at least `min`, else undefined. */
 function countOf(value: unknown, min: number): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value >= min ? value : undefined;
@@ -492,9 +497,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		return opRef;
 	}
 
-	steer(text: string): Promise<void> {
-		return this.#call((client) => client.steer(text));
-	}
+	steer = (text: string): Promise<void> => this.#call((c) => c.steer(text));
 
 	abort(): Promise<void> {
 		this.#dropTail();
@@ -507,9 +510,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		await this.#call((client) => client.abortAndRestoreQueue());
 	}
 
-	newSession(): Promise<{ cancelled: boolean }> {
-		return this.#call((client) => client.newSession());
-	}
+	newSession = (): Promise<{ cancelled: boolean }> => this.#call((c) => c.newSession());
 
 	async openSession(): Promise<OmpOpenResult> {
 		const result = await this.#call((client) => client.openSession(resolve(this.#options.sessionDir)));
@@ -531,12 +532,12 @@ export class RpcOmpDriver implements OmpSessionDriver {
 				? { configuredThinking: raw.configuredThinkingLevel }
 				: {}),
 			...contextOf(raw.contextUsage),
+			...(typeof raw.fastModeEnabled === "boolean" ? { fastModeEnabled: raw.fastModeEnabled } : {}),
+			...(typeof raw.fastModeActive === "boolean" ? { fastModeActive: raw.fastModeActive } : {}),
 		};
 	}
 
-	switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
-		return this.#call((client) => client.switchSession(resolve(sessionFile)));
-	}
+	switchSession = (f: string): Promise<{ cancelled: boolean }> => this.#call((c) => c.switchSession(resolve(f)));
 
 	async availableModels(): Promise<string[]> {
 		const models = await this.#call((client) => client.getAvailableModels());
@@ -560,16 +561,16 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		return this.#call((client) => client.getAvailableThinkingLevels());
 	}
 
-	availableCommands(): Promise<OmpCommand[]> {
-		return this.#call((client) => client.getAvailableCommands());
-	}
+	availableCommands = (): Promise<OmpCommand[]> => this.#call((c) => c.getAvailableCommands());
 
-	setThinking(level: string): Promise<void> {
-		return this.#call((client) => client.setThinkingLevel(level));
+	setThinking = (level: string): Promise<void> => this.#call((c) => c.setThinkingLevel(level));
+
+	setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+		return this.#call((client) => client.setFastMode(enabled));
 	}
 
 	async setTodos(phases: TodoPhase[]): Promise<void> {
-		await this.#call((client) => client.setTodos(phases));
+		await this.#call((c) => c.setTodos(phases));
 	}
 
 	async compact(instructions?: string): Promise<OmpCompactResult> {
@@ -582,9 +583,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		return leafIdViaCursor((since) => this.entriesSince(since), this.#leafCursor);
 	}
 
-	entriesSince(since?: string): Promise<OmpEntries> {
-		return this.#call((client) => client.getEntries(since));
-	}
+	entriesSince = (since?: string): Promise<OmpEntries> => this.#call((c) => c.getEntries(since));
 
 	/**
 	 * One side question (`btw`): subscribes to `btw_record` first, then asks. omp writes the `running` frame before the
@@ -636,20 +635,11 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	onFinal(listener: (final: OmpFinal) => void): () => void {
-		this.#finalListeners.add(listener);
-		return () => this.#finalListeners.delete(listener);
-	}
+	onFinal = (fn: (final: OmpFinal) => void): (() => void) => listen(this.#finalListeners, fn);
 
-	onEvent(listener: (event: OmpEvent) => void): () => void {
-		this.#eventListeners.add(listener);
-		return () => this.#eventListeners.delete(listener);
-	}
+	onEvent = (fn: (event: OmpEvent) => void): (() => void) => listen(this.#eventListeners, fn);
 
-	onExit(listener: (info: OmpExitInfo) => void): () => void {
-		this.#exitListeners.add(listener);
-		return () => this.#exitListeners.delete(listener);
-	}
+	onExit = (fn: (info: OmpExitInfo) => void): (() => void) => listen(this.#exitListeners, fn);
 
 	async stop(): Promise<void> {
 		const client = this.#client;

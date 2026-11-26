@@ -20,11 +20,13 @@ export type CommandKind =
 	| "status"
 	| "model"
 	| "thinking"
+	| "fast"
 	| "compact"
 	| "resume"
 	| "queue"
 	| "followup"
 	| "usage"
+	| "usage-reset"
 	| "distill"
 	| "btw"
 	| "budget"
@@ -43,11 +45,13 @@ export const COMMAND_TEXT: Record<CommandKind, string> = {
 	status: "/status-jabbu",
 	model: "/model-jabbu",
 	thinking: "/thinking-jabbu",
+	fast: "/fast-jabbu",
 	compact: "/compact-jabbu",
 	resume: "/resume-jabbu",
 	queue: "/queue-jabbu",
 	followup: "/followup-jabbu",
 	usage: "/usage-jabbu",
+	"usage-reset": "/usage-reset-jabbu",
 	distill: "/distill-jabbu",
 	btw: "/btw-jabbu",
 	budget: "/budget-jabbu",
@@ -104,15 +108,9 @@ export function purposeMemoError(memo: string): string | null {
 }
 
 /** Kinds that take an argument after the command word; the others only count when they are the whole message. */
-export const TAKES_ARG: ReadonlySet<CommandKind> = new Set([
-	"model",
-	"thinking",
-	"compact",
-	"resume",
-	"queue",
-	"followup",
-	"btw",
-]);
+export const TAKES_ARG: ReadonlySet<CommandKind> = new Set(
+	"model thinking fast compact resume queue followup btw usage-reset".split(" ") as CommandKind[],
+);
 
 export interface ParsedCommand {
 	kind: CommandKind;

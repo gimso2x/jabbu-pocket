@@ -11,6 +11,7 @@ import type {
 import { cutCodePointSafe } from "../channel/text";
 import { TOP_LEVEL_TS } from "../core/normalize";
 import { type DiscordEmbed, fitEmbed, subtext } from "./card";
+import { buttonRows, componentRows } from "./components";
 import { toDiscordEmoji } from "./emoji";
 import { mrkdwnToDiscord } from "./format";
 import {
@@ -22,6 +23,8 @@ import {
 	type MessageReference,
 	UPLOAD_LIMIT_BYTES,
 } from "./transport";
+
+export { buttonRows };
 
 /** Discord's "a thread has already been created for this message": the thread is there. */
 export const THREAD_EXISTS = 160004;
@@ -35,10 +38,6 @@ const THREAD_TYPES: ReadonlySet<number> = new Set([10, 11, 12]);
 /** Channel types of direct messages (DM, group DM). */
 const DM_TYPES: ReadonlySet<number> = new Set([1, 3]);
 
-/** Buttons per Action Row, label and custom_id lengths (Components Reference). */
-const ROW_BUTTONS = 5;
-const LABEL_MAX = 80;
-const CUSTOM_ID_MAX = 100;
 const CACHE_MAX = 1000; // #channels and #messageChannels FIFO cap; oldest forgotten first
 
 function setBounded<V>(map: Map<string, V>, key: string, value: V): void {
@@ -46,9 +45,6 @@ function setBounded<V>(map: Map<string, V>, key: string, value: V): void {
 	const oldest = map.keys().next().value;
 	if (map.size > CACHE_MAX && oldest !== undefined) map.delete(oldest);
 }
-const BUTTON_STYLE = { primary: 1, danger: 4 } as const;
-/** SECONDARY: a button without a style. */
-const DEFAULT_STYLE = 2;
 
 /**
  * Where a button's `value` is kept: Discord components carry only `custom_id`, so the value is stored under
@@ -62,33 +58,6 @@ export interface ButtonValueLedger {
 }
 
 const buttonKeyPrefix = (messageId: string): string => `btn:${messageId}:`;
-
-/**
- * Action Rows (type 1) of at most five buttons (type 2). A custom_id Discord would refuse is an error before
- * anything is sent: cutting it would change which action a click names.
- */
-export function buttonRows(buttons: readonly ActionButton[]): unknown[] {
-	const rows: unknown[] = [];
-	for (let start = 0; start < buttons.length; start += ROW_BUTTONS) {
-		rows.push({
-			type: 1,
-			components: buttons.slice(start, start + ROW_BUTTONS).map((button) => {
-				if (button.actionId.length === 0 || button.actionId.length > CUSTOM_ID_MAX)
-					throw new DiscordCallError(
-						"definitive",
-						`discord custom_id must be 1-${CUSTOM_ID_MAX} characters: ${button.actionId.slice(0, 40)}… (${button.actionId.length})`,
-					);
-				return {
-					type: 2,
-					style: button.style === undefined ? DEFAULT_STYLE : BUTTON_STYLE[button.style],
-					label: cutCodePointSafe(button.label, LABEL_MAX),
-					custom_id: button.actionId,
-				};
-			}),
-		});
-	}
-	return rows;
-}
 
 /** Where a post lands: a channel (a thread is one), optionally as a reply to a message in it. */
 export interface Destination {
@@ -111,9 +80,10 @@ export function messageOf(msg: OutboundMessage): { content: string; embeds?: Dis
 		});
 		return { content: cutCodePointSafe(mrkdwnToDiscord(msg.text), MESSAGE_CONTENT_LIMIT), embeds: [embed] };
 	}
+	const hasComponents = (msg.buttons?.length ?? 0) > 0 || (msg.selectMenus?.length ?? 0) > 0;
 	const lines = [
 		mrkdwnToDiscord(msg.text),
-		...(msg.buttonsNote !== undefined && (msg.buttons?.length ?? 0) > 0 ? [mrkdwnToDiscord(msg.buttonsNote)] : []),
+		...(msg.buttonsNote !== undefined && hasComponents ? [mrkdwnToDiscord(msg.buttonsNote)] : []),
 	];
 	return { content: cutCodePointSafe(lines.join("\n"), MESSAGE_CONTENT_LIMIT) };
 }
@@ -241,7 +211,9 @@ export class DiscordChannel implements ChannelPort {
 	async post(target: PostTarget, msg: OutboundMessage): Promise<MessageRef> {
 		const { content, embeds } = messageOf(msg);
 		const buttons = msg.buttons ?? [];
-		const components = buttons.length === 0 ? undefined : buttonRows(buttons);
+		const selectMenus = msg.selectMenus ?? [];
+		const components =
+			buttons.length === 0 && selectMenus.length === 0 ? undefined : componentRows(buttons, selectMenus);
 		const destination = await this.destination(target.conversationId, target.threadId);
 		const { id } = await this.transport.createMessage({
 			channelId: destination.channelId,
@@ -263,16 +235,18 @@ export class DiscordChannel implements ChannelPort {
 
 	async edit(ref: MessageRef, msg: OutboundMessage): Promise<void> {
 		const { content, embeds } = messageOf(msg);
-		// `buttons: []` removes earlier buttons, and so does a card redrawn without any.
-		const buttons = msg.buttons ?? (isCard(msg) ? [] : undefined);
-		const components = buttons === undefined ? undefined : buttonRows(buttons);
+		// Explicit `buttons`/`selectMenus` or a card without them clears earlier components (`components: []`).
+		const clearComponents = isCard(msg) || msg.buttons !== undefined || msg.selectMenus !== undefined;
+		const buttons = clearComponents ? (msg.buttons ?? []) : undefined;
+		const selectMenus = clearComponents ? (msg.selectMenus ?? []) : undefined;
+		const components = clearComponents ? componentRows(buttons ?? [], selectMenus ?? []) : undefined;
 		await this.transport.editMessage({
 			channelId: await this.#messageChannel(ref),
 			messageId: ref.messageId,
 			content,
 			allowedMentions: this.allowedMentions(content),
-			// A message redrawn plain with `buttons`: an earlier card's embed goes too.
-			...(embeds !== undefined ? { embeds } : msg.buttons !== undefined ? { embeds: [] } : {}),
+			// A message redrawn plain with components: an earlier card's embed goes too.
+			...(embeds !== undefined ? { embeds } : clearComponents ? { embeds: [] } : {}),
 			...(components === undefined ? {} : { components }),
 		});
 		if (buttons !== undefined) this.#storeButtonValues(ref.messageId, buttons);

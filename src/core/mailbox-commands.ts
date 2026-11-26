@@ -8,6 +8,7 @@ import { chargeSessionWindow } from "./mailbox-cost";
 import { briefingReason, pickOption } from "./mailbox-helpers";
 import { failedNotice } from "./mailbox-notices";
 import { UNCERTAIN_REASON_TEXT } from "./mailbox-sending";
+import { fastCommand, usageResetCommand } from "./mailbox-settings";
 import { MAX_LISTED, type MailboxDeps, type MailboxHost, minutes, preview } from "./mailbox-types";
 import { platformOfThreadRef } from "./normalize";
 import { listSavedSessions, pickSession } from "./sessions";
@@ -34,8 +35,7 @@ export async function commandReply(
 			if (host.deps.budgetProvider === undefined) return "비용 장부가 연결되지 않았습니다";
 			return await host.deps.budgetProvider();
 		case "btw":
-			// A question with a turn and a capable driver was started by `#runCommand`; without a turn it never
-			// reaches here (it becomes a plain message).
+			// A question with a turn and capable driver ran in #runCommand; idle turns reach here as plain prompts.
 			if (arg !== "") return "이 대화의 에이전트는 곁질문을 지원하지 않습니다.";
 			return "사용법: `!btw <질문>` — 진행 중인 작업에 끼워 넣지 않고 그 질문에만 바로 답합니다. 작업 중이 아니면 일반 메시지로 보냅니다.";
 		case "queue":
@@ -48,6 +48,11 @@ export async function commandReply(
 		case "thinking":
 			if (arg !== "" && host.turn()) return busyText;
 			return await thinkingCommand(host, arg, threadRef);
+		case "fast":
+			if (arg !== "" && host.turn()) return busyText;
+			return await fastCommand(host, arg, threadRef);
+		case "usage-reset":
+			return await usageResetCommand(host, arg);
 		case "compact":
 			if (host.turn()) return busyText;
 			return await compactCommand(host, arg, opRef, threadRef);
@@ -65,10 +70,7 @@ export async function commandReply(
 	}
 }
 
-/**
- * `!restart` never touches the driver or a turn: a drain already running answers at once, a non-Discord or
- * monitor origin is refused, and otherwise the daemon's provider launches the detached apply (or says why not).
- */
+/** `!restart`: refuses monitor/draining origins; otherwise launches detached apply via daemon provider. */
 export async function restartCommand(host: MailboxHost, threadRef: string): Promise<string> {
 	const { originKey, restartProvider } = host.deps;
 	if (host.deps.isDraining?.()) return RESTART_DRAINING_TEXT;
@@ -249,10 +251,7 @@ export async function queueText(host: MailboxHost): Promise<string> {
 	return lines.join("\n");
 }
 
-/**
- * `/queue-jabbu`: no argument lists the queue; `drop <번호>` cancels exactly one waiting row (pending ->
- * discarded), so it is never prompted or steered. Allowed while a turn runs — that is when the queue builds up.
- */
+/** `/queue-jabbu`: lists queue or cancels/closes/retries one item; allowed while a turn runs. */
 export async function queueCommand(host: MailboxHost, arg: string, opRef: string): Promise<string> {
 	if (arg === "") return await queueText(host);
 	const sub = /^(drop|close|retry)\s+(\S+)$/.exec(arg);
@@ -282,11 +281,7 @@ export async function queueCommand(host: MailboxHost, arg: string, opRef: string
 	return `🚫 대기 ${number}번을 취소했습니다: [${picked.label}] ${preview(picked.command ? picked.command.arg : picked.row.textRef)}`;
 }
 
-/**
- * `close <번호>` discards an uncertain row without replaying it; `retry <번호>` makes it pending again and the drain
- * sends it once more from scratch (it may then answer twice). `slot` indexes the uncertain list (negative = a
- * waiting row's number, which these two never touch).
- */
+/** `close <번호>` discards an uncertain row; `retry <번호>` re-queues it. `slot` indexes `uncertainRows`. */
 export function resolveUncertain(
 	host: MailboxHost,
 	verb: "close" | "retry",

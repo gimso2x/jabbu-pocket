@@ -174,6 +174,23 @@ export class AgyAccountPool {
 		return this.#isBlockedMem(name, now);
 	}
 
+	clearBlocked(account?: string, now = this.#now()): string[] {
+		this.#syncStateFromDisk();
+		const cleared: string[] = [];
+		if (account === undefined || account === "*") {
+			for (const [name, until] of Object.entries(this.#blocked)) {
+				if (until > now) cleared.push(name);
+			}
+			this.#blocked = {};
+			if (cleared.length > 0) this.#saveState(now, "*");
+			return cleared.sort();
+		}
+		if ((this.#blocked[account] ?? 0) > now) cleared.push(account);
+		delete this.#blocked[account];
+		if (cleared.length > 0) this.#saveState(now, new Set([account]));
+		return cleared;
+	}
+
 	#isBlockedMem(name: string, now: number): boolean {
 		const until = this.#blocked[name];
 		return until !== undefined && until > now;
@@ -351,12 +368,14 @@ export class AgyAccountPool {
 		this.#loadedPath = path;
 	}
 
-	#saveState(now: number): void {
+	#saveState(now: number, drop?: "*" | ReadonlySet<string>): void {
 		const path = this.#resolveStatePath();
-		const disk = this.#readDiskState(path);
+		const disk = drop === "*" ? undefined : this.#readDiskState(path);
 		const blocked: Record<string, number> = {};
-		for (const [name, until] of Object.entries(disk?.blocked ?? {})) {
-			if (until > now) blocked[name] = until;
+		if (drop !== "*" && disk !== undefined) {
+			for (const [name, until] of Object.entries(disk.blocked)) {
+				if (until > now && !drop?.has(name)) blocked[name] = until;
+			}
 		}
 		for (const [name, until] of Object.entries(this.#blocked)) {
 			if (until > now) blocked[name] = Math.max(blocked[name] ?? 0, until);

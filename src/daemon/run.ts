@@ -253,7 +253,7 @@ export async function runDaemon(
 		...(hostLoad === undefined ? {} : { hostLoad }),
 		...(statfs === undefined ? {} : { statfs }),
 		sweepMs: env.JABBU_TEST_HOOKS === "1" && env.JABBU_SWEEP_MS ? Number(env.JABBU_SWEEP_MS) : undefined,
-		...(agyPool === undefined ? {} : { agyStatus: () => agyPool.status(clock.now()) }),
+		...(agyPool === undefined ? {} : { agyPool, agyStatus: () => agyPool.status(clock.now()) }),
 		driverFactory: createBotDriverFactory({
 			getConfig: () => daemonOptions.config,
 			secretsDir,

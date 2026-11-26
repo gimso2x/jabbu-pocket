@@ -80,6 +80,10 @@ export interface OriginRouterDeps {
 	briefingProvider?: MailboxDeps["briefingProvider"];
 	/** `!restart` launcher; passed to every mailbox (`MailboxDeps.restartProvider`). */
 	restartProvider?: MailboxDeps["restartProvider"];
+	/** `/usage-reset-jabbu` handler; passed to every mailbox (`MailboxDeps.usageResetProvider`). */
+	usageResetProvider?: MailboxDeps["usageResetProvider"];
+	/** Interactive command picker for bare commands; passed to every mailbox (`MailboxDeps.commandPicker`). */
+	commandPicker?: MailboxDeps["commandPicker"];
 	/** Whether an origin's work is held (a paused lane); passed per mailbox (`MailboxDeps.isHeld`). */
 	isHeld?: (originKey: string) => boolean;
 	/** Reason an origin's queued turns are held by a provider quota limit; absent when open. */
@@ -124,8 +128,6 @@ export class OriginRouter {
 				sessionsRoot,
 				isHeld,
 				quotaHoldReason,
-				onQuotaError,
-				onHeldWork,
 				initialTodos,
 				launchRefusal,
 				onLaunchRefused,
@@ -141,8 +143,6 @@ export class OriginRouter {
 				isDraining: () => this.draining,
 				...(isHeld === undefined ? {} : { isHeld: () => isHeld(originKey) }),
 				...(quotaHoldReason === undefined ? {} : { quotaHoldReason: () => quotaHoldReason(originKey) }),
-				...(onQuotaError === undefined ? {} : { onQuotaError }),
-				...(onHeldWork === undefined ? {} : { onHeldWork }),
 				...(initialTodos === undefined ? {} : { initialTodos: () => initialTodos(originKey) }),
 				...(launchRefusal === undefined ? {} : { launchRefusal: (driver) => launchRefusal(originKey, driver) }),
 				...(onLaunchRefused === undefined ? {} : { onLaunchRefused: (reason) => onLaunchRefused(originKey, reason) }),
@@ -161,10 +161,8 @@ export class OriginRouter {
 		const mailbox = this.mailbox(record.originKey);
 		// One line per thread-session lifetime: the first routed message opens `discord/ch/<C>/t/<rootId>`.
 		if (!known && isThreadOrigin(record.originKey)) {
-			this.#deps.log.info("thread_session_started", {
-				origin: record.originKey,
-				root: record.originKey.slice(record.originKey.lastIndexOf("/") + 1),
-			});
+			const root = record.originKey.slice(record.originKey.lastIndexOf("/") + 1);
+			this.#deps.log.info("thread_session_started", { origin: record.originKey, root });
 		}
 		return mailbox.enqueue(record);
 	}
@@ -184,7 +182,7 @@ export class OriginRouter {
 
 	/** Alerts origins whose running turn has gone silent; returns how many alerted now. */
 	sweepStalls(): number {
-		return [...this.#mailboxes.values()].filter((mailbox) => mailbox.checkStall()).length;
+		return [...this.#mailboxes.values()].filter((m) => m.checkStall()).length;
 	}
 
 	/** What the origin's running turn is writing now; null for an origin with no mailbox (never creates one). */
@@ -214,7 +212,7 @@ export class OriginRouter {
 
 	/** Origins with a running turn, or one whose child is still starting (spawn and prompt not yet through). */
 	busyTurns(): number {
-		return [...this.#mailboxes.values()].filter((mailbox) => mailbox.turnPending).length;
+		return [...this.#mailboxes.values()].filter((m) => m.turnPending).length;
 	}
 
 	/** Host tool calls running across every origin. */
@@ -225,12 +223,12 @@ export class OriginRouter {
 	/** Shutdown drain mode: stop dispatching pending rows across all mailboxes. */
 	stopDispatching(): void {
 		this.#dispatchStopped = true;
-		for (const mailbox of this.#mailboxes.values()) mailbox.stopDispatching();
+		for (const m of this.#mailboxes.values()) m.stopDispatching();
 	}
 
 	/** Origins whose mailbox currently has a turn running. */
 	busyOrigins(): string[] {
-		return [...this.#mailboxes.entries()].filter(([, mailbox]) => mailbox.state.busy).map(([originKey]) => originKey);
+		return [...this.#mailboxes.entries()].filter(([, m]) => m.state.busy).map(([k]) => k);
 	}
 
 	/** Shutdown drain: wait bounded for running turns to settle; returns origins still busy at timeout. */
@@ -244,6 +242,6 @@ export class OriginRouter {
 	}
 
 	async close(): Promise<void> {
-		await Promise.all([...this.#mailboxes.values()].map((mailbox) => mailbox.close()));
+		await Promise.all([...this.#mailboxes.values()].map((m) => m.close()));
 	}
 }

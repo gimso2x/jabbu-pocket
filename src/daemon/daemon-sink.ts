@@ -25,6 +25,7 @@ import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format"
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseOpsPanelActionId } from "../ops/ops-panel";
+import { parsePickerActionId } from "../ops/picker";
 import { parseApprovalRetryActionId } from "../safety/approval";
 import { AMBIGUOUS_NOTICE_OP_PREFIX, INTERIM_INFIX, LOG_COPY_SUFFIX, PEER_SILENCE_OP_PREFIX } from "../store/db";
 import type { DeliveryRow, InboundRow } from "../store/db-rows";
@@ -39,6 +40,7 @@ import {
 } from "./daemon-constants";
 import { approvalOf, type DaemonContext, dispatchPending, postThreadNotices, startedStore } from "./daemon-context";
 import type { DaemonOpsPanel } from "./daemon-ops-panel";
+import type { DaemonCommandPicker } from "./daemon-picker";
 import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
@@ -56,6 +58,7 @@ export interface CoreSinkDeps {
 	pending: PendingDispatchSweep;
 	landing: DaemonTaskLanding;
 	opsPanel?: DaemonOpsPanel;
+	picker?: DaemonCommandPicker;
 	statusText: (originKey: string) => Promise<string>;
 }
 
@@ -249,10 +252,13 @@ export class DaemonInbound {
 				const ts = parseThreadRef(platformMessageId)?.threadTs ?? platformMessageId;
 				return approvalOf(ctx).handleCardReply({ approvalId: threadRef, ts, text, injected });
 			},
-			onAction: ({ actionId, value, userId, channel, messageTs, interactionId, replyEphemeral }) => {
+			onAction: ({ actionId, value, values, userId, channel, messageTs, interactionId, replyEphemeral }) => {
 				if (approvalOf(ctx).handleAction({ actionId, userId, answerId: interactionId })) return;
 				const opsAction = parseOpsPanelActionId(actionId);
 				if (opsAction !== undefined) return deps.opsPanel?.handleAction(opsAction, replyEphemeral);
+				const pickerAction = parsePickerActionId(actionId);
+				if (pickerAction !== undefined)
+					return deps.picker?.handleAction(pickerAction, { values, channel, messageTs, replyEphemeral });
 				const retry = parseApprovalRetryActionId(actionId);
 				if (retry !== undefined)
 					return deps.landing.handleApprovalRetry(`${retry.channel}:${retry.ts}`, channel, messageTs);
@@ -551,25 +557,19 @@ export class DaemonInbound {
 									: await lanes.resume(name, "button");
 		this.#ctx.log.info(outcome.handled ? `lane_${kind}_requested` : `lane_${kind}_ignored`, { lane: name });
 		if (kind === "pause" || kind === "resume" || kind === "session") {
-			// The status message changes, but the owner clicked: the answer tells what was re-read.
-			const lane = this.#ctx.store?.getLane(name);
-			const route = lane === undefined ? undefined : this.#ctx.channels.forThreadRef(lane.threadRef);
-			if (route !== undefined) {
-				await route.port
-					.post(route.target, { text: outcome.text })
-					.catch((error: unknown) =>
-						this.#ctx.log.warn("lane_button_reply_failed", { lane: name, error: String(error) }),
-					);
-			}
+			await this.#replyLaneThread(name, outcome.text);
 			return;
 		}
 		if (outcome.handled) return;
-		// A refused click changes no card, so the owner is told why in the lane's thread (a text command gets the same).
+		await this.#replyLaneThread(name, `⚠️ ${outcome.text}`);
+	}
+
+	async #replyLaneThread(name: string, text: string): Promise<void> {
 		const lane = this.#ctx.store?.getLane(name);
 		const route = lane === undefined ? undefined : this.#ctx.channels.forThreadRef(lane.threadRef);
 		if (route === undefined) return;
 		await route.port
-			.post(route.target, { text: `⚠️ ${outcome.text}` })
+			.post(route.target, { text })
 			.catch((error: unknown) => this.#ctx.log.warn("lane_button_reply_failed", { lane: name, error: String(error) }));
 	}
 

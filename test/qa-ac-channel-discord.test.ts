@@ -24,7 +24,7 @@ describe("qa-ac channel·discord 수정", () => {
 	test("#11: 표 바로 뒤 탭·4칸 들여쓴 코드 줄은 표 행으로 흡수되지 않는다", () => {
 		const md = ["| a | b |", "| --- | --- |", "| 1 | 2 |", "\t| tab | row |", "    | space | row |"].join("\n");
 		const [part] = renderDiscordParts(md, false);
-		expect(part).toContain("```\na | b\n--+--\n1 | 2\n```");
+		expect(part).toContain("**a**: 1\n- b: 2");
 		expect(part).toContain("\t| tab | row |");
 		expect(part).toContain("    | space | row |");
 	});

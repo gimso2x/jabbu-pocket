@@ -1,19 +1,8 @@
 // Text for Discord: core text written as Slack mrkdwn becomes Discord markdown (`mrkdwnToDiscord`), and a delivery body
-// (the model's markdown, which Discord mostly draws as is) becomes messages of at most 2000 characters
-// (`renderDiscordParts`); cards and copy blocks are cut out in `messages.ts`.
-import { tableToAscii } from "../channel/card";
-import {
-	chunkText,
-	delimiterAligns,
-	escapeMrkdwn,
-	fenceCloseRun,
-	fenceOpenRun,
-	inlineSpans,
-	REDELIVERED_PREFIX,
-	splitRowCells,
-	tableEndAt,
-} from "../channel/text";
-import { clampBacktickRuns, maxBacktickRun, outsideCode } from "./code-spans";
+// becomes Discord messages of at most 2000 characters (`renderDiscordParts`); cards and copy blocks split in `messages.ts`.
+import { chunkText, escapeMrkdwn, inlineSpans, REDELIVERED_PREFIX } from "../channel/text";
+import { outsideCode } from "./code-spans";
+import { renderStackedTables } from "./table";
 import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
 export { outsideCode };
@@ -55,67 +44,9 @@ export function escapeDiscordMarkdown(text: string): string {
 	return escapeMrkdwn(text.replace(/[\\*_`~|>()[\]]/g, "\\$&").replace(/(^|\n)( {0,3})(#)/g, "$1$2\\$3"));
 }
 
-/** Inline `code`, `[label](url)`, `**bold**`, `__bold__` show literally in a fence; spans are capped (linear time). */
-const CELL_INLINE =
-	/(?<!`)(`+)(?!`)(.{1,128}?)(?<!`)\1(?!`)|\[([^[\]]{1,256})\]\((?:[^()\n]|\([^()\n]{0,512}\)){0,1024}\)|\*\*(?=\S)(.{1,128}?)(?<=\S)\*\*|(?<!\w)__(?=\S)(.{1,128}?)(?<=\S)__(?!\w)/g;
-
-function stripCellMarkdown(cell: string): string {
-	return cell.replace(
-		CELL_INLINE,
-		(match, _ticks, code?: string, linkLabel?: string, boldStar?: string, boldUnder?: string) => {
-			const inner = linkLabel ?? boldStar ?? boldUnder;
-			if (code !== undefined) return code;
-			return inner === undefined ? match : stripCellMarkdown(inner);
-		},
-	);
-}
-
-/** GFM tables outside code fences, aligned by `displayWidth` and wrapped in a trackable code fence. */
-function fenceTables(text: string, limit = MESSAGE_CONTENT_LIMIT): { text: string; spans: Array<[number, number]> } {
-	const lines = text.split("\n");
-	const out: string[] = [];
-	const spans: Array<[number, number]> = [];
-	let offset = 0;
-	let fenceRun = 0;
-	const push = (line: string): void => {
-		out.push(line);
-		offset += line.length + 1;
-	};
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i] ?? "";
-		// A fence opens on a line of 3+ backticks and an info string without backticks, and closes on a line of backticks
-		// alone at least as long; a fence closed on its own line (```bash x```) opens nothing.
-		if (fenceRun === 0) fenceRun = fenceOpenRun(line) ?? 0;
-		else if ((fenceCloseRun(line) ?? 0) >= fenceRun) fenceRun = 0;
-		const end = fenceRun > 0 ? undefined : tableEndAt(lines, i, 3);
-		if (end === undefined) {
-			push(line);
-			continue;
-		}
-		const headers = splitRowCells(line).map(stripCellMarkdown);
-		const rows = lines.slice(i + 2, end).map((row) => {
-			const cells = splitRowCells(row).map(stripCellMarkdown);
-			return headers.map((_, col) => cells[col] ?? "");
-		});
-		// The delimiter row's `:` markers pick the padding side; the markers themselves never reach the output.
-		const align = delimiterAligns(lines[i + 1] ?? "");
-		const maxFence = Math.max(16, Math.floor(limit / 4));
-		const ascii = clampBacktickRuns(tableToAscii({ headers, rows }, { rule: true, align }), maxFence);
-		const fence = "`".repeat(Math.max(3, maxBacktickRun(ascii) + 1));
-		const start = offset;
-		push(fence);
-		for (const row of ascii.split("\n")) push(row);
-		push(fence);
-		spans.push([start, offset - 1]);
-		i = end - 1;
-	}
-	return { text: out.join("\n"), spans };
-}
-
 /**
- * One delivery body as Discord messages: tables fenced, split into parts of at most 2000 characters with code fences
- * closed in each part and surrogate pairs kept whole. A redelivered answer is marked in its first part; `footer`
- * (elapsed time, tool count) closes the last one as an italic line.
+ * One delivery body as Discord messages: GFM tables rendered as stacked Markdown for mobile readability and split into
+ * parts of at most 2000 characters with code fences closed in each part and surrogate pairs kept whole.
  */
 export function renderDiscordParts(body: string, redelivered: boolean, footer?: string): string[] {
 	const prefix = redelivered ? `${REDELIVERED_PREFIX}\n` : "";
@@ -124,12 +55,10 @@ export function renderDiscordParts(body: string, redelivered: boolean, footer?: 
 	return parts.map((part, i) => `${i === 0 ? prefix : ""}${part}${i === parts.length - 1 ? suffix : ""}`);
 }
 
-/** Plain text in parts of at most `limit`: tables fenced and kept whole when they fit, fences closed in each part. */
+/** Plain text in parts of at most `limit`: stacked tables kept whole when they fit, fences closed in each part. */
 export function chunkPlain(body: string, limit: number): string[] {
-	const { text, spans } = fenceTables(body, limit);
-	// A table longer than a message cannot stay whole; it is split like any fenced block.
-	// Links, timestamps and spoilers outside fences are kept whole the same way; tables first, so a link inside a
-	// table falls under its table span.
+	const { text, spans } = renderStackedTables(body);
+	// A stacked table longer than one message splits on `\n\n` row boundaries; inline spans inside it stay whole.
 	const whole = [...spans, ...inlineSpans(text)].filter(([start, end]) => end - start <= limit);
 	return chunkText(text, limit, whole);
 }
