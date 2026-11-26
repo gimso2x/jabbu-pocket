@@ -149,7 +149,12 @@ describe("gap 1: the process is cut while a send is in flight", () => {
 				uncertainReason: "send_interrupted",
 			});
 			expect(sent("prompt")).toHaveLength(1);
-			expect(store.listDeliveries({ originKey: ORIGIN })).toEqual([]);
+			// The boot park posts exactly one notice in the row's thread (its only delivery: nothing was answered).
+			const notices = store.listDeliveries({ originKey: ORIGIN });
+			expect(notices).toHaveLength(1);
+			expect(notices[0]).toMatchObject({ opRef: `uncertain:${row.platformMessageId}`, threadRef: row.threadRef });
+			expect(notices[0]?.body).toContain("전달 불확실");
+			expect(notices[0]?.body).toContain(row.text);
 		});
 	}
 
