@@ -14,7 +14,7 @@ import type { InboundRow, OriginRow } from "../store/db-rows";
 import type { TypicalDuration } from "../store/turn-duration";
 import { PROVIDER_LIMIT } from "./failure-kind";
 import type { LiveTurn } from "./live-turn";
-import { STEER_BEFORE_ANSWER_SEEN_NOTE, type TurnPeer } from "./mailbox-notices";
+import type { TurnPeer } from "./mailbox-notices";
 import type { ThreadSource } from "./mailbox-thread-context";
 import type { ChatPlatform } from "./origin-key";
 import type { StuckDetector } from "./stuck";
@@ -208,30 +208,21 @@ export interface MailboxDeps {
 	onEscalate?: (info: TurnFailureEscalation) => void;
 	/** A turn's omp retry reported a provider usage limit; once per turn, on the actor chain (never await the platform). */
 	onProviderLimit?: (info: ProviderLimitInfo) => void;
-	/**
-	 * A `child_restart`/`unexplained` prompt cache miss of `CACHE_MISS_NOTIFY_TOKENS`+ in a conversation turn; at most
-	 * once per origin per `CACHE_MISS_NOTIFY_MS` (memory only), never for a monitor. On the actor chain: never await the platform.
-	 */
+	/** Turn/send failed with a provider quota/rate-limit error; daemon tracks recovery and holds queued turns. */
+	onQuotaError?: (info: { originKey: string; threadRef: string; model?: string; reason: string }) => void;
+	/** Prompt cache miss notice for conversation turns (never monitors). */
 	onCacheMiss?: (info: CacheMissInfo) => void;
 	/** A new conversation turn starts on a cold cache (`isColdCache`); once per baseline, never for a monitor. */
 	onColdCache?: (info: ColdCacheInfo) => void;
 	/** True while a restart drain runs: messages are recorded `pending` only — no new turn, no steer, no command. */
 	isDraining?: () => boolean;
-	/**
-	 * True while this origin's work is held (a paused lane; the registry row is the single source). Like a drain:
-	 * pending rows wait — no new turn, no steer — until the hold lifts (`!` commands still run). `resumePending`
-	 * re-runs them.
-	 */
+	/** True while held (paused lane): pending rows wait until resumed (`!` commands still run). */
 	isHeld?: () => boolean;
-	/**
-	 * True while the bot is frozen (`FROZEN`): autonomous rows (`isAutonomousRow`) stay pending — no turn — while the
-	 * owner's rows run as usual. `resumePending` re-runs them after the unfreeze.
-	 */
+	/** Reason queued turns are held by a provider quota limit; absent when open. */
+	quotaHoldReason?: () => string | undefined;
+	/** True while frozen (`FROZEN`): autonomous rows wait; owner rows still run. */
 	isFrozen?: () => boolean;
-	/**
-	 * True while the origin's session is handed to a terminal omp (`jabbu-pocket lanes attach`): no child starts — not even
-	 * for a `!` command, which stays pending like any other row until the session comes back.
-	 */
+	/** True while attached to a terminal omp: no child or `!` command runs until detached. */
 	isAttached?: () => boolean;
 	/**
 	 * The held origin's driver started working on its own (a queued message omp began without the mailbox: a
@@ -487,11 +478,10 @@ export interface ActiveTurn {
 	pendingAnswer: string | undefined;
 	/** Pending owner rows the drain held back because the turn is at `MAX_STEERS` (they never answer a dialog card). */
 	capDeferred: Set<string>;
-	/**
-	 * When this turn's last interim answer (not a wait note) was recorded for delivery: an owner row written before it
-	 * is steered with {@link STEER_BEFORE_ANSWER_SEEN_NOTE}; undefined until the turn sent one.
-	 */
+	/** Prompt cache miss notice timing; undefined until first miss. */
 	lastInterimDeliveredAt: number | undefined;
+	/** Effective `provider/id` model of this turn when known. */
+	model?: string;
 }
 
 /**
@@ -568,4 +558,6 @@ export interface MailboxHost {
 	frozenHold(row: InboundRow): boolean;
 	/** `/queue retry`: the command's end runs a drain so the row it made pending goes out. */
 	requestRedrain(): void;
+	/** Reason queued turns are held by a provider quota limit; absent when open. */
+	quotaHoldReason(): string | undefined;
 }

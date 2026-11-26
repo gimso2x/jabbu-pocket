@@ -1,9 +1,16 @@
 import { typicalNote } from "../store/turn-duration";
 import type { BoardPanel } from "./board";
 import { discordThreadHref, renderFlowChain } from "./detail";
-import { hostChecksLevel, repoCountsText } from "./host-checks";
 import { byAttention, type InboxEntry, inboxEntries, isStale } from "./inbox";
 import { contextBar, costCardBody, renderLimitsPop } from "./load-view";
+import {
+	renderInboxMachines,
+	renderInboxPulse,
+	renderPeerBotsCard,
+	renderSystemMachines,
+	renderTurnBotFilters,
+} from "./ops-renderers";
+import { renderHerdrAgentsBlock, renderHostChecksCard } from "./ops-views";
 import type { DashboardSnapshot, JobInfo, MonitorInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -18,6 +25,7 @@ import {
 	TURN_LABELS,
 } from "./text";
 import { type Turn, type TurnGroup, turnOf } from "./turn";
+import { renderFlowCards, renderNavExtras, renderStatusPop, renderSysStrip, renderViewTools } from "./ux-renderers";
 
 /** What the page is showing besides the data: the chosen view, the search text, the list order, the open entry and theme. */
 export interface DashboardUi {
@@ -38,6 +46,8 @@ export interface DashboardUi {
 	stale?: boolean;
 	/** Inbox entry ids unread in this browser ({@link unreadIds}): a dot on their cards and rows, a count per column. */
 	unread?: string[];
+	/** Active bot/attention filter chip on the `turns` view. */
+	bot?: string;
 }
 
 /**
@@ -183,6 +193,7 @@ export function renderDashboardMain(
 	// ---- the inbox: one row per agent pane, plus the open TASKs no pane carries; `turnOf` alone groups them ----
 	type Entry = InboxEntry;
 	const tasks = s.tasks.ok ? s.tasks.items : [];
+	const openTaskHosts = tasks.filter((task) => task.open).map((task) => task.host);
 	const entries = inboxEntries(s, live);
 	const turns = new Map(entries.map((entry) => [entry.id, turnOf(entry, unread.has(entry.id))]));
 	const turnFor = (entry: Entry): Turn => turns.get(entry.id) ?? turnOf(entry);
@@ -271,7 +282,7 @@ export function renderDashboardMain(
 		const title = line.length > 24 ? `${line.slice(0, 23)}…` : line;
 		const where = [next.machine, next.task?.branch || next.taskId].filter((part) => part).join(" · ");
 		const reply = next.card?.replyUrl;
-		return `<div class="next-line"><a class="next-up" ${linkOf(next)}><span class="next-label">다음</span><span class="next-title">${esc(
+		return `<div class="next-line${attention.length === 1 && !reply && q === "" ? " is-single" : ""}"><a class="next-up" ${linkOf(next)}><span class="next-label">다음</span><span class="next-title">${esc(
 			title,
 		)}</span><span class="next-why">${esc([turnFor(next).reason, next.task?.overlap ?? []].flat().join(" · "))}${
 			where === "" ? "" : ` · ${esc(where)}`
@@ -328,20 +339,19 @@ export function renderDashboardMain(
 			count === undefined ? "" : `<span class="count-chip">${esc(count)}</span>`
 		}${extra}${clearBtn}</div>`;
 
+	const hasLayout = view === "inbox" || view === "list" || view === "turns";
+	const layout = view === "list" || (view === "turns" && ui.layout === "list") ? "list" : "board";
+	const [boardHref, listHref] =
+		view === "turns" ? ["?view=turns", "?view=turns&amp;layout=list"] : ["./", "?view=list"];
+	const viewTools = renderViewTools(hasLayout, boardHref, listHref, layout);
 	/** The four group counts, the same line on the inbox and the list. */
 	const groupSum = `<p class="badges group-sum">${GROUPS.map(
 		([id, label]) =>
 			`<a class="chip" href="#col-${id}">${esc(label)} <b>${entries.filter((entry) => groupOf(entry) === id).length}</b></a>`,
 	).join("")}</p>`;
 	const inboxView = (): string => {
-		const machines =
-			live === undefined
-				? ""
-				: `<div class="badges">${live.machines
-						.map((machine) =>
-							badge(`${machine.name}${machine.connected ? "" : " · 끊김"}`, machine.connected ? "" : "is-danger"),
-						)
-						.join("")}</div>`;
+		const machines = live === undefined ? "" : renderInboxMachines(live.machines, openTaskHosts, badge);
+		const idleInbox = entries.length === 0 && q === "" && !staleOn;
 		const columns = GROUPS.map(([id, label, keep]) => {
 			const cards = entries.filter((entry) => groupOf(entry) === id).sort(byDefault);
 			// Numbers go to the 내 차례 rows the search leaves lit, 1…9 without gaps.
@@ -361,7 +371,7 @@ export function renderDashboardMain(
 					? ""
 					: `<div class="col-unread"><span>안 읽음 <b>${unreadCount}</b></span><button type="button" class="button is-ghost is-sm" data-mark-read="${id}">모두 읽음</button></div>`;
 			const recent =
-				id !== "done" || closed.length === 0
+				id !== "done" || closed.length === 0 || idleInbox
 					? ""
 					: `<details class="closed" id="closed"><summary>최근 닫힘 <span class="count-chip">${closed.length}</span></summary>${closed
 							.map(
@@ -377,46 +387,26 @@ export function renderDashboardMain(
 				label,
 			)}</span><span class="count-chip">${cards.length}</span></h2>${unreadLine}${body}${recent}</section>`;
 		}).join("");
-		const herdr = s.herdr;
 		// Without a live board, the `herdr agent list` of every host stays visible under the inbox.
-		const agents =
-			live !== undefined || (herdr.ok && herdr.hosts.length === 0)
-				? ""
-				: `<section class="rows-block" aria-label="herdr 에이전트">${head(
-						"herdr 에이전트",
-						herdr.ok ? herdr.hosts.reduce((sum, host) => sum + (host.ok ? host.agents.length : 0), 0) : undefined,
-					)}${
-						herdr.ok
-							? herdr.hosts
-									.map(
-										(host) =>
-											`<p class="group">${esc(host.host)}</p>${
-												!host.ok
-													? `<div class="notice is-danger">${badge("호스트 연결 실패", "is-danger")}<span>${esc(host.error)}</span><span class="notice-next">다음 행동: <code>jabbu-pocket doctor</code>로 해당 호스트의 SSH 및 herdr 경로를 점검하세요.</span></div>`
-													: host.agents.length === 0
-														? '<div class="empty-box"><p class="note">실행 중인 에이전트가 없어요</p><p class="note-sub">새 작업을 위임하면 이 호스트의 에이전트 목록에 나타납니다.</p></div>'
-														: `<div class="rows">${host.agents
-																.map(
-																	(agent) =>
-																		`<div class="row"><div class="row-main"><div class="badges">${state(agent.agentStatus)}</div><p class="row-title">${esc(agent.name)}</p>${
-																			agent.terminalTitle ? `<p class="row-sub">${esc(agent.terminalTitle)}</p>` : ""
-																		}${
-																			agent.question
-																				? `<p class="row-sub">묻는 말: ${esc(agent.question)}</p>`
-																				: agent.blocked || agent.lastSay
-																					? `<p class="row-sub">${esc(agent.blocked || agent.lastSay)}</p>`
-																					: ""
-																		}<p class="row-sub">${agent.taskId ? `${esc(agent.taskId)} · ` : ""}${esc(agent.cwd)}</p></div></div>`,
-																)
-																.join("")}</div>`
-											}`,
-									)
-									.join("")
-							: `<div class="notice is-danger">${badge("herdr 조회 실패", "is-danger")}<span>${esc(herdr.error)}</span><span class="notice-next">다음 행동: 로컬 herdr 실행 파일과 데몬 설정을 확인하세요(<code>jabbu-pocket doctor</code>).</span></div>`
-					}</section>`;
+		const agents = live !== undefined ? "" : renderHerdrAgentsBlock(s.herdr, head, badge, state);
 		// The head's 확인 필요 is the 내 차례 rows, the same number as the tab title.
-		const top = `${head("에이전트 인박스", undefined, `<span class="view-sum">확인 필요 <b>${attention.length}</b></span>${staleHead}${machines}`)}${banners.join("")}${nextLine()}`;
-		return `${top}${hits === 0 ? nothing : ""}${groupSum}<div class="groups">${columns}</div>${agents}`;
+		const pulse = !idleInbox
+			? ""
+			: renderInboxPulse(
+					s,
+					closed.map((t) => ({
+						taskId: t.taskId,
+						title: t.title,
+						statusLabel: STATES[t.status]?.[0] ?? t.status,
+						closedAt: at(t.closedAt),
+					})),
+					badge,
+					ago,
+					at,
+					(scope) => alertText(scope).title,
+				);
+		const top = `${head("에이전트 인박스", undefined, `<span class="view-sum">확인 필요 <b>${attention.length}</b></span>${staleHead}${machines}${viewTools}`)}${banners.join("")}${nextLine()}`;
+		return `${top}${hits === 0 ? nothing : ""}${idleInbox ? pulse : groupSum}<div class="groups${idleInbox ? " is-idle-inbox" : ""}">${columns}</div>${agents}`;
 	};
 
 	const SORTS: Array<[string, string]> = [
@@ -469,7 +459,7 @@ export function renderDashboardMain(
 					}</td><td class="num">${ago(entry.since)}</td></tr>`,
 			)
 			.join("");
-		return `${head("에이전트 목록", rows.length, staleHead)}${banners.join("")}${
+		return `${head("에이전트 목록", rows.length, `${staleHead}${viewTools}`)}${banners.join("")}${
 			rows.length === 0
 				? '<div class="empty-box"><p class="note">보여 줄 에이전트나 TASK가 없어요.</p><p class="note-sub">새로운 작업이 시작되면 목록에 표시됩니다.</p></div>'
 				: `${hits === 0 ? nothing : ""}${groupSum}<table class="list"><thead><tr>${heads}</tr></thead><tbody>${body}</tbody></table>`
@@ -545,7 +535,8 @@ export function renderDashboardMain(
 					? ""
 					: `<details class="closed" id="closed"><summary>끝난 백그라운드 작업 <span class="count-chip">${doneJobs.length}</span></summary><div class="rows">${doneJobs.map(jobRow).join("")}</div></details>`;
 			const runningJobs = jobs.ok ? jobs.items.filter((job) => job.state === "running").length : 0;
-			if (!turns.ok) return `${head("턴", undefined)}${banners.join("")}${failed(turns.error)}${jobTop}${jobDone}`;
+			if (!turns.ok)
+				return `${head("턴", undefined, viewTools)}${banners.join("")}${failed(turns.error)}${jobTop}${jobDone}`;
 			const draining = d.ok && (d.drain !== undefined || d.heartbeat?.draining === true);
 			const holding = turns.items.filter((turn) => turn.blocksRestart);
 			const oldest = holding.reduce((max, turn) => Math.max(max, turn.ageMs), 0);
@@ -557,14 +548,30 @@ export function renderDashboardMain(
 					} 그동안 들어온 요청은 재시작 뒤 처리됩니다.</span></p>`
 				: "";
 			// One card per conversation (chat thread = omp session), laid out like the inbox.
-			const threads = turns.threads.filter((thread) =>
-				hit(thread.title, thread.latest.preview, thread.originKey, thread.threadRef, ...(thread.jobs ?? [])),
+			const bot = ui.bot ?? "";
+			const threads = turns.threads.filter(
+				(thread) =>
+					(bot === ""
+						? true
+						: bot === "own"
+							? thread.install === undefined
+							: bot === "attention"
+								? thread.column === "attention"
+								: thread.install === bot) &&
+					hit(
+						thread.title,
+						thread.latest.preview,
+						thread.originKey,
+						thread.threadRef,
+						thread.install,
+						...(thread.jobs ?? []),
+					),
 			);
 			const openThreads = turns.threads.filter((thread) => thread.column === "working").length;
 			// Every number in the head says what it counts: open threads match the 진행 중 column, jobs link to their block.
 			const bg = runningJobs > 0 ? ` · <a href="#jobs">백그라운드 작업 <b>${runningJobs}</b></a>` : "";
 			const sum = q === "" ? `진행 중 스레드 <b>${openThreads}</b>` : `검색 결과 <b>${threads.length}</b>건`;
-			const title = head("턴", undefined, `<span class="view-sum">${sum}${bg}</span>`);
+			const title = head("턴", undefined, `<span class="view-sum">${sum}${bg}</span>${viewTools}`);
 			// No thread but live jobs: the jobs stand in for the empty board.
 			if (turns.threads.length === 0) {
 				return liveJobs.length > 0
@@ -579,7 +586,8 @@ export function renderDashboardMain(
 				if (/^([^/:]+:)?[a-z]+\/dm\//.test(key)) return "DM";
 				const channel = /^(?:[^/:]+:)?(slack|discord)\/ch\/([^/]+)(\/t\/[^/]+)?$/.exec(key);
 				if (channel !== null) {
-					const id = `${channel[1] === "discord" ? "Discord " : ""}${channel[2] ?? ""}`;
+					const named = channel[2] ? s.channelNames?.[channel[2]] : undefined;
+					const id = named ?? `${channel[1] === "discord" ? "Discord " : ""}${channel[2] ?? ""}`;
 					return channel[3] === undefined ? `${id} 채널 메인` : id;
 				}
 				return key.startsWith("monitor/") ? "" : key;
@@ -650,7 +658,13 @@ export function renderDashboardMain(
 					.map((part) => `<span>${esc(part)}</span>`)
 					.join("")}${modelChip(thread.model)}${contextBar(thread.context, thread.column)}</span></div></article>`;
 			};
-			const lead = `${banners.join("")}${drainLine}${threads.length === 0 ? nothing : ""}`;
+			const botFilters = renderTurnBotFilters(turns.threads, bot);
+			const lead = `${banners.join("")}${drainLine}${botFilters}${
+				threads.length === 0
+					? nothing ||
+						'<div class="empty-box" role="status"><p class="note">선택한 필터와 맞는 스레드가 없어요</p></div>'
+					: ""
+			}`;
 			if (ui.layout === "list") {
 				const TURN_SORTS: Array<[string, string]> = [
 					["state", "상태"],
@@ -732,7 +746,7 @@ export function renderDashboardMain(
 					label,
 				)}</span><span class="count-chip">${cards.length}</span></h2>${body}</section>`;
 			}).join("");
-			if (q !== "" && threads.length === 0) {
+			if ((q !== "" || bot !== "") && threads.length === 0) {
 				return `${title}${lead}${jobTop}${jobDone}`;
 			}
 			return `${title}${lead}${jobTop}<nav class="col-chips" aria-label="열로 이동">${chips}</nav><div class="inbox">${columns}</div>${jobDone}`;
@@ -745,24 +759,12 @@ export function renderDashboardMain(
 			const shown = flows.items.filter((chain) =>
 				hit(chain.title, chain.place, ...chain.tasks.flatMap((step) => [step.taskId, step.title, step.branch])),
 			);
-			const cards = shown.map((chain) => {
-				const first = chain.tasks[0]?.createdAt;
-				return `<section class="flow-card${chain.here === null ? " is-closed" : ""}" data-thread="${esc(
-					chain.threadRef,
-				)}"><h2 class="flow-title"><span>${esc(chain.title)}</span><small>${chain.done}/${chain.total} 끝남</small></h2><p class="flow-meta">${esc(
-					[`TASK ${chain.total}개`, `${at(first)} ~ ${at(chain.updatedAt)}`, chain.place ?? ""]
-						.filter((part) => part !== "")
-						.join(" · "),
-				)}</p>${renderFlowChain(chain, selected, false)}</section>`;
-			});
-			const lead =
-				'<p class="lead flow-lead">요청 하나가 어떤 TASK를 거쳐 끝나는지 보여 줘요. 시간이 겹쳐 같이 돈 TASK는 한 묶음 상자에 쌓이고, 묶음 사이 노란 알약은 다음 묶음까지 기다린 시간이에요. 노란 테두리 상자가 다음에 풀 고리예요. 상자를 누르면 오른쪽에 TASK 상세가 열려요.</p>';
-			return `${head("흐름", flows.items.length)}${banners.join("")}${lead}${
-				cards.length === 0
+			return `${head("흐름", flows.items.length)}${banners.join("")}${
+				shown.length === 0
 					? flows.items.length > 0
 						? nothing
 						: '<div class="empty-box"><p class="note">최근 7일 안에 TASK가 있는 요청이 없어요</p><p class="note-sub">요청이 TASK로 등록되면 여기에 고리로 표시됩니다.</p></div>'
-					: `<div class="flow-list">${cards.join("")}</div>`
+					: renderFlowCards(shown, selected, renderFlowChain)
 			}`;
 		}
 		if (view === "lanes") {
@@ -904,14 +906,16 @@ export function renderDashboardMain(
 			const monitorRow = (monitor: MonitorInfo): string => {
 				const id = monitor.id;
 				const selected = isSel(id) || isSel(monitor.name);
-				const chips = [
-					`→ ${monitor.destination}`,
-					...(monitor.copyTo === null ? [] : [`+ 사본 ${monitor.copyTo}`]),
-					monitor.deliver === "verbatim" ? "턴 없음" : (monitor.model?.split("/").pop() ?? "기본 모델"),
-					...monitor.files.map((file) => `${file.kind === "procedure" ? "절차" : "스크립트"} ${file.name}`),
-				]
-					.map((text) => `<span class="mon-chip">${esc(text)}</span>`)
-					.join("");
+				const chips =
+					[
+						`→ ${monitor.destination}`,
+						...(monitor.copyTo === null ? [] : [`+ 사본 ${monitor.copyTo}`]),
+						monitor.deliver === "verbatim" ? "턴 없음" : (monitor.model?.split("/").pop() ?? "기본 모델"),
+						...monitor.files.map((file) => `${file.kind === "procedure" ? "절차" : "스크립트"} ${file.name}`),
+					]
+						.map((text) => `<span class="mon-chip">${esc(text)}</span>`)
+						.join("") +
+					(monitor.stats.failed > 0 ? `<span class="mon-chip is-danger">최근 실패 ${monitor.stats.failed}</span>` : "");
 				const health = [
 					...(monitor.running ? [badge("실행 중", "is-info")] : []),
 					...(monitor.failStreak > 0
@@ -1004,7 +1008,7 @@ export function renderDashboardMain(
 					(a, b) => Number(b.gateState === "open") - Number(a.gateState === "open") || msOf(b.lastAt) - msOf(a.lastAt),
 				)
 				.map((alert) => ({ alert, text: alertText(alert.scope) }))
-				.filter(({ alert, text }) => hit(text.title, alert.scope, alert.signature))
+				.filter(({ alert, text }) => hit(text.title, alert.scope, alert.signature, alert.install))
 				.map(({ alert, text }) => {
 					const [word, tone] =
 						alert.gateState === "open"
@@ -1014,7 +1018,13 @@ export function renderDashboardMain(
 								: alert.gateState === "unknown"
 									? ["상태 모름", "is-warning"]
 									: ["기록만 남음", ""];
-					return row(String(alert.incidentId), [badge(word, tone), badge(`${alert.count}회`, "")], esc(text.title), [
+					const alertId = alert.install ? `${alert.install}:${alert.incidentId}` : String(alert.incidentId);
+					const badges = [
+						badge(word, tone),
+						badge(`${alert.count}회`, ""),
+						...(alert.install ? [badge(alert.install, "")] : []),
+					];
+					return row(alertId, badges, esc(text.title), [
 						`처음 ${at(alert.firstAt)} · 마지막 ${at(alert.lastAt)} · 지속 ${dur(msOf(alert.lastAt) - msOf(alert.firstAt))}`,
 						`할 일: ${cmd(text.todo)}`,
 					]);
@@ -1042,6 +1052,7 @@ export function renderDashboardMain(
 			bad: ["문제", "is-danger"],
 		};
 		const cards: string[] = [];
+		const counts = { ok: 0, warn: 0, bad: 0 };
 		const pushCard = (
 			id: string,
 			title: string,
@@ -1052,12 +1063,13 @@ export function renderDashboardMain(
 		): void => {
 			const [word, tone] = LEVELS[level] ?? ["?", ""];
 			if (!hit(id, title, word, body.replace(/<[^>]*>/g, " "))) return;
+			counts[level === "bad" ? "bad" : level === "warn" ? "warn" : "ok"] += 1;
 			const anchor =
 				link === undefined
 					? ""
 					: `<a class="sys-link" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(link.text)}</a>`;
 			cards.push(
-				`<section class="sys-card${wide ? " is-wide" : ""}" data-card="${id}" aria-label="${esc(title)}"><header class="sys-head"><span class="sys-dot ${tone}" aria-hidden="true"></span><h3 class="h3">${esc(
+				`<section class="sys-card${wide ? " is-wide" : ""} is-${level}" data-card="${id}" aria-label="${esc(title)}"><header class="sys-head"><span class="sys-dot ${tone}" aria-hidden="true"></span><h3 class="h3">${esc(
 					title,
 				)}</h3>${anchor}${badge(word, tone)}</header>${body}</section>`,
 			);
@@ -1102,6 +1114,13 @@ export function renderDashboardMain(
 					["그 뒤", `${dur(clock - msOf(gateway.since))} · ${at(gateway.since)}부터`],
 				]),
 			);
+		}
+		if (s.peerHealth !== undefined) {
+			if (!s.peerHealth.ok) pushCard("peers", "피어 봇", "bad", note(s.peerHealth.error));
+			else if (s.peerHealth.items.length > 0) {
+				const ph = renderPeerBotsCard(s.peerHealth.items, dur, badge);
+				pushCard("peers", `피어 봇 ${s.peerHealth.items.length}`, ph.level, ph.html);
+			}
 		}
 
 		const beat = d.ok ? d.heartbeat : undefined;
@@ -1207,16 +1226,10 @@ export function renderDashboardMain(
 			: 0;
 		const herdr = s.herdr;
 		const hosts = herdr.ok ? herdr.hosts.filter((host) => host.ok || host.error !== "herdr is not configured") : [];
+		const sysMach = live === undefined ? undefined : renderSystemMachines(live.machines, openTaskHosts, badge);
 		const machines =
-			live !== undefined
-				? live.machines
-						.map((machine) =>
-							badge(
-								`${machine.name}${machine.connected ? " · 연결" : " · 끊김"}`,
-								machine.connected ? "" : "is-danger",
-							),
-						)
-						.join(" ") || "머신 없음"
+			sysMach !== undefined
+				? sysMach.html
 				: board !== undefined
 					? badge("보드 연결 안 됨", "is-danger")
 					: !herdr.ok
@@ -1232,10 +1245,7 @@ export function renderDashboardMain(
 									)
 									.join(" ");
 		const herdrDown =
-			(board !== undefined && !board.ok) ||
-			live?.machines.some((machine) => !machine.connected) === true ||
-			!herdr.ok ||
-			hosts.some((host) => !host.ok);
+			(board !== undefined && !board.ok) || sysMach?.busyDown === true || !herdr.ok || hosts.some((host) => !host.ok);
 		pushCard(
 			"monitors",
 			"모니터·herdr 머신",
@@ -1250,71 +1260,14 @@ export function renderDashboardMain(
 		);
 
 		// Other hosts' ops-check results (config `dashboard.opsStatus`): not a gate, alert or menu count.
-		const checks = s.hostChecks;
-		if (checks !== undefined) {
-			const link = s.hostChecksUrl === undefined ? undefined : { href: s.hostChecksUrl, text: "전체 보기" };
-			if (!checks.ok) {
-				pushCard("hosts", "호스트 점검", "bad", note(`호스트 점검을 읽지 못했어요: ${checks.error}`), true, link);
-			} else {
-				const rows: Array<[string, string]> = [];
-				const lines: string[] = [];
-				const line = (key: string, state: string, tone: string, word: string, label: string, detail: string) =>
-					`<li class="gate-row is-open" data-check="${esc(key)}" data-state="${esc(state)}"><span class="sys-dot ${tone}" aria-hidden="true"></span><span class="gate-word">${word}</span><span class="gate-label">${esc(
-						label,
-					)}</span><code class="gate-detail">${esc(detail)}</code></li>`;
-				for (const host of checks.hosts) {
-					const age = host.reportAgeMs === null ? "보고 없음" : `${dur(host.reportAgeMs)} 전`;
-					const repo = host.repoCounts === undefined ? undefined : repoCountsText(host.repoCounts);
-					const repoShown = repo !== undefined && host.issues.some((issue) => issue.detail === repo);
-					rows.push([
-						host.label,
-						host.online
-							? [
-									`정상 ${host.okCount}/${host.total}`,
-									age,
-									...(host.skipped > 0 ? [`건너뜀 ${host.skipped}`] : []),
-									...(repo === undefined || repoShown ? [] : [`저장소 ${repo}`]),
-								]
-									.map(esc)
-									.join(" · ")
-							: badge(`보고 끊김 · ${age}`, "is-danger"),
-					]);
-					const stale = host.online ? [] : host.issues.filter((issue) => issue.state === "stale");
-					for (const issue of host.issues) {
-						if (stale.includes(issue)) continue;
-						const alert = issue.state === "fail" && issue.severity === "alert";
-						const word = issue.severity === "alert" ? "❌" : issue.severity === "notice" ? "🆕" : "ℹ";
-						lines.push(
-							line(
-								`${host.host}:${issue.id}`,
-								issue.state,
-								alert ? "is-danger" : "is-warning",
-								word,
-								`${host.label} · ${issue.label}`,
-								issue.detail,
-							),
-						);
-					}
-					if (stale.length > 0) {
-						lines.push(
-							line(host.host, "stale", "is-danger", "판정 보류", host.label, `점검 ${stale.length}개 판정 보류`),
-						);
-					}
-				}
-				pushCard(
-					"hosts",
-					"호스트 점검",
-					hostChecksLevel(checks),
-					`${facts(rows)}${lines.length === 0 ? "" : `<ul class="gate-list">${lines.join("")}</ul>`}`,
-					true,
-					link,
-				);
-			}
-		}
+		if (s.hostChecks !== undefined)
+			renderHostChecksCard(s.hostChecks, s.hostChecksUrl, dur, badge, facts, note, pushCard);
 
-		return `${head("시스템", undefined)}${banners.join("")}${
-			cards.length === 0 ? nothing : `<div class="sys-grid">${cards.join("")}</div>`
-		}`;
+		const bodyHtml =
+			cards.length === 0
+				? nothing
+				: `${renderSysStrip(counts.ok, counts.warn, counts.bad)}<div class="sys-grid${counts.warn + counts.bad > 0 ? " has-issue is-compact-ok" : ""}">${cards.join("")}</div>`;
+		return `${head("시스템", undefined)}${banners.join("")}${bodyHtml}`;
 	};
 
 	// ---- top bar and side navigation ----
@@ -1344,6 +1297,10 @@ export function renderDashboardMain(
 	const warnOf = (section: { ok: boolean }, warn: boolean): boolean => !section.ok || warn;
 	/** Only alerts whose gate is open right now warn; closed-gate records are a grey count. */
 	const openAlerts = s.alerts.ok ? s.alerts.items.filter((alert) => alert.gateState === "open").length : 0;
+	const peerBad =
+		s.peerHealth !== undefined &&
+		(!s.peerHealth.ok ||
+			s.peerHealth.items.some((p) => !p.running || p.discord === "down" || p.error !== undefined || p.openAlerts > 0));
 	const NAV: Record<string, [number, boolean]> = {
 		// Entries needing attention override working count so the warning badge shows confirmation count rather than "! 0".
 		inbox: [attention.length || entries.filter((e) => e.col === "working").length, !s.tasks.ok || attention.length > 0],
@@ -1372,9 +1329,12 @@ export function renderDashboardMain(
 		],
 		// Only open alerts count; closed-gate records stay in the tab's list without a number on the tab.
 		alerts: [openAlerts, openAlerts > 0 || !s.alerts.ok],
-		system: [d.ok ? d.openGates.length : 0, !d.ok || !d.running || d.openGates.length > 0 || d.frozen !== undefined],
+		system: [
+			d.ok ? d.openGates.length : 0,
+			!d.ok || !d.running || d.openGates.length > 0 || d.frozen !== undefined || peerBad,
+		],
 	};
-	const nav = VIEWS.map(([id, label]) => {
+	const navItem = ([id, label]: [string, string]): string => {
 		const [n, warn] = NAV[id] ?? [0, false];
 		const current = id === view || (id === "inbox" && view === "list");
 		return `<a class="nav-item" href="${id === "inbox" ? "./" : `?view=${id}`}" data-view="${id}"${
@@ -1382,19 +1342,19 @@ export function renderDashboardMain(
 		}><span>${esc(label)}</span>${
 			id === "alerts" && n === 0 && !warn ? "" : `<span class="nav-count${warn ? " is-warn" : ""}">${n}</span>`
 		}${navIcon(id)}</a>`;
-	}).join("");
-	const hasLayout = view === "inbox" || view === "list" || view === "turns";
-	const layout = view === "list" || (view === "turns" && ui.layout === "list") ? "list" : "board";
-	// The turns view switches between its own board and table; inbox and list switch between theirs.
-	const [boardHref, listHref] =
-		view === "turns" ? ["?view=turns", "?view=turns&amp;layout=list"] : ["./", "?view=list"];
-	const layoutSeg = hasLayout
-		? `<div class="seg" role="group" aria-label="보기 방식"><a class="seg-item" href="${boardHref}" data-layout="board"${
-				layout === "board" ? ' aria-current="true"' : ""
-			}>Board</a><a class="seg-item" href="${listHref}" data-layout="list"${layout === "list" ? ' aria-current="true"' : ""}>List</a></div>`
-		: "";
-	const themeBtn = (mode: string, text: string): string =>
-		`<button type="button" class="seg-item" data-theme-set="${mode}" aria-pressed="${theme === mode}">${text}</button>`;
+	};
+	const primary = new Set(["inbox", "turns", "flow", "approvals"]);
+	const hideLanes = s.lanes.ok && s.lanes.items.length === 0 && view !== "lanes";
+	const navOf = (want: boolean) =>
+		VIEWS.filter(([id]) => primary.has(id) === want && !(hideLanes && id === "lanes"))
+			.map(navItem)
+			.join("");
+	const nav = navOf(true);
+	const secondaryNav = navOf(false);
+	const moreWarn = ["lanes", "monitors", "alerts", "system"].some(
+		(id) => !(hideLanes && id === "lanes") && NAV[id]?.[1],
+	);
+	const statusPop = renderStatusPop(d, board !== undefined && !board.ok, chips.join(""));
 	// The test chip: hidden with nothing running or queued; the queue opens on click.
 	const heavy = s.heavyRun;
 	const heavyChip =
@@ -1409,9 +1369,9 @@ export function renderDashboardMain(
 			: "";
 	const topbar = `<header class="topbar"><nav class="crumbs" aria-label="위치"><span>jabbu</span><span aria-hidden="true">/</span><span aria-current="page">${esc(
 		viewLabel,
-	)}</span></nav><div class="status-chips" aria-label="봇 상태">${chips.join("")}</div>${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools">${layoutSeg}<div class="seg" role="group" aria-label="테마">${themeBtn("system", "시스템")}${themeBtn("light", "라이트")}${themeBtn("dark", "다크")}</div><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
+	)}</span></nav>${statusPop}${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools"><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
 	const content = view === "inbox" ? inboxView() : view === "list" ? listView() : sectionView();
-	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}</nav><main class="view" id="view" aria-label="${esc(
+	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}${renderNavExtras(view, moreWarn, theme, secondaryNav)}</nav><main class="view" id="view" aria-label="${esc(
 		viewLabel,
 	)}" tabindex="-1">${content}</main>`;
 }

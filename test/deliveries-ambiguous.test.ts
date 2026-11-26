@@ -10,6 +10,7 @@ import type { DeliveryItem, DeliverySource } from "../src/channel/types";
 import { Daemon } from "../src/daemon/daemon";
 import { DiscordCallError } from "../src/discord/transport";
 import { createLogger } from "../src/log";
+import { openMonitorLedger } from "../src/monitors/ledger";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { openDeliveryLedger, openStore, type Store } from "../src/store/db";
@@ -241,6 +242,21 @@ describe("jabbu-pocket deliveries (CLI)", () => {
 		expect(listed.code).toBe(1);
 		expect(listed.stderr).toContain("no ledger at");
 		store = openStore({ timezone: "Asia/Seoul", path: dbPath, clock, redact });
+	});
+
+	test("a partial ledger without the deliveries table: a plain sentence, exit 1, never SQLite's no such table", async () => {
+		store.close();
+		rmSync(dbPath, { force: true });
+		// What `jabbu-pocket monitors add` on a fresh home leaves: a jabbu.db holding only the monitor tables.
+		openMonitorLedger(dbPath).close();
+		const expected = `deliveries: ${dbPath} has no deliveries table yet (run the daemon once)\n`;
+		for (const args of [["list"], ["ack", "1"], ["resend", "1"]]) {
+			const ran = await cli(...(args as string[]));
+			expect([ran.code, ran.stdout, ran.stderr]).toEqual([1, "", expected]);
+		}
+		// The advice holds: the daemon's first open creates the table, and the same read then answers normally.
+		store = openStore({ timezone: "Asia/Seoul", path: dbPath, clock, redact });
+		expect(await cli("list")).toMatchObject({ code: 0, stdout: "no ambiguous deliveries\n" });
 	});
 });
 

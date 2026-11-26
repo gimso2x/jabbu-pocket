@@ -11,6 +11,7 @@ import { entryText, type OmpEntry, type OmpSessionDriver } from "../omp/driver";
 import type { Store } from "../store/db";
 import type { InboundRow } from "../store/db-rows";
 import { taskClosed } from "./daemon-task-resume";
+import { settleBootToolFreeRows } from "./recovery-tool-free";
 
 export const INTERRUPTED_NOTICE = "[turn failed] interrupted_by_restart — 다시 보내 주세요";
 
@@ -145,6 +146,7 @@ export interface RecoveryResult {
 	answered: number;
 	interrupted: number;
 	continued: number; // cut turns resumed with a `cut-<id>` row instead of the interrupted notice
+	toolFreeClosed?: number;
 }
 
 /**
@@ -169,14 +171,7 @@ function finalAnswerParts(entries: readonly OmpEntry[], promptText: string, last
 	return parts.length === 0 ? undefined : parts;
 }
 
-/**
- * Startup rule (2): every `dispatched` row of the dead process either has its final answer in the omp session after
- * its `entry_cursor` (-> answered + delivery) or gets one interrupted notice; prompts are never resent. A `sending`
- * row turns `uncertain`, a `refused:` row is discarded (`settleDeadProcessRows`). A turn a planned restart cut (op_ref
- * in {@link RESTART_CUT_FILE}) gets one resume row `cut-<id>` and {@link CONTINUE_NOTICE} instead, once: a resume row's
- * turn, a monitor origin, a command op (`COMMAND_OP_REF`), a closed [TASK]'s or lane work turn (lane questions resume)
- * or an op_ref not in a fresh record is interrupted. Steered rows share an `op_ref`, settled by the first row's lookup.
- */
+/** Startup rule (2): settle dead-process `sending`/`dispatched` rows and resume cut turns without resending prompts. */
 export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryResult> {
 	const { store, log } = deps;
 	const result: RecoveryResult = { answered: 0, interrupted: 0, continued: 0 };
@@ -188,6 +183,8 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 		cutTurns ??= readRestartCut(homeDir, (deps.now ?? Date.now)(), log);
 		return cutTurns;
 	};
+	const toolFreeClosed = await settleBootToolFreeRows(deps);
+	if (toolFreeClosed > 0) result.toolFreeClosed = toolFreeClosed;
 	settleDeadProcessRows(store, log, (deps.now ?? Date.now)());
 	const byOrigin = new Map<string, Map<string, InboundRow[]>>();
 	for (const row of store.listInbound({ state: "dispatched" })) {

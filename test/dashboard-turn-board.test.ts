@@ -795,7 +795,7 @@ describe("터미널에서 보기: watch / attach commands to paste (lane-attach 
 describe("turn board peer installs", () => {
 	const THREAD = "discord/ch/300000000000000001/t/100000000000000001";
 
-	test("a peer's open turn joins the board under its install; a finished one and a missing peer db do not", async () => {
+	test("a peer's open and 24h recent turns join the board under its install; older turns and a missing peer db do not", async () => {
 		seed([{ origin: THREAD, text: "송박 요청", state: "answered", createdAt: NOW - 10 * MINUTE }]);
 		const peer = mkdtempSync(join(tmpdir(), "jabbu-turn-board-peer-"));
 		const gone = join(peer, "missing");
@@ -815,6 +815,12 @@ describe("turn board peer installs", () => {
 						state: "answered",
 						createdAt: NOW - HOUR,
 					},
+					{
+						origin: "discord/ch/300000000000000003/t/100000000000000003",
+						text: "오래된 끝난 일",
+						state: "answered",
+						createdAt: NOW - 30 * HOUR,
+					},
 				],
 				peer,
 			);
@@ -833,6 +839,7 @@ describe("turn board peer installs", () => {
 			const peerThreads = snapshot.turns.threads.filter((thread) => thread.install === "서팍");
 			expect(peerThreads.map((thread) => [thread.originKey, thread.column, thread.latest.preview])).toEqual([
 				[`서팍:${THREAD}`, "working", "서팍 WSL 작업"],
+				["서팍:discord/ch/300000000000000002/t/100000000000000002", "done", "끝난 일"],
 			]);
 			expect(snapshot.turns.items.filter((turn) => turn.install === "서팍").map((turn) => turn.blocksRestart)).toEqual([
 				false,
@@ -847,13 +854,14 @@ describe("turn board peer installs", () => {
 			expect(page).toContain("서팍 · 서팍 WSL 작업");
 			expect(page).toContain("Discord 300000000000000001");
 
-			// UX-002: opening a peer thread suppresses detail tabs (only 개요 + 최근 턴), while own thread keeps them.
+			// UX-002: opening a peer thread shows 개요 + 대화 tabs (no 트레이스), while own thread keeps all three.
 			const peerHtml = renderDashboardPage(snapshot, { view: "turns", item: `서팍:${THREAD}` });
-			expect(peerHtml).toMatch(/id="detail-tabs"[^>]*hidden/);
-			expect(peerHtml).toMatch(/id="detail-conv"[^>]*hidden/);
-			expect(peerHtml).toContain("피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.");
+			expect(tabsOf(peerHtml)).toEqual({ hidden: false, words: ["개요", "대화"], selected: ["대화"] });
+			expect(peerHtml).not.toMatch(/id="detail-conv"[^>]*hidden/);
+			expect(peerHtml).not.toContain("피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.");
+			expect(renderItemDetail(snapshot, "turns", `서팍:${THREAD}`)).toContain('class="turn-recent-item" disabled>');
 			const ownHtml = renderDashboardPage(snapshot, { view: "turns", item: THREAD });
-			expect(ownHtml).not.toMatch(/id="detail-tabs"[^>]*hidden/);
+			expect(tabsOf(ownHtml)).toEqual({ hidden: false, words: ["개요", "대화", "트레이스"], selected: ["대화"] });
 
 			// UX-007: search updates view-sum count and URL helpers round-trip q, sort, and desc.
 			const missed = renderDashboardMain(snapshot, undefined, NOW, { view: "turns", q: "없는검색어" });

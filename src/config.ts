@@ -13,6 +13,9 @@ import {
 	type WorkerAgyConfig,
 	workerAgyOf,
 } from "./config-agy";
+import { validateDashboardExtras } from "./config-dashboard";
+import { type OpsPanelConfig, opsPanelOf } from "./config-ops-panel";
+import { costCapOf, type QuotaGateConfig, quotaGateOf } from "./config-quota";
 import { SLACK_KEYS } from "./config-removed-keys";
 import {
 	asRecord,
@@ -138,6 +141,8 @@ const ROOT_KEYS = new Set([
 	"peerSilenceAlert",
 	"hostSessionCeiling",
 	"costCap",
+	"quotaGate",
+	"opsPanel",
 	"herdr",
 	"workerOmpArgs",
 	"workerAgy",
@@ -242,6 +247,10 @@ export interface JabbuConfig {
 	peerSilenceAlert?: { minutes: number };
 	/** Cost ceiling in dollars as omp prices it (`turnUsd` warns/3x stops, `dailyUsd` opens `cost_cap` gate). */
 	costCap?: { turnUsd?: number; dailyUsd?: number };
+	/** Per-provider quota gate for new lanes and [TASK] starts (`holdPct`, `pollMinutes`, `providers`). */
+	quotaGate?: QuotaGateConfig;
+	/** Discord `#ops` pinned status panel and hysteresis load-alert settings (`config.opsPanel`). */
+	opsPanel?: OpsPanelConfig;
 	/** herdr switch: `{}` enables herdr/taskSpec and [TASK] sweep (`bin` overrides path). */
 	herdr?: { bin?: string };
 	/**
@@ -333,6 +342,7 @@ export interface JabbuConfig {
 		opsStatus?: { command: string[]; url?: string };
 		usageLimits?: DashboardUsageLimitsConfig;
 		peerHomes?: Array<{ name: string; home: string }>;
+		channelNames?: Record<string, string>;
 	};
 	/**
 	 * `jabbu-pocket apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
@@ -747,18 +757,9 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 
 	const channels = parseChannels(configPath, root, home);
 
-	const costCap = root.costCap;
-	if (costCap !== undefined) {
-		const record = asRecord(costCap);
-		if (record === undefined) invalid(configPath, "costCap");
-		for (const key of Object.keys(record)) {
-			if (key !== "turnUsd" && key !== "dailyUsd") invalid(configPath, `costCap.${key}`);
-			const value = record[key];
-			if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
-				invalid(configPath, `costCap.${key}`);
-			}
-		}
-	}
+	const costCap = costCapOf(configPath, root.costCap);
+	const quotaGate = quotaGateOf(configPath, root.quotaGate);
+	const opsPanel = opsPanelOf(configPath, root.opsPanel, channels.discord);
 
 	const lanes = root.lanes;
 	const keptLanes: Record<string, unknown> = {};
@@ -1092,45 +1093,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		if (record.allowedHosts !== undefined && !validAllowedHosts(record.allowedHosts)) {
 			invalid(configPath, "dashboard.allowedHosts");
 		}
-		if (record.opsStatus !== undefined) {
-			const ops = asRecord(record.opsStatus);
-			if (ops === undefined) invalid(configPath, "dashboard.opsStatus");
-			if (
-				!Array.isArray(ops.command) ||
-				ops.command.length === 0 ||
-				!ops.command.every((part) => typeof part === "string" && part !== "")
-			) {
-				invalid(configPath, "dashboard.opsStatus.command");
-			}
-			if (ops.url !== undefined && (typeof ops.url !== "string" || !/^https?:\/\/\S+$/.test(ops.url))) {
-				invalid(configPath, "dashboard.opsStatus.url");
-			}
-			for (const key of Object.keys(ops)) {
-				if (key !== "command" && key !== "url") invalid(configPath, `dashboard.opsStatus.${key}`);
-			}
-		}
 		if (record.usageLimits !== undefined) {
 			dashboardUsageLimits = usageLimitsOf(configPath, record.usageLimits);
 		}
-		if (record.peerHomes !== undefined) {
-			if (!Array.isArray(record.peerHomes)) invalid(configPath, "dashboard.peerHomes");
-			const names = new Set<string>();
-			record.peerHomes.forEach((entry: unknown, i: number) => {
-				const peer = asRecord(entry);
-				if (peer === undefined) invalid(configPath, `dashboard.peerHomes.${i}`);
-				for (const key of Object.keys(peer)) {
-					if (key !== "name" && key !== "home") invalid(configPath, `dashboard.peerHomes.${i}.${key}`);
-				}
-				const { name, home } = peer;
-				if (typeof name !== "string" || name === "" || name.length > 20 || /[:\s]/.test(name) || names.has(name)) {
-					invalid(configPath, `dashboard.peerHomes.${i}.name`);
-				}
-				names.add(name);
-				if (typeof home !== "string" || !isAbsolute(home)) invalid(configPath, `dashboard.peerHomes.${i}.home`);
-			});
-		}
-		const dashboardKeys = ["port", "bind", "herdrWebUrl", "allowedHosts", "opsStatus", "usageLimits", "peerHomes"];
-		for (const key of Object.keys(record)) if (!dashboardKeys.includes(key)) invalid(configPath, `dashboard.${key}`);
+		validateDashboardExtras(configPath, record);
 	}
 
 	const candidatesRaw = root.candidates;
@@ -1187,10 +1153,9 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (hostSessionCeiling !== undefined) config.hostSessionCeiling = hostSessionCeiling;
 	if (peerHopLimit !== undefined) config.peerHopLimit = peerHopLimit as { turns: number; windowMinutes: number };
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;
-	if (costCap !== undefined) {
-		const { turnUsd, dailyUsd } = costCap as { turnUsd?: number; dailyUsd?: number };
-		config.costCap = { ...(turnUsd === undefined ? {} : { turnUsd }), ...(dailyUsd === undefined ? {} : { dailyUsd }) };
-	}
+	if (costCap !== undefined) config.costCap = costCap;
+	if (quotaGate !== undefined) config.quotaGate = quotaGate;
+	if (opsPanel !== undefined) config.opsPanel = opsPanel;
 	if (restartNotice !== undefined) config.restartNotice = restartNotice;
 	if (recallEnabled !== undefined) config.recallEnabled = recallEnabled;
 	if (hostTools !== undefined) config.hostTools = hostTools;

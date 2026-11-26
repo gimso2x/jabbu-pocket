@@ -55,6 +55,8 @@ import {
 	rollLabel,
 	stackHtml,
 } from "./motion";
+import * as ops from "./ops-renderers";
+import * as opsViews from "./ops-views";
 import type { DashboardSnapshot, FlowChainInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -71,6 +73,19 @@ import {
 import { TRACE_CLIENT } from "./trace-client";
 import { flowDoing, renderFlow, renderTrace } from "./trace-view";
 import { turnOf } from "./turn";
+import { stripClientComments } from "./ux-client";
+import {
+	buildTraceRows,
+	renderApprovalCards,
+	renderDiffNav,
+	renderFlowCards,
+	renderNavExtras,
+	renderStatusPop,
+	renderSysStrip,
+	renderTraceFilters,
+	renderTraceInspector,
+	renderViewTools,
+} from "./ux-renderers";
 
 /**
  * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
@@ -79,11 +94,8 @@ import { turnOf } from "./turn";
  * detail panel (`?card=`, `?task=`, `?item=` in the address; a card's conversation and plan read through
  * `api/pane/*`). Every request is relative to the page, so any tunnel prefix works.
  */
-export const SCRIPT = `const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)};
-const TURN_LABELS = ${JSON.stringify(TURN_LABELS)};
-const JOB_LABELS = ${JSON.stringify(JOB_LABELS)};
-const MONITOR_STAGES = ${JSON.stringify(MONITOR_STAGES)};
-const APPROVAL_OUTCOMES = ${JSON.stringify(APPROVAL_OUTCOMES)};
+export const SCRIPT = `${stripClientComments(
+	`const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)}, TURN_LABELS = ${JSON.stringify(TURN_LABELS)}, JOB_LABELS = ${JSON.stringify(JOB_LABELS)}, MONITOR_STAGES = ${JSON.stringify(MONITOR_STAGES)}, APPROVAL_OUTCOMES = ${JSON.stringify(APPROVAL_OUTCOMES)};
 const esc = ${esc.toString()};
 const monitorTook = ${monitorTook.toString()};
 const gateText = ${gateText.toString()};
@@ -115,34 +127,22 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()}, repoCountsText = ${repoCountsText.toString()};
 const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, monitorModelDetail = ${monitorModelDetail.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()}, renderLimitsPop = ${renderLimitsPop.toString()};
+const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()}, renderFlowCards = ${renderFlowCards.toString()}, renderApprovalCards = ${renderApprovalCards.toString()}, buildTraceRows = ${buildTraceRows.toString()}, renderTraceFilters = ${renderTraceFilters.toString()}, renderTraceInspector = ${renderTraceInspector.toString()}, renderDiffNav = ${renderDiffNav.toString()}, renderSysStrip = ${renderSysStrip.toString()}, renderInboxMachines = ${ops.renderInboxMachines.toString()}, renderTurnBotFilters = ${ops.renderTurnBotFilters.toString()}, renderPeerBotsCard = ${ops.renderPeerBotsCard.toString()}, renderSystemMachines = ${ops.renderSystemMachines.toString()}, renderInboxPulse = ${ops.renderInboxPulse.toString()}, renderHerdrAgentsBlock = ${opsViews.renderHerdrAgentsBlock.toString()}, renderHostChecksCard = ${opsViews.renderHostChecksCard.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
-const renderTaskFacts = ${renderTaskFacts.toString()};
-const renderFlowChain = ${renderFlowChain.toString()};
-const discordThreadHref = ${discordThreadHref.toString()};
-const renderTaskDetail = ${renderTaskDetail.toString()};
-const renderDetailHead = ${renderDetailHead.toString()};
-const renderItemDetail = ${renderItemDetail.toString()};
-const renderMonitorDetail = ${renderMonitorDetail.toString()};
-const renderDiffDetail = ${renderDiffDetail.toString()};
-const renderDetailTabs = ${renderDetailTabs.toString()};
-const renderPlan = ${renderPlan.toString()};
-const renderConversation = ${renderConversation.toString()};
-const renderLiveTurn = ${renderLiveTurn.toString()};
-const rollDiff = ${rollDiff.toString()};
-const rollEffects = ${rollEffects.toString()};
-const rollLabel = ${rollLabel.toString()};
-const freshCards = ${freshCards.toString()};
-const pushStack = ${pushStack.toString()};
-const expireStack = ${expireStack.toString()};
-const stackHtml = ${stackHtml.toString()};
-const pillMotion = ${pillMotion.toString()};
-const freshSteps = ${freshSteps.toString()};
+const renderTaskFacts = ${renderTaskFacts.toString()}, renderFlowChain = ${renderFlowChain.toString()}, discordThreadHref = ${discordThreadHref.toString()};
+const renderTaskDetail = ${renderTaskDetail.toString()}, renderDetailHead = ${renderDetailHead.toString()}, renderItemDetail = ${renderItemDetail.toString()};
+const renderMonitorDetail = ${renderMonitorDetail.toString()}, renderDiffDetail = ${renderDiffDetail.toString()}, renderDetailTabs = ${renderDetailTabs.toString()};
+const renderPlan = ${renderPlan.toString()}, renderConversation = ${renderConversation.toString()}, renderLiveTurn = ${renderLiveTurn.toString()};
+const rollDiff = ${rollDiff.toString()}, rollEffects = ${rollEffects.toString()}, rollLabel = ${rollLabel.toString()};
+const freshCards = ${freshCards.toString()}, pushStack = ${pushStack.toString()}, expireStack = ${expireStack.toString()}, stackHtml = ${stackHtml.toString()}, pillMotion = ${pillMotion.toString()}, freshSteps = ${freshSteps.toString()};
 const renderMarkdown = ${renderMarkdown.toString()};
-const renderTrace = ${renderTrace.toString()};
+const renderTrace = ${renderTrace.toString()};`,
+	true,
+)}
 const flowDoing = ${flowDoing.toString()};
 const renderFlow = ${renderFlow.toString()};
-${TRACE_CLIENT}
-${BOOT_CLIENT}`.replace(/<\/script/gi, "<\\/script");
+${stripClientComments(TRACE_CLIENT, true)}
+${stripClientComments(BOOT_CLIENT)}`.replace(/<\/script/gi, "<\\/script");
 
 export interface DashboardPageOptions {
 	/** The agent board (config has `herdrBoard`); absent = no board stream, TASKs only in the inbox. */
@@ -190,12 +190,8 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 		headHtml = renderDetailHead(open.id, found, owner, live?.generatedAt ?? 0, chainOf(found?.taskId));
 	} else if (open?.kind === "task") {
 		const key = live?.cards.find((entry) => entry.taskId === open.id)?.key;
-		headHtml = renderTaskDetail(
-			open.id,
-			tasks.find((entry) => entry.taskId === open.id),
-			key,
-			chainOf(open.id),
-		);
+		const owner = tasks.find((entry) => entry.taskId === open.id);
+		headHtml = renderTaskDetail(open.id, owner, key, chainOf(open.id));
 	} else if (open?.kind === "item") {
 		headHtml = renderItemDetail(snapshot, view ?? "inbox", open.id);
 	} else if (open?.kind === "diff") {
@@ -225,7 +221,8 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 				: snapshot.turns.threads.find((entry) => entry.originKey === open.id)
 			: undefined;
 	const ownThread = thread && found?.install === undefined;
-	const tab = open?.kind === "card" || jobDetail ? "head" : ownThread ? (oldTurn ? "trace" : "conv") : undefined;
+	const threadTab = oldTurn && ownThread ? "trace" : "conv";
+	const tab = open?.kind === "card" || jobDetail ? "head" : thread ? threadTab : undefined;
 	const discordHref =
 		found === undefined ? "" : discordThreadHref(snapshot.discordGuild, found.originKey, found.threadRef);
 	const barTitle = /<h2 class="detail-title"[^>]*>([\s\S]*?)<\/h2>/.exec(headHtml)?.[1] ?? "";
@@ -262,19 +259,19 @@ ${open === undefined ? `<aside id="detail" class="detail" aria-label="${label}" 
 		discordHref === "" ? " hidden" : ' target="_blank" rel="noopener noreferrer"'
 	}>디스코드에서 답하기</a><a class="detail-close" href="${back}" data-close>닫기 <kbd>Esc</kbd></a></div>
 <div id="detail-tabs" class="tabs" role="tablist" aria-label="상세 보기"${tab === undefined ? " hidden" : ""}>${renderDetailTabs(
-		ownThread ? "thread" : jobDetail ? "job" : "card",
+		thread ? "thread" : jobDetail ? "job" : "card",
 		tab ?? "head",
-		open?.kind === "card" && live?.cards.some((entry) => entry.key === open.id && entry.local && entry.agent === "omp"),
+		ownThread || (open?.kind === "card" && live?.cards.some((c) => c.key === open.id && c.local && c.agent === "omp")),
 	)}</div>
 <div id="detail-head" role="tabpanel" aria-labelledby="tab-head"${tab === undefined || tab === "head" ? "" : " hidden"}>${headHtml}</div>
 <section id="detail-plan" role="tabpanel" aria-labelledby="tab-plan" hidden></section>
 <section id="detail-conv" role="tabpanel" aria-labelledby="tab-conv"${tab === "conv" ? "" : " hidden"}></section>
 <section id="detail-trace" role="tabpanel" aria-labelledby="tab-trace" aria-label="턴 트레이스" hidden></section>
 </aside>
-<footer class="hint-bar" aria-label="단축키 안내"><span class="hint-item"><kbd>j</kbd><kbd>k</kbd><span>이동</span></span><span class="hint-item"><kbd>Enter</kbd><span>열기</span></span><span class="hint-item"><kbd>1–9</kbd><span>확인 필요 n번째 열기</span></span><span class="hint-item"><kbd>Esc</kbd><span>닫기</span></span><span class="hint-item"><kbd>/</kbd><span>검색</span></span><span class="hint-item"><kbd>g</kbd><kbd>i</kbd><span>인박스</span></span><span class="hint-item"><kbd>g</kbd><kbd>a</kbd><span>승인</span></span><button type="button" class="hint-btn" data-cmd-open><kbd>⌘K</kbd><span>명령 팔레트</span></button><button type="button" class="hint-btn" data-help-open><kbd>?</kbd><span>도움말</span></button></footer>
+<footer class="hint-bar" aria-label="단축키 안내"><span class="hint-item"><kbd>j</kbd><kbd>k</kbd><span>이동</span></span><span class="hint-item"><kbd>Enter</kbd><span>열기</span></span><span class="hint-item"><kbd>e</kbd><kbd>u</kbd><span>확인·안읽음</span></span><span class="hint-item"><kbd>1–9</kbd><span>확인 필요 n번째 열기</span></span><span class="hint-item"><kbd>Esc</kbd><span>닫기</span></span><span class="hint-item"><kbd>/</kbd><span>검색</span></span><span class="hint-item"><kbd>g</kbd><kbd>i</kbd><span>인박스</span></span><span class="hint-item"><kbd>g</kbd><kbd>a</kbd><span>승인</span></span><button type="button" class="hint-btn" data-cmd-open><kbd>⌘K</kbd><span>명령 팔레트</span></button><button type="button" class="hint-btn" data-help-open><kbd>?</kbd><span>도움말</span></button></footer>
 </div>
 <div id="cmd-palette" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="명령 팔레트" hidden><div class="modal-card"><div class="cmd-head"><input id="cmd-input" type="text" placeholder="보기 전환, TASK ID·카드 이동, 테마 전환…" aria-label="명령 또는 TASK 검색" autocomplete="off"><button type="button" class="detail-close" data-cmd-close>닫기 <kbd>Esc</kbd></button></div><div id="cmd-list" class="cmd-list" role="listbox" aria-label="명령 목록"></div></div></div>
-<div id="kb-help" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="단축키 도움말" hidden><div class="modal-card"><div class="help-head"><h2 class="h3">키보드 단축키</h2><button type="button" class="detail-close" data-help-close>닫기 <kbd>Esc</kbd></button></div><div class="help-body"><div class="help-group"><h3 class="h3">목록·상세 탐색</h3><div class="help-row"><span>다음·이전 항목</span><span><kbd>j</kbd> <kbd>k</kbd> / <kbd>↓</kbd> <kbd>↑</kbd></span></div><div class="help-row"><span>상세 열기</span><kbd>Enter</kbd></div><div class="help-row"><span>상세·창 닫기</span><kbd>Esc</kbd></div><div class="help-row"><span>검색창 포커스</span><kbd>/</kbd></div><div class="help-row"><span>확인 필요 n번째 열기</span><span><kbd>1</kbd>–<kbd>9</kbd></span></div><div class="help-row"><span>다음 항목에 답하기(herdr)</span><kbd>r</kbd></div><div class="help-row"><span>명령 팔레트</span><span><kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd></span></div><div class="help-row"><span>단축키 도움말</span><kbd>?</kbd></div></div><div class="help-group"><h3 class="h3">턴 트레이스</h3><div class="help-row"><span>단계 이동</span><span><kbd>↓</kbd> <kbd>↑</kbd> · <kbd>Home</kbd> <kbd>End</kbd></span></div><div class="help-row"><span>펼치기·자식으로</span><kbd>→</kbd></div><div class="help-row"><span>접기·부모로</span><kbd>←</kbd></div><div class="help-row"><span>단계 상세 열고 닫기</span><span><kbd>Enter</kbd> / <kbd>Space</kbd></span></div><div class="help-row"><span>단계 상세 닫기</span><kbd>Esc</kbd></div></div><div class="help-group"><h3 class="h3">보기 바로 이동</h3><div class="help-row"><span>에이전트 인박스 (Board)</span><span><kbd>g</kbd> <kbd>i</kbd></span></div><div class="help-row"><span>에이전트 목록 (List)</span><span><kbd>g</kbd> <kbd>l</kbd></span></div><div class="help-row"><span>진행 중 턴</span><span><kbd>g</kbd> <kbd>t</kbd></span></div><div class="help-row"><span>흐름</span><span><kbd>g</kbd> <kbd>f</kbd></span></div><div class="help-row"><span>레인</span><span><kbd>g</kbd> <kbd>n</kbd></span></div><div class="help-row"><span>승인 대기</span><span><kbd>g</kbd> <kbd>a</kbd></span></div><div class="help-row"><span>모니터 / 알림 / 시스템</span><span><kbd>g</kbd> <kbd>m</kbd> / <kbd>e</kbd> / <kbd>s</kbd></span></div></div></div></div></div>
+<div id="kb-help" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="단축키 도움말" hidden><div class="modal-card"><div class="help-head"><h2 class="h3">키보드 단축키</h2><button type="button" class="detail-close" data-help-close>닫기 <kbd>Esc</kbd></button></div><div class="help-body"><div class="help-group"><h3 class="h3">목록·상세 탐색</h3><div class="help-row"><span>다음·이전 항목</span><span><kbd>j</kbd> <kbd>k</kbd> / <kbd>↓</kbd> <kbd>↑</kbd></span></div><div class="help-row"><span>상세 열기</span><kbd>Enter</kbd></div><div class="help-row"><span>확인함 / 안 읽음</span><span><kbd>e</kbd> / <kbd>u</kbd></span></div><div class="help-row"><span>상세·창 닫기</span><kbd>Esc</kbd></div><div class="help-row"><span>검색창 포커스</span><kbd>/</kbd></div><div class="help-row"><span>확인 필요 n번째 열기</span><span><kbd>1</kbd>–<kbd>9</kbd></span></div><div class="help-row"><span>다음 항목에 답하기(herdr)</span><kbd>r</kbd></div><div class="help-row"><span>명령 팔레트</span><span><kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd></span></div><div class="help-row"><span>단축키 도움말</span><kbd>?</kbd></div></div><div class="help-group"><h3 class="h3">턴 트레이스</h3><div class="help-row"><span>단계 이동</span><span><kbd>↓</kbd> <kbd>↑</kbd> · <kbd>Home</kbd> <kbd>End</kbd></span></div><div class="help-row"><span>펼치기·자식으로</span><kbd>→</kbd></div><div class="help-row"><span>접기·부모로</span><kbd>←</kbd></div><div class="help-row"><span>단계 상세 열고 닫기</span><span><kbd>Enter</kbd> / <kbd>Space</kbd></span></div><div class="help-row"><span>단계 상세 닫기</span><kbd>Esc</kbd></div></div><div class="help-group"><h3 class="h3">보기 바로 이동</h3><div class="help-row"><span>에이전트 인박스 (Board)</span><span><kbd>g</kbd> <kbd>i</kbd></span></div><div class="help-row"><span>에이전트 목록 (List)</span><span><kbd>g</kbd> <kbd>l</kbd></span></div><div class="help-row"><span>진행 중 턴</span><span><kbd>g</kbd> <kbd>t</kbd></span></div><div class="help-row"><span>흐름</span><span><kbd>g</kbd> <kbd>f</kbd></span></div><div class="help-row"><span>레인</span><span><kbd>g</kbd> <kbd>n</kbd></span></div><div class="help-row"><span>승인 대기</span><span><kbd>g</kbd> <kbd>a</kbd></span></div><div class="help-row"><span>모니터 / 알림 / 시스템</span><span><kbd>g</kbd> <kbd>m</kbd> / <kbd>e</kbd> / <kbd>s</kbd></span></div></div></div></div></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <div id="event-stack" class="event-stack" hidden><p id="es-say" class="es-say" aria-live="polite"></p><div id="es-body"></div></div>
 <p id="stale" class="stale" role="status" hidden></p>

@@ -25,12 +25,12 @@ function redactMessage(msg: OutboundMessage): OutboundMessage {
 	};
 }
 
-// The single outbound writer: every text, card title/body/field, button label/value, upload title and comment is masked
-// here before an adapter sees it, so no caller can skip it (masking is idempotent: callers may redact too).
+// The single outbound writer: masks every text, card, button, and upload field before an adapter sees it.
 function redacting(port: ChannelPort): ChannelPort {
 	const openThread = port.openThread?.bind(port);
 	const archiveThread = port.archiveThread?.bind(port);
 	const conversationContext = port.conversationContext?.bind(port);
+	const pin = port.pin?.bind(port);
 	return {
 		platform: port.platform,
 		post: (target, msg) => port.post(target, redactMessage(msg)),
@@ -47,6 +47,7 @@ function redacting(port: ChannelPort): ChannelPort {
 		...(openThread === undefined ? {} : { openThread: (ref, name) => openThread(ref, redact(name)) }),
 		...(archiveThread === undefined ? {} : { archiveThread: (ref) => archiveThread(ref) }),
 		...(conversationContext === undefined ? {} : { conversationContext }),
+		...(pin === undefined ? {} : { pin }),
 	};
 }
 
@@ -66,11 +67,7 @@ export class ChannelRegistry {
 		return port;
 	}
 
-	/**
-	 * Port and post target of a delivery thread ref (`<conversationId>:<threadId|->`), the platform read from the
-	 * conversation id's grammar; `-` (top level) leaves `threadId` out. `undefined` for a malformed ref or an
-	 * unregistered platform.
-	 */
+	/** Port and post target of `<conversationId>:<threadId|->`; `undefined` for malformed refs or unregistered platforms. */
 	forThreadRef(threadRef: string): { port: ChannelPort; target: PostTarget } | undefined {
 		const ref = parseThreadRef(threadRef);
 		const route = ref === undefined ? undefined : this.forConversation(ref.channel);

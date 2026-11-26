@@ -438,7 +438,7 @@ export interface RemoteHerdrStartResult {
 }
 
 /**
- * One remote agent start, following the hub fleet owner-start flow: reuse the shared owners workspace, create a
+ * One remote agent start: reuse the shared owners workspace, create a
  * tab in it, rename, `agent start --kind omp`, then deliver the prompt. On a failed start the tab/workspace this
  * call created is closed again. Not concurrency-safe per host: nothing serializes remote starts, so two starts of
  * one name at once can both pass the name check.

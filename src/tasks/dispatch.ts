@@ -6,6 +6,7 @@ import type { BoardLinkResolver } from "../dispatch/board";
 import { type HerdrRunnerOptions, herdrRemoteStart, herdrStartAgent, type ProcessRunner } from "../dispatch/omp";
 import { type DiskView, diskHeadroom, type HostLoadReader } from "../ops/host-resources";
 import type { SessionCeilingGate } from "../ops/host-sessions";
+import type { QuotaRefusalCheck } from "../ops/quota-gate";
 import { type StartCapacity, startCapacity } from "../ops/start-capacity";
 import { redact } from "../redact";
 import { buildWorkerFloorsPrompt } from "../safety/prompt";
@@ -70,6 +71,7 @@ export interface TaskDispatchDeps {
 	hostLoad?: Partial<HostLoadReader>;
 	/** The host-wide omp session ceiling the start gate judges (`hostSessionCeiling`); local starts only. */
 	hostSessions?: SessionCeilingGate;
+	quotaRefusal?: QuotaRefusalCheck;
 	/** The daemon's Mailbox port: present → a new local non-agy task runs headless (`runtime='headless'`), else on herdr. */
 	headless?: TaskMailboxPort;
 	/** herdr board card link of a started agent (`config.herdrBoard`); absent → the card carries no link. */
@@ -142,10 +144,7 @@ async function startAgent(
 	return started;
 }
 
-/**
- * Starts the task's herdr agent in its worktree (local herdr, or the host's over ssh) with `prompt`.
- * `closeOnPromptFailure`: a new task's caller removes the worktree on failure, so the agent must not outlive it.
- */
+/** Starts the task's herdr agent in its worktree; `closeOnPromptFailure` tears down on initial failure. */
 async function startHerdrAgent(
 	deps: TaskDispatchDeps,
 	row: TaskRow,
@@ -208,10 +207,7 @@ async function threadLink(channels: ChannelRegistry, log: TaskChatLog, threadRef
 	}
 }
 
-/**
- * New task: ID → worktree → four documents → agent → card and ⏳. A failure before the agent runs undoes only what
- * this call created (the worktree and branch, the reserved registry row) and reports the error.
- */
+/** New task: ID → worktree → four docs → agent → card and ⏳; rolls back on pre-agent failure. */
 export async function startTask(
 	deps: TaskDispatchDeps,
 	input: {
@@ -231,10 +227,14 @@ export async function startTask(
 		throw new Error("taskSpec은 [TASK] 요청이 온 채팅 스레드 안에서만 쓸 수 있습니다(현재 스레드를 알 수 없음)");
 	}
 	hostEntryOf(deps, host); // unknown host fails before anything is reserved
+	const quotaHold = deps.quotaRefusal?.(worker.model ?? undefined);
+	if (quotaHold !== undefined && input.force !== true) {
+		deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
+		return `시작 거부: ${quotaHold}`;
+	}
+	if (quotaHold !== undefined) deps.log.info("task_start_forced", { repo: spec.repo, reason: "quota" });
 	let capacity: StartCapacity | undefined;
 	if (host === null) {
-		// A worktree, a docs commit and a worker on a full disk or tight memory fail half-way: refuse before reserving
-		// anything (memory·disk·host omp sessions, with the measured numbers); load only warns; the owner's `force` passes.
 		const disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
 		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
 		if (capacity.refusals.length > 0 && input.force !== true) {

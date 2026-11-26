@@ -16,9 +16,7 @@ import type { TraceInput, TraceSpan } from "./trace";
 export { iterJsonlRecords, readJsonlRecords };
 
 /**
- * An omp session transcript (`<session>.jsonl`, sub-agents in `<session>/<name>.jsonl`) as spans on a turn's clock.
- * Of its text only the tool's intent line (`i`), a failed tool's first output, a failed model call's error and a
- * sub-agent's brief preview leave, masked and cut; everything else is sizes and marks.
+ * An omp session transcript as spans on a turn's clock; text fields leave masked and cut.
  */
 
 /** Spans kept per transcript (the newest ones); a longer turn says `truncated`. */
@@ -87,13 +85,7 @@ function blockHead(text: string, at: number): { label: string; warned: boolean }
 	return known === undefined ? undefined : { label: known[1], warned };
 }
 
-/**
- * A turn's first user message as the blocks `composeTurnPrompt` put before the request (label, bytes, whether the
- * block carries an injection warning) and the request itself. The request is cut off at the last request marker; in the
- * blocks only a head after a blank line outside quote and code fences starts a block, so a head-looking line in a
- * pasted quote or in the request is no block. A lifted first line is the `워크플로 호출`; other text before the first
- * known head is one `기타` block.
- */
+/** Split `composeTurnPrompt` prefix blocks + final request block (cut at the last request marker outside fences). */
 export function splitTurnPrompt(prompt: string): TraceInput[] {
 	const marker = `\n\n${CURRENT_REQUEST_MARKER}\n`;
 	const cutAt = prompt.lastIndexOf(marker);
@@ -122,28 +114,20 @@ export function splitTurnPrompt(prompt: string): TraceInput[] {
 export interface TranscriptWindow {
 	from: number;
 	to: number;
-	/** The turn is still dispatched: open spans run into "now". */
 	live: boolean;
-	/** The turn's dispatch: every span time counts from here. */
 	origin: number;
 }
-
-/** Where a transcript sits: 0 = the turn's own session; `prefix` keeps a sub-agent's entry ids apart from its parent's. */
 interface Scope {
 	depth: number;
 	prefix: string;
 }
-
 export interface Transcript {
 	spans: TraceSpan[];
 	first?: number;
-	/** The last message inside the window. */
 	lastIn?: number | undefined;
 	model?: string;
-	/** Its last model call ended the conversation (`stop`) or failed (`error`/`aborted`). */
 	ending?: "stop" | "failed";
 	truncated: boolean;
-	/** The turn's first prompt taken apart (session's own turn only, not a sub-agent's). */
 	inputs?: TraceInput[];
 }
 
@@ -167,9 +151,13 @@ function modelSpan(message: Json, at: number, origin: number): Omit<TraceSpan, "
 	const failed = message.stopReason === "error" || message.stopReason === "aborted";
 	const end = num(message.completedAt) ?? at;
 	const model = typeof message.model === "string" ? message.model : "model";
-	const tokensIn = (num(usage.input) ?? 0) + (num(usage.cacheRead) ?? 0) + (num(usage.cacheWrite) ?? 0);
+	const input = num(usage.input) ?? 0;
+	const cacheRead = num(usage.cacheRead) ?? 0;
+	const cacheWrite = num(usage.cacheWrite) ?? 0;
+	const tokensIn = input + cacheRead + cacheWrite;
 	const cost = isRecord(usage.cost) ? num(usage.cost.total) : undefined;
 	const error = failed ? text(message.errorMessage, ERROR_CHARS) : undefined;
+	const detail = calls.length > 0 ? `→ ${calls.join(" · ")}` : message.stopReason === "stop" ? "답변" : undefined;
 	return {
 		name: model,
 		kind: "llm",
@@ -177,17 +165,26 @@ function modelSpan(message: Json, at: number, origin: number): Omit<TraceSpan, "
 		start: (num(message.timestamp) ?? end - (num(message.duration) ?? 0)) - origin,
 		end: end - origin,
 		model,
-		...(calls.length > 0
-			? { detail: `→ ${calls.join(" · ")}` }
-			: message.stopReason === "stop"
-				? { detail: "답변" }
-				: {}),
+		...(detail === undefined ? {} : { detail }),
 		...(tokensIn > 0 ? { tokensIn } : {}),
+		...(input > 0 ? { tokensInput: input } : {}),
+		...(cacheRead > 0 ? { cacheRead } : {}),
+		...(cacheWrite > 0 ? { cacheWrite } : {}),
 		...(num(usage.output) === undefined ? {} : { tokensOut: num(usage.output) }),
 		...(cost === undefined ? {} : { cost }),
 		...(error === undefined ? {} : { error }),
 	};
 }
+
+const argsText = (args: unknown): string =>
+	isRecord(args)
+		? Object.entries(args)
+				.filter(([k]) => k !== "i")
+				.map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+				.join(" · ")
+		: typeof args === "string"
+			? args
+			: "";
 
 /** One transcript's spans inside the window, with its sub-agents (the `<stem>/*.jsonl` beside it) as children. */
 export function readTranscript(
@@ -200,12 +197,9 @@ export function readTranscript(
 	const result: Transcript = { spans: [], truncated: false };
 	const calls = new Map<string, TraceSpan>();
 	let tail: "model" | "other" = "other";
-	/** The last message inside the window: where an unanswered tool call stops and the next model call starts. */
 	let lastIn: number | undefined;
 	const records = parsed ?? readJsonlRecords(file);
-	/** Entry index (file order) of each answered tool call in the window. */
 	const answeredAt: number[] = [];
-	/** Set by a compaction: the next model call carries how many of the turn's tool results it summarised. */
 	let compacted: number | undefined;
 	for (const [index, entry] of records.entries()) {
 		const at = Date.parse(typeof entry.timestamp === "string" ? entry.timestamp : "");
@@ -252,6 +246,8 @@ export function readTranscript(
 			for (const part of Array.isArray(message.content) ? message.content : []) {
 				if (!isRecord(part) || part.type !== "toolCall" || typeof part.id !== "string") continue;
 				const intent = isRecord(part.arguments) ? text(part.arguments.i, DETAIL_CHARS) : undefined;
+				const rawArgs = argsText(part.arguments);
+				const argsPreview = rawArgs === "" ? undefined : oneLineText(rawArgs, 240);
 				const tool: TraceSpan = {
 					id: `${scope.prefix}${part.id}`,
 					name: typeof part.name === "string" ? part.name : "tool",
@@ -259,6 +255,7 @@ export function readTranscript(
 					status: "running",
 					start: span.end ?? span.start,
 					...(intent === undefined ? {} : { detail: intent }),
+					...(argsPreview !== undefined && argsPreview !== intent ? { argsPreview } : {}),
 				};
 				calls.set(part.id, tool);
 				result.spans.push(tool);
@@ -274,7 +271,8 @@ export function readTranscript(
 			tool.end = at - origin;
 			tool.status = message.isError === true ? "failed" : "done";
 			answeredAt.push(index);
-			tool.resultBytes = byteLength(messageText(message));
+			const body = messageText(message);
+			tool.resultBytes = byteLength(body);
 			const truncation =
 				isRecord(message.details) && isRecord(message.details.truncation) ? message.details.truncation : undefined;
 			if (truncation?.truncated === true) {
@@ -287,6 +285,8 @@ export function readTranscript(
 			const first = Array.isArray(message.content) ? message.content.find(isRecord) : undefined;
 			const error = tool.status === "failed" ? text(first?.text, ERROR_CHARS) : undefined;
 			if (error !== undefined) tool.error = error;
+			const resPrev = oneLineText(body, 240);
+			if (resPrev !== undefined && resPrev !== error) tool.resultPreview = resPrev;
 		}
 	}
 	// A tool call never answered ran out with the turn (an abort, a restart); only a live turn keeps it running.

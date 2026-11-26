@@ -14,7 +14,13 @@ import type { UsageLimitsInfo } from "./usage-limits";
  * `is-danger` from 90%), `200k+` once the session passed 200k tokens. Nothing for an unknown use or `done` cards.
  */
 export function contextBar(context: { percent: number; tokens: number } | undefined, column?: string): string {
-	if (context === undefined || column === "done") return "";
+	if (context === undefined) return "";
+	if (column === "done") {
+		if (context.tokens <= 200_000) return "";
+		const k = Math.round(context.tokens / 1000);
+		const tone = context.tokens >= 300_000 ? "is-danger" : "is-warning";
+		return `<span class="badge ${tone} ctx-hi" title="컨텍스트 ${k}k 토큰 — 새 스레드 분리 권장">${k}k</span>`;
+	}
 	const pct = Math.round(context.percent);
 	const tone = context.percent >= 90 ? " is-danger" : context.percent >= 80 ? " is-warn" : "";
 	return `<span class="limit-row${tone}" title="컨텍스트 ${Math.round(context.tokens / 1000)}k 토큰"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></span><b class="limit-pct">${pct}%${
@@ -22,24 +28,33 @@ export function contextBar(context: { percent: number; tokens: number } | undefi
 	}</b></span>`;
 }
 
-/** The body of the "7일 비용" card: a bar per day, the costliest sessions and the cache-write share; a failed read says so. */
+/** The body of the "7일 비용" card: daily bars with average marker, day drilldown lists, top sessions and cache share. */
 export function costCardBody(cost: Section<CostLedgerInfo>): string {
 	if (!cost.ok) return `<p class="note">${esc(`읽지 못했어요: ${cost.error}`)}</p>`;
 	const usd = (amount: number): string => `$${amount.toFixed(amount >= 100 ? 0 : 2)}`;
 	const peak = Math.max(0.01, ...cost.days.map((day) => day.cost));
+	const avg = cost.days.length > 0 ? cost.total / cost.days.length : 0;
+	const avgPct = cost.total > 0 ? Math.min(100, Math.round((avg / peak) * 100)) : 0;
+	const marker = avgPct > 0 ? `<em class="cost-avg" style="left:${avgPct}%"></em>` : "";
 	const days = cost.days
 		.map(
 			(day) =>
-				`<div class="limit-row" data-day="${esc(day.day)}"><span class="limit-name">${esc(day.day)}</span><span class="meter" role="img" aria-label="${esc(day.day)} ${usd(day.cost)}"><i style="width:${Math.round((day.cost / peak) * 100)}%"></i></span><b class="limit-pct">${usd(day.cost)}</b></div>`,
+				`<div class="limit-row" data-day="${esc(day.day)}"><span class="limit-name">${esc(day.day)}</span><span class="meter" role="img" aria-label="${esc(day.day)} ${usd(day.cost)}"><i style="width:${Math.round((day.cost / peak) * 100)}%"></i>${marker}</span><b class="limit-pct">${usd(day.cost)}</b></div>`,
 		)
 		.join("");
-	const top = cost.top
-		.map(
-			(session) =>
-				`<li class="gate-row"><span class="sys-dot" aria-hidden="true"></span><span class="gate-word">${esc(session.kind)}</span><span class="gate-label">${esc(session.title)}</span><code class="gate-detail">${usd(session.cost)}</code></li>`,
-		)
+	const row = (session: { kind: string; title: string; cost: number }): string =>
+		`<li class="gate-row"><span class="sys-dot" aria-hidden="true"></span><span class="gate-word">${esc(session.kind)}</span><span class="gate-label">${esc(session.title)}</span><code class="gate-detail">${usd(session.cost)}</code></li>`;
+	const top = cost.top.map(row).join("");
+	const dayLists = Object.entries(cost.dayTop ?? {})
+		.map(([d, list]) => `<ul class="gate-list" data-cost-day="${esc(d)}" hidden>${list.map(row).join("")}</ul>`)
 		.join("");
-	return `${days}${top === "" ? "" : `<ul class="gate-list">${top}</ul>`}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
+	const meta =
+		cost.total > 0
+			? `<div class="cost-meta"><span>일평균 ${usd(avg)} · 날짜 클릭 시 상세</span><button type="button" class="button is-ghost is-sm" data-cost-day-reset hidden>전체 7일</button></div>`
+			: "";
+	return `${days}${meta}${top === "" ? "" : `<ul class="gate-list" data-cost-all>${top}</ul>`}${dayLists}${
+		cost.total > 0 ? '<p class="note-sub" data-cost-day-empty hidden>선택한 날짜에 집계된 세션 비용이 없어요</p>' : ""
+	}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
 }
 
 /** `warn` under 20% remaining, `danger` under 5%; serialized into the page script, so it stays self-contained. */
