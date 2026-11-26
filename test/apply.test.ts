@@ -2570,7 +2570,7 @@ async function within<T>(promise: Promise<T>, ms: number, what: string): Promise
 	}
 }
 
-describe("spawnRunner time limit (cataly-apply-release-guards)", () => {
+describe("spawnRunner time limit", () => {
 	test("past the limit the whole process group is killed and the run fails as timed out", async () => {
 		const pidFile = join(root, "grandchild.pid");
 		const result = await spawnRunner(["sh", "-c", `sleep 30 & echo $! > ${pidFile}; wait`], {
@@ -2649,7 +2649,7 @@ describe("spawnRunner time limit (cataly-apply-release-guards)", () => {
 	});
 });
 
-describe("apply signal handling (cataly-apply-release-guards)", () => {
+describe("apply signal handling", () => {
 	const REPO_ROOT = join(import.meta.dir, "..");
 
 	/** A daemon socket answering the drain ops as a busy daemon would; records every op. */

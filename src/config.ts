@@ -13,6 +13,8 @@ import {
 	type WorkerAgyConfig,
 	workerAgyOf,
 } from "./config-agy";
+import { type OpsPanelConfig, opsPanelOf } from "./config-ops-panel";
+import { costCapOf, type QuotaGateConfig, quotaGateOf } from "./config-quota";
 import { SLACK_KEYS } from "./config-removed-keys";
 import {
 	asRecord,
@@ -138,6 +140,8 @@ const ROOT_KEYS = new Set([
 	"peerSilenceAlert",
 	"hostSessionCeiling",
 	"costCap",
+	"quotaGate",
+	"opsPanel",
 	"herdr",
 	"workerOmpArgs",
 	"workerAgy",
@@ -242,6 +246,10 @@ export interface JabbuConfig {
 	peerSilenceAlert?: { minutes: number };
 	/** Cost ceiling in dollars as omp prices it (`turnUsd` warns/3x stops, `dailyUsd` opens `cost_cap` gate). */
 	costCap?: { turnUsd?: number; dailyUsd?: number };
+	/** Per-provider quota gate for new lanes and [TASK] starts (`holdPct`, `pollMinutes`, `providers`). */
+	quotaGate?: QuotaGateConfig;
+	/** Discord `#ops` pinned status panel and hysteresis load-alert settings (`config.opsPanel`). */
+	opsPanel?: OpsPanelConfig;
 	/** herdr switch: `{}` enables herdr/taskSpec and [TASK] sweep (`bin` overrides path). */
 	herdr?: { bin?: string };
 	/**
@@ -747,18 +755,9 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 
 	const channels = parseChannels(configPath, root, home);
 
-	const costCap = root.costCap;
-	if (costCap !== undefined) {
-		const record = asRecord(costCap);
-		if (record === undefined) invalid(configPath, "costCap");
-		for (const key of Object.keys(record)) {
-			if (key !== "turnUsd" && key !== "dailyUsd") invalid(configPath, `costCap.${key}`);
-			const value = record[key];
-			if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
-				invalid(configPath, `costCap.${key}`);
-			}
-		}
-	}
+	const costCap = costCapOf(configPath, root.costCap);
+	const quotaGate = quotaGateOf(configPath, root.quotaGate);
+	const opsPanel = opsPanelOf(configPath, root.opsPanel, channels.discord);
 
 	const lanes = root.lanes;
 	const keptLanes: Record<string, unknown> = {};
@@ -1187,10 +1186,9 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (hostSessionCeiling !== undefined) config.hostSessionCeiling = hostSessionCeiling;
 	if (peerHopLimit !== undefined) config.peerHopLimit = peerHopLimit as { turns: number; windowMinutes: number };
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;
-	if (costCap !== undefined) {
-		const { turnUsd, dailyUsd } = costCap as { turnUsd?: number; dailyUsd?: number };
-		config.costCap = { ...(turnUsd === undefined ? {} : { turnUsd }), ...(dailyUsd === undefined ? {} : { dailyUsd }) };
-	}
+	if (costCap !== undefined) config.costCap = costCap;
+	if (quotaGate !== undefined) config.quotaGate = quotaGate;
+	if (opsPanel !== undefined) config.opsPanel = opsPanel;
 	if (restartNotice !== undefined) config.restartNotice = restartNotice;
 	if (recallEnabled !== undefined) config.recallEnabled = recallEnabled;
 	if (hostTools !== undefined) config.hostTools = hostTools;

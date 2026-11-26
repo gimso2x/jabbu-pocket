@@ -1047,7 +1047,7 @@ describe("JABBU_TEST_STATFS test hook", () => {
 	});
 });
 
-describe("drain_orphaned (cataly-apply-release-guards)", () => {
+describe("drain_orphaned", () => {
 	const orphanGate = (isAlive: (pid: number) => boolean = () => false) =>
 		collectGates({ homeDir: home, now, isAlive }).find((g) => g.name === "drain_orphaned");
 	const beat = (draining: 0 | 1) =>

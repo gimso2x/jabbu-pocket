@@ -75,7 +75,9 @@ import {
 } from "./daemon-context";
 import { answerDialogsFor, cwdFor, floorsSurfaceFor, hostToolsFor, peerTouched } from "./daemon-host-tools";
 import { handleIpc } from "./daemon-ipc";
+import { DaemonOpsPanel } from "./daemon-ops-panel";
 import { escalateTurnFailures, notifyProviderLimit } from "./daemon-owner-post";
+import { DaemonQuotaGate } from "./daemon-quota";
 import { DaemonSkillReview } from "./daemon-review";
 import { DaemonInbound, deliverySources } from "./daemon-sink";
 import { DaemonStore, peerCallPolicyOf } from "./daemon-store";
@@ -158,6 +160,8 @@ export class Daemon {
 	readonly #review: DaemonSkillReview;
 	readonly #gates: GateSweep;
 	readonly #pending: PendingDispatchSweep;
+	readonly #quota: DaemonQuotaGate;
+	readonly #opsPanel: DaemonOpsPanel;
 
 	constructor(options: DaemonOptions) {
 		const daemon = this;
@@ -211,12 +215,15 @@ export class Daemon {
 				return daemon.#taskSweeper;
 			},
 			requestIdleSweep: () => daemon.#startIdleSweep(),
+			quotaRefusal: (model) => daemon.#quota.refusalFor(model),
 		};
 		this.#inbound = new DaemonInbound(this.#ctx);
 		this.#landing = new DaemonTaskLanding(this.#ctx);
 		this.#review = new DaemonSkillReview(this.#ctx, (originKey, sessionDir) => this.#makeDriver(originKey, sessionDir));
 		this.#gates = new GateSweep(this.#ctx);
 		this.#pending = new PendingDispatchSweep(this.#ctx);
+		this.#quota = new DaemonQuotaGate(this.#ctx);
+		this.#opsPanel = new DaemonOpsPanel(this.#ctx, { status: () => this.status() });
 		this.#options = options;
 		const channels = new ChannelRegistry();
 		for (const binding of options.channels) channels.register(binding.port);
@@ -604,6 +611,7 @@ export class Daemon {
 				ceiling: resolvedCeiling(gateOptionsFromConfig(config).hostSessionCeiling),
 				onPressure: () => this.#startIdleSweep(),
 			},
+			quotaRefusal: (model) => this.#quota.refusalFor(model),
 			...(this.#options.hostLoad === undefined ? {} : { hostLoad: this.#options.hostLoad }),
 			...(this.#options.statfs === undefined ? {} : { statfs: this.#options.statfs }),
 			...(this.#options.verifyClaim === undefined ? {} : { verify: this.#options.verifyClaim }),
@@ -627,6 +635,7 @@ export class Daemon {
 			drainDeferNoticed: this.#drainDeferNoticed,
 			pending: this.#pending,
 			landing: this.#landing,
+			opsPanel: this.#opsPanel,
 			statusText: (originKey) => this.#statusText(originKey),
 		});
 		const deliveriesOf = deliverySources(store, config, crash);
@@ -643,10 +652,7 @@ export class Daemon {
 			});
 			this.#adapters.set(platform, adapter);
 		}
-		// One platform that cannot come up (a revoked token, a taken port) must not keep the others down: it is stopped
-		// (closing whatever it half-opened) and dropped from recovery, stop and the delivery pump. Its pending rows are
-		// still dispatched and its answers wait in deliveries for the next boot. Only when every platform fails does
-		// the start fail.
+		// One failed platform is stopped and dropped; pending rows stay for next boot unless all adapters fail.
 		const started = [...this.#adapters.values()];
 		const failed = (
 			await Promise.all(
@@ -766,11 +772,7 @@ export class Daemon {
 		setImmediate(() => void this.pump());
 	}
 
-	/**
-	 * One sweep of the interval chain; never rejects (a rejection would reach the process-level fatal handler and take
-	 * every omp child down with the daemon). A step that throws ends the sweep with `sweep_failed` and skips the beat:
-	 * a sweep that keeps failing then ages the stamp until `sweep_stalled` opens for `jabbu-pocket gates` outside the daemon.
-	 */
+	/** One sweep of the interval chain; never rejects so a failed step only skips the beat and logs `sweep_failed`. */
 	async sweep(): Promise<void> {
 		try {
 			await this.pump();
@@ -786,6 +788,8 @@ export class Daemon {
 			this.#maybeSweepTasks();
 			this.#maybeFlushWikiTurns();
 			this.#pending.sweep();
+			this.#quota.maybePoll();
+			this.#opsPanel.maybeTick();
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
@@ -808,11 +812,7 @@ export class Daemon {
 		}
 	}
 
-	/**
-	 * A lane verdict can wait on an owner approval card (30 minutes) and a mailbox idle stop queues behind its serial
-	 * chain (`/compact-jabbu`, a child start): run each in the background, one at a time, so gates, approval expiry
-	 * and the heartbeat keep their cadence. A tick still running when the next sweep comes is skipped, not stacked.
-	 */
+	/** Run lane tick in the background so gates, approval expiry, and heartbeat keep their cadence. */
 	#startLaneTick(): void {
 		const lanes = this.#lanes;
 		if (lanes === undefined || this.#laneTicking || this.#stopped) return;
@@ -1121,6 +1121,8 @@ export class Daemon {
 		this.#store?.setLogChannel({ discord: plan.next.channels.discord?.logChannelId });
 		this.#store?.setAlertChannel({ discord: plan.next.channels.discord?.alertChannelId });
 		if (plan.changed.includes("peerSilenceAlert")) this.#store?.setPeerCallPolicy(peerCallPolicyOf(plan.next));
+		if (plan.changed.includes("quotaGate")) this.#quota.maybePoll();
+		if (plan.changed.includes("opsPanel")) this.#opsPanel.maybeTick();
 		this.#broker?.setEscalationChannel({ discord: plan.next.channels.discord?.escalationChannelId });
 		// Of the top-level keys only the peer hop cap reaches the adapter (its own policy is under `channels.discord`).
 		this.#adapters
@@ -1306,19 +1308,17 @@ export class Daemon {
 		return repoMatchesTask(this.#options.config, row, repos);
 	}
 
-	/**
-	 * SIGTERM path: stop dispatching pending rows (they stay pending for the next boot's rule (1)), stop intake,
-	 * wait bounded for running turns to settle (their answers land in the ledger for the next boot's recovery),
-	 * stop the omp children, close the ledger. A turn that outlives the drain bound is stopped mid-flight exactly
-	 * as before. A second signal re-enters here: it awaits the in-flight shutdown instead of resolving at once,
-	 * which would let runDaemon exit and abandon the drain mid-wait.
-	 */
+	/** `#ops` 패널 직렬 작업이 모두 끝날 때까지 기다린다(테스트·종료 동기화용). */
+	opsPanelIdle(): Promise<void> {
+		return this.#opsPanel.idle();
+	}
+
+	/** SIGTERM path: stop intake, drain bounded turns, wait for background sweeps/panel, stop children, and close store. */
 	async stop(): Promise<void> {
 		if (this.#stopPromise === undefined) {
 			this.#stopped = true;
 			this.#router?.stopDispatching();
-			// Right away, before any await: a sweep still in flight must not start a cron command now, and the
-			// running ones are killed (their events stay dispatched for the next boot).
+			// Stop monitors before any await so an in-flight sweep cannot start a new cron command.
 			this.#monitors?.stop();
 			this.#stopPromise = this.#shutdown();
 		}
@@ -1327,11 +1327,8 @@ export class Daemon {
 
 	async #shutdown(): Promise<void> {
 		clearInterval(this.#timer);
-		// Running lane checks are killed now; the verdicts are not awaited (the claims stay pending for the next boot).
 		this.#lanes?.stop();
-		// Running [TASK] gates are aborted and waited for (their copies removed); nothing is recorded.
 		await this.#taskGates?.stop();
-		// Queued [TASK] checks are dropped and the running one killed; none of it reaches the cache.
 		await this.#checkRunner?.stop();
 		this.#heartbeat?.stop();
 		this.#heartbeat = undefined;
@@ -1341,6 +1338,7 @@ export class Daemon {
 		await this.#pumping;
 		await this.#monitors?.idle();
 		await this.#drainRunningTurns();
+		await this.#opsPanel.idle();
 		await this.#router?.close();
 		this.#store?.close();
 		this.#log.info("daemon_stop", { boot: this.#options.bootId });

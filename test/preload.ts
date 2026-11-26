@@ -213,7 +213,7 @@ export function installNetworkGuard(
 	};
 }
 
-// Stage 1 records only (Cataly's 2단계 plan): the count from a full suite run decides when `block` becomes the
+// Stage 1 records only: the count from a full suite run decides when `block` becomes the
 // default. `JABBU_TEST_NET_GUARD=block` opts in today.
 const guardMode: GuardMode = process.env.JABBU_TEST_NET_GUARD === "block" ? "block" : "record";
 const guardFile = join(scratchDir, "network-attempts.jsonl");

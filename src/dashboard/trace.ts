@@ -45,9 +45,14 @@ export interface TraceSpan {
 	model?: string;
 	/** The span's own numbers; agents add up their children on the page. */
 	tokensIn?: number;
+	tokensInput?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
 	tokensOut?: number;
 	cost?: number;
 	error?: string;
+	argsPreview?: string;
+	resultPreview?: string;
 	children?: TraceSpan[];
 	/** On the turn's root: the first prompt's blocks and the request (sizes and marks, no text). */
 	inputs?: TraceInput[];
@@ -306,14 +311,7 @@ function columnsOf(db: Database, table: string): Set<string> {
 
 const sessionOf = (dir: string): string | undefined => (existsSync(dir) ? newestSessionFile(dir) : undefined);
 
-/**
- * The TASKs of the turn's origin that the turn made or called, and the lanes it started, inside the turn window
- * `[from, to)`. A TASK is the turn's when it was registered in the window, or when `herdr_prompts` has a start/followup
- * of the same origin and agent in it (a resume or a later instruction). That table keeps only the newest 20 rows per
- * agent and 30 days (store/db.ts `HERDR_PROMPT_ROWS_KEPT`): a follow-up turn older than that no longer finds its
- * worker, and a registration inside the window always does. Lanes only count with a recorded `meta.parentOrigin`
- * (lanes started before it was recorded are not linked).
- */
+/** TASKs of the origin created or prompted in `[from, to)`, plus lanes whose `meta.parentOrigin` matches. */
 function findWorkers(
 	db: Database,
 	originKey: string,
@@ -420,11 +418,7 @@ function clampSpan(span: TraceSpan): TraceSpan {
 	};
 }
 
-/**
- * A worker as a child span of the turn. An omp worker holds its session's spans inside its window (ids prefixed with
- * the worker's id); an agy, remote or session-less one is a bar with its model and status only: agy's own conversation
- * store is not read.
- */
+/** A worker as a child span of the turn (omp session spans inside its window; agy/remote/session-less = bar only). */
 function workerSpan(worker: Worker, turnStart: number): { span: TraceSpan; truncated: boolean } {
 	const start = Math.max(worker.start, turnStart);
 	const running = worker.status === "running";

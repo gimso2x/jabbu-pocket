@@ -19,10 +19,7 @@ import type { WikiNotes } from "../wiki/notes";
 import type { DaemonStore } from "./daemon-store";
 import type { DaemonOptions } from "./daemon-types";
 
-/**
- * The live state of one `Daemon` that its parts in the sibling files read: every field is a getter over the daemon's
- * own, so a value set by `start()` (or replaced by a reload, as `options.config`) is seen at the moment of the read.
- */
+/** Live state of one `Daemon` read via getters so reload updates apply immediately. */
 export interface DaemonContext {
 	readonly options: DaemonOptions;
 	readonly clock: MailboxClock;
@@ -42,6 +39,7 @@ export interface DaemonContext {
 	readonly taskSweeper: TaskSweeper | undefined;
 	/** Starts one idle sweep now (a lane or [TASK] start was refused for sessions or memory); a sweep already running absorbs it. */
 	readonly requestIdleSweep: () => void;
+	readonly quotaRefusal?: (model: string | undefined) => string | undefined;
 }
 
 /** The ledger of a started daemon; throws before `start()` opened it. */

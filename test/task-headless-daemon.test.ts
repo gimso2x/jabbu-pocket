@@ -567,7 +567,7 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 	});
 
 	describe("dashboard 작업 내역 (IPC task_followup · tasks_pause/resume source web)", () => {
-		type Answer = { ok: boolean; text?: string; error?: string };
+		type Answer = { ok: boolean; text?: string; error?: string; paused?: boolean };
 		const ipc = (rig: Rig, request: Record<string, unknown>) =>
 			callDaemon(rig.daemon.socketPath, request) as Promise<Answer>;
 		/** The newest kept prompt preview of `agent` (`herdr_prompts`, what the dashboard's 마지막 지시 shows). */
@@ -614,6 +614,7 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 			await rig.until(() => received(rig, origin).length === 1);
 			const paused = await ipc(rig, { op: "tasks_pause", id: row.taskId, source: "web" });
 			expect(paused.ok).toBe(true);
+			expect(paused.paused).toBe(true);
 			expect(paused.text).toStartWith(`⏸ ${row.taskId} 멈췄습니다`);
 			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(true);
 			expect(sweepLines(rig, "task_paused")[0]).toContain("source=web");
@@ -637,7 +638,7 @@ describe("headless [TASK] workers in a daemon without herdr", () => {
 			expect(paused.text).toContain("턴을 멈췄습니다(헤드리스)");
 			expect(sweepLines(rig, "task_paused")[0]).not.toContain("source=");
 			const resumed = await ipc(rig, { op: "tasks_resume", id: row.taskId, source: "web" });
-			expect(resumed).toMatchObject({ ok: true });
+			expect(resumed).toMatchObject({ ok: true, paused: false });
 			expect(resumed.text).toStartWith(`▶ ${row.taskId} 재개했습니다`);
 			expect(rig.daemon.store.tasks.isPaused(rig.daemon.store.tasks.require(row.taskId))).toBe(false);
 			expect(sweepLines(rig, "task_resumed")[0]).toContain("source=web");

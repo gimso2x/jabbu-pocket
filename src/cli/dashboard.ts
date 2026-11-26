@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
-import type { LiveView } from "../core/live-turn";
 import { callDaemon } from "../daemon/ipc";
+import { readThreadLive } from "../dashboard/agy-conversation";
 import { readDiff } from "../dashboard/diff";
 import { readMonitorDetail } from "../dashboard/monitor-detail";
 import { resolvePeers } from "../dashboard/peers";
@@ -83,6 +83,7 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 
 	let server: Server<undefined>;
 	const web = webDashboardOptionsFor(homeDir, config?.channels.web, callDaemon, config);
+	const peers = () => resolvePeers(config?.dashboard, config?.timezone ?? hostTimezone());
 	try {
 		server = startDashboardServer({
 			port,
@@ -98,7 +99,7 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 					now: now(),
 					timezone: config?.timezone ?? hostTimezone(),
 				}),
-			conversation: (origin, before) => readThreadConversation(homeDir, origin, before),
+			conversation: (origin, before) => readThreadConversation(homeDir, origin, before, { peers: peers() }),
 			// The daemon's procedure file roots (MonitorScheduler in daemon.ts).
 			monitorDetail: (id) =>
 				readMonitorDetail(
@@ -109,17 +110,11 @@ export async function dashboardCommand(args: string[], homeDir: string): Promise
 						timezone: config?.timezone ?? hostTimezone(),
 					},
 					id,
-					resolvePeers(config?.dashboard, config?.timezone ?? hostTimezone()),
+					peers(),
 				),
 			diff: (subject) => readDiff(homeDir, subject),
 			// 800 ms bound: a wedged daemon must not hold a read past the next tick (callDaemon defaults to 120 s).
-			live: async (origin) => {
-				const answer = await callDaemon(join(homeDir, "jabbu.sock"), { op: "live", origin }, 800);
-				if (typeof answer !== "object" || answer === null || !("ok" in answer) || answer.ok !== true) {
-					throw new Error("daemon live op failed");
-				}
-				return "live" in answer ? (answer.live as LiveView | null) : null;
-			},
+			live: (origin) => readThreadLive(homeDir, origin, callDaemon, peers()),
 			onError: (error) =>
 				process.stderr.write(
 					`dashboard snapshot_failed: ${redact(error instanceof Error ? error.message : String(error))}\n`,

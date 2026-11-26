@@ -33,8 +33,8 @@ import { makeRepo } from "./helpers/git-fixtures";
 import { LANE_START, type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
 // PR 게시 뒤 추적: gh는 가짜다. 여기서 나가는 것은 로컬 Discord fake 뿐이고 GitHub에 닿지 않는다.
-// Cataly T/pr-watch.test.ts의 사례(기준선, 리뷰 철회, 강제 푸시 rewritten, 실패 체크, 머지 종료, 읽기 실패 커서 유지)를
-// 가짜 `gh api` 위로 옮기고, 레인 매니저 통합(게시된 PR의 tick 패스, `!prwatch off`)을 더한다.
+// 기준선, 리뷰 철회, 강제 푸시 rewritten, 실패 체크, 머지 종료, 읽기 실패 커서 유지 사례를
+// 가짜 `gh api` 위에서 검증하고, 레인 매니저 통합(게시된 PR의 tick 패스, `!prwatch off`)을 더한다.
 
 const UPSTREAM = "acme/app";
 const PR_URL = `https://github.com/${UPSTREAM}/pull/7`;
@@ -105,7 +105,7 @@ interface FakeGitHub {
 	failing: Map<string, string>;
 }
 
-/** `gh api --method GET`의 가짜: 한 저장소의 PR 하나를 Cataly 테스트의 가짜 표대로 읽는다. */
+/** `gh api --method GET`의 가짜: 한 저장소의 PR 하나를 상태 표대로 읽는다. */
 function fakeGitHub(pr: FakePr, login: string | null = "me"): FakeGitHub {
 	const calls: string[] = [];
 	const failing = new Map<string, string>();
@@ -195,7 +195,7 @@ const who = (ignore: ReadonlySet<string> = new Set()): { self: string; ignore: R
 	ignore,
 });
 
-/** 커서를 저장하는 한 패스(Cataly CLI처럼 줄을 내고 커서를 저장한다). */
+/** 커서를 저장하는 한 패스(새 줄을 내고 커서를 저장한다). */
 async function pass(
 	gh: FakeGitHub,
 	cursor: LanePrWatch | undefined,
@@ -380,7 +380,7 @@ describe("prWatchPass (가짜 gh)", () => {
 		const noLogin = fakeGitHub(pr, null);
 		const api = noLogin.run;
 		await expect(api("user")).rejects.toThrow("HTTP 401");
-		// 내역 없이 self를 못 정하면 Cataly처럼 읽지 않고 보류한다(매니저가 이 경고를 한 번만 올린다).
+		// 내역 없이 self를 못 정하면 읽지 않고 보류한다(매니저가 이 경고를 한 번만 올린다).
 		expect(noLogin.calls).toEqual(["user"]);
 	});
 
