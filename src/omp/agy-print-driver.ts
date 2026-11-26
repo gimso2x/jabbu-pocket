@@ -186,6 +186,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, opened);
 	}
 	async #spawn(resume: string | undefined): Promise<string> {
+		this.#requireStarted(); // a prompt parked on a retire must not spawn a child under a stopped driver
 		const { log, originKey, ...options } = this.#options;
 		const env = this.#env();
 		const logDir = options.logDir ?? join(env.HOME ?? homedir(), ".gemini", "antigravity-cli", "log");

@@ -210,6 +210,20 @@ test("a quota error ends `agy rate limited (429)` and the driver ends the child 
 	await driver.stop();
 });
 
+test("stop during a retire: a parked prompt rejects instead of spawning a child under the stopped driver", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	await driver.prompt("@hold");
+	const aborting = driver.abort();
+	const parked = driver.prompt("next");
+	const stopping = driver.stop();
+	await expect(parked).rejects.toThrow("driver not started");
+	await stopping;
+	await aborting;
+	expect(h.spawns()).toHaveLength(1);
+});
+
 test("the conversation id is kept and a new driver resumes it with --conversation, without floors", async () => {
 	const h = harness();
 	const one = h.make();
