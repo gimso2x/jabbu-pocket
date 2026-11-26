@@ -198,8 +198,9 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const proc = Bun.spawn(command, { cwd: resolve(options.cwd), env, ...io, detached: true });
 		const init = Promise.withResolvers<string>();
 		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false, ready: false };
-		child.gone = Promise.all([proc.exited, this.#pumpStdout(child)]).then(([code]) => this.#onExit(child, code));
+		const stdoutDone = this.#pumpStdout(child);
 		void this.#pumpStderr(child);
+		child.gone = Promise.all([proc.exited, stdoutDone]).then(([code]) => this.#onExit(child, code));
 		this.#child = child;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		const timer = setTimeout(() => init.reject(new Error(`no init in ${timeoutMs}ms`)), timeoutMs);
