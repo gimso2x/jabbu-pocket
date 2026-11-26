@@ -850,6 +850,13 @@ describe("collectGates", () => {
 			db.run(insert, ["q1", "방금 거기서 응답 실패(rpc_error)가 떴다고 하던데", now, now - 600_000]);
 			db.run(insert, ["q2", "```\n<@222222222222222222> 응답 실패(x)\n```", now, now - 600_000]);
 			db.run(insert, ["q3", "<@222222222222222222> 확인했어", now, now - 600_000]);
+			db.run(insert, [
+				"q4",
+				"<@222222222222222222> 아까 <@111111111111111111> 응답 실패(rpc_error) 봤어?",
+				now,
+				now - 600_000,
+			]);
+			db.run(insert, ["q5", "<@222222222222222222> 확인\n> 응답 실패(500)", now, now - 600_000]);
 		});
 		expect(gateState("turns_failing")).toEqual({ state: "open", detail: "recent=3" });
 	});

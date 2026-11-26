@@ -2,9 +2,9 @@ import { Database } from "bun:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { failureNoticeBody } from "../channel/failure-notice";
 import type { JabbuConfig } from "../config";
 import { isAutonomousRow } from "../core/mailbox";
-import { PEER_FAILURE_MARK } from "../core/types";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { holderAlive } from "../daemon/lock";
 import { nextFireOf, toMonitor } from "../monitors/ledger";
@@ -582,15 +582,14 @@ export function collectGates(options: GatesOptions): Gate[] {
 		ledger.push(monitorsStalled(db, heartbeat, now, freeze !== undefined, readUnfrozenAt(homeDir)));
 
 		// Monitor failures never write a `[turn failed]` delivery (their notices are `⏰ …`), so this counts chat turns
-		// only. A peer failure notice is mention-first (mailbox-notices `failedNotice`): the failureNoticeBody shapes
-		// as head-anchored GLOBs, so a body merely quoting the mark later never counts. Columns guarded as above.
+		// only. Uses `failureNoticeBody` directly (single source of truth for owner + peer shapes). Columns guarded as above.
 		const failedTurns =
 			columnExists(db, "deliveries", "body") && columnExists(db, "deliveries", "created_at")
-				? scalar(
-						db,
-						`SELECT COUNT(*) AS n FROM deliveries WHERE created_at > ${now - TURNS_FAILING_WINDOW_MS}
-						 AND (body LIKE '[turn failed]%' OR body GLOB '<@[0-9]*> ${PEER_FAILURE_MARK}*' OR body GLOB '{{mention:[0-9]*}} ${PEER_FAILURE_MARK}*')`,
-					)
+				? (
+						db.query(`SELECT body FROM deliveries WHERE created_at > ${now - TURNS_FAILING_WINDOW_MS}`).all() as Array<{
+							body: string;
+						}>
+					).filter((row) => failureNoticeBody(row.body)).length
 				: 0;
 		ledger.push(gate("turns_failing", failedTurns >= TURNS_FAILING_THRESHOLD, `recent=${failedTurns}`));
 
