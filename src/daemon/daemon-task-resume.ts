@@ -115,7 +115,13 @@ export function noteAgyTaskLimit(ctx: DaemonContext, info: TurnSettledInfo): voi
 	const error = info.error;
 	if (error === undefined || !error.startsWith(AGY_RATE_LIMIT_HEAD)) return;
 	const row = taskOfOrigin(ctx.store?.tasks, info.originKey);
-	if (row === undefined || row.runtime !== "headless" || agyModelOf(row.workerModel) === undefined) return;
+	if (
+		row === undefined ||
+		row.runtime !== "headless" ||
+		agyModelOf(row.workerModel) === undefined ||
+		(row.status !== "working" && row.status !== "blocked")
+	)
+		return;
 	const sweeper = ctx.taskSweeper;
 	if (sweeper === undefined) {
 		ctx.log.warn("task_agy_limit_unhandled", { task: row.taskId, reason: "no task sweeper" });

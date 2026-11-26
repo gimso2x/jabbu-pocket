@@ -3152,6 +3152,28 @@ describe("agy worker limit", () => {
 		expect(r.reminders).toHaveLength(reminded);
 		expect(r.ledger.require(r.row.taskId).status).toBe("blocked");
 	});
+
+	test("blockOnAgyLimit ignores done, cancelled and review tasks without posting an agy 한도 card", async () => {
+		const error = "agy rate limited (429): RESOURCE_EXHAUSTED (code 429): Individual quota reached.";
+		const inReview = rig({}, { risk: "L0", runtime: "headless", workerModel: "agy:gemini-4-hydrogen-high" });
+		inReview.ledger.transition(inReview.row.taskId, "review", "bot", "outcome");
+		await inReview.sweeper.blockOnAgyLimit(inReview.row, error);
+		expect(inReview.ledger.require(inReview.row.taskId).status).toBe("review");
+		expect(texts(inReview).filter((text) => text.includes("agy 한도"))).toHaveLength(0);
+
+		const done = rig({}, { risk: "L0", runtime: "headless", workerModel: "agy:gemini-4-hydrogen-high" });
+		done.ledger.transition(done.row.taskId, "review", "bot", "outcome");
+		done.ledger.transition(done.row.taskId, "done", "human", "merged");
+		await done.sweeper.blockOnAgyLimit(done.row, error);
+		expect(done.ledger.require(done.row.taskId).status).toBe("done");
+		expect(texts(done).filter((text) => text.includes("agy 한도"))).toHaveLength(0);
+
+		const cancelled = rig({}, { risk: "L0", runtime: "headless", workerModel: "agy:gemini-4-hydrogen-high" });
+		cancelled.ledger.transition(cancelled.row.taskId, "cancelled", "human", "stopped");
+		await cancelled.sweeper.blockOnAgyLimit(cancelled.row, error);
+		expect(cancelled.ledger.require(cancelled.row.taskId).status).toBe("cancelled");
+		expect(texts(cancelled).filter((text) => text.includes("agy 한도"))).toHaveLength(0);
+	});
 });
 
 describe("TaskSweeper: [TASK] PR 착지의 카드(AC-18)와 레코드 상태(AC-20)", () => {

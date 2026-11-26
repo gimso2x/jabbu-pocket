@@ -11,9 +11,8 @@ import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
 
-// A [TASK] worker's agy print-mode child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn;
-// stdout `init` (conversation id) → `step_update`s → one `result` per turn. Print mode applies `--settings` deny rules
-// (`agy acp` does not). No input cuts a turn: abort ends the child, the next prompt resumes with `--conversation`.
+// A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn;
+// stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
 
 /** sessionDir file with the latest turn's final assistant text: the task `read` of a driver that is gone. */
 export const AGY_LAST_ANSWER_FILE = "agy-last-answer.txt";
@@ -25,12 +24,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
 const KILL_GRACE_MS = 2_000;
 const QUIET_STEPS: Record<string, true> = { user_input: true, system_message: true };
 
-/**
- * `model`: the agy model id fixed at registration. `settings`: `--settings` JSON (`agySettings()`). `addDirs`: `--add-dir`
- * besides `cwd`. `workerFloors`: ahead of the first prompt of every new conversation (agy has no system prompt flag).
- * Each child logs to its own `<logDir>/cli-task-<logName>-<ms>-<pid>-<n>.log` (the account switch timer reads the first
- * auth line of each file); `logDir` defaults to the child HOME's `.gemini/antigravity-cli/log`. `startupTimeoutMs`: wait for `init`.
- */
+/** `model`, `settings`, `addDirs`, `workerFloors` (new-conversation prefix), `logName`, `logDir` for child logs. */
 export interface AgyPrintDriverOptions extends Pick<Switch.AgyOmpDriverOptions, SharedOption | "startupTimeoutMs"> {
 	model: string;
 	settings: string;
@@ -42,7 +36,7 @@ export interface AgyPrintDriverOptions extends Pick<Switch.AgyOmpDriverOptions, 
 type SharedOption = "agyExecutable" | "cwd" | "sessionDir" | "env" | "baseEnv" | "log" | "originKey" | "toolKeepalive";
 /** `init` resolves with the conversation id (rejects when the child dies first); `ended`: stopped on purpose. */
 type ChildIo = { proc: Bun.Subprocess<"pipe", "pipe", "pipe">; init: PromiseWithResolvers<string> };
-type Child = ChildIo & { gone: Promise<void>; stderr: string; ended: boolean };
+type Child = ChildIo & { gone: Promise<void>; stderr: string; ended: boolean; ready: boolean };
 const str = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 const num = (value: unknown): number => (typeof value === "number" ? value : 0);
 const subscribe = <T>(set: Set<(value: T) => void>, listener: (value: T) => void) => {
@@ -205,7 +199,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const io = { stdin: "pipe", stdout: "pipe", stderr: "pipe" } as const;
 		const proc = Bun.spawn(command, { cwd: resolve(options.cwd), env, ...io, detached: true });
 		const init = Promise.withResolvers<string>();
-		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false };
+		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false, ready: false };
 		const stdoutDone = this.#pumpStdout(child);
 		void this.#pumpStderr(child);
 		child.gone = Promise.all([proc.exited, stdoutDone]).then(([code]) => this.#onExit(child, code));
@@ -251,7 +245,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#child = undefined;
 		this.#toolKeepalive.clear();
 		this.#dropTurn();
-		if (this.#started) for (const listener of this.#exits) listener({ code, expected: false, stderr: child.stderr });
+		if (!this.#started || !child.ready) return;
+		for (const listener of this.#exits) listener({ code, expected: false, stderr: child.stderr });
 	}
 	async #pumpStdout(child: Child): Promise<void> {
 		const decoder = new TextDecoder();
@@ -278,7 +273,10 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		if (!isRecord(message)) return;
 		const event = str(message.event) ?? "?";
 		const id = str(message.conversation_id);
-		if (event === "init" && id !== undefined && id !== "") child.init.resolve(id);
+		if (event === "init" && id !== undefined && id !== "") {
+			child.ready = true;
+			child.init.resolve(id);
+		}
 		if (event === "init" || child.ended || child !== this.#child) return;
 		const body = message[event];
 		const turn = this.#turn;
@@ -334,7 +332,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			this.#rateLimited(child, turn, quotaRetryNotice(error) ?? error);
 			return;
 		}
-		const text = str(result.response) ?? turn.text;
+		const text = str(result.response) || turn.text;
 		const { model } = this.#options;
 		const entry = { entries: this.#entries, nextSeq: () => ++this.#seq, provider: "agy", model, usage: undefined };
 		Switch.pushAgyAssistantEntry({ ...entry, text, succeeded });
@@ -366,6 +364,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			child.proc.stdin.write(`${JSON.stringify({ event: "user", message: { role: "user", content } })}\n`);
 			child.proc.stdin.flush();
 		} catch (cause) {
+			this.#retire();
 			this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error: `agy stdin closed: ${String(cause)}` });
 		}
 	}

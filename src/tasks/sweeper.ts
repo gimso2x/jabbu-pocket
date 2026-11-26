@@ -521,10 +521,7 @@ export class TaskSweeper {
 		return this.#result(row, status, judgement, actions);
 	}
 
-	/**
-	 * A herdr agy worker's limit: when herdr says it stopped (idle, done, unknown) or cannot say, its screen tail is read.
-	 * A limit line there blocks the task and stops the prompts (true); an unreadable screen is only logged.
-	 */
+	/** Herdr agy limit: reads screen tail when stopped/unknown; a limit line blocks and stops prompts (true). */
 	async #agyLimit(row: TaskRow, agent: HerdrAgentStatusResult, actions: string[]): Promise<boolean> {
 		const { log } = this.#deps;
 		const status = agent.ok ? agent.status : undefined;
@@ -544,6 +541,7 @@ export class TaskSweeper {
 	async blockOnAgyLimit(row: TaskRow, line: string, actions: string[] = []): Promise<void> {
 		const { ledger, log } = this.#deps;
 		const fresh = ledger.require(row.taskId);
+		if (fresh.status !== "working" && fresh.status !== "blocked") return;
 		if (fresh.status === "working") {
 			ledger.transition(row.taskId, "blocked", "bot", "agy 한도");
 			await setStatusReaction(this.#deps.channels, log, row.threadRef, "blocked");

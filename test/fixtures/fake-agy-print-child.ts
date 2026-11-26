@@ -34,6 +34,10 @@ if (args.at(-1) !== "-p=" || flag("--input-format") !== "stream-json" || flag("-
 	process.stderr.write("error: fake agy wants stream-json in and out with -p= last\n");
 	process.exit(2);
 }
+if (flag("--model") === "@crash-init") {
+	process.stderr.write("boot failed\n");
+	process.exit(1);
+}
 
 const wanted = flag("--conversation");
 let conversation = `fake-${randomUUID()}`;
@@ -66,6 +70,12 @@ function turn(content: string): void {
 	stepUpdate({ state: "DONE", step_type: "brand_new_step" });
 	if (content.includes("@error")) {
 		result("ERROR", "", "model exploded");
+		return;
+	}
+	if (content.includes("@empty-res")) {
+		stepUpdate({ state: "ACTIVE", step_type: "agent_response", text_delta: "STREAMED" });
+		stepUpdate({ state: "DONE", step_type: "agent_response", text_delta: "-OK", usage });
+		result("SUCCESS", "");
 		return;
 	}
 	if (content.includes("@quota")) {

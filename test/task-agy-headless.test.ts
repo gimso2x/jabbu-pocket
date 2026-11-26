@@ -60,7 +60,7 @@ function context(options: { runtime: TaskRow["runtime"]; workerModel?: string })
 			},
 		},
 	} as unknown as DaemonContext;
-	return { home, row, ctx, blocked, warnings, origin: taskOriginKey(row.agent) };
+	return { home, ledger, row, ctx, blocked, warnings, origin: taskOriginKey(row.agent) };
 }
 
 test("AC-4: an agy [TASK] origin gets the print driver with the row's model, floors and OMP_WIKI_NOTE_DISABLE=1", async () => {
@@ -113,4 +113,10 @@ test("AC-5: a headless agy 429 turn end blocks once through the sweeper without 
 	expect(agy.blocked).toHaveLength(1);
 	expect(herdr.blocked).toEqual([]);
 	expect(omp.blocked).toEqual([]);
+
+	const done = context({ runtime: "headless", workerModel: "agy:gemini-4-hydrogen-high" });
+	done.ledger.transition(done.row.taskId, "review", "bot", "outcome");
+	done.ledger.transition(done.row.taskId, "done", "human", "merged");
+	noteAgyTaskLimit(done.ctx, { originKey: done.origin, error: limit, text: "", openDialogs: 0 });
+	expect(done.blocked).toEqual([]);
 });

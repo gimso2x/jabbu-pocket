@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AGY_LAST_ANSWER_FILE, AgyPrintDriver } from "../src/omp/agy-print-driver";
+import { AGY_LAST_ANSWER_FILE, AgyPrintDriver, type AgyPrintDriverOptions } from "../src/omp/agy-print-driver";
 import { OmpDriverError, type OmpEvent, type OmpExitInfo, type OmpFinal } from "../src/omp/driver";
 import { agySettings } from "../src/tasks/worker-tier";
 
@@ -34,7 +34,7 @@ function harness() {
 	writeFileSync(logFile, "");
 	const sessionDir = join(root, "sessions", "e1");
 	const logDir = join(root, "agy-log");
-	const make = () =>
+	const make = (overrides: Partial<AgyPrintDriverOptions> = {}) =>
 		new AgyPrintDriver({
 			agyExecutable: executable,
 			cwd: root,
@@ -48,6 +48,7 @@ function harness() {
 			env: { FAKE_AGY_LOG: logFile, OMP_WIKI_NOTE_DISABLE: "1" },
 			baseEnv: { HOME: root, PATH: process.env.PATH ?? "/usr/bin:/bin", SLACK_BOT_TOKEN: "xoxb-TEST-0" },
 			startupTimeoutMs: 10_000,
+			...overrides,
 		});
 	const entries = (): LogEntry[] =>
 		readFileSync(logFile, "utf8")
@@ -286,4 +287,25 @@ test("the model list is the fixed model the state reports; another model and unk
 	expect(after.entries).toHaveLength(entries.length - 1);
 	await driver.stop();
 	expect(existsSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE))).toBe(true);
+});
+
+test("pre-init crash rejects openSession with OmpDriverError and emits 0 onExit events", async () => {
+	const h = harness();
+	const driver = h.make({ model: "@crash-init" });
+	const exits: OmpExitInfo[] = [];
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	await expect(driver.openSession()).rejects.toBeInstanceOf(OmpDriverError);
+	await driver.stop();
+	expect(exits).toEqual([]);
+});
+
+test("an empty result.response preserves streamed text in final and agy-last-answer.txt", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const final = await started(driver, "@empty-res");
+	expect(final).toMatchObject({ status: "completed", text: "STREAMED-OK" });
+	expect(readFileSync(join(h.sessionDir, AGY_LAST_ANSWER_FILE), "utf8")).toBe("STREAMED-OK");
+	await driver.stop();
 });
