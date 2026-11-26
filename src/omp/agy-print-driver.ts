@@ -186,6 +186,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, opened);
 	}
 	async #spawn(resume: string | undefined): Promise<string> {
+		// Tool-call ids restart at step 0 in the new child; the old child's states would suppress its first calls.
+		this.#tools.clear();
 		const { log, originKey, ...options } = this.#options;
 		const env = this.#env();
 		const logDir = options.logDir ?? join(env.HOME ?? homedir(), ".gemini", "antigravity-cli", "log");
