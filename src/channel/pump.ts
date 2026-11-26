@@ -2,6 +2,7 @@
 // or once the ledger gave up on it (ambiguous, retries spent, expired). The platform part (how one delivery is posted,
 // whether its post path is rate limited) is the `DeliverySender`; `finishDeliveryStatus` is the status finish they share.
 import type { Logger } from "../log";
+import { failureNoticeBody } from "./failure-notice";
 import type { RetryAfterGate } from "./retry";
 import { errorText, type FinalOutcome } from "./text";
 import type { AdapterClock, DeliveryItem, DeliveryRetry, DeliverySource } from "./types";
@@ -67,7 +68,7 @@ export async function finishDeliveryStatus(
 ): Promise<void> {
 	if (delivery.keepStatus) return;
 	const outcome: FinalOutcome =
-		result === "undelivered" ? "undelivered" : delivery.body.startsWith("[turn failed]") ? "failed" : "done";
+		result === "undelivered" ? "undelivered" : failureNoticeBody(delivery.body) ? "failed" : "done";
 	const cancelled = new Set(delivery.cancelThreadRefs ?? []);
 	// One thread's failed finish must not abandon the rest: the delivery is already settled in the ledger, so
 	// no later pump retries this finish. The first error still surfaces to the caller's per-delivery catch.
@@ -117,7 +118,7 @@ export function answerFooter(
 	footerOf: (threadRef: string, originKey: string, outcome: "done" | "failed") => string | undefined,
 ): string | undefined {
 	if (delivery.keepStatus === true || (delivery.cancelThreadRefs ?? []).includes(delivery.threadRef)) return undefined;
-	const outcome = delivery.body.startsWith("[turn failed]") ? "failed" : "done";
+	const outcome = failureNoticeBody(delivery.body) ? "failed" : "done";
 	return footerOf(delivery.threadRef, delivery.originKey, outcome);
 }
 
@@ -184,8 +185,8 @@ export class DeliveryPump {
 	}
 
 	/**
-	 * A failed send: an ambiguous one is never resent, and a definitive one whose ledger write says the retries are spent
-	 * is not either — both end the thread's status as undelivered. A definitive failure with retries left waits for them.
+	 * A failed send: an ambiguous one, or a definitive one whose ledger write says its retries are spent, ends the
+	 * thread's status as undelivered. A definitive failure with retries left waits for them.
 	 */
 	async #fail(delivery: DeliveryItem, failed: Extract<DeliverySendResult, { kind: "failed" }>): Promise<void> {
 		const { error, outcome, sentParts, replyTs } = failed;
@@ -236,10 +237,8 @@ export class DeliveryPump {
 		await this.#ledger(delivery, "defer", () => source.defer(delivery.deliveryId, error, retry));
 	}
 
-	/**
-	 * One ledger write (confirm/fail/defer). A throw (SQLITE_FULL/BUSY) is logged and the batch goes on; the row stays
-	 * in flight as claimed, which the next start recovers. False when it threw.
-	 */
+	/** One ledger write (confirm/fail/defer): a throw (SQLITE_FULL/BUSY) is logged and the batch goes on; the row
+	 * stays in flight as claimed, which the next start recovers. False when it threw. */
 	async #ledger(delivery: DeliveryItem, call: string, write: () => Promise<unknown> | unknown): Promise<boolean> {
 		try {
 			await write();
