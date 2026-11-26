@@ -4,7 +4,12 @@
 import { OmpDriverError } from "../omp/driver";
 import type { InboundRow } from "../store/db-rows";
 import type { MailboxDeps } from "./mailbox-types";
-import { notifyUncertainParked, parkUncertainNotified, UNCERTAIN_REASON_TEXT } from "./mailbox-uncertain";
+import {
+	notifyUncertainMissingNotice,
+	notifyUncertainParked,
+	parkUncertainNotified,
+	UNCERTAIN_REASON_TEXT,
+} from "./mailbox-uncertain";
 
 export { UNCERTAIN_REASON_TEXT };
 
@@ -28,6 +33,9 @@ export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDe
  */
 export function settleDeadProcessRows(store: MailboxDeps["store"], log: MailboxDeps["log"]): void {
 	parkInterruptedSends(store, log);
+	for (const row of notifyUncertainMissingNotice(store)) {
+		log.warn("inbound_uncertain_notice_late", { origin: row.originKey, id: row.platformMessageId });
+	}
 	for (const row of store.listInbound({ state: "dispatched" })) {
 		if (!row.opRef?.startsWith(REFUSED_OP_PREFIX)) continue;
 		store.discard(row.platformMessageId);
