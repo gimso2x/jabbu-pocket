@@ -338,18 +338,19 @@ describe("monitors: restart catch-up", () => {
 		expect(store.monitors.getMonitor(monitor.id)?.cursorAt).toBe(clock.now());
 	});
 
-	test("minutely monitor down for 2h: 24 run, 96 are skipped; a second tick adds nothing", async () => {
+	test("minutely monitor down for 48h: the 439 too-old fires past the 1000-row cap are still counted as skipped", async () => {
 		behavior.holdTurns = true;
 		const monitor = cronMonitor("* * * * *");
-		clock.advance(2 * HOUR);
+		clock.advance(48 * HOUR);
 		const summary = await run();
-		expect(summary.claimed).toBe(24);
-		expect(summary.skippedCatchUp).toBe(96);
-		const again = await run();
-		expect(again.claimed + again.skippedCatchUp).toBe(0);
 		const slots = store.monitors.listSlots(monitor.id);
-		expect(slots).toHaveLength(120);
-		expect(slots.filter((s) => s.reason === "catchup_limit")).toHaveLength(96);
+		expect(summary.claimed).toBe(24);
+		// 1439 too-old fires (first 24h, 1000 rowed) + 1417 over-limit fires (last 24h past the 24 replays).
+		expect(summary.skippedCatchUp).toBe(1439 + 1417);
+		expect(slots.filter((s) => s.state === "claimed")).toHaveLength(24);
+		expect(slots.filter((s) => s.reason === "catchup_age")).toHaveLength(1000);
+		expect(slots.filter((s) => s.reason === "catchup_limit")).toHaveLength(1417);
+		expect(store.monitors.getMonitor(monitor.id)?.cursorAt).toBe(clock.now());
 	});
 });
 

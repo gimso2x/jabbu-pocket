@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { assertTimezone, CronError, firesBetween, nextFire, parseCron, zonedToUtc } from "../src/monitors/cron";
+import {
+	assertTimezone,
+	CronError,
+	countFiresBetween,
+	firesBetween,
+	nextFire,
+	parseCron,
+	zonedToUtc,
+} from "../src/monitors/cron";
 import { formatLocal } from "../src/time";
 
 const utc = (iso: string): number => Date.parse(iso);
@@ -25,6 +33,15 @@ describe("cron: Asia/Seoul (no DST)", () => {
 		const gaps = fires.slice(1).map((at, i) => at - (fires[i] as number));
 		expect(gaps.length).toBeGreaterThan(0);
 		for (const gap of gaps) expect(gap).toBe(24 * 3_600_000);
+	});
+
+	test("countFiresBetween counts past the firesBetween cap", () => {
+		const cron = parseCron("* * * * *");
+		const from = utc("2026-03-10T00:00:00Z");
+		const to = utc("2026-03-10T02:00:00Z");
+		expect(firesBetween(cron, "Asia/Seoul", from, to, 10)).toHaveLength(10);
+		expect(countFiresBetween(cron, "Asia/Seoul", from, to)).toBe(120);
+		expect(countFiresBetween(cron, "Asia/Seoul", to, to)).toBe(0);
 	});
 
 	test("formatLocal and zonedToUtc round-trip a Seoul wall clock", () => {

@@ -123,21 +123,41 @@ function jsonReply(
 async function readJsonBody(
 	request: Request,
 	allowEmpty = false,
-): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false }> {
-	let raw: string;
-	try {
-		raw = await request.text();
-	} catch {
-		return { ok: false };
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; tooLarge: boolean }> {
+	// The cap is enforced while streaming, like the upload path: a body far past 64KiB is cancelled after one chunk
+	// too many instead of being buffered whole first. A lying Content-Length is caught by the same streaming check.
+	const declared = Number(request.headers.get("content-length"));
+	if (Number.isFinite(declared) && declared > MAX_POST_BODY_BYTES) return { ok: false, tooLarge: true };
+	const decoder = new TextDecoder();
+	let raw = "";
+	let total = 0;
+	if (request.body !== null) {
+		const reader = request.body.getReader();
+		try {
+			for (;;) {
+				const next = await reader.read();
+				if (next.done) break;
+				total += next.value.byteLength;
+				if (total > MAX_POST_BODY_BYTES) {
+					await reader.cancel().catch(() => undefined);
+					return { ok: false, tooLarge: true };
+				}
+				raw += decoder.decode(next.value, { stream: true });
+			}
+		} catch {
+			return { ok: false, tooLarge: false };
+		} finally {
+			reader.releaseLock();
+		}
 	}
-	if (Buffer.byteLength(raw, "utf8") > MAX_POST_BODY_BYTES) return { ok: false };
+	raw += decoder.decode();
 	if (allowEmpty && raw.trim() === "") return { ok: true, value: {} };
 	try {
 		const parsed = JSON.parse(raw) as unknown;
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { ok: false };
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { ok: false, tooLarge: false };
 		return { ok: true, value: parsed as Record<string, unknown> };
 	} catch {
-		return { ok: false };
+		return { ok: false, tooLarge: false };
 	}
 }
 
@@ -224,9 +244,8 @@ async function forwardDaemonOp(
 	} catch {
 		return jsonReply({ error: "daemon_unreachable" }, 503, false, commonHeaders);
 	}
-	if (typeof answer !== "object" || answer === null || !("ok" in answer)) {
+	if (typeof answer !== "object" || answer === null || !("ok" in answer))
 		return jsonReply({ error: "daemon_invalid_response" }, 502, false, commonHeaders);
-	}
 	const record = answer as { ok?: unknown; error?: unknown; text?: unknown };
 	if (record.ok !== true) {
 		return jsonReply(
@@ -269,7 +288,10 @@ export async function handleWebRequest(
 		}
 		const taskOp = WEB_TASK_OP.exec(pathname);
 		const body = await readJsonBody(request, taskOp !== null);
-		if (!body.ok) return jsonReply({ error: "invalid_json" }, 400, false, commonHeaders);
+		if (!body.ok) {
+			const error = body.tooLarge ? "body_too_large" : "invalid_json";
+			return jsonReply({ error }, body.tooLarge ? 413 : 400, false, commonHeaders);
+		}
 		const rawBot = typeof body.value.bot === "string" ? body.value.bot : url.searchParams.get("bot");
 		const target = resolveBotTarget(ctx.bots, rawBot);
 		if (target === undefined) return jsonReply({ error: "invalid_bot" }, 400, false, commonHeaders);
