@@ -362,7 +362,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			child.proc.stdin.flush();
 		} catch (cause) {
 			this.#retire();
-			this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error: `agy stdin closed: ${String(cause)}` });
+			const error = `agy stdin closed: ${String(cause)}`; // Delivered after prompt() resolves: the mailbox creates its turn only then.
+			setTimeout(() => this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error }), 0);
 		}
 	}
 	/** Ends `turn` once: notes queued steers it drops, clears it and the queue, keeps its answer, sends its final. */

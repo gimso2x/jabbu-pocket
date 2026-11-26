@@ -286,4 +286,14 @@ describe("wiki turn notes from turn HEADs (daemon wiring)", () => {
 		}
 		expect(d.store.listUnsentWikiTurns()).toEqual([]);
 	});
+
+	test("turnTexts takes the conclusion from the answer's first part, not its tail", () => {
+		store.recordAnswer({
+			originKey: THREAD_ORIGIN,
+			opRef: "op-conclusion",
+			threadRef: THREAD_REF,
+			parts: ["결론: 커밋했습니다", "세부: 파일 3개, 테스트 통과"],
+		});
+		expect(store.turnTexts(THREAD_ORIGIN, "op-conclusion").conclusion).toBe("결론: 커밋했습니다");
+	});
 });

@@ -55,7 +55,7 @@ export function renderStatusText(report: StatusReport): string {
 	const lines = [
 		`jabbu · omp ${report.ompVersion} · 데몬 ${report.daemonRunning ? "실행 중" : "중지"} · origin ${report.origins.length}개`,
 		...renderOriginLines(report.origins),
-		`장부 p/i/c/a/e: ${ledger.pending}/${ledger.inflight}/${ledger.confirmed}/${ledger.ambiguous}/${ledger.expired}`,
+		`장부 대기/진행/확정/모호/만료: ${ledger.pending}/${ledger.inflight}/${ledger.confirmed}/${ledger.ambiguous}/${ledger.expired}`,
 		`입수 pending=${inbound.pending} dispatched=${inbound.dispatched} answered=${inbound.answered} failed=${inbound.failed_notified} discarded=${inbound.discarded} uncertain=${inbound.uncertain}`,
 		renderMonitorsLine(report.monitors, report.timezone),
 	];
