@@ -4,7 +4,7 @@
 
 ## 배경
 
-- 2026-11-04 oh-my-hermes(main `61470e4f5`, MIT) 분석에서 가져온 후보 1번이다. OMH `docs/HANDOFF-RISK-SCAN.md`는 무인 코딩 위임 직전에 최종 지시문(브리프)과 저장소를 훑어 위험 신호를 `clear / advisory / high_risk`로 판정하고, strict 모드에서는 high_risk면 자동화를 멈춘다. 코드는 가져오지 않고 개념만 TS로 새로 쓴다.
+- 무인 코딩 위임 직전에 최종 지시문(브리프)과 저장소를 훑어 위험 신호를 `clear / advisory / high_risk`로 판정하고, strict 모드에서는 high_risk면 자동화를 멈춘다.
 - jabbu는 herdr 워커에 사람 없이 돌 지시를 넘긴다. 지금 이 경로에는 지시문 내용 검사가 없다. taskSpec `risk`(L0~L4)는 위임하는 세션이 스스로 적는 값일 뿐이고, 지시문에 되돌릴 수 없는 명령(강제 push, 하드 리셋, 서비스 재시작 등)이 들어 있어도 그대로 워커에 전달된다.
 - 워커에게 "하지 마라"고 적는 금지 줄(예: "머지·push·데몬 재시작은 하지 않는다")은 정상 지시이므로 고위험으로 보면 안 된다. 기존 스펙·위임 지시문이 전부 이런 금지 줄을 갖고 있다.
 
@@ -90,8 +90,8 @@ export function scanHandoffBrief(brief: string, options?: { protectedBranches?: 
 ## 제외
 
 - simple 모드(`runOmpPrint`) 경로
-- `src/omp/env.ts` 환경변수 정책 변경, 데몬 재시도 실패 분류(OMH 후보 2·3번, 별도 과제)
-- 저장소 상태 검사(OMH의 `--repo` 기능: 보호 브랜치 체크아웃 여부 등)
+- `src/omp/env.ts` 환경변수 정책 변경, 데몬 재시도 실패 분류(후속 별도 과제)
+- 저장소 상태 검사(`--repo` 기능: 보호 브랜치 체크아웃 여부 등)
 - `ApprovalBroker`·승인 카드 렌더링 변경
 - 라이브 체크아웃(`<오너 체크아웃 경로>`) 편집
 - 머지·push·데몬 재시작

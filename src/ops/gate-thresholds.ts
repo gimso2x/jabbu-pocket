@@ -4,7 +4,7 @@
 import { DEFAULT_SWEEP_MS } from "../daemon/heartbeat";
 import { FRESHNESS_MS } from "../store/transitions";
 
-/** A stale backup is the first thing to catch; the hub uses the same 36h window for its file-age check. */
+/** A stale backup is the first thing to catch (36h file-age window). */
 export const BACKUP_MAX_AGE_MS = 36 * 60 * 60_000;
 /** A stamp dated further ahead than this is a clock jump or corruption, not a fresh backup. */
 export const BACKUP_FUTURE_TOLERANCE_MS = 60 * 60_000;
@@ -14,14 +14,14 @@ export const BACKUP_FUTURE_TOLERANCE_MS = 60 * 60_000;
  */
 export const SWEEP_STALLED_MS = 3 * DEFAULT_SWEEP_MS;
 /**
- * A dispatched turn with no omp event for this long is hung (upstream cycle: INBOUND_STARVATION_MS). Measured from
+ * A dispatched turn with no omp event for this long is hung. Measured from
  * `last_event_at`, falling back to `dispatched_at`, so a long turn that keeps working does not open the gate. A turn
  * whose origin waits on a pending approval card is waiting on the owner, not hung (the card has its own timeout).
  */
 export const INBOUND_STARVATION_MS = 10 * 60_000;
 /**
- * An owner message still `pending` (never handed to omp) this long means the conversation went silent on it
- * (gajae-way `origin_silent`). Rows queued behind a turn that is still producing omp events are normal queueing
+ * An owner message still `pending` (never handed to omp) this long means the conversation went silent on it.
+ * Rows queued behind a turn that is still producing omp events are normal queueing
  * and stay out; a hung turn ahead of them does not exempt them.
  */
 export const ORIGIN_SILENT_MS = 15 * 60_000;

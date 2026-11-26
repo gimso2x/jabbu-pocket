@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -16,6 +17,9 @@ import { createInterface } from "node:readline";
  * - "@hold": a text delta `working`, then the turn waits for SIGUSR1 (answers `HELD`).
  * - "@close-stdin": after answering, the child closes its stdin but stays alive (keep-alive timer), so the driver's
  *   next stdin write hits EPIPE: the stdin-closed path of `#send`.
+ * - "@hold-stdout": a detached bun sleeper holding stdout, then the turn never answers: the driver's exit must
+ *   settle on the exit code, not on stdout EOF. A text delta `working` goes after the spawn, so a test waiting
+ *   for it knows the sleeper already exists.
  * - anything else: `REPLY<n>:<last line of the prompt>` in two text deltas (n = turns of this process).
  * SIGTERM writes a `stream input cancelled` ERROR result and exits 1; stdin closing exits 0.
  */
@@ -109,6 +113,20 @@ function turn(content: string): void {
 			stepUpdate({ ...tool, state: "ERROR", tool_info: { parameters, error: { type: "TOOL_ERROR", message } } });
 		else stepUpdate({ ...tool, state: "DONE", tool_info: { parameters, output: "hi" } });
 	}
+	if (content.includes("@hold-stdout")) {
+		// Detached (its own session, out of the driver's process group) and holding stdout: the sleeper is a
+		// bun `-e` so no new binary is needed (cf. @deaf in the ACP fake). The delta goes after the spawn, so
+		// a test waiting for it knows the sleeper already exists.
+		// sleep-ok: the sleeper's 30s bound is a safety cap, not a wait; the test kills it in cleanup.
+		const grand = spawn(process.execPath, ["-e", "await Bun.sleep(30_000);"], {
+			detached: true,
+			stdio: ["ignore", "inherit", "ignore"],
+		});
+		grand.unref();
+		log({ kind: "grand", pid: grand.pid });
+		stepUpdate({ state: "ACTIVE", step_type: "agent_response", text_delta: "working" });
+		return;
+	}
 	if (content.includes("@hold")) {
 		stepUpdate({ state: "ACTIVE", step_type: "agent_response", text_delta: "working" });
 		held = () => answer("HELD");
@@ -143,13 +161,14 @@ lines.on("line", (line) => {
 	const message = JSON.parse(line) as { event?: string; message?: { content?: string } };
 	if (message.event !== "user") return;
 	const content = message.message?.content ?? "";
-	turn(content);
+	if (!content.includes("@close-stdin")) turn(content);
 	if (content.includes("@close-stdin")) {
 		stdinClosedAlive = true;
 		// Close fd 0 at the OS level: Bun's stdin.destroy() only stops the stream, the pipe stays open.
 		closeSync(0);
 		// Liveness handle, not a sleep: the child must stay up with stdin closed so the next write hits EPIPE.
 		setInterval(() => {}, 1000);
+		turn(content);
 	}
 });
 lines.on("close", () => {

@@ -180,7 +180,7 @@ describe("reservation start held by capacity", () => {
 		await h.settle();
 		expect(h.store.getLaneReservation(reservation.id)?.state).toBe("ready");
 
-		// ▶ while tight: refused with the reason, the reservation stays ready (Cataly's QUEUE_HELD).
+		// ▶ while tight: refused with the reason, the reservation stays ready.
 		const held = await h.manager.startReservation(reservation.id);
 		expect(held.handled).toBeFalse();
 		expect(held.text).toContain("시작하지 못했습니다");
