@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveAgyExecutable } from "./agy-acp-client";
+import { resolveAgyExecutable, watchChildExit } from "./agy-acp-client";
 import { appendTurnChunk, resetTurnText } from "./agy-notice";
 import * as Quota from "./agy-quota";
 import * as Switch from "./agy-switch";
@@ -203,7 +203,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false, ready: false };
 		const stdoutDone = this.#pumpStdout(child);
 		void this.#pumpStderr(child);
-		child.gone = Promise.all([proc.exited, stdoutDone]).then(([code]) => this.#onExit(child, code));
+		child.gone = watchChildExit(proc.exited, stdoutDone, (code) => this.#onExit(child, code));
 		this.#child = child;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		const timer = setTimeout(() => init.reject(new Error(`no init in ${timeoutMs}ms`)), timeoutMs);

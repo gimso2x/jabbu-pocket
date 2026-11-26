@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -14,6 +15,9 @@ import { createInterface } from "node:readline";
  * - "@quota": `result` status ERROR with agy's 429 executor error text; "@notice": a text delta carrying agy's quota
  *   retry notice, then the turn hangs. Both keep the child running (the driver must end it).
  * - "@hold": a text delta `working`, then the turn waits for SIGUSR1 (answers `HELD`).
+ * - "@hold-stdout": a detached bun sleeper holding stdout, then the turn never answers: the driver's exit must
+ *   settle on the exit code, not on stdout EOF. A text delta `working` goes after the spawn, so a test waiting
+ *   for it knows the sleeper already exists.
  * - anything else: `REPLY<n>:<last line of the prompt>` in two text deltas (n = turns of this process).
  * SIGTERM writes a `stream input cancelled` ERROR result and exits 1; stdin closing exits 0.
  */
@@ -104,6 +108,20 @@ function turn(content: string): void {
 		if (content.includes("@denied"))
 			stepUpdate({ ...tool, state: "ERROR", tool_info: { parameters, error: { type: "TOOL_ERROR", message } } });
 		else stepUpdate({ ...tool, state: "DONE", tool_info: { parameters, output: "hi" } });
+	}
+	if (content.includes("@hold-stdout")) {
+		// Detached (its own session, out of the driver's process group) and holding stdout: the sleeper is a
+		// bun `-e` so no new binary is needed (cf. @deaf in the ACP fake). The delta goes after the spawn, so
+		// a test waiting for it knows the sleeper already exists.
+		// sleep-ok: the sleeper's 30s bound is a safety cap, not a wait; the test kills it in cleanup.
+		const grand = spawn(process.execPath, ["-e", "await Bun.sleep(30_000);"], {
+			detached: true,
+			stdio: ["ignore", "inherit", "ignore"],
+		});
+		grand.unref();
+		log({ kind: "grand", pid: grand.pid });
+		stepUpdate({ state: "ACTIVE", step_type: "agent_response", text_delta: "working" });
+		return;
 	}
 	if (content.includes("@hold")) {
 		stepUpdate({ state: "ACTIVE", step_type: "agent_response", text_delta: "working" });

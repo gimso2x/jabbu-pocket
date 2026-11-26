@@ -15,6 +15,9 @@ import { createInterface } from "node:readline";
  * - "@tool": a run_command tool call (in_progress, then completed with output) before the answer; with "@nooutput"
  *   the completion has no output, with "@failtool" it ends `failed`.
  * - "@hold": the prompt stays open until `session/cancel` (replies `cancelled`) or SIGUSR1 (answers HELD-DONE).
+ * - "@hold-stdout": a detached bun sleeper holding stdout, then the prompt never answers (cancel is ignored
+ *   too): the client's exit must settle on the exit code, not on stdout EOF. A text chunk goes after the spawn,
+ *   so a test waiting for it knows the sleeper already exists.
  * - "@holdmsg": emits a text chunk before waiting on SIGUSR1 / `session/cancel` (no tool call).
  * - "@holdtool": a tool call in_progress until SIGUSR1 (completes it, answers HELD-TOOL-DONE) or `session/cancel`.
  * - "@deaf": starts a grandchild that connects to the unix socket FAKE_AGY_GRAND_SOCK and stays, reports a tool call
@@ -174,6 +177,22 @@ function prompt(id: unknown, text: string): void {
 		const toolCall = { toolCallId: "call_perm", title: "run\nrm -rf build" };
 		const method = text.includes("@askother") ? "fs/read_text_file" : "session/request_permission";
 		send({ id: "perm-1", method, params: { sessionId, toolCall, options } });
+		return;
+	}
+	if (text.includes("@hold-stdout")) {
+		// Detached (its own session, out of the driver's process group) and holding stdout: the sleeper is a
+		// bun `-e` so no new binary is needed (cf. @deaf). The chunk goes after the spawn, so a test waiting
+		// for it knows the sleeper already exists. No onCancel: the cancel goes unanswered, like @deaf, so the
+		// driver kills the group and must still settle.
+		// sleep-ok: the sleeper's 30s bound is a safety cap, not a wait; the test kills it in cleanup.
+		const grand = spawn(process.execPath, ["-e", "await Bun.sleep(30_000);"], {
+			detached: true,
+			stdio: ["ignore", "inherit", "ignore"],
+		});
+		grand.unref();
+		log({ dir: "grand", pid: grand.pid });
+		update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "WAIT\n" } });
+		held = { id, onSignal: () => finish("HELD-DONE") };
 		return;
 	}
 	if (text.includes("@holdmsg")) {

@@ -136,6 +136,17 @@ function nextEvent(driver: AgyOmpDriver, match: (event: OmpEvent) => boolean): P
 	return promise;
 }
 
+/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+	for (let hop = 0; hop < hops; hop += 1) {
+		if (ready()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	}
+	throw new Error(`never happened: ${what}`);
+}
+
 function alive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -431,6 +442,50 @@ test("a cancel agy never answers kills the process group: no onExit, no turn lef
 	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
 	expect(finals).toHaveLength(2);
 	await driver.stop();
+});
+
+test("abort returns while a detached descendant holds stdout: exit settles on the code, not EOF", async () => {
+	const harness = makeHarness();
+	const exits: OmpExitInfo[] = [];
+	const driver = harness.make({ cancelTimeoutMs: 50 });
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const session = (await driver.openSession()).sessionId;
+	const pid = childPid(driver);
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	const chunk = nextEvent(driver, (event) => event.type === "message_update");
+	const opRef = await driver.prompt("@hold-stdout");
+	await chunk;
+	// The chunk can reach the driver while the grandchild spawn is still in flight: wait for the fake's
+	// log to prove the detached sleeper exists before aborting, or the test passes vacuously.
+	await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
+	await driver.abort();
+	// Returned: the turn is over and its final out. The detached sleeper kept stdout open, so only the exit
+	// code (plus a short drain grace) settled the exit.
+	expect(finals).toEqual([{ opRef, status: "aborted", text: "", error: "cancel unanswered; agy killed" }]);
+	expect(await driver.state()).toMatchObject({ idle: true });
+	expect(driver.pid).toBeUndefined();
+	expect(alive(pid)).toBe(false);
+
+	// The next prompt starts a new child on the same session.
+	const next = nextFinal(driver);
+	await driver.prompt("back");
+	expect(await next).toMatchObject({ status: "completed", text: "REPLY1:back" });
+	expect(spawns(harness)).toHaveLength(2);
+	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
+	expect(finals).toHaveLength(2);
+	await driver.stop();
+	// The detached sleeper outlives the group kill: end it so its pipe does not outlive the test file.
+	const grand = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
+	if (grand !== undefined) {
+		try {
+			process.kill(grand, "SIGKILL");
+		} catch {
+			// already gone
+		}
+	}
+	expect(exits).toEqual([]);
 });
 
 test("a resumed session is reused without session/new; one agy cannot read falls back to session/new", async () => {

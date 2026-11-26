@@ -16,7 +16,7 @@ afterAll(() => {
 });
 
 interface LogEntry {
-	kind: "argv" | "env" | "in" | "exit";
+	kind: "argv" | "env" | "in" | "exit" | "grand";
 	pid?: number;
 	argv?: string[];
 	env?: Record<string, string | undefined>;
@@ -76,6 +76,17 @@ function nextFinal(driver: AgyPrintDriver): Promise<OmpFinal> {
 		resolve(final);
 	});
 	return promise;
+}
+
+/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+	for (let hop = 0; hop < hops; hop += 1) {
+		if (ready()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	}
+	throw new Error(`never happened: ${what}`);
 }
 
 /** Prompts `text` and resolves with that turn's final (subscribed before the prompt goes out). */
@@ -322,6 +333,38 @@ test("newSession mid-turn ends the turn `aborted` with cancelled=true and the ne
 	expect((await driver.state()).idle).toBe(true);
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
 	await driver.stop();
+});
+
+test("abort returns while a detached descendant still holds stdout: exit settles on the code, not EOF", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold-stdout");
+	await working.promise;
+	// The delta can reach the driver while the grandchild spawn is still in flight: wait for the fake's
+	// log to prove the detached sleeper exists before aborting, or the test passes vacuously.
+	await until(() => h.entries().some((entry) => entry.kind === "grand"), "the detached sleeper");
+	const held = h.lastPid();
+	await driver.abort();
+	expect(finals.map((final) => final.status)).toEqual(["aborted"]);
+	expect(finals[0]?.error).toBe("cancelled");
+	expect(alive(held)).toBe(false);
+	expect((await driver.state()).idle).toBe(true);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	await driver.stop();
+	// The detached sleeper outlives the group kill: end it so its pipe does not outlive the test file.
+	const grand = h.entries().find((entry) => entry.kind === "grand")?.pid;
+	if (grand !== undefined) {
+		try {
+			process.kill(grand, "SIGKILL");
+		} catch {
+			// already gone
+		}
+	}
 });
 
 test("switchSession mid-turn ends the turn `aborted` with cancelled=true and resumes the given conversation", async () => {
