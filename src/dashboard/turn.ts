@@ -30,7 +30,7 @@ export interface TaskTurnFields {
 	decision?: { question: string };
 	/** The task's own PR landing (`tasks.land_json`). */
 	land?: TaskLandRecord["state"];
-	/** `running`: a gate review/QA start is newer than its receipt. */
+	/** `running`: a gate review/QA start is newer than its receipt (not after PR landing took over). */
 	gate?: "running";
 	workerModel?: string;
 	/**
@@ -93,9 +93,10 @@ export function turnOf(entry: InboxEntry, unread = false): Turn {
 	if (entry.orphan && open?.status === "working") return turn("mine", "카드 없음", "에이전트 카드 없음");
 	if (open?.status === "review") {
 		if (open.land === "active") return turn("working", "착지 중", "PR 착지 진행 중");
+		if (open.land === "blocked" || open.land === "held")
+			return turn("mine", "결정 대기", "PR 착지 멈춤 · 오너 확인 필요");
 		if (open.gate === "running") return turn("working", "게이트 진행", "독립 리뷰·실행 QA 진행 중");
-		const held = open.land === "blocked" || open.land === "held";
-		return turn("mine", "결정 대기", held ? "PR 착지 멈춤 · 오너 확인 필요" : "Outcome 도달 · 머지 결정 대기");
+		return turn("mine", "결정 대기", "Outcome 도달 · 머지 결정 대기");
 	}
 	if (open !== undefined) {
 		const busy = card === undefined ? pane === undefined || pane === "working" : card.column === "working";
@@ -128,7 +129,10 @@ export function taskTurnFields(
 	const question = judged?.decision.question.trim() ?? "";
 	if (question !== "") fields.decision = { question: redact(question) };
 	const notices = Object.entries(row.notices);
-	if (row.status === "review") {
+	// Once PR landing moved past rework (`active`, `blocked`, `held`), any running gate was aborted (`landReviewed`)
+	// and `#resumeGate` never restarts it (`row.land !== null`), so a receiptless start notice must not keep `running`.
+	const landState = row.land?.state;
+	if (row.status === "review" && (landState === undefined || landState === "rework")) {
 		const started = notices.some(([key, at]) => {
 			const kind = key.startsWith("gate:") ? /:(review|qa):\d+$/.exec(key)?.[1] : undefined;
 			if (kind !== "review" && kind !== "qa") return false;

@@ -113,6 +113,17 @@ describe("turnOf: one group per fixed snapshot", () => {
 		expect(turnOf(lone(task("T-7", { status: "review", gate: "running" }))).group).toBe("working");
 	});
 
+	test("PR 착지 멈춤 review (land=blocked|held, stale gate=running) → 내 차례", () => {
+		for (const land of ["blocked", "held"] as const) {
+			expect(turnOf(lone(task("T-7b", { status: "review", land, gate: "running" })))).toMatchObject({
+				group: "mine",
+				mark: "!",
+				word: "결정 대기",
+				reason: "PR 착지 멈춤 · 오너 확인 필요",
+			});
+		}
+	});
+
 	test("판정 대기 pendingChecks (judge=pending) → 진행 중", () => {
 		const turn = turnOf(lone(task("T-8", { judge: "pending", herdr: { ok: true, status: "done" } })));
 		expect(turn).toMatchObject({ group: "working", word: "판정 대기" });
@@ -321,16 +332,22 @@ describe("taskTurnFields: the ledger values behind judge, land and gate", () => 
 		const review = row({
 			status: "review",
 			workerModel: "glm/glm-5.4:high",
-			land: { state: "active" } as TaskRow["land"],
 			notices: { "gate:abc123:rt0:review:1": NOW },
 			gate: { review: { at: NOW - 10 } } as TaskRow["gate"],
 		});
 		expect(taskTurnFields(review, judged(true, "머지할까요?"))).toEqual({
 			repo: "demo-repo",
 			workerModel: "glm/glm-5.4:high",
-			land: "active",
 			decision: { question: "머지할까요?" },
 			gate: "running",
+		});
+		const landing = row({
+			status: "review",
+			land: { state: "active" } as TaskRow["land"],
+		});
+		expect(taskTurnFields(landing, undefined)).toEqual({
+			repo: "demo-repo",
+			land: "active",
 		});
 		const done = row({
 			status: "review",
@@ -338,5 +355,54 @@ describe("taskTurnFields: the ledger values behind judge, land and gate", () => 
 			gate: { review: { at: NOW } } as TaskRow["gate"],
 		});
 		expect(taskTurnFields(done, undefined).gate).toBeUndefined();
+	});
+
+	test("gate=running is suppressed once PR landing moved past rework, and kept for rework/none", () => {
+		for (const state of ["active", "blocked", "held"] as const) {
+			for (const kind of ["review", "qa"] as const) {
+				const fields = taskTurnFields(
+					row({
+						status: "review",
+						land: { state } as TaskRow["land"],
+						notices: { [`gate:abc123:rt0:${kind}:1`]: NOW },
+					}),
+					undefined,
+				);
+				expect(fields.gate).toBeUndefined();
+			}
+		}
+		const blockedFields = taskTurnFields(
+			row({
+				status: "review",
+				land: { state: "blocked" } as TaskRow["land"],
+				notices: { "gate:abc123:rt0:review:1": NOW },
+			}),
+			undefined,
+		);
+		expect(turnOf(lone(task("T-20261126-08", { status: "review", ...blockedFields })))).toMatchObject({
+			group: "mine",
+			word: "결정 대기",
+			reason: "PR 착지 멈춤 · 오너 확인 필요",
+		});
+		expect(
+			taskTurnFields(
+				row({
+					status: "review",
+					land: { state: "rework" } as TaskRow["land"],
+					notices: { "gate:abc123:rt0:qa:1": NOW },
+				}),
+				undefined,
+			).gate,
+		).toBe("running");
+		expect(
+			taskTurnFields(
+				row({
+					status: "review",
+					land: null,
+					notices: { "gate:abc123:rt0:review:1": NOW },
+				}),
+				undefined,
+			).gate,
+		).toBe("running");
 	});
 });
