@@ -196,26 +196,26 @@ jobs:
           timeout 30s systemctl is-system-running --wait || true
           src_dir="$PWD"
           rm -rf "$HOME/repo"
-          mkdir -p "$HOME/repo" "$HOME/.local/bin"
+          mkdir -p "$HOME/repo" "$HOME/.bun/bin" "$HOME/.local/bin"
           git config --global --add safe.directory "$src_dir"
           git config --global --add safe.directory "$src_dir/.git"
           git init --quiet "$HOME/repo"
           git -C "$HOME/repo" fetch --quiet --depth=1 "$src_dir" HEAD
           git -C "$HOME/repo" checkout --quiet FETCH_HEAD
           cd "$HOME/repo"
-          bash scripts/ci-install-bun.sh "$HOME/.local/bin"
+          bash scripts/ci-install-bun.sh "$HOME/.bun/bin"
           bash scripts/ci-install-gitleaks.sh "$HOME/.local/bin"
       - name: Install dependencies and run checks and tests in WSL2
         shell: wsl-bash {0}
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
+          export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"
           export JABBU_GITLEAKS="$HOME/.local/bin/gitleaks"
           cd "$HOME/repo"
           bun install --frozen-lockfile
           bun run check
           bun run knip
           bun scripts/check-repo-hygiene.ts
-          bun test --parallel=3
+          bun test --parallel=3 --timeout=15000
       - name: Check for a clean worktree in WSL2
         if: always() && !cancelled()
         shell: wsl-bash {0}

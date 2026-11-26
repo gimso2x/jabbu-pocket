@@ -173,7 +173,7 @@ describe("ci.yml", () => {
 		}
 		const wslInstall = workflow.jobs["test-wsl"].steps.find((step) => step.run?.includes("ci-install-gitleaks.sh"));
 		expect(wslInstall?.run).toContain('bash scripts/ci-install-gitleaks.sh "$HOME/.local/bin"');
-		expect(wslInstall?.run).toContain('bash scripts/ci-install-bun.sh "$HOME/.local/bin"');
+		expect(wslInstall?.run).toContain('bash scripts/ci-install-bun.sh "$HOME/.bun/bin"');
 		for (const wf of [workflow, ompLatest, workflowLint, dependencyAudit]) {
 			for (const job of Object.values(wf.jobs)) {
 				for (const step of job.steps) expect(step.run ?? "").not.toContain("curl");
