@@ -5,7 +5,7 @@ import type { InboundRecord, MailboxClock } from "../core/types";
 import type { Logger } from "../log";
 import type { FreezeState } from "../ops/freeze";
 import type { Store } from "../store/db";
-import { firesBetween } from "./cron";
+import { countFiresBetween, firesBetween } from "./cron";
 import { type ClaimResult, type MonitorEventRow, type MonitorRow, monitorOrigin, NO_REPORT, SILENT } from "./ledger";
 import { runScript, type ScriptResult } from "./script";
 import { MAX_PROCEDURE_BYTES, parseAt, resolveProcedureFile, SCRIPT_TIMEOUT_MS } from "./spec";
@@ -223,8 +223,8 @@ export class MonitorScheduler {
 		};
 		store.monitors.reconcileDeliveries();
 		const monitors = store.monitors.listMonitors();
-		// The freeze records skipped events and never replays them.
-		const skip = this.#skipReason();
+		// The freeze records skipped events and never replays them: `frozen` when the switch is on, else nothing holds.
+		const skip = this.#deps.frozen?.() === undefined ? undefined : FROZEN_SKIP;
 		for (const monitor of monitors) {
 			if (!monitor.enabled) continue;
 			try {
@@ -240,11 +240,6 @@ export class MonitorScheduler {
 		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
 		summary.dispatched = this.#dispatchReady();
 		return summary;
-	}
-
-	/** Why this tick fires nothing at all: `frozen` (the freeze switch). `undefined` means nothing is holding the monitors. */
-	#skipReason(): string | undefined {
-		return this.#deps.frozen?.() === undefined ? undefined : FROZEN_SKIP;
 	}
 
 	/** A claim made while held is a forced skip (`frozen`), so it counts as held back, not as claimed. */
@@ -265,6 +260,12 @@ export class MonitorScheduler {
 		const cron = store.monitors.cron(trigger.schedule);
 		const windowStart = now - CATCHUP_MAX_AGE_MS;
 		const tooOld = firesBetween(cron, trigger.timezone, monitor.cursorAt, windowStart - 1, MAX_OLD_SKIPPED_RECORDED);
+		// The rows are capped, the count is not: fires after the 1000th too-old one and before the window still
+		// skipped, and the summary must say so. Counted only when the cap was hit.
+		const tooOldCount =
+			tooOld.length < MAX_OLD_SKIPPED_RECORDED
+				? tooOld.length
+				: tooOld.length + countFiresBetween(cron, trigger.timezone, tooOld.at(-1) ?? monitor.cursorAt, windowStart - 1);
 		const recent = firesBetween(
 			cron,
 			trigger.timezone,
@@ -289,7 +290,7 @@ export class MonitorScheduler {
 		}
 		// A span with no slot needs no cursor move: the next fire after the old cursor and after `now` is the same.
 		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
-		const skipped = tooOld.length + overLimit.length;
+		const skipped = tooOldCount + overLimit.length;
 		if (skipped > 0) {
 			summary.skippedCatchUp += skipped;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: skipped, replayed: run.length });
@@ -411,7 +412,7 @@ export class MonitorScheduler {
 		const { store, router, clock, log } = this.#deps;
 		let dispatched = 0;
 		let settledVerbatim = false;
-		const skip = this.#skipReason();
+		const skip = this.#deps.frozen?.() === undefined ? undefined : FROZEN_SKIP;
 		for (const event of store.monitors.dispatchable(clock.now())) {
 			const monitor = store.monitors.getMonitor(event.monitorId);
 			if (!monitor) continue;

@@ -39,8 +39,7 @@ interface FieldSpec {
 }
 
 function parseValue(token: string, field: FieldSpec): number {
-	const lower = token.toLowerCase();
-	const named = field.names?.indexOf(lower) ?? -1;
+	const named = field.names?.indexOf(token.toLowerCase()) ?? -1;
 	if (named !== -1) return named + (field.nameBase ?? 0);
 	if (!/^\d+$/.test(token)) throw new CronError(`${field.label}: invalid value "${token}"`);
 	return Number(token);
@@ -53,23 +52,18 @@ function parseField(text: string, field: FieldSpec): { values: Set<number>; wild
 		if (item === "") throw new CronError(`${field.label}: empty list item`);
 		const [range = "", stepText, extra] = item.split("/");
 		if (extra !== undefined) throw new CronError(`${field.label}: invalid step in "${item}"`);
-		let step = 1;
-		if (stepText !== undefined) {
-			if (!/^\d+$/.test(stepText) || Number(stepText) < 1)
-				throw new CronError(`${field.label}: invalid step "${stepText}"`);
-			step = Number(stepText);
-		}
+		const step = stepText === undefined ? 1 : Number(stepText);
+		if (stepText !== undefined && (!/^\d+$/.test(stepText) || step < 1))
+			throw new CronError(`${field.label}: invalid step "${stepText}"`);
 		let from: number;
 		let to: number;
 		if (range === "*") {
-			from = field.min;
-			to = field.max;
+			[from, to] = [field.min, field.max];
 			if (stepText === undefined || step === 1) wild = true;
 		} else if (range.includes("-")) {
 			const [a = "", b = "", more] = range.split("-");
 			if (more !== undefined) throw new CronError(`${field.label}: invalid range "${range}"`);
-			from = parseValue(a, field);
-			to = parseValue(b, field);
+			[from, to] = [parseValue(a, field), parseValue(b, field)];
 			if (from > to) throw new CronError(`${field.label}: range "${range}" runs backwards`);
 		} else {
 			from = parseValue(range, field);
@@ -95,10 +89,7 @@ export function parseCron(source: string): CronSchedule {
 	const days = parseField(dom, { label: "day-of-month", min: 1, max: 31 });
 	const months = parseField(month, { label: "month", min: 1, max: 12, names: MONTH_NAMES, nameBase: 1 });
 	const weekdays = parseField(dow, { label: "day-of-week", min: 0, max: 7, names: DOW_NAMES });
-	if (weekdays.values.has(7)) {
-		weekdays.values.delete(7);
-		weekdays.values.add(0);
-	}
+	if (weekdays.values.delete(7)) weekdays.values.add(0);
 	return {
 		source: fields.join(" "),
 		minutes: minutes.values,
@@ -114,30 +105,29 @@ export function parseCron(source: string): CronSchedule {
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
 /** Throws `CronError` for a name Intl does not know. */
-export function assertTimezone(timezone: string): void {
+export const assertTimezone = (timezone: string): void => {
 	formatterFor(timezone);
-}
+};
 
 function formatterFor(timezone: string): Intl.DateTimeFormat {
-	let formatter = formatters.get(timezone);
-	if (!formatter) {
-		try {
-			formatter = new Intl.DateTimeFormat("en-US", {
-				timeZone: timezone,
-				hourCycle: "h23",
-				year: "numeric",
-				month: "numeric",
-				day: "numeric",
-				hour: "numeric",
-				minute: "numeric",
-				weekday: "short",
-			});
-		} catch {
-			throw new CronError(`unknown time zone "${timezone}"`);
-		}
+	const cached = formatters.get(timezone);
+	if (cached !== undefined) return cached;
+	try {
+		const formatter = new Intl.DateTimeFormat("en-US", {
+			timeZone: timezone,
+			hourCycle: "h23",
+			year: "numeric",
+			month: "numeric",
+			day: "numeric",
+			hour: "numeric",
+			minute: "numeric",
+			weekday: "short",
+		});
 		formatters.set(timezone, formatter);
+		return formatter;
+	} catch {
+		throw new CronError(`unknown time zone "${timezone}"`);
 	}
-	return formatter;
 }
 
 export interface WallClock {
@@ -166,8 +156,7 @@ export function wallClock(ms: number, timezone: string): WallClock {
 function dayMatches(cron: CronSchedule, w: WallClock): boolean {
 	const dom = cron.daysOfMonth.has(w.day);
 	const dow = cron.daysOfWeek.has(w.weekday);
-	if (cron.domWild || cron.dowWild) return dom && dow;
-	return dom || dow;
+	return cron.domWild || cron.dowWild ? dom && dow : dom || dow;
 }
 
 /**
@@ -217,6 +206,19 @@ export function firesBetween(
 	return out;
 }
 
+/** Number of matches in `(fromMs, toMs]` without materializing them: the count behind a capped `firesBetween`. */
+export function countFiresBetween(cron: CronSchedule, timezone: string, fromMs: number, toMs: number): number {
+	let count = 0;
+	let at = fromMs;
+	for (;;) {
+		const next = nextFire(cron, timezone, at);
+		if (next === undefined || next > toMs) break;
+		count += 1;
+		at = next;
+	}
+	return count;
+}
+
 /**
  * UTC instant of a local wall-clock time in `timezone` (used for `at` values written without an offset). A local
  * time that does not exist (spring-forward gap) resolves to the instant just after the gap; an ambiguous one takes
@@ -226,16 +228,14 @@ export function zonedToUtc(
 	local: { year: number; month: number; day: number; hour: number; minute: number; second: number; ms: number },
 	timezone: string,
 ): number {
-	const asUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second, local.ms);
 	// Offsets are whole minutes; two refinement rounds settle every real zone including DST edges.
-	let guess = asUtc;
+	let guess = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, local.second, local.ms);
 	for (let round = 0; round < 3; round += 1) {
 		const w = wallClock(guess, timezone);
 		const shown = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, 0, 0);
 		const wanted = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute, 0, 0);
-		const delta = wanted - shown;
-		if (delta === 0) break;
-		guess += delta;
+		if (wanted === shown) break;
+		guess += wanted - shown;
 	}
 	return guess;
 }
