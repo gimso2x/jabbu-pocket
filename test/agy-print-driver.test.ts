@@ -206,6 +206,19 @@ test("a stdout line past 1MiB ends the turn as a protocol error and the child is
 	await driver.stop();
 });
 
+test("a completed stdout line past 1MiB (with trailing newline) also ends the turn and retires the child", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const long = await started(driver, "@longline-nl");
+	expect(long.status).toBe("error");
+	expect(long.error).toBe("agy line over 1MiB");
+	const first = h.lastPid();
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(first)).toBe(false);
+	await driver.stop();
+});
+
 test("a quota error ends `agy rate limited (429)` and the driver ends the child itself; the next prompt resumes", async () => {
 	const h = harness();
 	const driver = h.make();

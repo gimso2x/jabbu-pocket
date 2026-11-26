@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveAgyExecutable } from "./agy-acp-client";
+import { oversizedLineBytes, resolveAgyExecutable } from "./agy-acp-client";
 import { appendTurnChunk, resetTurnText } from "./agy-notice";
 import * as Quota from "./agy-quota";
 import * as Switch from "./agy-switch";
@@ -9,11 +9,9 @@ import { AgyToolKeepalive } from "./agy-tool-keepalive";
 import type * as Omp from "./driver";
 import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
-import { MAX_RPC_FRAME_BYTES, parseObject } from "./rpc-client";
+import { parseObject } from "./rpc-client";
 import { isRecord } from "./type-guards";
-
 // A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn; stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
-
 /** sessionDir file with the latest turn's final assistant text: the task `read` of a driver that is gone. */
 export const AGY_LAST_ANSWER_FILE = "agy-last-answer.txt";
 const POINTER_FILE = "agy-conversation.json";
@@ -23,7 +21,6 @@ const STREAM_ARGS = "--input-format stream-json --output-format stream-json --da
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
 const KILL_GRACE_MS = 2_000;
 const QUIET_STEPS: Record<string, true> = { user_input: true, system_message: true };
-
 /** `model`, `settings`, `addDirs`, `workerFloors` (new-conversation prefix), `logName`, `logDir` for child logs. */
 export interface AgyPrintDriverOptions extends Pick<Switch.AgyOmpDriverOptions, SharedOption | "startupTimeoutMs"> {
 	model: string;
@@ -43,7 +40,6 @@ const subscribe = <T>(set: Set<(value: T) => void>, listener: (value: T) => void
 	set.add(listener);
 	return () => set.delete(listener);
 };
-
 export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	readonly #options: AgyPrintDriverOptions;
 	readonly #pointerPath: string;
@@ -253,19 +249,20 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const decoder = new TextDecoder();
 		let buffer = "";
 		for await (const chunk of child.proc.stdout) {
+			if (child.ended || child !== this.#child) return;
 			const lines = (buffer + decoder.decode(chunk, { stream: true })).split("\n");
 			buffer = lines.pop() ?? "";
-			if (Buffer.byteLength(buffer) > MAX_RPC_FRAME_BYTES) {
+			if (oversizedLineBytes(lines, buffer) > 0) {
+				const turn = this.#turn;
 				this.#options.log?.warn("agy.print.line_too_long", { origin: this.#options.originKey, pid: child.proc.pid });
 				this.#retire();
-				const turn = this.#turn;
-				if (turn !== undefined)
+				if (turn)
 					this.#finish(turn, { opRef: turn.opRef, status: "error", text: turn.text, error: "agy line over 1MiB" });
 				return;
 			}
 			for (const line of lines) this.#onLine(child, line);
 		}
-		this.#onLine(child, buffer);
+		if (!child.ended && child === this.#child) this.#onLine(child, buffer);
 	}
 	async #pumpStderr(child: Child): Promise<void> {
 		const decoder = new TextDecoder();

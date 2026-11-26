@@ -110,6 +110,10 @@ function turn(content: string): void {
 		held = () => answer("HELD");
 		return;
 	}
+	if (content.includes("@longline-nl")) {
+		process.stdout.write(`${"x".repeat(2 * 1024 * 1024)}\n`);
+		return;
+	}
 	if (content.includes("@longline")) {
 		// A line past the RPC frame cap that never ends: the driver must cap it, not buffer it forever.
 		process.stdout.write("x".repeat(2 * 1024 * 1024));

@@ -106,6 +106,10 @@ function prompt(id: unknown, text: string): void {
 	update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" } });
 	update({ sessionUpdate: "brand_new_kind" });
 	if (text.includes("@die")) process.exit(3);
+	if (text.includes("@longline-nl")) {
+		process.stdout.write(`${"x".repeat(2 * 1024 * 1024)}\n`);
+		return;
+	}
 	if (text.includes("@longline")) {
 		process.stdout.write("x".repeat(2 * 1024 * 1024));
 		return;
