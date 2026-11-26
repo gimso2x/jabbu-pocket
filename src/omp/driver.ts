@@ -154,6 +154,8 @@ export interface OmpFinal {
 	/** Final assistant text of the session at turn end; `""` when there is none. */
 	text: string;
 	error?: string;
+	/** Steered messages this final dropped undelivered (agy-print's queue at abort/error); unset or 0: none. */
+	droppedSteers?: number;
 	/** What the turn spent, from a driver without a priced session file (agy); omp leaves it unset. */
 	usage?: OmpTurnUsage;
 }
@@ -237,11 +239,8 @@ export interface OmpSessionDriver {
 	/** Queue a steering message into the running turn. */
 	steer(text: string): Promise<void>;
 	abort(): Promise<void>;
-	/**
-	 * Abort the turn and empty omp's own steer/follow-up queue too (omp RPC `abort_and_restore_queue`; the queue it
-	 * returns is dropped), so a message steered into the stopped turn never runs afterwards. Absent on drivers without
-	 * such a queue call: the owner's `!stop` then aborts and stops the child when something is still queued.
-	 */
+	/** Abort and empty omp's steer/follow-up queue (`abort_and_restore_queue`; the queue is dropped). Absent on drivers
+	 * without it: `!stop` aborts, stops the child when still queued, and counts the driver's `droppedSteers` instead. */
 	abortAndClearQueue?(): Promise<void>;
 	newSession(): Promise<{ cancelled: boolean }>;
 	/** Continue the newest session in this driver's `sessionDir` (or start a fresh one). */

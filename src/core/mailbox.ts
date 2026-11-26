@@ -254,9 +254,8 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Startup recovery: dispatch rows that are already in the ledger as `pending` (their thread comes from the row).
-	 * A `sending` row (a send cut before its outcome was recorded) is parked as `uncertain`, never sent again.
-	 * Resolves when the drain has finished.
+	 * Startup recovery: dispatch rows already in the ledger as `pending` (their thread comes from the row); a `sending`
+	 * row (a send cut before its outcome was recorded) is parked as `uncertain`, never sent again. Resolves when drained.
 	 */
 	resumePending(): Promise<void> {
 		return this.#serial(() => {
@@ -285,14 +284,12 @@ export class OriginMailbox {
 
 	/**
 	 * Reports a running turn that has emitted no omp event for `STALL_MS`. Synchronous and clock-driven, so the daemon
-	 * sweep and tests with a fake clock both call it. Returns whether a new stall just began.
-	 * Never while a host tool runs: the child waits on jabbu (an approval click, an upload), not on its model. Never
-	 * while the turn waits for its unsettled session's late runs either (`tailWaiting`): that wait is expected.
-	 *
-	 * Stalls of one turn merge: the first logs `stall_alert` and shows the stalled status text; later ones log
-	 * `stall_repeat` (count, totalSilentMs) and leave the text alone until `STALL_RELEASE_MS` of calm. Every call also
-	 * judges the turn's accumulated silence: a conversation turn past the count/time threshold asks the owner once
-	 * (never aborted), a monitor turn past its threshold is aborted and failed.
+	 * sweep and fake-clock tests both call it; returns whether a new stall just began. Never while a host tool runs
+	 * (the child waits on jabbu, not its model) and never during a `tailWaiting` wait (that wait is expected).
+	 * Stalls of one turn merge: the first logs `stall_alert` and shows the stalled text; later ones log `stall_repeat`
+	 * (count, totalSilentMs) and leave the text alone until `STALL_RELEASE_MS` of calm. Every call also judges the
+	 * accumulated silence: a conversation turn past the threshold asks the owner once (never aborted), a monitor turn
+	 * past its threshold is aborted and failed.
 	 */
 	checkStall(): boolean {
 		const turn = this.#turn;
@@ -357,10 +354,10 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed through the normal
-	 * failure path (`recordTurnFailure` → monitor event failed with retry/backoff). The child is stopped afterwards —
-	 * it was wedged, and a monitor's next fire starts a fresh session anyway. A real `aborted` final that wins the race
-	 * settles the turn first; this then does nothing.
+	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed through the normal failure
+	 * path (`recordTurnFailure` → monitor event failed with retry/backoff). The child is stopped afterwards — it was
+	 * wedged, and a monitor's next fire starts a fresh session anyway. A real `aborted` final that wins the race settles
+	 * the turn first; this then does nothing.
 	 */
 	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
 		const driver = this.#driver;
@@ -386,9 +383,8 @@ export class OriginMailbox {
 
 	/**
 	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: …`) through the
-	 * normal failure path. The child is kept — it is not wedged, and its session holds the conversation — unless the
-	 * abort itself failed: then it is stopped before the drain. A final that
-	 * settled the turn first wins; this then does nothing (no notice either).
+	 * normal failure path. The child is kept — not wedged, its session holds the conversation — unless the abort itself
+	 * failed: then it is stopped before the drain. A final that settled the turn first wins; this then does nothing.
 	 */
 	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
 		const driver = this.#driver;
@@ -419,9 +415,8 @@ export class OriginMailbox {
 
 	/**
 	 * Adds one assistant call's price to the running turn, judges the turn with what is known now, and re-reads the
-	 * turn's sub-agent transcripts off the actor's chain (a sub-agent may be spending while this session is quiet).
-	 * The judgement is repeated after that read, so a total that only crosses the ceiling through sub-agents still
-	 * warns and still stops at the multiple.
+	 * turn's sub-agent transcripts off the actor's chain (a sub-agent may be spending while this session is quiet). The
+	 * judgement is repeated after that read, so a total crossing the ceiling only through sub-agents still warns and stops.
 	 */
 	#accrueTurnCost(turn: ActiveTurn, message: unknown): void {
 		turn.costUsd += messageCost(message);
@@ -692,10 +687,10 @@ export class OriginMailbox {
 
 	/**
 	 * Interim delivery of a running conversation turn (never a monitor's: its answer is machine-read at the turn end).
-	 * A note next to a `wait` call goes out at its `message_end`. A stop-ended answer waits for the next message or
-	 * tool call — proof the turn goes on (rule-guards continuation, incomplete-items reminder) — so a turn's last
-	 * answer still goes out at the turn end under the turn's op ref. The start of the wait for an unsettled session
-	 * (`tail_wait_start`) is such proof too: the prompt's answer goes out now, not after the background work.
+	 * A note next to a `wait` call goes out at its `message_end`. A stop-ended answer waits for the next message or tool
+	 * call — proof the turn goes on (rule-guards continuation, incomplete-items reminder) — so a turn's last answer
+	 * still goes out at the turn end under the turn's op ref. The wait-start for an unsettled session (`tail_wait_start`)
+	 * is such proof too: the prompt's answer goes out now, not after the background work.
 	 */
 	#sendInterimOf(turn: ActiveTurn, event: OmpEvent): void {
 		if (this.#deps.originKey.startsWith(MONITOR_ORIGIN_PREFIX) || isTaskOrigin(this.#deps.originKey)) return;
@@ -1742,13 +1737,13 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * `!stop`: stops the running turn but keeps the session — no new epoch, the
-	 * child stays. First the rows that waited before this command (a steer-blocked message, a `!followup`) are
-	 * cancelled: the stopped turn's final drains, and they must not start the next turn. Then the turn is aborted with
-	 * omp's own queue emptied, so a steered message does not run once more. The turn's rows move to the command op (as
-	 * `/new` does), so the command's one answer finishes their threads' status as 🚫 취소됨 and the turn posts nothing.
-	 * A child whose abort throws — or that still holds queued messages when no queue-clearing abort exists — is stopped;
-	 * the next message reopens the same session directory.
+	 * `!stop`: stops the running turn but keeps the session — no new epoch, the child stays. Rows that waited before
+	 * the command (a steer-blocked message, a `!followup`) are cancelled first: the stopped turn's final drains, and
+	 * they must not start the next turn. The abort empties omp's own queue, so a steered message never runs once more;
+	 * a driver without that call (agy-print) reports undelivered steers in its abort final's `droppedSteers`, and the
+	 * answer counts them too. The turn's rows move to the command op (as `/new` does): the command's one answer finishes
+	 * their threads as 🚫 취소됨 and the turn posts nothing. A child whose abort throws — or still holds queued
+	 * messages when no queue-clearing abort exists — is stopped; the next message reopens the same session directory.
 	 */
 	async #stopTurn(row: InboundRow, opRef: string): Promise<void> {
 		const { store, originKey, log } = this.#deps;
@@ -1757,7 +1752,7 @@ export class OriginMailbox {
 		const cancelled = waitingRows(this.#host).filter((waiting) => earlier.has(waiting.row.platformMessageId));
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		for (const waiting of cancelled) store.discard(waiting.row.platformMessageId, opRef);
-		const note = cancelled.length === 0 ? "" : ` 대기 ${cancelled.length}개를 취소했습니다.`;
+		let note = cancelled.length === 0 ? "" : ` 대기 ${cancelled.length}개를 취소했습니다.`;
 		const answer = (text: string): void => {
 			store.recordAnswer({ originKey, opRef, threadRef: row.threadRef, parts: [`${text}${note}`] });
 		};
@@ -1768,17 +1763,22 @@ export class OriginMailbox {
 			answer(NOTHING_TO_STOP_TEXT);
 			return;
 		}
-		let stopChild = false;
+		let stopChild = false,
+			droppedSteers = 0;
 		try {
 			if (driver.abortAndClearQueue !== undefined) await driver.abortAndClearQueue();
 			else {
-				await driver.abort();
+				const off = driver.onFinal((final) => {
+					if (final.opRef === turn.opRef) droppedSteers = final.droppedSteers ?? 0;
+				});
+				await driver.abort().finally(off);
 				stopChild = (await driver.state()).queuedMessageCount > 0;
 			}
 		} catch (error) {
 			stopChild = true;
 			log.warn("owner_stop_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
 		}
+		if (droppedSteers > 0) note += ` 아직 모델에 전달되지 않은 steer ${droppedSteers}건도 취소했습니다.`;
 		log.info("owner_stop", { origin: originKey, opRef: turn.opRef, cancelled: cancelled.length, stopChild });
 		const settles = this.#turn === turn && this.#driver === driver;
 		if (settles) {
