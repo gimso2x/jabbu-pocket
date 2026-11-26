@@ -63,15 +63,14 @@ function alive(pid: number): boolean {
 /**
  * Resolves once `pid` is gone. The runner returns when the shell exits, right after it sent SIGKILL to the whole
  * group; the kernel finishes killing each member on its own schedule, so a grandchild can still read as alive for a
- * moment. Yields to the event loop (no timer) and fails at `ms`.
+ * moment. Polls on a short timer, not a setImmediate spin: a busy loop burns a core the parallel files next to this
+ * one need. Fails at `ms`.
  */
 async function goneWithin(pid: number, ms: number): Promise<void> {
 	const deadline = Date.now() + ms;
 	while (alive(pid)) {
 		if (Date.now() > deadline) throw new Error(`process ${pid} still alive after ${ms} ms`);
-		const tick = Promise.withResolvers<void>();
-		setImmediate(tick.resolve);
-		await tick.promise;
+		await Bun.sleep(5); // sleep-ok: /proc에서 사라지기까지의 찰나를 5ms씩만 기다리는 유한 폴
 	}
 }
 
@@ -88,8 +87,16 @@ describe("realProcessRunner signal", () => {
 				signal: abort.signal,
 			});
 			await within(ready, 4_000, "the grandchild pid file");
-			grandchild = Number(readFileSync(join(dir, "pid"), "utf8").trim());
-			expect(alive(grandchild)).toBe(true);
+			// A sub-second failure here names only what was observed; its cause (a refused fork, an early kill, …) is a
+			// hypothesis for the log, nothing this test can prove.
+			const pidText = readFileSync(join(dir, "pid"), "utf8").trim();
+			if (!/^\d+$/.test(pidText)) {
+				throw new Error(`no grandchild pid recorded before the abort (pid file holds ${JSON.stringify(pidText)})`);
+			}
+			grandchild = Number(pidText);
+			if (!alive(grandchild)) {
+				throw new Error(`grandchild ${grandchild} was not alive before the abort`);
+			}
 			abort.abort();
 			const result = await within(run, 4_000, "the aborted run returning");
 			expect(result.timedOut).toBe(false);
