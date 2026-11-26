@@ -1580,28 +1580,49 @@ describe("headless [TASK] runtime (no herdr): registration", () => {
 		expect(h.transport.calls.some((c) => c.method === "createMessage")).toBe(true);
 	});
 
-	test("AC-3: an agy request keeps runtime herdr when herdr is on, and falls back to a headless omp worker when it is off", async () => {
+	test("AC-3: with a headless port an L0 agy request starts headless with agy:<model>, herdr on or off", async () => {
 		const agyModel = "gemini-4-hydrogen-high";
-		const spec = { taskSpec: { ...GOOD_SPEC, risk: "L1", worker: "agy" }, task: "go" };
-		const on = fakeMailbox();
-		const withHerdr = harness({ agy: { model: agyModel }, headless: on.port });
-		await call(withHerdr, spec);
-		expect(withHerdr.ledger.require("T-20261026-01")).toMatchObject({
+		const spec = { taskSpec: { ...GOOD_SPEC, risk: "L0", worker: "agy" }, task: "go" };
+		for (const noHerdr of [true, false]) {
+			const mailbox = fakeMailbox();
+			const h = harness({ agy: { model: agyModel }, headless: mailbox.port, noHerdr });
+			const out = await call(h, spec);
+			expect(h.ledger.require("T-20261026-01")).toMatchObject({ runtime: "headless", workerModel: `agy:${agyModel}` });
+			expect(out).toContain(`워커: agy ${agyModel} (low)`);
+			expect(mailbox.calls.ensured).toEqual([[ORIGIN, `/sessions/${ORIGIN}`]]);
+			expect(mailbox.calls.routed).toHaveLength(1);
+			// The print driver puts the floors ahead of the first prompt itself; the routed prompt is the plain brief.
+			expect(mailbox.calls.routed[0]?.text).toContain("너는 T-20261026-01 담당이다");
+			expect(h.herdr).toEqual([]);
+		}
+	});
+
+	test("AC-3: a resume keeps the row's runtime — a headless agy row resumes headless, a herdr agy row stays on herdr", async () => {
+		const agyModel = "gemini-4-hydrogen-high";
+		const spec = { taskSpec: { ...GOOD_SPEC, risk: "L0", worker: "agy" }, task: "go" };
+		const mailbox = fakeMailbox();
+		const headless = harness({ agy: { model: agyModel }, headless: mailbox.port, noHerdr: true });
+		await call(headless, spec);
+		mailbox.calls.routed.length = 0;
+		const resumed = await call(headless, { taskSpec: { id: "T-20261026-01" }, task: "이어서" });
+		expect(resumed).toContain("살아 있는 에이전트에 재개 프롬프트를 보냈습니다");
+		expect(headless.ledger.require("T-20261026-01")).toMatchObject({
+			runtime: "headless",
+			workerModel: `agy:${agyModel}`,
+		});
+		expect(mailbox.calls.routed.map((r) => r.platformMessageId.split(":")[2])).toEqual(["followup"]);
+		expect(headless.herdr).toEqual([]);
+
+		const herdrRow = harness({ agy: { model: agyModel } });
+		await call(herdrRow, spec);
+		expect(herdrRow.ledger.require("T-20261026-01").runtime).toBe("herdr");
+		herdrRow.herdr.length = 0;
+		await call(herdrRow, { taskSpec: { id: "T-20261026-01" }, task: "이어서" });
+		expect(herdrRow.ledger.require("T-20261026-01")).toMatchObject({
 			runtime: "herdr",
 			workerModel: `agy:${agyModel}`,
 		});
-		expect(withHerdr.herdr.map((cmd) => cmd.join(" ")).some((line) => line.includes("agy"))).toBe(true);
-		expect(on.calls.ensured).toEqual([]);
-
-		const off = fakeMailbox();
-		const noHerdr = harness({ agy: { model: agyModel }, headless: off.port, noHerdr: true });
-		const out = await call(noHerdr, spec);
-		const row = noHerdr.ledger.require("T-20261026-01");
-		expect(row.runtime).toBe("headless");
-		expect(row.workerModel ?? "").not.toContain("agy");
-		expect(out).toContain("herdr 없음");
-		expect(off.calls.routed).toHaveLength(1);
-		expect(noHerdr.herdr).toEqual([]);
+		expect(herdrRow.herdr.some((cmd) => cmd[1] === "agent")).toBe(true);
 	});
 
 	test("AC-5: a host task stays on herdr over ssh even when a headless port is given", async () => {

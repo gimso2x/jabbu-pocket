@@ -47,6 +47,7 @@ export function fakeMailbox() {
 	const origins = new Set<string>();
 	const busy = new Set<string>();
 	const files = new Map<string, string>();
+	const agyAnswers = new Map<string, string>();
 	const calls = {
 		ensured: [] as Array<[string, string]>,
 		routed: [] as InboundRecord[],
@@ -68,6 +69,7 @@ export function fakeMailbox() {
 		},
 		busy: (origin) => busy.has(origin),
 		sessionFile: (origin) => files.get(origin),
+		lastAgyAnswer: (origin) => agyAnswers.get(origin),
 		pauseTurn: async (origin) => {
 			calls.paused.push(origin);
 			if (!calls.pauseBusy) busy.delete(origin);
@@ -76,5 +78,5 @@ export function fakeMailbox() {
 		stopWhenIdle: async (origin) => void calls.stopped.push(origin),
 		resumePending: async () => undefined,
 	};
-	return { port, origins, busy, files, calls };
+	return { port, origins, busy, files, agyAnswers, calls };
 }

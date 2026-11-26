@@ -513,20 +513,17 @@ export class TaskSweeper {
 		}
 
 		// An agy worker is asked about first, once: a limit on its screen stops every prompt below.
-		const agyAgent = agyModelOf(row.workerModel) === undefined ? undefined : await this.#agentStatus(row);
+		const agyAgent =
+			agyModelOf(row.workerModel) === undefined || row.runtime !== "herdr" ? undefined : await this.#agentStatus(row);
 		if (agyAgent !== undefined && (await this.#agyLimit(row, agyAgent, actions)))
 			return this.#result(row, "blocked", judgement, actions);
 		await this.#staleness(row, now, actions, judgement, agyAgent);
 		return this.#result(row, status, judgement, actions);
 	}
 
-	/**
-	 * An agy worker's limit: when herdr says it stopped (idle, done, unknown) or cannot
-	 * say (a reminder could go out next), its screen tail is read. A limit line there blocks the task with one owner card
-	 * per line per resume window and stops the prompts (true). An unreadable screen leaves the flow as it is (logged).
-	 */
+	/** Herdr agy limit: reads screen tail when stopped/unknown; a limit line blocks and stops prompts (true). */
 	async #agyLimit(row: TaskRow, agent: HerdrAgentStatusResult, actions: string[]): Promise<boolean> {
-		const { ledger, log } = this.#deps;
+		const { log } = this.#deps;
 		const status = agent.ok ? agent.status : undefined;
 		if (status === "working" || status === "blocked" || status === "gone") return false;
 		const screen = await this.#readAgent(row);
@@ -536,7 +533,15 @@ export class TaskSweeper {
 		}
 		const line = agyLimitLine(screen.output ?? "");
 		if (line === undefined) return false;
+		await this.blockOnAgyLimit(row, line, actions);
+		return true;
+	}
+
+	/** One owner card per limit line per resume window, the task blocked; shared with a headless agy 429 turn end. */
+	async blockOnAgyLimit(row: TaskRow, line: string, actions: string[] = []): Promise<void> {
+		const { ledger, log } = this.#deps;
 		const fresh = ledger.require(row.taskId);
+		if (fresh.status !== "working" && fresh.status !== "blocked") return;
 		if (fresh.status === "working") {
 			ledger.transition(row.taskId, "blocked", "bot", "agy 한도");
 			await setStatusReaction(this.#deps.channels, log, row.threadRef, "blocked");
@@ -546,7 +551,6 @@ export class TaskSweeper {
 			await this.#post(row, buildAgyLimitCard(row, line, this.#deps.ownerUserId, await this.#boardLink(row)));
 			actions.push("agy limit notice");
 		}
-		return true;
 	}
 
 	/**

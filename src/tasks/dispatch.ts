@@ -258,9 +258,8 @@ export async function startTask(
 		threadRef,
 		host,
 		repo: spec.repo,
-		// Local non-agy tasks run headless on the daemon's Mailbox; remote and agy ones stay on herdr.
-		runtime:
-			host === null && agyModelOf(worker.model) === undefined && deps.headless !== undefined ? "headless" : "herdr",
+		// Local tasks (agy ones too: the agy print driver) run headless on the daemon's Mailbox; remote ones on herdr.
+		runtime: host === null && deps.headless !== undefined ? "headless" : "herdr",
 		acceptance: acceptanceItems(spec.acceptance),
 		worker: {
 			tier: worker.tier,
