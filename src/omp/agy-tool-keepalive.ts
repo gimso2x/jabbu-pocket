@@ -56,28 +56,26 @@ export class AgyToolKeepalive {
 	}
 
 	#tick(): void {
-		if (this.#active.size === 0) {
-			this.#stopTimer();
-			return;
-		}
-		let oldestId: string | undefined;
-		let oldest: { name: string; startedAt: number } | undefined;
-		for (const [id, entry] of this.#active) {
-			if (oldest === undefined || entry.startedAt < oldest.startedAt) {
-				oldestId = id;
-				oldest = entry;
+		while (this.#active.size > 0) {
+			let oldestId: string | undefined;
+			let oldest: { name: string; startedAt: number } | undefined;
+			for (const [id, entry] of this.#active) {
+				if (oldest === undefined || entry.startedAt < oldest.startedAt) {
+					oldestId = id;
+					oldest = entry;
+				}
 			}
-		}
-		if (oldestId === undefined || oldest === undefined) {
-			this.#stopTimer();
+			if (oldestId === undefined || oldest === undefined) break;
+			const elapsedMs = this.#now() - oldest.startedAt;
+			// An entry past its budget is spent, not a stop: drop it and let the next active tool keep its cover.
+			if (elapsedMs > this.#maxMs) {
+				this.#active.delete(oldestId);
+				continue;
+			}
+			this.#onEmit({ type: AGY_TOOL_KEEPALIVE_EVENT, toolCallId: oldestId, toolName: oldest.name, elapsedMs });
 			return;
 		}
-		const elapsedMs = this.#now() - oldest.startedAt;
-		if (elapsedMs > this.#maxMs) {
-			this.#stopTimer();
-			return;
-		}
-		this.#onEmit({ type: AGY_TOOL_KEEPALIVE_EVENT, toolCallId: oldestId, toolName: oldest.name, elapsedMs });
+		this.#stopTimer();
 	}
 
 	#stopTimer(): void {

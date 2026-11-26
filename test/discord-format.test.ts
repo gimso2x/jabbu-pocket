@@ -14,6 +14,11 @@ describe("mrkdwnToDiscord", () => {
 		["~a~", "~~a~~"],
 		["_기울임_", "_기울임_"],
 		["<https://x.y|라벨>", "[라벨](https://x.y)"],
+		// A label carrying `](` must not become a link whose target is the label's URL, not the token's.
+		[
+			"<https://good.example|click](https://evil.example) [x>",
+			"<https://good.example|click](https://evil.example) [x>",
+		],
 		["<https://x.y>", "https://x.y"],
 		["보기: <https://x.y/a?b=1&amp;c=2|링크>", "보기: [링크](https://x.y/a?b=1&c=2)"],
 		["&lt;a&gt;", "<a>"],

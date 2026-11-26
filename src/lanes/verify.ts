@@ -48,7 +48,7 @@ export class GitOutputCapError extends VerifyUnavailableError {
 
 /**
  * A `GitRunner` that gives each git call `timeoutMs` (a push to a remote needs longer than a local query). With
- * `stdoutCap`, a call whose stdout grows past that many bytes is killed and rejects with `GitOutputCapError`.
+ * `stdoutCap`, a call whose stdout or stderr grows past that many bytes is killed and rejects with `GitOutputCapError`.
  */
 export const gitRunner =
 	(timeoutMs: number, stdoutCap = Number.POSITIVE_INFINITY): GitRunner =>
@@ -80,7 +80,7 @@ export const gitRunner =
 				timedOut.reject(new Error(`git timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
 			const [stdout, stderr, code] = await Promise.race([
-				Promise.all([readText(out, stdoutCap), readText(err), proc.exited]),
+				Promise.all([readText(out, stdoutCap), readText(err, stdoutCap), proc.exited]),
 				timedOut.promise,
 			]);
 			if (proc.signalCode !== null) throw new Error(`git killed by ${proc.signalCode}`);

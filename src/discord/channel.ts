@@ -38,7 +38,13 @@ const DM_TYPES: ReadonlySet<number> = new Set([1, 3]);
 const ROW_BUTTONS = 5;
 const LABEL_MAX = 80;
 const CUSTOM_ID_MAX = 100;
-const CHANNELS_MAX = 1000; // channels remembered for lookups; bounded, oldest forgotten first
+const CACHE_MAX = 1000; // #channels and #messageChannels FIFO cap; oldest forgotten first
+
+function setBounded<V>(map: Map<string, V>, key: string, value: V): void {
+	map.set(key, value);
+	const oldest = map.keys().next().value;
+	if (map.size > CACHE_MAX && oldest !== undefined) map.delete(oldest);
+}
 const BUTTON_STYLE = { primary: 1, danger: 4 } as const;
 /** SECONDARY: a button without a style. */
 const DEFAULT_STYLE = 2;
@@ -152,7 +158,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Records the channel a message is in (a click names it), so later edits of that message go there. */
 	rememberMessage(messageId: string, channelId: string): void {
-		this.#messageChannels.set(messageId, channelId);
+		setBounded(this.#messageChannels, messageId, channelId);
 	}
 
 	/** Replaces the stored values of `messageId`'s buttons with those of `buttons` (none: the keys go away). */
@@ -165,15 +171,9 @@ export class DiscordChannel implements ChannelPort {
 			if (button.value !== undefined) ledger.setCursor(`${prefix}${button.actionId}`, button.value);
 	}
 
-	#setChannel(id: string, info: DiscordChannelInfo | null): void {
-		this.#channels.set(id, info);
-		const oldest = this.#channels.keys().next().value;
-		if (this.#channels.size > CHANNELS_MAX && oldest !== undefined) this.#channels.delete(oldest);
-	}
-
 	/** Records what the adapter learnt without asking (an inbound DM, a thread it started). */
 	remember(info: DiscordChannelInfo): void {
-		this.#setChannel(info.id, info);
+		setBounded(this.#channels, info.id, info);
 	}
 
 	/** Drops what is cached for `id` (a deleted channel or thread). */
@@ -189,7 +189,7 @@ export class DiscordChannel implements ChannelPort {
 		const context: ConversationContext = {
 			...(channel?.name === undefined ? {} : { channelName: channel.name }),
 			...(channel?.topic === undefined ? {} : { topic: channel.topic }),
-			...(thread !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
+			...(thread?.name !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
 		};
 		return Object.keys(context).length === 0 ? undefined : context;
 	}
@@ -200,11 +200,11 @@ export class DiscordChannel implements ChannelPort {
 		if (known !== undefined && (known !== null || remember404)) return known ?? undefined;
 		try {
 			const info = await this.transport.getChannel(id);
-			this.#setChannel(id, info);
+			setBounded(this.#channels, id, info);
 			return info;
 		} catch (err) {
 			if (err instanceof DiscordCallError && err.kind === "definitive" && err.status === 404) {
-				if (remember404) this.#setChannel(id, null);
+				if (remember404) setBounded(this.#channels, id, null);
 				return undefined;
 			}
 			throw err;
@@ -232,8 +232,8 @@ export class DiscordChannel implements ChannelPort {
 	async #messageChannel(ref: MessageRef): Promise<string> {
 		const known = this.#messageChannels.get(ref.messageId);
 		if (known !== undefined) return known;
-		if (ref.threadId === undefined || ref.threadId === ref.messageId) return ref.conversationId;
-		return (await this.destination(ref.conversationId, ref.threadId)).channelId;
+		const plain = ref.threadId === undefined || ref.threadId === ref.messageId;
+		return plain ? ref.conversationId : (await this.destination(ref.conversationId, ref.threadId)).channelId;
 	}
 
 	/** No `@everyone`, role or user pings from content; only a mention of the owner or a peer bot notifies that user. */
@@ -257,7 +257,7 @@ export class DiscordChannel implements ChannelPort {
 			...(embeds === undefined ? {} : { embeds }),
 			...(components === undefined ? {} : { components }),
 		});
-		this.#messageChannels.set(id, destination.channelId);
+		this.rememberMessage(id, destination.channelId);
 		if (buttons.length > 0) this.#storeButtonValues(id, buttons);
 		return {
 			platform: "discord",
