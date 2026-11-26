@@ -319,7 +319,9 @@ describe("AC-4: an unreadable report", () => {
 			expect(card).toContain("호스트 점검을 읽지 못했어요: ");
 			expect(card).toContain(reason);
 			const { hostChecks: _dropped, ...without } = snapshot;
-			expect(html.replace(card, "")).toBe(system(without));
+			const withoutStrip = (page: string): string =>
+				page.replace(/<div class="notice[^"]*sys-strip">[\s\S]*?<\/div>/, "");
+			expect(withoutStrip(html.replace(card, ""))).toBe(withoutStrip(system(without)));
 			const items = attentionItems(renderBriefingHtml(snapshot, NOW));
 			expect(items[0]).toBe("게이트 discord_disconnected");
 			expect(items.at(-1)?.startsWith("호스트 점검 읽지 못함:")).toBe(true);

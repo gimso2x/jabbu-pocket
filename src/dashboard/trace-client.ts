@@ -13,9 +13,7 @@ export const TRACE_CLIENT = `function traceController(host) {
 	let receivedAt = 0;
 	let fold = {};
 	let focus = null;
-	let openSpan = null;
-	let generation = 0;
-	let ticks = 0;
+	let openSpan = null, filter = "all", generation = 0, ticks = 0;
 	// 폭포 (default) or 흐름도: the choice survives a reload; storage may be blocked, then it stays 폭포.
 	let mode = "waterfall";
 	try {
@@ -101,7 +99,7 @@ export const TRACE_CLIENT = `function traceController(host) {
 		for (const button of bar.querySelectorAll("[data-trace-mode]")) {
 			button.setAttribute("aria-pressed", String(button.getAttribute("data-trace-mode") === mode));
 		}
-		const state = { now: clock(), fold: fold, focus: focus, open: openSpan, title: title };
+		const state = { now: clock(), fold: fold, focus: focus, open: openSpan, title: title, filter: filter };
 		const template = document.createElement("template");
 		if (answer.ok && mode === "flow") {
 			template.innerHTML = renderFlow(answer, state);
@@ -197,10 +195,7 @@ export const TRACE_CLIENT = `function traceController(host) {
 			url = source ? source.url : "api/turn/" + encodeURIComponent(turnId) + "/trace";
 			notes = source ? source.notes : null;
 			answer = null;
-			fold = {};
-			focus = null;
-			openSpan = null;
-			ticks = 0;
+			fold = {}; focus = null; openSpan = null; filter = "all"; ticks = 0;
 			known.clear();
 			generation += 1;
 			const wrap = document.createElement("div");
@@ -297,6 +292,8 @@ export const TRACE_CLIENT = `function traceController(host) {
 		/** A click inside the waterfall; true = handled. */
 		click(target) {
 			if (!answer || !answer.ok) return false;
+			const fBtn = target.closest("[data-trace-filter]");
+			if (fBtn) { filter = fBtn.getAttribute("data-trace-filter") || "all"; draw(); return true; }
 			const modeButton = target.closest("[data-trace-mode]");
 			if (modeButton) {
 				setMode(modeButton.getAttribute("data-trace-mode") === "flow" ? "flow" : "waterfall");

@@ -14,6 +14,7 @@ import {
 	openTurnsText,
 	TURN_LABELS,
 } from "./text";
+import { renderApprovalCards, renderDiffNav } from "./ux-renderers";
 
 /**
  * A TASK's facts for the detail panel: ID and risk, branch, machine, AC and step progress, PROGRESS, blocker, worker.
@@ -380,9 +381,12 @@ export function renderDetailHead(
 			: card.question
 				? [{ question: card.question, options: card.options ?? [] }]
 				: [];
+	const reply = /^https?:\/\//.test(card.replyUrl ?? "")
+		? `<a class="button" href="${esc(card.replyUrl)}" target="_blank" rel="noopener noreferrer">herdr에서 답하기</a>`
+		: "";
 	const sayHtml =
 		asks.length > 0
-			? `<section class="detail-say" aria-label="묻는 말"><h3 class="h3">묻는 말</h3>${asks
+			? `<section class="detail-say" aria-label="묻는 말"${reply ? ` data-reply-url="${esc(card.replyUrl)}"` : ""}><h3 class="h3">묻는 말</h3>${asks
 					.map(
 						(ask) =>
 							`<p class="lead">${esc(ask.question)}</p>${
@@ -391,7 +395,11 @@ export function renderDetailHead(
 									: ""
 							}`,
 					)
-					.join("")}</section>`
+					.join("")}${
+					asks.some((ask) => ask.options.length > 0)
+						? '<p class="note-sub say-hint">선택지를 누르면 답변 문구가 복사돼요</p>'
+						: ""
+				}</section>`
 			: card.blocked
 				? `<section class="detail-say" aria-label="막힌 이유"><h3 class="h3">막힌 이유</h3><p class="lead">${esc(card.blocked)}</p></section>`
 				: card.lastSay
@@ -414,9 +422,6 @@ export function renderDetailHead(
 								? `${Math.floor(promptMinutes / 60)}시간 전`
 								: `${Math.floor(promptMinutes / 1440)}일 전`
 				}</p></section>`;
-	const reply = /^https?:\/\//.test(card.replyUrl ?? "")
-		? `<a class="button" href="${esc(card.replyUrl)}" target="_blank" rel="noopener noreferrer">herdr에서 답하기</a>`
-		: "";
 	const about =
 		task === undefined
 			? ""
@@ -620,18 +625,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 			s.approvals.items.find((approval) => approval.approvalId === id) ??
 			s.approvals.recent.find((approval) => approval.approvalId === id);
 		if (item) {
-			// Same order and labels as the approval card's sections (`DETAIL_SECTIONS` in safety/approval.ts).
-			const SECTIONS = [
-				["action", "할 일"],
-				["why", "이유"],
-				["impact", "영향"],
-				["rollback", "되돌릴 수 없는 이유"],
-			] as const;
 			const facts: Array<[string, string]> = [];
-			for (const [key, label] of SECTIONS) {
-				const value = item.detail?.[key];
-				if (value) facts.push([label, esc(value)]);
-			}
 			if ("status" in item) {
 				const word = (APPROVAL_OUTCOMES[item.status] ?? [item.status])[0];
 				facts.push(
@@ -663,7 +657,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 				item.title,
 			)}</h2>${item.summary.trim() === item.title ? "" : `<p class="lead detail-summary">${esc(item.summary)}</p>`}${
 				item.detail === null ? '<p class="lead">세부 내용 없음(요약만 받은 요청)</p>' : ""
-			}<dl class="facts">${facts.map(([name, value]) => `<dt>${esc(name)}</dt><dd>${value}</dd>`).join("")}</dl>${
+			}${renderApprovalCards(item.detail)}<dl class="facts">${facts.map(([name, value]) => `<dt>${esc(name)}</dt><dd>${value}</dd>`).join("")}</dl>${
 				links !== ""
 					? `<div class="detail-actions">${links}</div>`
 					: "status" in item
@@ -845,14 +839,14 @@ export function renderDiffDetail(subject: string, body?: unknown): string {
 			})
 			.join("");
 	const files = answer.files.map(
-		(file) =>
-			`<details class="diff-file"><summary><span class="diff-path">${esc(file.path)}</span> <span class="diff-add">+${esc(file.added)}</span> <span class="diff-del">−${esc(file.deleted)}</span>${
+		(file, i) =>
+			`<details class="diff-file" id="diff-f-${i}"><summary><span class="diff-path">${esc(file.path)}</span> <span class="diff-add">+${esc(file.added)}</span> <span class="diff-del">−${esc(file.deleted)}</span>${
 				file.binary ? " 바이너리" : ""
 			}</summary>${file.binary ? "" : `<pre class="diff-code">${lines(file.hunks)}</pre>`}</details>`,
 	);
 	return `${head}<p class="lead">파일 ${answer.files.length}개 · +${added} −${deleted} · ${esc(String(answer.base ?? "").slice(0, 12))} → ${esc(
 		String(answer.sha ?? "").slice(0, 12),
-	)}</p>${answer.truncated ? '<p class="note">너무 커서 일부가 잘렸어요 (잘림).</p>' : ""}${files.join("")}`;
+	)}</p>${answer.truncated ? '<p class="note">너무 커서 일부가 잘렸어요 (잘림).</p>' : ""}${renderDiffNav(answer.files)}${files.join("")}`;
 }
 
 /**
