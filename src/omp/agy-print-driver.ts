@@ -370,7 +370,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	/** Ends `turn` once: notes queued steers it drops, clears it and the queue, keeps its answer, sends its final. */
 	#finish(turn: Switch.PendingTurn, final: Omit<Omp.OmpFinal, "usage">): void {
 		if (turn.finished) return;
-		if (this.#queued.length > 0 && final.error !== undefined) final.error += ` (steer ${this.#queued.length}건 미전달)`;
+		if (this.#queued.length > 0 && final.error !== undefined) final.droppedSteers = this.#queued.length;
+		if (final.droppedSteers !== undefined) final.error += ` (steer ${final.droppedSteers}건 미전달)`;
 		if (this.#turn === turn) this.#dropTurn();
 		turn.finished = true;
 		if (final.text !== "") this.#keepAnswer(final.text);
