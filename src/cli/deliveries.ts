@@ -1,6 +1,4 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { openDeliveryLedger } from "../store/db";
+import { openDeliveriesLedgerFor } from "./deliveries-ledger";
 import { heldLine } from "./deliveries-list";
 
 export const DELIVERIES_USAGE = `  deliveries list                held (ambiguous) deliveries waiting for the owner: id, channel, thread, time, preview
@@ -28,12 +26,8 @@ export function deliveriesCommand(args: string[], homeDir: string): number {
 		process.stderr.write(`${call.error}\n${DELIVERIES_USAGE}`);
 		return 2;
 	}
-	const path = join(homeDir, "jabbu.db");
-	if (!existsSync(path)) {
-		process.stderr.write(`deliveries: no ledger at ${path} (run the daemon once)\n`);
-		return 1;
-	}
-	const ledger = openDeliveryLedger(path);
+	const ledger = openDeliveriesLedgerFor(homeDir);
+	if (ledger === undefined) return 1;
 	try {
 		if (call === "list") {
 			const rows = ledger.listAmbiguous();

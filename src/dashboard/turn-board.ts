@@ -164,7 +164,7 @@ function readInstallTurns(
 	const { now, iso, draining, frozen, activeJobs, sessionModel, install } = opts;
 	const isPeer = install !== undefined;
 	// `sending` (the write-ahead before a prompt or steer) counts as running: TURN_COLUMNS reads it as `dispatched`.
-	const openStates = isPeer ? "('pending','sending','dispatched')" : "('pending','sending','dispatched','uncertain')";
+	const openStates = "('pending','sending','dispatched','uncertain')";
 	const open = rows<TurnSql>(
 		handle,
 		`SELECT ${TURN_COLUMNS} FROM inbound WHERE state IN ${openStates} ORDER BY created_at, inbound_id LIMIT ?`,
@@ -269,14 +269,14 @@ function readInstallTurns(
 		activeThreads.length === 0
 			? "0 AS has_job"
 			: `MAX(CASE WHEN thread_ref IN (${activeThreads.map(() => "?").join(",")}) THEN 1 ELSE 0 END) AS has_job`;
-	const having = isPeer ? "open > 0" : "open > 0 OR active >= ? OR has_job > 0";
+	const having = "open > 0 OR active >= ? OR has_job > 0";
 	const threadRows = rows<{ origin_key: string; active: number }>(
 		handle,
 		`SELECT origin_key, MAX(${ACTIVE}) AS active, SUM(CASE WHEN state IN ${openStates} THEN 1 ELSE 0 END) AS open, ${jobSelect} FROM inbound
 			GROUP BY origin_key HAVING ${having} ORDER BY (open > 0 OR has_job > 0) DESC, active DESC LIMIT ?`,
 		...activeThreads,
-		...(isPeer ? [] : [since]),
-		THREAD_LIMIT,
+		since,
+		isPeer ? 40 : THREAD_LIMIT,
 	);
 	const threads = threadRows.flatMap((thread): ThreadInfo[] => {
 		const key = thread.origin_key;

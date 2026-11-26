@@ -60,6 +60,13 @@ import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
 import { discordThreadHref } from "./detail";
 import { type OverlapView, readEditOverlaps } from "./edit-overlap";
 import { type HostChecksInfo, readHostChecks } from "./host-checks";
+import {
+	type PeerAlertInfo,
+	type PeerHealthInfo,
+	readInstallAlerts,
+	readPeerAlerts,
+	readPeerHealth,
+} from "./peer-health";
 import type { PeerInstall } from "./peers";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
@@ -468,10 +475,11 @@ function cronWords(schedule: string, timezone: string, botTimezone: string): str
 	const [minute = "", hour = "", dom, month, dow = ""] = fields;
 	const upTo = (field: string, max: number): boolean => /^\d{1,2}$/.test(field) && Number(field) <= max;
 	const pad = (field: string): string => field.padStart(2, "0");
+	const hours = /^\d{1,2}(?:,\d{1,2})*$/.test(hour) ? hour.split(",").filter((h) => Number(h) <= 23) : [];
 	let words: string | undefined;
 	if (fields.length === 5 && dom === "*" && month === "*") {
-		if (upTo(minute, 59) && upTo(hour, 23)) {
-			const time = `${pad(hour)}:${pad(minute)}`;
+		if (upTo(minute, 59) && hours.length > 0 && hours.length === hour.split(",").length) {
+			const time = hours.map((h) => `${pad(h)}:${pad(minute)}`).join("·");
 			if (dow === "*") words = `매일 ${time}`;
 			else if (dow === "1-5") words = `평일 ${time}`;
 			else if (/^[0-7](?:,[0-7])*$/.test(dow)) {
@@ -528,13 +536,16 @@ function monitorFiles(row: MonitorRow): MonitorFile[] {
 /** A channel as the owner knows it: the DM, the config's Discord log, escalation or alert channel, else its id. */
 function channelName(channel: string | null, config: DashboardConfig | undefined): string {
 	if (channel === null) return "오너 DM";
+	const named = config?.dashboard?.channelNames?.[channel];
+	if (named !== undefined && named !== "") return named;
 	if (channel === config?.channels?.discord?.logChannelId) return "로그 채널";
 	if (channel === config?.channels?.discord?.escalationChannelId) return "에스컬레이션 채널";
 	if (channel === config?.channels?.discord?.alertChannelId) return "경보 채널";
 	return `채널 ${channel}`;
 }
 
-interface AlertInfo {
+export interface AlertInfo {
+	install?: string;
 	scope: string;
 	signature: string;
 	count: number;
@@ -658,6 +669,10 @@ export interface DashboardSnapshot {
 	 * 답하기 link needs for server channels and lanes; null otherwise (DM links do not need it). Optional like `jabbuCli`.
 	 */
 	discordGuild?: string | null;
+	/** Configured channel ID -> human-readable channel label map (`dashboard.channelNames`). */
+	channelNames?: Record<string, string>;
+	/** Per-peer install status, 24h turns, alerts, and active AGY quota account. */
+	peerHealth?: Section<{ items: PeerHealthInfo[] }>;
 	/** The top-bar test chip: the full test run holding this host's heavy-run lock and those queued behind it. Read fresh every time. */
 	heavyRun?: Section<HeavyRunInfo>;
 	/** The "호스트 점검" card: only with config `dashboard.opsStatus` (absent otherwise, and in hand-made snapshots). */
@@ -890,14 +905,15 @@ function approvalStats(db: Database, now: number): ApprovalStats {
 }
 
 /** `DM` for any platform's owner DM; a channel by its id, named after its platform when that is Discord (a removed `slack/` row keeps its plain label). */
-function originLabel(originKey: string | null): string | null {
+function originLabel(originKey: string | null, channelNames?: Record<string, string>): string | null {
 	if (originKey === null) return null;
 	const ref = parseChatOrigin(originKey);
 	if (ref?.kind === "dm") return ref.platform === "web" ? "웹 대화" : "DM";
 	const channel = /^(slack|discord)\/ch\/([^/]+)(\/t\/[^/]+)?$/.exec(originKey);
 	if (channel === null) return originKey;
-	const platform = channel[1] === "discord" ? "Discord " : "";
-	return `${platform}채널 ${channel[2]} ${channel[3] === undefined ? "메인" : "스레드"}`;
+	const named = channel[2] ? channelNames?.[channel[2]] : undefined;
+	const head = named ?? `${channel[1] === "discord" ? "Discord " : ""}채널 ${channel[2]}`;
+	return `${head} ${channel[3] === undefined ? "메인" : "스레드"}`;
 }
 
 /** Identical commands inside one snapshot share one process (one `herdr agent list` per host). */
@@ -1696,7 +1712,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				const info: FlowChainInfo = {
 					threadRef,
 					originKey,
-					place: originLabel(originKey),
+					place: originLabel(originKey, config?.dashboard?.channelNames),
 					title: text === undefined ? "(원문 없음)" : previewLine(text, list[0]?.title),
 					requestedAt: request === undefined ? null : iso(request.created_at),
 					updatedAt: iso(updatedAt),
@@ -1834,7 +1850,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 						cardUrl: r.card_url?.startsWith("https://") ? r.card_url : null,
 						originUrl: r.origin_url?.startsWith("https://") ? r.origin_url : null,
 						remainingMs: Math.max(0, r.expires_at - now),
-						originLabel: originLabel(r.origin_key),
+						originLabel: originLabel(r.origin_key, config?.dashboard?.channelNames),
 					};
 				}),
 				recent: rows<{
@@ -1865,7 +1881,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 						tookMs: r.decided_at === null ? null : Math.max(0, r.decided_at - r.created_at),
 						originKey: r.origin_key,
 						originThreadRef: r.origin_thread_ref,
-						originLabel: originLabel(r.origin_key),
+						originLabel: originLabel(r.origin_key, config?.dashboard?.channelNames),
 						detail: approvalDetail(r.detail_json),
 						cardUrl: r.card_url?.startsWith("https://") ? r.card_url : null,
 						originUrl: r.origin_url?.startsWith("https://") ? r.origin_url : null,
@@ -1960,35 +1976,15 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			return { ...(local === undefined ? {} : { local }), ...(offsite === undefined ? {} : { offsite }) };
 		});
 
-		const alerts = section(() => ({
-			items: rows<{
-				incident_id: number;
-				scope: string;
-				signature: string;
-				status: string;
-				count: number;
-				first_at: number;
-				last_at: number;
-			}>(
-				needDb(),
-				"SELECT incident_id, scope, signature, status, count, first_at, last_at FROM alert_incidents WHERE status = 'alerted' ORDER BY last_at DESC",
-			).map((r): AlertInfo => {
-				const info: AlertInfo = {
-					scope: r.scope,
-					signature: redact(r.signature),
-					count: r.count,
-					lastAt: iso(r.last_at),
-					incidentId: r.incident_id,
-					firstAt: iso(r.first_at),
-					status: r.status,
-				};
-				if (r.scope.startsWith("gate:")) {
-					const name = r.scope.slice("gate:".length);
-					info.gateState = (gates.ok ? gates.items.find((gate) => gate.name === name)?.state : undefined) ?? "unknown";
-				}
-				return info;
-			}),
-		}));
+		const alerts = section(() => {
+			const own = readInstallAlerts(needDb(), iso, () => (gates.ok ? gates.items : undefined));
+			const peer: PeerAlertInfo[] = readPeerAlerts(deps.peers ?? [], now, iso, deps.collectGates ?? collectGates);
+			return { items: [...own, ...peer].sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt)) };
+		});
+		const peerHealth =
+			(deps.peers?.length ?? 0) === 0
+				? undefined
+				: await section(() => ({ items: readPeerHealth(deps.peers ?? [], now) }));
 
 		return {
 			generatedAt: iso(now),
@@ -2009,6 +2005,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			heavyRun: await heavyRun,
 			jabbuCli: ["bun", join(deps.repoDir, "src", "main.ts")],
 			discordGuild,
+			...(config?.dashboard?.channelNames === undefined ? {} : { channelNames: config.dashboard.channelNames }),
+			...(peerHealth === undefined ? {} : { peerHealth }),
 			...(hostChecks === undefined ? {} : { hostChecks: await hostChecks }),
 			...(opsStatus?.url === undefined ? {} : { hostChecksUrl: opsStatus.url }),
 			...(usageLimits === undefined ? {} : { usageLimits: await usageLimits }),

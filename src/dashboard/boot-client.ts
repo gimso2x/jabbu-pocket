@@ -28,7 +28,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 	// The board the server drew the page with, so the first snapshot refresh does not redraw without it.
 	const seeded = boardOn ? document.getElementById("board-data") : null;
 	let board = seeded && seeded.textContent ? JSON.parse(seeded.textContent) : null;
-	const ui = { view: "inbox", q: "", sort: "", desc: false, theme: "system", layout: "", stale: false };
+	const ui = { view: "inbox", q: "", sort: "", desc: false, theme: "system", layout: "", stale: false, bot: "" };
 	let open = null;
 	let tab = "head";
 	// The turn the 트레이스 tab shows when not the thread's last one (a 최근 턴 row, or the old one-turn address).
@@ -953,6 +953,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		ui.layout = "";
 		ui.sort = "";
 		ui.desc = false;
+		ui.bot = "";
 		setNavMore(document, false);
 		if (open) show(null, "none");
 		history.pushState(null, "", toUrl(null));
@@ -968,7 +969,9 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			{ label: "보기: 에이전트 목록 (List)", sub: "g l", run: () => setView("list") },
 			{ label: "보기: 턴", sub: "g t", run: () => setView("turns") },
 			{ label: "보기: 흐름", sub: "g f", run: () => setView("flow") },
-			{ label: "보기: 레인", sub: "g n", run: () => setView("lanes") },
+			...(!snapshot || !snapshot.lanes || !snapshot.lanes.ok || snapshot.lanes.items.length > 0
+				? [{ label: "보기: 레인", sub: "g n", run: () => setView("lanes") }]
+				: []),
 			{ label: "보기: 승인 대기", sub: "g a", run: () => setView("approvals") },
 			{ label: "보기: 모니터", sub: "g m", run: () => setView("monitors") },
 			{ label: "보기: 알림", sub: "g e", run: () => setView("alerts") },
@@ -1088,7 +1091,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		if (!target) return;
 		if (!target.closest("#event-stack")) stackEl.classList.remove("is-open");
 		const runToastAct = () => { const fn = toastUndo; toastUndo = null; if (toastTimer) clearTimeout(toastTimer); toast.hidden = true; if (fn) fn(); };
-		if (uxHandleClick(target, event, document, { copyText, showToast, runToastAct })) return;
+		if (uxHandleClick(target, event, document, { copyText, showToast, runToastAct, setBot: (v) => { ui.bot = v; drawMain(false); } })) return;
 		if (handleLimitsClick(target, event, document)) return;
 		if (target.closest("[data-es-close]")) {
 			event.preventDefault();
