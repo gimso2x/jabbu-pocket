@@ -16,7 +16,7 @@ import { Daemon } from "../src/daemon/daemon";
 import { buildLaneOutcomeCard, laneHoldActionId, lanePublishActionId, parseLaneActionId } from "../src/lanes/card";
 import { EXTERNAL_PR_LANE, laneLandBlockers } from "../src/lanes/land";
 import type { LaneManagerDeps } from "../src/lanes/manager-types";
-import { defaultPrTools, type ProcResult, type ProcRunner, readPrBody } from "../src/lanes/pr";
+import { defaultPrTools, type ProcResult, type ProcRunner, type PrTools, publishPr, readPrBody } from "../src/lanes/pr";
 import type { LaneMeta, LaneRow } from "../src/lanes/status";
 import { parsePrCommand } from "../src/lanes/trigger";
 import { createLogger } from "../src/log";
@@ -715,6 +715,31 @@ describe("through the daemon: `!pr` in a closed lane's thread", () => {
 		} finally {
 			await daemon.stop();
 		}
+	});
+});
+
+describe("publishPr", () => {
+	test("a body file that vanished after approval is refused before any push", async () => {
+		const dir = tempDir("jabbu-xpr-publish-");
+		const pushes: string[][] = [];
+		const tools: PrTools = {
+			git: async (argv) => {
+				pushes.push(argv);
+				return { code: 0, stdout: "", stderr: "" };
+			},
+			gh: async () => ({ code: 0, stdout: "https://github.com/up/proj/pull/77\n", stderr: "" }),
+		};
+		const result = await publishPr(tools, {
+			repoDir: dir,
+			worktree: dir,
+			externalPr: { repo: UPSTREAM, base: "main", bodyFile: "pr-body.md", title: "외부", branch: "pr/L-20270115-01" },
+			target: { login: LOGIN, remote: "origin", url: "https://github.com/me/proj", fork: false },
+			plan: { kind: "new" },
+			sha: "abc1234",
+			signal: new AbortController().signal,
+		});
+		expect(result).toMatchObject({ ok: false });
+		expect(pushes).toEqual([]);
 	});
 });
 
