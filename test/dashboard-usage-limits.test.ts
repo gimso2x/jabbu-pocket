@@ -372,9 +372,11 @@ describe("AC-1: html strip", () => {
 		// Each share sits in a roll cell (`data-roll`) whose text is the number.
 		const shares = (chip: string): string => chip.replace(/<span class="roll-n"[^>]*>(\d+)<\/span>/g, "$1");
 		expect(shares(chipOf(html, "Antigravity"))).toMatch(
-			/limit-chip is-danger[\s\S]*<small>5h<\/small>3<small>주<\/small>15/,
+			/limit-chip is-danger[\s\S]*<small>5시간<\/small>3<small>주간<\/small>15/,
 		);
-		expect(shares(chipOf(html, "Claude"))).toMatch(/limit-chip is-ok[\s\S]*<small>5h<\/small>93<small>주<\/small>31/);
+		expect(shares(chipOf(html, "Claude"))).toMatch(
+			/limit-chip is-ok[\s\S]*<small>5시간<\/small>93<small>주간<\/small>31/,
+		);
 		expect(chipOf(html, "GLM")).toMatch(/limit-chip is-muted[\s\S]*GLM \?/);
 		// The narrow-bar summary: one dot per source in source order plus the lowest source name and share.
 		expect(shares(html)).toContain(
@@ -494,7 +496,7 @@ describe("AC-1: html strip", () => {
 		const html = strip(server);
 		const shares = (chip: string): string => chip.replace(/<span class="roll-n"[^>]*>(\d+)<\/span>/g, "$1");
 		expect(shares(chipOf(html, "Antigravity"))).toMatch(
-			/limit-chip is-danger[\s\S]*<small>5h<\/small>1<small>주<\/small>75/,
+			/limit-chip is-danger[\s\S]*<small>5시간<\/small>1<small>주간<\/small>75/,
 		);
 		expect(html).toContain('<span class="limit-acct">camelwise · 4계정</span>');
 		expect(html).toContain('data-account="camelwise"');
