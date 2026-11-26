@@ -613,7 +613,7 @@ bun src/main.ts monitors apply --dir <디렉터리> [--prune] [--dry-run]  # 내
 | `deliver` | `turn`(기본) · `verbatim`. 아래 참고 |
 | `procedureFiles` | 최대 5개 파일 경로(절대, 또는 workspaceDir 기준 상대). workspaceDir 또는 `~/.jabbu/scripts` 안의 일반 파일만 허용하며(심볼릭 링크는 실제 경로로 판정) 밖이면 거부합니다. 발사할 때마다 디스크에서 다시 읽어 파일별 `[절차 파일 <경로>]` 블록으로 지시 뒤에 붙입니다. 합계 64KiB까지이고 넘으면 잘림 표시, 못 읽는 파일은 `읽기 실패` 줄로 남기고 발사는 계속합니다. 긴 절차를 4000자 지시 밖에 두는 용도입니다. `monitors update`에서 `null`이면 해제 |
 
-`monitors update`에서 `channel`·`copyChannel`·`model`·`thinking`을 `null`로 주면 해제합니다. `monitors list`는 cron 명령(`command=`·`timeout=`)과 설정된 옵션(`channel=`·`copyChannel=`·`model=`·`thinking=`·`fire=`·`once`·`state=`·`deliver=verbatim`)을 함께 보여 주고, `monitors list --json`과 `jabbu_monitor_list`는 `deliver`를 늘 보여 줍니다.
+`monitors update`에서 `channel`·`copyChannel`·`model`·`thinking`을 `null`로 주면 해제합니다. `monitors list`는 cron 명령(`command=`·`timeout=`)과 설정된 옵션(`channel=`·`copyChannel=`·`model=`·`thinking=`·`fire=`·`once`·`state=`·`deliver=verbatim`)을 함께 보여 주고, `monitors list --json`과 `jabbu_monitor_list`는 `deliver`를 늘 보여 줍니다. 장부가 아직 없는 홈(데몬을 한 번도 띄우지 않은 새 설치)에서는 `list`·`show`·`update`·`remove`·`test`·`export`와 `apply --dry-run`이 장부 파일을 만들지 않고 빈 결과(`no monitors`, `monitor not found`)로 답합니다. `add`와 실제 `apply`가 장부를 만듭니다.
 
 ### 실행과 전달
 
