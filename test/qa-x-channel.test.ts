@@ -121,6 +121,24 @@ describe("4. a 404 on a message id is not remembered as a missing channel", () =
 	});
 });
 
+describe("5. the channel cache forgets the oldest entry past its cap", () => {
+	test("remembering past 1000 channels re-reads the evicted one", async () => {
+		const transport = new FakeDiscordTransport({ botUserId: BOT });
+		const channel = new DiscordChannel(transport, { ownerUserId: OWNER });
+		const first = "100000000000000001";
+		transport.setChannel({ id: first, type: 0, guildId: GUILD });
+		channel.remember({ id: first, type: 0, guildId: GUILD });
+		for (let i = 0; i < 1000; i++)
+			channel.remember({ id: `200000000000000${String(i).padStart(3, "0")}`, type: 0, guildId: GUILD });
+		// The oldest entry was forgotten: the lookup goes to the transport again.
+		expect(await channel.channelInfo(first)).toMatchObject({ id: first, type: 0 });
+		expect(transport.calls.filter((c) => c.method === "getChannel")).toHaveLength(1);
+		// The newest entry is still cached: no transport call for it.
+		expect(await channel.channelInfo("200000000000000999")).toMatchObject({ type: 0 });
+		expect(transport.calls.filter((c) => c.method === "getChannel")).toHaveLength(1);
+	});
+});
+
 interface Frame {
 	op: number;
 	d: unknown;

@@ -38,7 +38,13 @@ const DM_TYPES: ReadonlySet<number> = new Set([1, 3]);
 const ROW_BUTTONS = 5;
 const LABEL_MAX = 80;
 const CUSTOM_ID_MAX = 100;
-const MESSAGE_CHANNELS_MAX = 1000; // posts remembered for edit routing; bounded, oldest forgotten first
+const CACHE_MAX = 1000; // #channels and #messageChannels FIFO cap; oldest forgotten first
+
+function setBounded<V>(map: Map<string, V>, key: string, value: V): void {
+	map.set(key, value);
+	const oldest = map.keys().next().value;
+	if (map.size > CACHE_MAX && oldest !== undefined) map.delete(oldest);
+}
 const BUTTON_STYLE = { primary: 1, danger: 4 } as const;
 /** SECONDARY: a button without a style. */
 const DEFAULT_STYLE = 2;
@@ -66,12 +72,11 @@ export function buttonRows(buttons: readonly ActionButton[]): unknown[] {
 		rows.push({
 			type: 1,
 			components: buttons.slice(start, start + ROW_BUTTONS).map((button) => {
-				if (button.actionId.length === 0 || button.actionId.length > CUSTOM_ID_MAX) {
+				if (button.actionId.length === 0 || button.actionId.length > CUSTOM_ID_MAX)
 					throw new DiscordCallError(
 						"definitive",
 						`discord custom_id must be 1-${CUSTOM_ID_MAX} characters: ${button.actionId.slice(0, 40)}… (${button.actionId.length})`,
 					);
-				}
 				return {
 					type: 2,
 					style: button.style === undefined ? DEFAULT_STYLE : BUTTON_STYLE[button.style],
@@ -153,9 +158,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Records the channel a message is in (a click names it), so later edits of that message go there. */
 	rememberMessage(messageId: string, channelId: string): void {
-		this.#messageChannels.set(messageId, channelId);
-		const oldest = this.#messageChannels.keys().next().value;
-		if (this.#messageChannels.size > MESSAGE_CHANNELS_MAX && oldest !== undefined) this.#messageChannels.delete(oldest);
+		setBounded(this.#messageChannels, messageId, channelId);
 	}
 
 	/** Replaces the stored values of `messageId`'s buttons with those of `buttons` (none: the keys go away). */
@@ -170,7 +173,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Records what the adapter learnt without asking (an inbound DM, a thread it started). */
 	remember(info: DiscordChannelInfo): void {
-		this.#channels.set(info.id, info);
+		setBounded(this.#channels, info.id, info);
 	}
 
 	/** Drops what is cached for `id` (a deleted channel or thread). */
@@ -188,9 +191,7 @@ export class DiscordChannel implements ChannelPort {
 			...(channel?.topic === undefined ? {} : { topic: channel.topic }),
 			...(thread?.name !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
 		};
-		return context.channelName === undefined && context.topic === undefined && context.threadName === undefined
-			? undefined
-			: context;
+		return Object.keys(context).length === 0 ? undefined : context;
 	}
 
 	/** The channel behind `id`, cached; `undefined` on 404 (cached too unless `remember404` is false). Other errors throw. */
@@ -199,11 +200,11 @@ export class DiscordChannel implements ChannelPort {
 		if (known !== undefined && (known !== null || remember404)) return known ?? undefined;
 		try {
 			const info = await this.transport.getChannel(id);
-			this.#channels.set(id, info);
+			setBounded(this.#channels, id, info);
 			return info;
 		} catch (err) {
 			if (err instanceof DiscordCallError && err.kind === "definitive" && err.status === 404) {
-				if (remember404) this.#channels.set(id, null);
+				if (remember404) setBounded(this.#channels, id, null);
 				return undefined;
 			}
 			throw err;
@@ -294,9 +295,8 @@ export class DiscordChannel implements ChannelPort {
 	): Promise<{ fileId: string }> {
 		// Refused before any call: Discord would take the request and fail it whole.
 		const { size } = await stat(file.path);
-		if (size > UPLOAD_LIMIT_BYTES) {
+		if (size > UPLOAD_LIMIT_BYTES)
 			throw new DiscordCallError("definitive", `discord upload too large: ${size} bytes > 25 MiB`);
-		}
 		const destination = await this.destination(target.conversationId, target.threadId);
 		const content =
 			file.comment === undefined ? undefined : cutCodePointSafe(mrkdwnToDiscord(file.comment), MESSAGE_CONTENT_LIMIT);
