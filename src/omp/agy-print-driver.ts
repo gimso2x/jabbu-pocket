@@ -11,8 +11,7 @@ import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
 
-// A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn;
-// stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
+// A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn; stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
 
 /** sessionDir file with the latest turn's final assistant text: the task `read` of a driver that is gone. */
 export const AGY_LAST_ANSWER_FILE = "agy-last-answer.txt";
@@ -159,8 +158,10 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		this.#requireStarted();
 		if (conversationId === undefined) clearAgyPointer(this.#pointerPath);
 		else writeAgyPointer(this.#options.sessionDir, this.#pointerPath, conversationId);
-		this.#retire();
-		return { cancelled: false };
+		const turn = this.#turn; // a running turn cannot outlive its child: abort() ends it `aborted`
+		if (turn !== undefined) await this.abort();
+		else this.#retire();
+		return { cancelled: turn !== undefined };
 	}
 	#dropTurn(): void {
 		if (this.#turn !== undefined) Object.assign(this.#turn, { finished: true }).settled.resolve();
