@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- `monitors`: 장부가 아직 없는 홈에서 읽기(`list`·`show`·`update`·`remove`·`test`·`export`, `apply --dry-run`)가 장부 파일을 만들지 않고 빈 장부로 답합니다. 예전에는 `monitors list` 한 번이 모니터 표만 있는 `jabbu.db`를 남겨 `gates`·`status`가 `ledger_unreadable` 게이트를 열고 `deliveries list`가 `no such table: deliveries`로 실패했습니다. `add`와 실제 `apply`는 그대로 만듭니다(`tasks`가 이미 따르던 규칙).
 - 보안: 앞 64KiB를 넘어 끝까지 검사하지 못한 위임 지시문을 `advisory`(그대로 내보냄)에서 `high_risk`(오너 승인 필요)로 올립니다. 예전에는 `task` 상한(100,000바이트)까지의 지시문 가운데 64KiB를 넘는 부분이 검사되지 않은 채 사람 없이 실행될 수 있었습니다. 승인 카드에는 검사하지 못한 범위를 적고, 규칙 목록에 `truncated`가 붙습니다.
 
 ## 0.1.1 — 2026-11-25
