@@ -145,7 +145,28 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 			toast.hidden = true;
 		}, 2200);
 	};
-	const copyText = (value, label) => copyTextToClipboard(value, label, showToast);
+	const copyText = async (value, label) => {
+		let ok = false;
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			try {
+				await navigator.clipboard.writeText(value);
+				ok = true;
+			} catch {}
+		}
+		if (!ok) {
+			try {
+				const area = document.createElement("textarea");
+				area.value = value;
+				area.style.position = "fixed";
+				area.style.opacity = "0";
+				document.body.appendChild(area);
+				area.select();
+				ok = document.execCommand("copy");
+				area.remove();
+			} catch {}
+		}
+		showToast((label || "값") + (ok ? " 복사됨: " + value : " 복사 실패"));
+	};
 
 	const fromUrl = () => parseUrlState(location.search);
 	const toUrl = (target) => buildUrlState(location.href, ui, target);

@@ -51,29 +51,7 @@ export function buildUrlState(
 	return url;
 }
 
-const CLIENT_DOM_HELPERS = `async function copyTextToClipboard(value, label, notify) {
-	let ok = false;
-	if (navigator.clipboard && navigator.clipboard.writeText) {
-		try {
-			await navigator.clipboard.writeText(value);
-			ok = true;
-		} catch {}
-	}
-	if (!ok) {
-		try {
-			const area = document.createElement("textarea");
-			area.value = value;
-			area.style.position = "fixed";
-			area.style.opacity = "0";
-			document.body.appendChild(area);
-			area.select();
-			ok = document.execCommand("copy");
-			area.remove();
-		} catch {}
-	}
-	notify((label || "값") + (ok ? " 복사됨: " + value : " 복사 실패"));
-}
-function closeLimitsPops(doc) {
+const CLIENT_DOM_HELPERS = `function closeLimitsPops(doc) {
 	for (const pop of doc.querySelectorAll(".limits-pop.is-open, .limits-pop:focus-within")) {
 		pop.classList.remove("is-open");
 		const btn = pop.querySelector(".limits-trigger");
