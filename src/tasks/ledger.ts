@@ -616,10 +616,8 @@ function openReadonly(path: string): Database {
 	return new Database(`${pathToFileURL(path).href}?immutable=1`, flags);
 }
 
-/**
- * Standalone connection for the CLI. `readonly` (the read commands) opens the file without write access: no WAL
- * switch, no table creation, so a read-only medium or a 0444 ledger still lists and shows.
- */
+/** Standalone connection for the CLI. `readonly` (the read commands) opens without write access: no WAL switch, no
+ * table creation, so a read-only medium or a 0444 ledger still lists and shows. */
 export function openTaskLedger(
 	path: string,
 	timezone: string,
@@ -630,8 +628,10 @@ export function openTaskLedger(
 		return new TaskLedger(openReadonly(path), { clock, timezone, readonly: true });
 	}
 	const db = new Database(path, { create: true, strict: true });
+	// Before the first statement: at the default 0ms timeout the schema check below answers SQLITE_BUSY_RECOVERY at
+	// once while another process recovers the WAL or holds an exclusive lock, so the CLI would die at open.
+	db.run("PRAGMA busy_timeout = 5000");
 	checkSchemaVersion(db);
 	db.run("PRAGMA journal_mode = WAL");
-	db.run("PRAGMA busy_timeout = 5000");
 	return new TaskLedger(db, { clock, timezone });
 }
