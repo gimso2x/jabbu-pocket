@@ -179,8 +179,7 @@ const readabilityLine = (hostTools: boolean): string =>
 	`- 휴대폰에서 훑어 읽히게 쓴다: 항목은 한 줄에 하나, 문단은 3줄 이내. 굵은 라벨은 섹션 머리에만 쓰고 모든 줄에 붙이지 않는다. ${hostTools ? "본문이 15줄을 넘을 분석·긴 표는 파일로 만들어 올리고 본문에는 결론과 핵심만 둔다." : "본문이 15줄을 넘을 분석·긴 표는 워크스페이스 파일로 만들어 경로를 알리고 본문에는 결론과 핵심만 둔다."} 결정이 필요하면 "다시 ~라고 해 주시면 진행" 같은 글 대신 아래 방식으로 묻는다. 경로·커밋·영수증·명령 출력 같은 근거는 그 항목 아래 줄 맨 앞 \`-# \` 작은 글씨 한 줄로 내린다. Write for a phone skim: one point per line, short paragraphs, bold only on section heads, ${hostTools ? "long analysis as an uploaded file," : "long analysis as a workspace file named by its path,"} decisions asked as below. Put evidence (paths, commits, receipts, command output) on its own line under the point, starting with \`-# \` (Discord subtext).`;
 
 /**
- * Answer-format discipline for chat sessions (owner DM, channels, threads), after the gajae-way hub and Hermes
- * report rules. Monitor sessions must keep machine-parsed answers (`NO_REPORT` / `[SILENT]` are matched on the exact
+ * Answer-format discipline for chat sessions (owner DM, channels, threads). Monitor sessions must keep machine-parsed answers (`NO_REPORT` / `[SILENT]` are matched on the exact
  * first/last line) and lane sessions report their own way, so those origins never see this section.
  */
 const formatSection = (herdr: boolean, askable: boolean, hostTools: boolean): string =>

@@ -42,7 +42,7 @@ export class DaemonSkillReview {
 	}
 
 	/**
-	 * Background skill review (hermes learning loop, minimal): every `skillReviewTurns` answered owner DM turns a
+	 * Background skill review: every `skillReviewTurns` answered owner DM turns a
 	 * separate child reads the recent digest and proposes skills; only an explicit owner click installs them.
 	 */
 	maybeReviewSkills(): void {

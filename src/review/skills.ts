@@ -57,7 +57,7 @@ export const SKILL_REVISIONS_DIR = "revisions";
 const LINE_BREAKS = /\r\n|[\r\n\u2028\u2029\u0085]/g;
 
 /**
- * The review prompt (hermes background_review, rules rewritten): only durable, reusable lessons become skills;
+ * The review prompt: only durable, reusable lessons become skills;
  * one-off narratives, environment-specific failures, unresolved failures and secrets are explicitly refused.
  */
 export function buildSkillReviewPrompt(digest: string): string {

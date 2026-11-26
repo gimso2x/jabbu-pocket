@@ -232,7 +232,7 @@ function capPayload(text: string): string {
 }
 
 /**
- * Wake gate (hermes monitor mode): the script's last non-empty stdout line being exactly `{"wakeAgent": false}`
+ * Wake gate: the script's last non-empty stdout line being exactly `{"wakeAgent": false}`
  * means "the check ran, stay quiet" — the agent turn and the delivery are both skipped.
  */
 export function isWakeGateOff(stdout: string): boolean {

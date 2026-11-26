@@ -32,7 +32,7 @@ export interface NewTaskSpec {
 	acceptance: string[];
 	repo: string;
 	background?: string;
-	/** The session's own reading of the owner's request (the hub brief's `[가정]`), shown on the accepted card. */
+	/** The session's own reading of the owner's request (`[가정]`), shown on the accepted card. */
 	assumptions?: string;
 	/** The worker tier the session asked for; the default and the L3+ raise are applied after the risk floor. */
 	tier?: LaneModelTier;

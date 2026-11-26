@@ -5,7 +5,7 @@ import type { Logger } from "../log";
 import { indexSecretValue } from "../redact";
 
 /**
- * Names that hold secret VALUES (upstream: SECRET_ENV_NAME). Pointer-style names (`*_FILE`, `*_PATH`, …) hold
+ * Names that hold secret VALUES. Pointer-style names (`*_FILE`, `*_PATH`, …) hold
  * locations, not values, and are skipped.
  */
 const SECRET_ENV_NAME = /API_KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|ACCESS_KEY|CREDENTIALS?|AUTH|COOKIE|SESSION/i;
