@@ -249,11 +249,9 @@ export class MonitorScheduler {
 
 	/** A claim made while held is a forced skip (`frozen`), so it counts as held back, not as claimed. */
 	#count(claim: ClaimResult, summary: TickSummary, skip: string | undefined): void {
-		if (skip !== undefined) {
-			if (claim.status !== "skipped_overlap") return;
-			summary.skippedFrozen += 1;
-		} else if (claim.status === "admitted") summary.claimed += 1;
-		else if (claim.status === "skipped_overlap") summary.skippedOverlap += 1;
+		if (skip !== undefined && claim.status === "skipped_overlap") summary.skippedFrozen += 1;
+		else if (skip === undefined && claim.status === "admitted") summary.claimed += 1;
+		else if (skip === undefined && claim.status === "skipped_overlap") summary.skippedOverlap += 1;
 	}
 
 	#claimCron(
@@ -290,7 +288,7 @@ export class MonitorScheduler {
 			);
 		}
 		// A span with no slot needs no cursor move: the next fire after the old cursor and after `now` is the same.
-		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now);
+		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOld.length + overLimit.length;
 		if (skipped > 0) {
 			summary.skippedCatchUp += skipped;
@@ -335,7 +333,7 @@ export class MonitorScheduler {
 		if (now < monitor.cursorAt + trigger.intervalMs || this.#scriptsRunning.has(monitor.id)) return;
 		const { store, log } = this.#deps;
 		// The cursor moves before the run, so a crash mid-check never causes an immediate rerun.
-		store.monitors.setCursor(monitor.id, now);
+		store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		this.#scriptsRunning.add(monitor.id);
 		this.#track(
 			(async () => {
@@ -352,13 +350,13 @@ export class MonitorScheduler {
 							? "unmet"
 							: "error";
 					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
-					if (
+					const logIt =
 						result.fired ||
 						outcome !== (store.monitors.getMonitor(monitor.id)?.lastScriptState ?? null) ||
 						result.timedOut ||
 						result.error !== undefined ||
-						result.stderr !== ""
-					) {
+						result.stderr !== "";
+					if (logIt) {
 						log.info("monitor_script", {
 							monitor: monitor.id,
 							fired: result.fired,
@@ -372,6 +370,7 @@ export class MonitorScheduler {
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
+						ranTrigger: monitor.trigger,
 						outcome,
 						...(outcome === "error"
 							? { error: result.error ?? (result.timedOut ? "timed out" : "killed before exiting") }
