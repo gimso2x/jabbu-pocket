@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
+import { CURRENT_REQUEST_MARKER } from "../core/types";
 import { LANE_ORIGIN_PREFIX, TASK_ORIGIN_PREFIX } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { isRecord } from "../omp/type-guards";
@@ -122,6 +123,13 @@ function kindOf(origin: string): CostSessionKind {
 	return origin.startsWith(MONITOR_ORIGIN_PREFIX) ? "모니터" : "대화";
 }
 
+/** Strip wrapped Discord channel context header so top-cost titles start from `[현재 요청]`. */
+function stripPromptHeader(text: string): string {
+	const idx = text.lastIndexOf(`\n\n${CURRENT_REQUEST_MARKER}\n`);
+	if (idx >= 0) return text.slice(idx + CURRENT_REQUEST_MARKER.length + 3);
+	return text.startsWith(`${CURRENT_REQUEST_MARKER}\n`) ? text.slice(CURRENT_REQUEST_MARKER.length + 1) : text;
+}
+
 /** The session's omp title, else its first user text, else the origin key — one masked line. */
 function titleOf(origin: string, files: string[]): string {
 	const prefix = [TASK_ORIGIN_PREFIX, LANE_ORIGIN_PREFIX, OLD_LANE_PREFIX].find((p) => origin.startsWith(p));
@@ -135,7 +143,7 @@ function titleOf(origin: string, files: string[]): string {
 				const message = record.message;
 				if (record.type !== "message" || !isRecord(message) || message.role !== "user") continue;
 				const part = Array.isArray(message.content) ? message.content.find(isRecord) : undefined;
-				if (typeof part?.text === "string") return previewLine(part.text, origin);
+				if (typeof part?.text === "string") return previewLine(stripPromptHeader(part.text), origin);
 				break;
 			}
 		} catch {

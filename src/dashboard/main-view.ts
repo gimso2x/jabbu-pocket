@@ -3,7 +3,7 @@ import type { BoardPanel } from "./board";
 import { discordThreadHref, renderFlowChain } from "./detail";
 import { hostChecksLevel, repoCountsText } from "./host-checks";
 import { byAttention, type InboxEntry, inboxEntries, isStale } from "./inbox";
-import { contextBar, costCardBody } from "./load-view";
+import { contextBar, costCardBody, resetIn, usageLevel } from "./load-view";
 import type { DashboardSnapshot, JobInfo, MonitorInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -18,7 +18,6 @@ import {
 	TURN_LABELS,
 } from "./text";
 import { type Turn, type TurnGroup, turnOf } from "./turn";
-import { resetIn, trendHtml, usageLevel } from "./usage-forecast";
 
 /** What the page is showing besides the data: the chosen view, the search text, the list order, the open entry and theme. */
 export interface DashboardUi {
@@ -558,10 +557,14 @@ export function renderDashboardMain(
 					} 그동안 들어온 요청은 재시작 뒤 처리됩니다.</span></p>`
 				: "";
 			// One card per conversation (chat thread = omp session), laid out like the inbox.
+			const threads = turns.threads.filter((thread) =>
+				hit(thread.title, thread.latest.preview, thread.originKey, thread.threadRef, ...(thread.jobs ?? [])),
+			);
 			const openThreads = turns.threads.filter((thread) => thread.column === "working").length;
 			// Every number in the head says what it counts: open threads match the 진행 중 column, jobs link to their block.
 			const bg = runningJobs > 0 ? ` · <a href="#jobs">백그라운드 작업 <b>${runningJobs}</b></a>` : "";
-			const title = head("턴", undefined, `<span class="view-sum">진행 중 스레드 <b>${openThreads}</b>${bg}</span>`);
+			const sum = q === "" ? `진행 중 스레드 <b>${openThreads}</b>` : `검색 결과 <b>${threads.length}</b>건`;
+			const title = head("턴", undefined, `<span class="view-sum">${sum}${bg}</span>`);
 			// No thread but live jobs: the jobs stand in for the empty board.
 			if (turns.threads.length === 0) {
 				return liveJobs.length > 0
@@ -570,9 +573,6 @@ export function renderDashboardMain(
 			}
 			type ThreadCol = "attention" | "working" | "done";
 			const THREAD_RANK: Record<ThreadCol, number> = { attention: 0, working: 1, done: 2 };
-			const threads = turns.threads.filter((thread) =>
-				hit(thread.title, thread.latest.preview, thread.originKey, thread.threadRef, ...(thread.jobs ?? [])),
-			);
 			const restartHeld = new Set(holding.map((turn) => turn.originKey));
 			const placeOf = (key: string): string => {
 				// Any platform's owner DM (`<platform>/dm/<id>`); this runs in the browser, so no parseChatOrigin here.
@@ -1345,8 +1345,8 @@ export function renderDashboardMain(
 	/** Only alerts whose gate is open right now warn; closed-gate records are a grey count. */
 	const openAlerts = s.alerts.ok ? s.alerts.items.filter((alert) => alert.gateState === "open").length : 0;
 	const NAV: Record<string, [number, boolean]> = {
-		// Entries in 진행 중, like the turns item; an entry in 내 차례 lights the warning.
-		inbox: [entries.filter((entry) => entry.col === "working").length, !s.tasks.ok || attention.length > 0],
+		// Entries needing attention override working count so the warning badge shows confirmation count rather than "! 0".
+		inbox: [attention.length || entries.filter((e) => e.col === "working").length, !s.tasks.ok || attention.length > 0],
 		// Threads in the 진행 중 column, the same number the column shows; a thread in 확인 필요 or a troubled job
 		// lights the warning. Running jobs are counted in the view's head, not here.
 		turns: [
@@ -1402,14 +1402,16 @@ export function renderDashboardMain(
 		const usage = s.usageLimits;
 		if (usage === undefined) return "";
 		const wrap = (chips: string, tiles: string): string =>
-			`<div class="limits-pop"><button type="button" class="limits-trigger" aria-label="모델 한도 자세히">${chips}</button><div class="limits-panel" role="tooltip">${tiles}</div></div>`;
+			`<div class="limits-pop"><button type="button" class="limits-trigger" aria-label="모델 한도 자세히" aria-expanded="false">${chips}</button><div class="limits-panel" role="tooltip">${tiles}</div></div>`;
 		if (!usage.ok) {
 			return wrap(
 				`<span class="limit-chip is-muted"><i class="dot is-muted" aria-hidden="true"></i>한도 ?</span>`,
 				`<div class="limit-tile is-failed"><div class="limit-head"><b>모델 한도</b></div><p class="limit-error">읽지 못했어요: ${esc(usage.error)}</p></div>`,
 			);
 		}
+		const best = { label: "", pct: 101 };
 		const parts = usage.sources.map((source) => {
+			const shortName = source.name === "Antigravity" ? "AG" : source.name;
 			const headOf = (tone: string): string =>
 				`<div class="limit-head"><i class="dot is-${tone}" aria-hidden="true"></i><b>${esc(source.name)}</b>${
 					source.account === undefined ? "" : `<span class="limit-acct">${esc(source.account)}</span>`
@@ -1419,7 +1421,6 @@ export function renderDashboardMain(
 					chip: `<span class="limit-chip is-muted" data-source="${esc(source.name)}"><i class="dot is-muted" aria-hidden="true"></i>${esc(source.name)} ?</span>`,
 					tile: `<div class="limit-tile is-failed" data-source="${esc(source.name)}">${headOf("muted")}<p class="limit-error">${esc(source.error)}</p></div>`,
 					tone: "muted",
-					least: undefined,
 				};
 			}
 			// A row's group: the parenthesised part of an omp label ("Claude 7 Day (Fable)"), the model family of an agy
@@ -1448,7 +1449,7 @@ export function renderDashboardMain(
 					group === "" ? win : `${group} ${win}`,
 				)}</span><span class="meter" role="img" aria-label="남은 ${row.remainingPct}%"><i style="width:${row.remainingPct}%"></i></span><b class="limit-pct">${row.remainingPct}%</b><span class="limit-reset"${
 					left === "" ? "" : ` title="${esc(`${left} 뒤 초기화`)}"`
-				}>${esc(left)}</span>${trendHtml(row.trend, clock)}</div>`;
+				}>${esc(left)}</span></div>`;
 			});
 			const lowest = (window: string): string => {
 				const pcts = rows.filter((r) => r.row.window === window).map((r) => r.row.remainingPct);
@@ -1457,25 +1458,22 @@ export function renderDashboardMain(
 			const short = lowest("5h");
 			const week = lowest("weekly");
 			const least = Math.min(...rows.map((r) => r.row.remainingPct));
+			if (rows.length > 0 && least < best.pct) Object.assign(best, { label: shortName, pct: least });
 			// Wide top bars show both windows (`lc-full`), narrower ones only the least remaining share (`lc-min`).
 			return {
-				chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(
-					source.name === "Antigravity" ? "AG" : source.name,
-				)}</b><span class="lc-full">${short === "" ? "" : `<small>5h</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
+				chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5h</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
 					week === "" ? "" : `<small>주</small>${roll(`lim:${source.name}:week`, week, "down")}`
 				}</span><span class="lc-min">${rows.length === 0 ? "" : `${roll(`lim:${source.name}:min`, least, "down")}%`}</span></span>`,
 				tile: `<div class="limit-tile is-${worst}" data-source="${esc(source.name)}">${headOf(worst)}${lines.join("")}</div>`,
 				tone: worst,
-				least: rows.length === 0 ? undefined : least,
 			};
 		});
-		// The narrowest desktop bars show one summary instead of the chips: a dot per source and the least share overall.
-		const leasts = parts.flatMap((part) => (part.least === undefined ? [] : [part.least]));
+		// The narrowest desktop bars show one summary instead of the chips: dots plus the lowest source's label and share.
 		const tones = parts.map((part) => part.tone);
 		const sumTone = tones.includes("danger") ? "danger" : tones.some((tone) => tone !== "ok") ? "warn" : "ok";
-		const summary = `<span class="limit-sum limit-chip is-${sumTone}">${tones
-			.map((tone) => `<i class="dot is-${tone}" aria-hidden="true"></i>`)
-			.join("")}${leasts.length === 0 ? "?" : `${roll("lim:sum", Math.min(...leasts), "down")}%`}</span>`;
+		const dots = tones.map((tone) => `<i class="dot is-${tone}" aria-hidden="true"></i>`).join("");
+		const sumVal = best.pct > 100 ? "?" : `${esc(best.label)} ${roll("lim:sum", best.pct, "down")}%`;
+		const summary = `<span class="limit-sum limit-chip is-${sumTone}">${dots}${sumVal}</span>`;
 		return wrap(parts.map((part) => part.chip).join("") + summary, parts.map((part) => part.tile).join(""));
 	};
 	// The test chip: hidden with nothing running or queued; the queue opens on click.
