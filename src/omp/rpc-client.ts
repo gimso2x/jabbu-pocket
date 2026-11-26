@@ -218,7 +218,10 @@ export async function* readLines(stream: ReadableStream<Uint8Array>): AsyncGener
 		buffer += decoder.decode(chunk, { stream: true });
 		let newline = buffer.indexOf("\n");
 		while (newline !== -1) {
-			yield buffer.slice(0, newline);
+			const line = buffer.slice(0, newline);
+			if (Buffer.byteLength(line) > MAX_RPC_FRAME_BYTES)
+				throw new RpcProtocolError(`line over ${MAX_RPC_FRAME_BYTES} bytes`);
+			yield line;
 			buffer = buffer.slice(newline + 1);
 			newline = buffer.indexOf("\n");
 		}
@@ -620,12 +623,8 @@ export class OmpRpcClient {
 				? undefined
 				: setTimeout(() => {
 						if (!this.#pending.delete(id)) return;
-						answered.reject(
-							new OmpDriverError(
-								"request_timeout",
-								`no response to ${command.type} within ${deadlineMs / 1000}s: ${this.stderr()}`,
-							),
-						);
+						const message = `no response to ${command.type} within ${deadlineMs / 1000}s: ${this.stderr()}`;
+						answered.reject(new OmpDriverError("request_timeout", message));
 					}, deadlineMs);
 		this.#pending.set(id, answered);
 		try {

@@ -138,9 +138,8 @@ export function parseExternalPrInput(
 	value: unknown,
 ): { ok: true; value: ExternalPrInput | undefined } | { ok: false; problem: string } {
 	if (value === undefined) return { ok: true, value: undefined };
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
 		return { ok: false, problem: "externalPr는 객체여야 합니다." };
-	}
 	const record = value as Record<string, unknown>;
 	const unknown = Object.keys(record).filter((key) => !(INPUT_KEYS as readonly string[]).includes(key));
 	if (unknown.length > 0) return { ok: false, problem: `externalPr에 모르는 키가 있습니다: ${unknown.join(", ")}` };
@@ -148,9 +147,8 @@ export function parseExternalPrInput(
 	for (const key of INPUT_KEYS) {
 		const field = record[key];
 		if (field === undefined) continue;
-		if (typeof field !== "string" || field.trim() === "") {
+		if (typeof field !== "string" || field.trim() === "")
 			return { ok: false, problem: `externalPr.${key}는 비어 있지 않은 문자열이어야 합니다.` };
-		}
 		out[key] = field.trim();
 	}
 	if (out.repo !== undefined && !GITHUB_REPO.test(out.repo)) {
@@ -476,14 +474,16 @@ export async function publishPr(
 		const fork = await tools.gh(["repo", "fork", pr.repo, "--clone=false", "--remote=false"], run);
 		if (fork.code !== 0) return failed(`포크를 만들지 못했습니다: ${failureLine(fork)}`);
 	}
+	// A body file that vanished after approval must not leave a pushed branch with no PR.
+	const body = plan.kind === "update" ? undefined : readPrBody(input.worktree, pr.bodyFile);
+	if (body !== undefined && !body.ok) return body;
 	const push = await tools.git(["push", target.remote, `${input.sha}:refs/heads/${branch}`], {
 		cwd: input.worktree,
 		signal,
 	});
 	if (push.code !== 0) return failed(`push 거절: ${failureLine(push)}`);
 	if (plan.kind === "update") return { ok: true, url: plan.pr.url, branch, pushed: true };
-	const body = readPrBody(input.worktree, pr.bodyFile);
-	if (!body.ok) return body;
+	if (body === undefined) return failed("PR 본문을 읽지 못했습니다");
 	const bodyDir = mkdtempSync(join(tmpdir(), "jabbu-pr-"));
 	const bodyPath = join(bodyDir, "body.md");
 	let create: ProcResult;

@@ -38,6 +38,13 @@ const DM_TYPES: ReadonlySet<number> = new Set([1, 3]);
 const ROW_BUTTONS = 5;
 const LABEL_MAX = 80;
 const CUSTOM_ID_MAX = 100;
+const CACHE_MAX = 1000; // #channels and #messageChannels FIFO cap; oldest forgotten first
+
+function setBounded<V>(map: Map<string, V>, key: string, value: V): void {
+	map.set(key, value);
+	const oldest = map.keys().next().value;
+	if (map.size > CACHE_MAX && oldest !== undefined) map.delete(oldest);
+}
 const BUTTON_STYLE = { primary: 1, danger: 4 } as const;
 /** SECONDARY: a button without a style. */
 const DEFAULT_STYLE = 2;
@@ -65,12 +72,11 @@ export function buttonRows(buttons: readonly ActionButton[]): unknown[] {
 		rows.push({
 			type: 1,
 			components: buttons.slice(start, start + ROW_BUTTONS).map((button) => {
-				if (button.actionId.length === 0 || button.actionId.length > CUSTOM_ID_MAX) {
+				if (button.actionId.length === 0 || button.actionId.length > CUSTOM_ID_MAX)
 					throw new DiscordCallError(
 						"definitive",
 						`discord custom_id must be 1-${CUSTOM_ID_MAX} characters: ${button.actionId.slice(0, 40)}… (${button.actionId.length})`,
 					);
-				}
 				return {
 					type: 2,
 					style: button.style === undefined ? DEFAULT_STYLE : BUTTON_STYLE[button.style],
@@ -152,7 +158,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Records the channel a message is in (a click names it), so later edits of that message go there. */
 	rememberMessage(messageId: string, channelId: string): void {
-		this.#messageChannels.set(messageId, channelId);
+		setBounded(this.#messageChannels, messageId, channelId);
 	}
 
 	/** Replaces the stored values of `messageId`'s buttons with those of `buttons` (none: the keys go away). */
@@ -161,14 +167,13 @@ export class DiscordChannel implements ChannelPort {
 		if (ledger === undefined) return;
 		const prefix = buttonKeyPrefix(messageId);
 		for (const key of ledger.listCursorKeys(prefix)) ledger.deleteCursor(key);
-		for (const button of buttons) {
+		for (const button of buttons)
 			if (button.value !== undefined) ledger.setCursor(`${prefix}${button.actionId}`, button.value);
-		}
 	}
 
 	/** Records what the adapter learnt without asking (an inbound DM, a thread it started). */
 	remember(info: DiscordChannelInfo): void {
-		this.#channels.set(info.id, info);
+		setBounded(this.#channels, info.id, info);
 	}
 
 	/** Drops what is cached for `id` (a deleted channel or thread). */
@@ -181,15 +186,12 @@ export class DiscordChannel implements ChannelPort {
 		const channel = this.#channels.get(conversationId) ?? undefined;
 		const thread =
 			threadId === undefined || threadId === TOP_LEVEL_TS ? undefined : (this.#channels.get(threadId) ?? undefined);
-		const channelName = channel?.name;
-		const topic = channel?.topic;
-		const threadName = thread !== undefined && THREAD_TYPES.has(thread.type) ? thread.name : undefined;
-		if (channelName === undefined && topic === undefined && threadName === undefined) return undefined;
-		return {
-			...(channelName === undefined ? {} : { channelName }),
-			...(topic === undefined ? {} : { topic }),
-			...(threadName === undefined ? {} : { threadName }),
+		const context: ConversationContext = {
+			...(channel?.name === undefined ? {} : { channelName: channel.name }),
+			...(channel?.topic === undefined ? {} : { topic: channel.topic }),
+			...(thread?.name !== undefined && THREAD_TYPES.has(thread.type) ? { threadName: thread.name } : {}),
 		};
+		return Object.keys(context).length === 0 ? undefined : context;
 	}
 
 	/** The channel behind `id`, cached; `undefined` on 404 (cached too unless `remember404` is false). Other errors throw. */
@@ -198,11 +200,11 @@ export class DiscordChannel implements ChannelPort {
 		if (known !== undefined && (known !== null || remember404)) return known ?? undefined;
 		try {
 			const info = await this.transport.getChannel(id);
-			this.#channels.set(id, info);
+			setBounded(this.#channels, id, info);
 			return info;
 		} catch (err) {
 			if (err instanceof DiscordCallError && err.kind === "definitive" && err.status === 404) {
-				if (remember404) this.#channels.set(id, null);
+				if (remember404) setBounded(this.#channels, id, null);
 				return undefined;
 			}
 			throw err;
@@ -211,8 +213,7 @@ export class DiscordChannel implements ChannelPort {
 
 	/** Whether `conversationId` is known to be a DM (learnt from an inbound message or a lookup). */
 	isDirect(conversationId: string): boolean {
-		const info = this.#channels.get(conversationId);
-		return info !== undefined && info !== null && DM_TYPES.has(info.type);
+		return DM_TYPES.has(this.#channels.get(conversationId)?.type ?? -1);
 	}
 
 	/** Where a post for `<conversationId>:<threadId>` goes: no thread (or `-`) → the channel; a thread → it; else a reply. */
@@ -231,8 +232,8 @@ export class DiscordChannel implements ChannelPort {
 	async #messageChannel(ref: MessageRef): Promise<string> {
 		const known = this.#messageChannels.get(ref.messageId);
 		if (known !== undefined) return known;
-		if (ref.threadId === undefined || ref.threadId === ref.messageId) return ref.conversationId;
-		return (await this.destination(ref.conversationId, ref.threadId)).channelId;
+		const plain = ref.threadId === undefined || ref.threadId === ref.messageId;
+		return plain ? ref.conversationId : (await this.destination(ref.conversationId, ref.threadId)).channelId;
 	}
 
 	/** No `@everyone`, role or user pings from content; only a mention of the owner or a peer bot notifies that user. */
@@ -256,7 +257,7 @@ export class DiscordChannel implements ChannelPort {
 			...(embeds === undefined ? {} : { embeds }),
 			...(components === undefined ? {} : { components }),
 		});
-		this.#messageChannels.set(id, destination.channelId);
+		this.rememberMessage(id, destination.channelId);
 		if (buttons.length > 0) this.#storeButtonValues(id, buttons);
 		return {
 			platform: "discord",
@@ -294,9 +295,8 @@ export class DiscordChannel implements ChannelPort {
 	): Promise<{ fileId: string }> {
 		// Refused before any call: Discord would take the request and fail it whole.
 		const { size } = await stat(file.path);
-		if (size > UPLOAD_LIMIT_BYTES) {
+		if (size > UPLOAD_LIMIT_BYTES)
 			throw new DiscordCallError("definitive", `discord upload too large: ${size} bytes > 25 MiB`);
-		}
 		const destination = await this.destination(target.conversationId, target.threadId);
 		const content =
 			file.comment === undefined ? undefined : cutCodePointSafe(mrkdwnToDiscord(file.comment), MESSAGE_CONTENT_LIMIT);

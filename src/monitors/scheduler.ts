@@ -225,7 +225,6 @@ export class MonitorScheduler {
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them: `frozen` when the switch is on, else nothing holds.
 		const skip = this.#deps.frozen?.() === undefined ? undefined : FROZEN_SKIP;
-		if (skip !== FROZEN_SKIP) this.#heldAt.clear();
 		for (const monitor of monitors) {
 			if (!monitor.enabled) continue;
 			try {
@@ -238,6 +237,7 @@ export class MonitorScheduler {
 				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, error: String(error) });
 			}
 		}
+		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
 		summary.dispatched = this.#dispatchReady();
 		return summary;
 	}
@@ -265,8 +265,7 @@ export class MonitorScheduler {
 		const tooOldCount =
 			tooOld.length < MAX_OLD_SKIPPED_RECORDED
 				? tooOld.length
-				: tooOld.length +
-					countFiresBetween(cron, trigger.timezone, tooOld[tooOld.length - 1] ?? monitor.cursorAt, windowStart - 1);
+				: tooOld.length + countFiresBetween(cron, trigger.timezone, tooOld.at(-1) ?? monitor.cursorAt, windowStart - 1);
 		const recent = firesBetween(
 			cron,
 			trigger.timezone,
@@ -290,7 +289,7 @@ export class MonitorScheduler {
 			);
 		}
 		// A span with no slot needs no cursor move: the next fire after the old cursor and after `now` is the same.
-		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now);
+		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOldCount + overLimit.length;
 		if (skipped > 0) {
 			summary.skippedCatchUp += skipped;
@@ -303,8 +302,8 @@ export class MonitorScheduler {
 		// A stored `at` is always a UTC ISO string (`…Z`), so the fallback zone is never consulted.
 		const slotAt = parseAt(at, "UTC");
 		if (slotAt > now) return;
-		if (skip === FROZEN_SKIP && now - slotAt <= CATCHUP_MAX_AGE_MS) {
-			// Not claimed and not disabled: a claimed slot could never fire again, and the one-shot would be lost.
+		if (skip === FROZEN_SKIP) {
+			// Not claimed and not disabled, however old: the freeze delayed it, so it is held to fire once after unfreeze.
 			summary.skippedFrozen += 1;
 			if (!this.#heldAt.has(monitor.id)) {
 				this.#heldAt.add(monitor.id);
@@ -312,7 +311,7 @@ export class MonitorScheduler {
 			}
 			return;
 		}
-		if (now - slotAt > CATCHUP_MAX_AGE_MS) {
+		if (now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -335,7 +334,7 @@ export class MonitorScheduler {
 		if (now < monitor.cursorAt + trigger.intervalMs || this.#scriptsRunning.has(monitor.id)) return;
 		const { store, log } = this.#deps;
 		// The cursor moves before the run, so a crash mid-check never causes an immediate rerun.
-		store.monitors.setCursor(monitor.id, now);
+		store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		this.#scriptsRunning.add(monitor.id);
 		this.#track(
 			(async () => {
@@ -352,13 +351,13 @@ export class MonitorScheduler {
 							? "unmet"
 							: "error";
 					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
-					if (
+					const logIt =
 						result.fired ||
 						outcome !== (store.monitors.getMonitor(monitor.id)?.lastScriptState ?? null) ||
 						result.timedOut ||
 						result.error !== undefined ||
-						result.stderr !== ""
-					) {
+						result.stderr !== "";
+					if (logIt) {
 						log.info("monitor_script", {
 							monitor: monitor.id,
 							fired: result.fired,
@@ -372,6 +371,7 @@ export class MonitorScheduler {
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
+						ranTrigger: monitor.trigger,
 						outcome,
 						...(outcome === "error"
 							? { error: result.error ?? (result.timedOut ? "timed out" : "killed before exiting") }

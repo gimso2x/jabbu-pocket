@@ -113,6 +113,16 @@ function readAppended(file: string, entry: FileEntry, size: number, timezone: st
 	return read;
 }
 
+/**
+ * The `localDay` key `days` calendar days before `key`: Gregorian date arithmetic, never 24h steps — a DST
+ * spring-forward day has 23 hours, so stepping instants by 24h skips it (and its costs fall out of the window).
+ */
+const dayKeyBefore = (key: string, days: number): string => {
+	const at = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)) - days));
+	const pad2 = (n: number): string => String(n).padStart(2, "0");
+	return `${at.getUTCFullYear()}${pad2(at.getUTCMonth() + 1)}${pad2(at.getUTCDate())}`;
+};
+
 /** The origin key of a session file: the URL-encoded first path part under the sessions root. */
 const originOf = (sessionsRoot: string, file: string): string =>
 	decodeURIComponent(relative(sessionsRoot, file).split(sep)[0] ?? "");
@@ -165,7 +175,8 @@ export function updateCostLedger(
 	const sessionsRoot = join(home, "sessions");
 	const stateFile = costLedgerFile(home);
 	const state = loadState(stateFile);
-	const dayKeys = Array.from({ length: DAYS }, (_, i) => localDay(now - (DAYS - 1 - i) * 86_400_000, timezone));
+	const today = localDay(now, timezone);
+	const dayKeys = Array.from({ length: DAYS }, (_, i) => dayKeyBefore(today, DAYS - 1 - i));
 	const next: LedgerState = { files: {} };
 	let bytesRead = 0;
 	for (const file of allSessionFiles(sessionsRoot)) {
@@ -175,7 +186,7 @@ export function updateCostLedger(
 		} catch {
 			continue;
 		}
-		if (now - stat.mtimeMs > DAYS * 86_400_000) continue;
+		if (now - stat.mtimeMs > (DAYS + 1) * 86_400_000) continue; // a pre-filter only; the day keys do the precise cut
 		const known = state.files[file];
 		const entry: FileEntry =
 			known !== undefined && known.ino === stat.ino && known.offset <= stat.size

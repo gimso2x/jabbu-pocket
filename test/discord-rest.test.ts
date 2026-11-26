@@ -106,6 +106,17 @@ describe("DiscordRest", () => {
 		});
 	});
 
+	test("a fetch failure keeps the method, route family and cause", async () => {
+		const fetchImpl = (() =>
+			Promise.reject(new DOMException("The operation timed out", "TimeoutError"))) as unknown as typeof fetch;
+		const client = new DiscordRest({ token: TOKEN, baseUrl: "http://discord.invalid", fetchImpl, now: () => 1_000 });
+		const error = await caught(client.createMessage({ channelId: CHANNEL, content: "hi" }));
+		expect(error).toBeInstanceOf(DiscordCallError);
+		expect((error as DiscordCallError).message).toBe(
+			"discord request failed: POST /channels: TimeoutError: The operation timed out",
+		);
+	});
+
 	test("patchCurrentUser PATCHes the global display name onto /users/@me", async () => {
 		server = startServer();
 		await rest(server.base).patchCurrentUser({ displayName: "송박" });

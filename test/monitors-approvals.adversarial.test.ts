@@ -233,7 +233,13 @@ describe("suppressUnchanged (ledger)", () => {
 	test("once + suppress: the first fire consumes the once; the re-armed monitor must fire even with identical output", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("once-suppress", { once: true, suppressUnchanged: true }));
-		const first = ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt: 1_000, hash: "HASH-A" });
+		const first = ledger.recordScriptCheck({
+			monitorId: monitor.id,
+			ranTrigger: monitor.trigger,
+			outcome: "met",
+			slotAt: 1_000,
+			hash: "HASH-A",
+		});
 		expect(checkStatus(first)).toBe("admitted");
 		expect(ledger.getMonitor(monitor.id)?.enabled).toBe(false);
 		// "re-enabling re-arms" a one-shot (updateMonitor resets the cursor and the observed state)...
@@ -241,7 +247,13 @@ describe("suppressUnchanged (ledger)", () => {
 			...scriptSpec("once-suppress", { once: true, suppressUnchanged: true }),
 			enabled: true,
 		});
-		const second = ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt: 2_000, hash: "HASH-A" });
+		const second = ledger.recordScriptCheck({
+			monitorId: monitor.id,
+			ranTrigger: monitor.trigger,
+			outcome: "met",
+			slotAt: 2_000,
+			hash: "HASH-A",
+		});
 		// ...but the stale last_output_hash survives, so the re-armed fire is silently turned into a `no_change` skip
 		// and the one-shot burns itself without ever waking the agent.
 		expect(checkStatus(second)).toBe("admitted");
@@ -250,7 +262,13 @@ describe("suppressUnchanged (ledger)", () => {
 	test("changing the script command resets the edge state but must also drop the stale output hash", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("cmd-change", { suppressUnchanged: true }));
-		ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt: 1_000, hash: "HASH-A" });
+		ledger.recordScriptCheck({
+			monitorId: monitor.id,
+			ranTrigger: monitor.trigger,
+			outcome: "met",
+			slotAt: 1_000,
+			hash: "HASH-A",
+		});
 		ledger.updateMonitor(monitor.id, {
 			...scriptSpec("cmd-change", { suppressUnchanged: true }),
 			trigger: {
@@ -263,15 +281,53 @@ describe("suppressUnchanged (ledger)", () => {
 			},
 		});
 		expect(ledger.getMonitor(monitor.id)?.lastScriptState).toBeNull();
-		const next = ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt: 2_000, hash: "HASH-A" });
+		const next = ledger.recordScriptCheck({
+			monitorId: monitor.id,
+			ranTrigger: ledger.getMonitor(monitor.id)?.trigger ?? monitor.trigger,
+			outcome: "met",
+			slotAt: 2_000,
+			hash: "HASH-A",
+		});
 		expect(checkStatus(next)).toBe("admitted");
+	});
+
+	test("a check that ran under the old command is dropped once the command has changed", () => {
+		const ledger = store.monitors;
+		const monitor = ledger.addMonitor(scriptSpec("stale-check", { suppressUnchanged: true }));
+		ledger.updateMonitor(monitor.id, {
+			...scriptSpec("stale-check", { suppressUnchanged: true }),
+			trigger: {
+				kind: "script",
+				command: ["/bin/false"],
+				intervalMs: MINUTE,
+				fire: "every",
+				once: false,
+				suppressUnchanged: true,
+			},
+		});
+		const stale = ledger.recordScriptCheck({
+			monitorId: monitor.id,
+			ranTrigger: monitor.trigger,
+			outcome: "met",
+			slotAt: 1_000,
+			hash: "HASH-A",
+		});
+		expect(stale).toBeUndefined();
+		expect(ledger.getMonitor(monitor.id)?.lastScriptState).toBeNull();
+		expect(ledger.listEvents()).toHaveLength(0);
 	});
 
 	test("an error check leaves the hash alone; a different output after it fires and replaces the hash", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("err-hash", { suppressUnchanged: true }));
 		const check = (outcome: "met" | "unmet" | "error", slotAt: number, hash?: string) =>
-			ledger.recordScriptCheck({ monitorId: monitor.id, outcome, slotAt, ...(hash === undefined ? {} : { hash }) });
+			ledger.recordScriptCheck({
+				monitorId: monitor.id,
+				ranTrigger: monitor.trigger,
+				outcome,
+				slotAt,
+				...(hash === undefined ? {} : { hash }),
+			});
 		expect(checkStatus(check("met", 1, "H1"))).toBe("admitted");
 		expect(check("error", 2)).toBeUndefined();
 		expect(ledger.getMonitor(monitor.id)?.lastOutputHash).toBe("H1");
@@ -287,7 +343,13 @@ describe("suppressUnchanged (ledger)", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("edge-recur", { fire: "edge", suppressUnchanged: true }));
 		const check = (outcome: "met" | "unmet", slotAt: number) =>
-			ledger.recordScriptCheck({ monitorId: monitor.id, outcome, slotAt, hash: "HASH-DISK-91" });
+			ledger.recordScriptCheck({
+				monitorId: monitor.id,
+				ranTrigger: monitor.trigger,
+				outcome,
+				slotAt,
+				hash: "HASH-DISK-91",
+			});
 		expect(checkStatus(check("met", 1))).toBe("admitted");
 		expect(check("unmet", 2)).toBeUndefined();
 		// An unmet check re-arms the monitor and forgets the stored hash, so the recurrence after recovery fires.
@@ -299,7 +361,7 @@ describe("suppressUnchanged (ledger)", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor({ ...scriptSpec("overlap-hash", { suppressUnchanged: true }), overlap: "skip" });
 		const check = (slotAt: number, hash: string) =>
-			ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt, hash });
+			ledger.recordScriptCheck({ monitorId: monitor.id, ranTrigger: monitor.trigger, outcome: "met", slotAt, hash });
 		const first = check(1, "H1");
 		expect(checkStatus(first)).toBe("admitted");
 		// H2 arrives while H1's run still owes an answer: skipped by overlap, never shown to the agent.
@@ -315,7 +377,13 @@ describe("suppressUnchanged (ledger)", () => {
 		const ledger = store.monitors;
 		const monitor = ledger.addMonitor(scriptSpec("no-flag", { suppressUnchanged: false }));
 		const check = (slotAt: number) =>
-			ledger.recordScriptCheck({ monitorId: monitor.id, outcome: "met", slotAt, hash: "H" });
+			ledger.recordScriptCheck({
+				monitorId: monitor.id,
+				ranTrigger: monitor.trigger,
+				outcome: "met",
+				slotAt,
+				hash: "H",
+			});
 		expect([checkStatus(check(1)), checkStatus(check(2)), checkStatus(check(3))]).toEqual([
 			"admitted",
 			"admitted",
