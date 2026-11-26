@@ -342,8 +342,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			this.#send(child, turn, queued);
 			return;
 		}
-		const dropped = this.#queued.length > 0 ? ` (steer ${this.#queued.length}건 미전달)` : "";
-		const final = { opRef: turn.opRef, text, ...(succeeded ? {} : { error: `${error}${dropped}` }) };
+		const final = { opRef: turn.opRef, text, ...(succeeded ? {} : { error }) };
 		this.#finish(turn, { ...final, status: succeeded ? "completed" : "error" });
 	}
 	/** A quota failure: the turn ends `agy rate limited (429): …` and the child goes; the next prompt starts a new one. */
@@ -368,9 +367,10 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error: `agy stdin closed: ${String(cause)}` });
 		}
 	}
-	/** Ends `turn` once: clears it and the queue, keeps its answer for `read`, sends its final, wakes an abort. */
+	/** Ends `turn` once: notes queued steers it drops, clears it and the queue, keeps its answer, sends its final. */
 	#finish(turn: Switch.PendingTurn, final: Omit<Omp.OmpFinal, "usage">): void {
 		if (turn.finished) return;
+		if (this.#queued.length > 0 && final.error !== undefined) final.error += ` (steer ${this.#queued.length}건 미전달)`;
 		if (this.#turn === turn) this.#dropTurn();
 		turn.finished = true;
 		if (final.text !== "") this.#keepAnswer(final.text);
