@@ -10,20 +10,13 @@ import {
 	monitorOptionSuffixes,
 	nextFireOf,
 } from "../monitors/ledger";
-import {
-	applyMonitors,
-	exportMonitors,
-	PortableApplyError,
-	type PortableContext,
-	specBaseOfRow,
-	specOfRow,
-} from "../monitors/portable";
+import { PortableApplyError, type PortableContext, specBaseOfRow, specOfRow } from "../monitors/portable";
 import { PortableUsageError } from "../monitors/portable-files";
 import { runScript } from "../monitors/script";
 import { MonitorSpecError, mergeMonitorSpec, parseMonitorSpec } from "../monitors/spec";
 import { readFreeze } from "../ops/freeze";
 import { formatLocal, hostTimezone } from "../time";
-import { monitorsLedger } from "./monitors-ledger";
+import { applyPortableMonitors, exportPortableMonitors, monitorsLedger } from "./monitors-ledger";
 
 export const MONITORS_USAGE = `  monitors add --json <spec>     create a monitor ({name, trigger (cron|at|script; a cron with command [+timeoutMs] runs that script per slot and needs deliver "verbatim"), instruction, overlap?, enabled?, channel?, copyChannel?, model?, thinking?, deliver?, procedureFiles? (<=5 files in the workspace or scripts dir, re-read on every fire)}
   monitors list [--json]         monitors with effective time zone and next fire
@@ -111,15 +104,14 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 		return 2;
 	}
 	const dir = resolve(values.dir);
-	const ledger = monitorsLedger(sub, homeDir, values["dry-run"] === true);
 	try {
 		if (sub === "export") {
-			const result = exportMonitors(ledger, dir, ctx, { withFiles: values["with-files"] === true });
+			const result = exportPortableMonitors(dir, homeDir, ctx, { withFiles: values["with-files"] === true });
 			for (const warning of result.warnings) process.stderr.write(`monitors export: warning: ${warning}\n`);
 			process.stdout.write(`exported=${result.written} removed=${result.removed}\n`);
 			return 0;
 		}
-		const result = applyMonitors(ledger, dir, ctx, {
+		const result = applyPortableMonitors(dir, homeDir, ctx, {
 			prune: values.prune === true,
 			dryRun: values["dry-run"] === true,
 		});
@@ -137,8 +129,6 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 		for (const problem of error.problems) process.stderr.write(`monitors apply: ${problem}\n`);
 		process.stderr.write(`monitors apply: ${error.message}; nothing was changed\n`);
 		return 2;
-	} finally {
-		ledger.close();
 	}
 }
 
@@ -184,11 +174,13 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		process.stderr.write(`monitors ${sub}: too many arguments\n`);
 		return 2;
 	}
-	const ledger = monitorsLedger(sub ?? "", homeDir);
+	let ledger: MonitorLedger | undefined;
 	try {
+		const addSpec = sub === "add" ? parseMonitorSpec(parseJson(values.json, "monitors add"), ctx) : undefined;
+		ledger = monitorsLedger(sub ?? "", homeDir);
 		const out = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
-		if (sub === "add") {
-			const row = ledger.addMonitor(parseMonitorSpec(parseJson(values.json, "monitors add"), ctx));
+		if (addSpec !== undefined) {
+			const row = ledger.addMonitor(addSpec);
 			out({ monitor: row, schedule: scheduleOf(row, ctx.defaultTimezone) });
 			return 0;
 		}
@@ -258,6 +250,6 @@ export async function monitorsCommand(args: string[], homeDir: string): Promise<
 		process.stderr.write(`monitors ${sub}: ${error.message}\n`);
 		return 1;
 	} finally {
-		ledger.close();
+		ledger?.close();
 	}
 }

@@ -688,4 +688,30 @@ describe("a monitors read on a home with no ledger", () => {
 		}
 		expect(parse((await monitors("list", "--json")).stdout).monitors).toHaveLength(1);
 	});
+
+	test("a failing add or a failing/empty apply never leaves an empty jabbu.db", async () => {
+		const missing = await monitors("add");
+		expect(missing.code).toBe(1);
+		const badJson = await monitors("add", "--json", "{invalid");
+		expect(badJson.code).toBe(1);
+		const badSpec = await monitors("add", "--json", JSON.stringify({ name: "only-name" }));
+		expect(badSpec.code).toBe(1);
+		expect(existsSync(ledgerPath())).toBe(false);
+
+		const emptyDir = mkdtempSync(join(tmpdir(), "jabbu-monitors-empty-"));
+		const badDir = mkdtempSync(join(tmpdir(), "jabbu-monitors-bad-"));
+		writeFileSync(join(badDir, "broken.json"), "{not-json");
+		try {
+			const emptyApply = await monitors("apply", "--dir", emptyDir);
+			expect([emptyApply.code, emptyApply.stdout]).toEqual([0, "added=0 updated=0 unchanged=0 removed=0\n"]);
+			expect(existsSync(ledgerPath())).toBe(false);
+
+			const badApply = await monitors("apply", "--dir", badDir);
+			expect(badApply.code).toBe(2);
+			expect(existsSync(ledgerPath())).toBe(false);
+		} finally {
+			rmSync(emptyDir, { recursive: true, force: true });
+			rmSync(badDir, { recursive: true, force: true });
+		}
+	});
 });
