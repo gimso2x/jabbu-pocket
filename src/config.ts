@@ -13,6 +13,7 @@ import {
 	type WorkerAgyConfig,
 	workerAgyOf,
 } from "./config-agy";
+import { validateDashboardExtras } from "./config-dashboard";
 import { type OpsPanelConfig, opsPanelOf } from "./config-ops-panel";
 import { costCapOf, type QuotaGateConfig, quotaGateOf } from "./config-quota";
 import { SLACK_KEYS } from "./config-removed-keys";
@@ -341,6 +342,7 @@ export interface JabbuConfig {
 		opsStatus?: { command: string[]; url?: string };
 		usageLimits?: DashboardUsageLimitsConfig;
 		peerHomes?: Array<{ name: string; home: string }>;
+		channelNames?: Record<string, string>;
 	};
 	/**
 	 * `jabbu-pocket apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
@@ -1091,45 +1093,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		if (record.allowedHosts !== undefined && !validAllowedHosts(record.allowedHosts)) {
 			invalid(configPath, "dashboard.allowedHosts");
 		}
-		if (record.opsStatus !== undefined) {
-			const ops = asRecord(record.opsStatus);
-			if (ops === undefined) invalid(configPath, "dashboard.opsStatus");
-			if (
-				!Array.isArray(ops.command) ||
-				ops.command.length === 0 ||
-				!ops.command.every((part) => typeof part === "string" && part !== "")
-			) {
-				invalid(configPath, "dashboard.opsStatus.command");
-			}
-			if (ops.url !== undefined && (typeof ops.url !== "string" || !/^https?:\/\/\S+$/.test(ops.url))) {
-				invalid(configPath, "dashboard.opsStatus.url");
-			}
-			for (const key of Object.keys(ops)) {
-				if (key !== "command" && key !== "url") invalid(configPath, `dashboard.opsStatus.${key}`);
-			}
-		}
 		if (record.usageLimits !== undefined) {
 			dashboardUsageLimits = usageLimitsOf(configPath, record.usageLimits);
 		}
-		if (record.peerHomes !== undefined) {
-			if (!Array.isArray(record.peerHomes)) invalid(configPath, "dashboard.peerHomes");
-			const names = new Set<string>();
-			record.peerHomes.forEach((entry: unknown, i: number) => {
-				const peer = asRecord(entry);
-				if (peer === undefined) invalid(configPath, `dashboard.peerHomes.${i}`);
-				for (const key of Object.keys(peer)) {
-					if (key !== "name" && key !== "home") invalid(configPath, `dashboard.peerHomes.${i}.${key}`);
-				}
-				const { name, home } = peer;
-				if (typeof name !== "string" || name === "" || name.length > 20 || /[:\s]/.test(name) || names.has(name)) {
-					invalid(configPath, `dashboard.peerHomes.${i}.name`);
-				}
-				names.add(name);
-				if (typeof home !== "string" || !isAbsolute(home)) invalid(configPath, `dashboard.peerHomes.${i}.home`);
-			});
-		}
-		const dashboardKeys = ["port", "bind", "herdrWebUrl", "allowedHosts", "opsStatus", "usageLimits", "peerHomes"];
-		for (const key of Object.keys(record)) if (!dashboardKeys.includes(key)) invalid(configPath, `dashboard.${key}`);
+		validateDashboardExtras(configPath, record);
 	}
 
 	const candidatesRaw = root.candidates;
