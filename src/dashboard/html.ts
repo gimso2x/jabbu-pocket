@@ -190,12 +190,8 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 		headHtml = renderDetailHead(open.id, found, owner, live?.generatedAt ?? 0, chainOf(found?.taskId));
 	} else if (open?.kind === "task") {
 		const key = live?.cards.find((entry) => entry.taskId === open.id)?.key;
-		headHtml = renderTaskDetail(
-			open.id,
-			tasks.find((entry) => entry.taskId === open.id),
-			key,
-			chainOf(open.id),
-		);
+		const owner = tasks.find((entry) => entry.taskId === open.id);
+		headHtml = renderTaskDetail(open.id, owner, key, chainOf(open.id));
 	} else if (open?.kind === "item") {
 		headHtml = renderItemDetail(snapshot, view ?? "inbox", open.id);
 	} else if (open?.kind === "diff") {
@@ -225,7 +221,8 @@ export function renderDashboardPage(snapshot: DashboardSnapshot, options: Dashbo
 				: snapshot.turns.threads.find((entry) => entry.originKey === open.id)
 			: undefined;
 	const ownThread = thread && found?.install === undefined;
-	const tab = open?.kind === "card" || jobDetail ? "head" : ownThread ? (oldTurn ? "trace" : "conv") : undefined;
+	const threadTab = oldTurn && ownThread ? "trace" : "conv";
+	const tab = open?.kind === "card" || jobDetail ? "head" : thread ? threadTab : undefined;
 	const discordHref =
 		found === undefined ? "" : discordThreadHref(snapshot.discordGuild, found.originKey, found.threadRef);
 	const barTitle = /<h2 class="detail-title"[^>]*>([\s\S]*?)<\/h2>/.exec(headHtml)?.[1] ?? "";
@@ -262,9 +259,9 @@ ${open === undefined ? `<aside id="detail" class="detail" aria-label="${label}" 
 		discordHref === "" ? " hidden" : ' target="_blank" rel="noopener noreferrer"'
 	}>디스코드에서 답하기</a><a class="detail-close" href="${back}" data-close>닫기 <kbd>Esc</kbd></a></div>
 <div id="detail-tabs" class="tabs" role="tablist" aria-label="상세 보기"${tab === undefined ? " hidden" : ""}>${renderDetailTabs(
-		ownThread ? "thread" : jobDetail ? "job" : "card",
+		thread ? "thread" : jobDetail ? "job" : "card",
 		tab ?? "head",
-		open?.kind === "card" && live?.cards.some((entry) => entry.key === open.id && entry.local && entry.agent === "omp"),
+		ownThread || (open?.kind === "card" && live?.cards.some((c) => c.key === open.id && c.local && c.agent === "omp")),
 	)}</div>
 <div id="detail-head" role="tabpanel" aria-labelledby="tab-head"${tab === undefined || tab === "head" ? "" : " hidden"}>${headHtml}</div>
 <section id="detail-plan" role="tabpanel" aria-labelledby="tab-plan" hidden></section>

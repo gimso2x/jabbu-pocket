@@ -537,8 +537,6 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 			const modelName = model === undefined ? "" : model.model.slice(model.model.lastIndexOf("/") + 1);
 			const lane = s.lanes.ok ? s.lanes.items.find((item) => item.originKey === thread.originKey) : undefined;
 			const cmd = terminal(lane === undefined ? [["lanes", "watch", thread.originKey]] : laneCommands(lane.name));
-			const peerMsg = "피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.";
-			const peerNote = thread.install === undefined ? "" : `<p class="note-sub">${peerMsg}</p>`;
 			return `${show(thread.title, [
 				["상태", esc(latest.state)],
 				...(model === undefined
@@ -561,7 +559,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 				["입수 번호", esc(latest.inboundId)],
 				["턴", esc(`${thread.turnCount}${thread.openCount > 0 ? ` · ${openTurnsText(thread)}` : ""}`)],
 				["대화", `<code>${esc(thread.originKey)}</code>`],
-			])}${peerNote}${cmd}${chain === undefined ? "" : renderFlowChain(chain, "", true)}<h3 class="h2">최근 턴</h3><ol class="turn-recent" aria-label="최근 턴 (누르면 트레이스)">${recent}</ol>`;
+			])}${cmd}${chain === undefined ? "" : renderFlowChain(chain, "", true)}<h3 class="h2">최근 턴</h3><ol class="turn-recent" aria-label="최근 턴 (누르면 트레이스)">${recent}</ol>`;
 		}
 	}
 	if (view === "flow" && s.flows?.ok) {
@@ -867,7 +865,7 @@ export function renderDetailTabs(mode: "card" | "thread" | "job", selected: stri
 			? [
 					["head", "개요", "detail-head"],
 					["conv", "대화", "detail-conv"],
-					["trace", "트레이스", "detail-trace"],
+					...(withTrace ? [["trace", "트레이스", "detail-trace"]] : []),
 				]
 			: mode === "job"
 				? [

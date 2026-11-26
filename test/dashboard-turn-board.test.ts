@@ -847,13 +847,14 @@ describe("turn board peer installs", () => {
 			expect(page).toContain("서팍 · 서팍 WSL 작업");
 			expect(page).toContain("Discord 300000000000000001");
 
-			// UX-002: opening a peer thread suppresses detail tabs (only 개요 + 최근 턴), while own thread keeps them.
+			// UX-002: opening a peer thread shows 개요 + 대화 tabs (no 트레이스), while own thread keeps all three.
 			const peerHtml = renderDashboardPage(snapshot, { view: "turns", item: `서팍:${THREAD}` });
-			expect(peerHtml).toMatch(/id="detail-tabs"[^>]*hidden/);
-			expect(peerHtml).toMatch(/id="detail-conv"[^>]*hidden/);
-			expect(peerHtml).toContain("피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.");
+			expect(tabsOf(peerHtml)).toEqual({ hidden: false, words: ["개요", "대화"], selected: ["대화"] });
+			expect(peerHtml).not.toMatch(/id="detail-conv"[^>]*hidden/);
+			expect(peerHtml).not.toContain("피어 설치본 대화는 개요와 최근 턴 목록만 표시됩니다.");
+			expect(renderItemDetail(snapshot, "turns", `서팍:${THREAD}`)).toContain('class="turn-recent-item" disabled>');
 			const ownHtml = renderDashboardPage(snapshot, { view: "turns", item: THREAD });
-			expect(ownHtml).not.toMatch(/id="detail-tabs"[^>]*hidden/);
+			expect(tabsOf(ownHtml)).toEqual({ hidden: false, words: ["개요", "대화", "트레이스"], selected: ["대화"] });
 
 			// UX-007: search updates view-sum count and URL helpers round-trip q, sort, and desc.
 			const missed = renderDashboardMain(snapshot, undefined, NOW, { view: "turns", q: "없는검색어" });
