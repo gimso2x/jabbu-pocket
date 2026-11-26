@@ -210,6 +210,38 @@ test("a quota error ends `agy rate limited (429)` and the driver ends the child 
 	await driver.stop();
 });
 
+test("a replacement child's first tool call emits its start and end (tool state resets on spawn)", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const types: string[] = [];
+	driver.onEvent((event) => types.push(event.type));
+	expect(await started(driver, "@tool")).toMatchObject({ status: "completed" });
+	expect(types).toContain("tool_execution_start");
+	expect(types).toContain("tool_execution_end");
+	expect((await started(driver, "@quota")).status).toBe("error");
+	types.length = 0;
+	expect(await started(driver, "@tool")).toMatchObject({ status: "completed", text: "REPLY1:@tool" });
+	expect(h.spawns()).toHaveLength(2);
+	expect(types).toContain("tool_execution_start");
+	expect(types).toContain("tool_execution_end");
+	await driver.stop();
+});
+
+test("stop during a retire: a parked prompt rejects instead of spawning a child under the stopped driver", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	await driver.prompt("@hold");
+	const aborting = driver.abort();
+	const parked = driver.prompt("next");
+	const stopping = driver.stop();
+	await expect(parked).rejects.toThrow("driver not started");
+	await stopping;
+	await aborting;
+	expect(h.spawns()).toHaveLength(1);
+});
+
 test("the conversation id is kept and a new driver resumes it with --conversation, without floors", async () => {
 	const h = harness();
 	const one = h.make();
@@ -291,6 +323,82 @@ test("abort with a steer queued ends the turn `aborted` and says the steer was n
 	expect(finals[0]?.droppedSteers).toBe(2);
 	expect((await driver.state()).queuedMessageCount).toBe(0);
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	await driver.stop();
+});
+
+test("newSession mid-turn ends the turn `aborted` with cancelled=true and the next prompt runs", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	const held = h.lastPid();
+	expect(await driver.newSession()).toEqual({ cancelled: true });
+	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled"]]);
+	expect(alive(held)).toBe(false);
+	expect((await driver.state()).idle).toBe(true);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	await driver.stop();
+});
+
+test("switchSession mid-turn ends the turn `aborted` with cancelled=true and resumes the given conversation", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	const held = h.lastPid();
+	expect(await driver.switchSession("/x/resumed-conversation.jsonl")).toEqual({ cancelled: true });
+	expect(finals.map((final) => [final.status, final.error])).toEqual([["aborted", "cancelled"]]);
+	expect(alive(held)).toBe(false);
+	expect((await driver.state()).idle).toBe(true);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toBe("resumed-conversation");
+	expect(finals).toHaveLength(2);
+	await driver.stop();
+});
+
+test("an idle newSession is cancelled=false, kills the idle child, and the next prompt starts a fresh conversation", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	await driver.openSession();
+	expect(await driver.newSession()).toEqual({ cancelled: false });
+	expect(await driver.newSession()).toEqual({ cancelled: false });
+	expect(finals).toEqual([]);
+	expect(await started(driver, "fresh")).toMatchObject({ status: "completed", text: "REPLY1:fresh" });
+	expect(h.spawns()).toHaveLength(2);
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toBeUndefined();
+	expect(h.inputs()).toEqual([`${FLOORS}\n\nfresh`]);
+	await driver.stop();
+});
+
+test("a prompt started while a mid-turn newSession settles is not cancelled by it", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	const rebound = driver.newSession();
+	const survivor = started(driver, "survivor");
+	expect(await rebound).toEqual({ cancelled: true });
+	expect(await survivor).toMatchObject({ status: "completed", text: "REPLY1:survivor" });
+	expect(finals.map((final) => final.status)).toEqual(["aborted", "completed"]);
+	expect(h.inputs()).toEqual([`${FLOORS}\n\n@hold`, `${FLOORS}\n\nsurvivor`]);
 	await driver.stop();
 });
 
