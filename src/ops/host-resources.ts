@@ -3,7 +3,7 @@ import { cpus, loadavg } from "node:os";
 import { type CgroupMemory, sampleCgroupMemory } from "./cgroup-memory";
 import { DEFAULT_HOST_SESSION_CEILING } from "./host-sessions";
 
-/** Below this much free space a filesystem is low (gajae-way ops cycle: 5 GiB or 10%, whichever trips first). */
+/** Below this much free space a filesystem is low (5 GiB or 10%, whichever trips first). */
 export const DISK_MIN_FREE_BYTES = 5 * 1024 ** 3;
 /** ... or below this share of its size. */
 export const DISK_MIN_FREE_RATIO = 0.1;

@@ -609,7 +609,7 @@ export class OmpRpcClient {
 	}
 
 	/**
-	 * One command out; `timeoutMs` overrides the client default (as `omp-superagent src/host.ts request()` does): 0 means
+	 * One command out; `timeoutMs` overrides the client default: 0 means
 	 * no timer. `compact` needs that — its response carries an LLM summary call, so 30 s is a normal, not a stuck, answer;
 	 * a request that never comes back still ends at the child's exit (`#rejectAll`) or `stop()`.
 	 */

@@ -1,7 +1,7 @@
 import { type Dirent, lstatSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
-/** Inbound attachments are context for one turn, not an archive; hermes-agent uses the same 24h retention. */
+/** Inbound attachments are context for one turn, not an archive (24h retention). */
 export const MEDIA_MAX_AGE_MS = 24 * 60 * 60_000;
 
 /** The web chat's upload directory under the media root (`src/web/upload.ts` `webUploadRoot`). */

@@ -6,6 +6,6 @@ aea9dd2e94901f820941ee9502fb04169a4eb9b3  src/core/mailbox-active-turn.ts
 3e6a6a474ca37ce38ff3328c1f6017aefc0afcfd  src/core/mailbox-sending.ts
 e5dfee035bec5cf5d509868be8a58d684809e370  src/core/mailbox-park.ts
 aec2e7ecb3d10365e8fd2543f99a0f05537f8a38  src/store/transitions.ts
-c7e62b80eb89ec210473fd9aeb137997dfa352ee  src/store/db.ts
+7637bc36fba426a5dbac6a014398d948e6570b0f  src/store/db.ts
 da4096122c76519649bf831d3e761e59a15d6399  src/daemon/recovery.ts
 5f27177f4f87c6970052e2998e0105777f949e43  src/channel/pump.ts

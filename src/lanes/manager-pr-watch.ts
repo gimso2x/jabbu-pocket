@@ -86,7 +86,7 @@ export class PrWatchRunner {
 	}
 
 	/**
-	 * One pr-watch pass (Cataly `prWatchPass`): reads the PR through `gh api --method GET`, posts what is new into the
+	 * One pr-watch pass: reads the PR through `gh api --method GET`, posts what is new into the
 	 * lane thread — each line first, the cursor after, so a crash repeats a line rather than losing it — and saves the
 	 * cursor to `meta.pr.watch`. A failed read changes nothing for that PR and warns once per distinct reason.
 	 */
