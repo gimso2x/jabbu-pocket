@@ -132,6 +132,29 @@ describe("renderDiscordParts", () => {
 			).toBe(true);
 		}
 	});
+
+	test("a link, timestamp and spoiler straddling the 2000-character boundary stay whole", () => {
+		const budget = MESSAGE_CONTENT_LIMIT - FENCE_RESERVE;
+		const constructs = [
+			"[긴 링크 라벨](https://example.com/some/very/long/path?x=1)",
+			"<t:1764057600:R>",
+			"||스포일러 내용||",
+		];
+		for (const construct of constructs) {
+			for (let at = budget - construct.length - 4; at <= budget + 2; at++) {
+				// No spaces around the construct: the natural cut would land inside it.
+				const body = `${"a".repeat(at)}${construct}${"b".repeat(100)}`;
+				const parts = renderDiscordParts(body, false);
+				expect(parts.length, `${construct} at ${at}`).toBeGreaterThan(1);
+				for (const part of parts) expect(part.length).toBeLessThanOrEqual(2000);
+				expect(
+					parts.some((part) => part.includes(construct)),
+					`${construct} at ${at}: whole in one part`,
+				).toBe(true);
+				expect(parts.join("")).toBe(body);
+			}
+		}
+	});
 });
 
 describe("renderDiscordMessages", () => {

@@ -28,9 +28,7 @@ export const escapeMrkdwn = (text: string): string =>
 
 export function formatElapsed(ms: number): string {
 	const total = Math.max(0, Math.floor(ms / 1000));
-	const mm = String(Math.floor(total / 60)).padStart(2, "0");
-	const ss = String(total % 60).padStart(2, "0");
-	return `${mm}:${ss}`;
+	return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function splitAt(text: string, limit: number, keepWhole: (cut: number) => number): [string, string] {
@@ -41,8 +39,7 @@ function splitAt(text: string, limit: number, keepWhole: (cut: number) => number
 	if (cut < limit / 2) {
 		cut = limit;
 		// never split a surrogate pair
-		const code = text.charCodeAt(cut - 1);
-		if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
+		if (text.charCodeAt(cut - 1) >= 0xd800 && text.charCodeAt(cut - 1) <= 0xdbff) cut -= 1;
 		// A limit of 1 on an emoji: the code point goes out whole rather than not at all.
 		if (cut === 0) cut = 2;
 	}
@@ -97,10 +94,7 @@ export function chunkText(
 	// Text that fits is one message: the fence reserve below is for cuts, so it must not split a 1,993–2,000 char text.
 	if (text.length <= limit) return [text];
 	let longest = 3;
-	for (const line of text.split("\n")) {
-		const run = fenceRun(line, limit);
-		if (run !== undefined && run > longest) longest = run;
-	}
+	for (const line of text.split("\n")) longest = Math.max(longest, fenceRun(line, limit) ?? 3);
 	const budget = limit - FENCE_RESERVE - 2 * (longest - 3);
 	const chunks: string[] = [];
 	// The backtick count of the fence open at a chunk's end: 0 when none. A fence opened at a line's head closes only on
@@ -117,11 +111,8 @@ export function chunkText(
 				continue;
 			}
 			const run = state.open === 0 ? fenceRun(line, limit) : undefined;
-			if (run !== undefined) {
-				state = { open: run, lineHead: true };
-				continue;
-			}
-			if ((line.match(/```/g) ?? []).length % 2 === 1) state.open = state.open > 0 ? 0 : 3;
+			if (run !== undefined) state = { open: run, lineHead: true };
+			else if ((line.match(/```/g) ?? []).length % 2 === 1) state.open = state.open > 0 ? 0 : 3;
 		}
 		return state;
 	};
@@ -227,14 +218,11 @@ export function formatFooter(outcome: "done" | "failed", elapsedMs: number, tool
 }
 
 /** A thrown value as one log field: its message, or the value itself when it is not an Error. */
-export function errorText(err: unknown): string {
-	return err instanceof Error ? err.message : String(err);
-}
+export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** Collapses control characters, line separators and bidi overrides so untrusted text cannot start a new prompt line. */
-export function oneLine(text: string, max: number): string {
-	return cutCodePointSafe(text.replace(/[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]+/gu, " ").trim(), max);
-}
+export const oneLine = (text: string, max: number): string =>
+	cutCodePointSafe(text.replace(/[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]+/gu, " ").trim(), max);
 
 /** Cuts to at most `limit` UTF-16 units without leaving a lone high surrogate at the end; "" for `limit <= 0`. */
 export function cutCodePointSafe(text: string, limit: number): string {
@@ -300,9 +288,7 @@ function toolLines(tools: readonly RecentTool[]): string[] {
 }
 
 /** Terminal-style width of `text` (`Bun.stringWidth`): East Asian wide/fullwidth, emoji and ZWJ sequences count 2 columns, marks 0. */
-export function displayWidth(text: string): number {
-	return Bun.stringWidth(text);
-}
+export const displayWidth = (text: string): number => Bun.stringWidth(text);
 
 /** Splits one GFM table row into trimmed cells; `\|` is a literal pipe, and a pipe inside a backtick span stays cell content. */
 export function splitRowCells(line: string): string[] {
@@ -361,11 +347,9 @@ export function delimiterAligns(line: string): ColumnAlign[] | undefined {
 	if (cells.length === 0) return undefined;
 	const rule = /^:?-+:?$/;
 	if (!cells.every((cell) => rule.test(cell))) return undefined;
-	return cells.map((cell) => {
-		const left = cell.startsWith(":");
-		const right = cell.endsWith(":");
-		return left && right ? "center" : right ? "right" : "left";
-	});
+	return cells.map((cell) =>
+		cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : "left",
+	);
 }
 
 const BLOCK_START = /^(?: {4}|\t| {0,3}(?:>|#{1,6}(?:[ \t]|$)|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)))/;
@@ -386,6 +370,23 @@ export function tableEndAt(lines: readonly string[], i: number, minDashes = 1): 
 	return j;
 }
 
+/** A markdown link (or image), Discord timestamp, spoiler or autolink: a chunk cut must not fall inside one. */
+const INLINE_SPAN =
+	/!?\[[^\]\n]{1,512}\]\((?:[^()\n]|\([^()\n]{0,512}\)){0,1024}\)|<t:\d{1,20}(?::[dDfFtTR])?>|\|\|[^|]{1,4096}\|\||<(?:https?|mailto):[^>\s]{1,512}>/g;
+
+/**
+ * `[start, end)` spans of the inline constructs a chunk cut must not split. A span inside a code fence is kept whole
+ * too: the cut only moves, and the fence handling does not depend on where it lands.
+ */
+export function inlineSpans(text: string): Array<readonly [number, number]> {
+	const spans: Array<readonly [number, number]> = [];
+	for (const match of text.matchAll(INLINE_SPAN)) {
+		const start = match.index ?? 0;
+		spans.push([start, start + match[0].length]);
+	}
+	return spans;
+}
+
 /** `[start, end)` character spans of the GFM tables outside code fences: a chunk cut must not fall inside one. */
 export function tableSpans(text: string): Array<readonly [number, number]> {
 	const lines = text.split("\n");
@@ -402,15 +403,14 @@ export function tableSpans(text: string): Array<readonly [number, number]> {
 	let i = 0;
 	while (i < lines.length) {
 		const end = fence > 0 ? undefined : tableEndAt(lines, i);
-		if (end !== undefined) {
-			spans.push([starts[i] ?? 0, (starts[end - 1] ?? 0) + (lines[end - 1] ?? "").length]);
-			i = end;
-			continue;
+		if (end !== undefined) spans.push([starts[i] ?? 0, (starts[end - 1] ?? 0) + (lines[end - 1] ?? "").length]);
+		else {
+			const line = lines[i] ?? "";
+			if (fence === 0) fence = fenceOpenRun(line) ?? 0;
+			else if ((fenceCloseRun(line) ?? 0) >= fence) fence = 0;
+			i++;
 		}
-		const line = lines[i] ?? "";
-		if (fence === 0) fence = fenceOpenRun(line) ?? 0;
-		else if ((fenceCloseRun(line) ?? 0) >= fence) fence = 0;
-		i++;
+		if (end !== undefined) i = end;
 	}
 	return spans;
 }

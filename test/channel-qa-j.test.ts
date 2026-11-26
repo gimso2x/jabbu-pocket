@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { validateCard } from "../src/channel/card";
-import { tableSpans } from "../src/channel/text";
+import { inlineSpans, tableSpans } from "../src/channel/text";
 import { cardToEmbed, fitEmbed } from "../src/discord/card";
 import { renderDiscordParts } from "../src/discord/format";
 
@@ -21,6 +21,19 @@ describe("channel text qa-j", () => {
 	test("29: a table inside a real fence is still skipped", () => {
 		const table = ["| a | b |", "| - | - |", "| 1 | 2 |"].join("\n");
 		expect(tableSpans(`\`\`\`\n${table}\n\`\`\`\n`)).toHaveLength(0);
+	});
+
+	test("31: inlineSpans finds links, timestamps, spoilers and autolinks, each as one span", () => {
+		const text =
+			"see [라벨](https://x.y/a_(b)) and ![alt](https://x.y/i.png) at <t:1764057600:R>, ||비밀|| or <https://x.y> — not [bare] or (plain)";
+		const found = inlineSpans(text).map(([start, end]) => text.slice(start, end));
+		expect(found).toEqual([
+			"[라벨](https://x.y/a_(b))",
+			"![alt](https://x.y/i.png)",
+			"<t:1764057600:R>",
+			"||비밀||",
+			"<https://x.y>",
+		]);
 	});
 });
 

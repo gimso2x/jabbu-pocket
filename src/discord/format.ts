@@ -8,6 +8,7 @@ import {
 	escapeMrkdwn,
 	fenceCloseRun,
 	fenceOpenRun,
+	inlineSpans,
 	REDELIVERED_PREFIX,
 	splitRowCells,
 	tableEndAt,
@@ -128,9 +129,8 @@ export function renderDiscordParts(body: string, redelivered: boolean, footer?: 
 export function chunkPlain(body: string, limit: number): string[] {
 	const { text, spans } = fenceTables(body, limit);
 	// A table longer than a message cannot stay whole; it is split like any fenced block.
-	return chunkText(
-		text,
-		limit,
-		spans.filter(([start, end]) => end - start <= limit),
-	);
+	// Links, timestamps and spoilers outside fences are kept whole the same way; tables first, so a link inside a
+	// table falls under its table span.
+	const whole = [...spans, ...inlineSpans(text)].filter(([start, end]) => end - start <= limit);
+	return chunkText(text, limit, whole);
 }
