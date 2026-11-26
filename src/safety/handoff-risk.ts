@@ -1188,11 +1188,10 @@ const CONTINUED = /\\[ \t\r]*$/;
 const SEVERITY_RANK = { advisory: 0, high_risk: 1 } as const;
 
 /**
- * Scans the first `HANDOFF_SCAN_BYTES` of a brief line by line for the high-risk patterns above; a hit whose own
- * clause forbids the command (`commandContext`) is downgraded to advisory. Lines joined by trailing backslashes are
- * also scanned as one line — joined with a blank and without one — reported at the first of them, so a command split
- * across them, even inside a word, is still seen; a rule a joined line finds no more severely than one of its own
- * lines (or the other joining) already did is not reported twice.
+ * Scans the first `HANDOFF_SCAN_BYTES` of a brief, line by line, for the high-risk patterns above; a hit whose own
+ * clause forbids the command (`commandContext`) is downgraded to advisory. Trailing backslashes join lines, scanned
+ * both joined and apart and reported at the first, so a split command is still seen; a joined line finding no more
+ * severity than one of its own lines already did is not reported twice. Past the cap: unverified, so high_risk.
  */
 export function scanHandoffBrief(brief: string, options: { protectedBranches?: readonly string[] } = {}): HandoffScan {
 	const branches = options.protectedBranches ?? DEFAULT_PROTECTED_BRANCHES;
@@ -1226,10 +1225,11 @@ export function scanHandoffBrief(brief: string, options: { protectedBranches?: r
 		}
 		first = last + 1;
 	}
-	const verdict: HandoffVerdict = findings.some((finding) => finding.severity === "high_risk")
-		? "high_risk"
-		: findings.length > 0 || truncated
-			? "advisory"
-			: "clear";
+	const verdict: HandoffVerdict =
+		truncated || findings.some((f) => f.severity === "high_risk")
+			? "high_risk"
+			: findings.length > 0
+				? "advisory"
+				: "clear";
 	return { verdict, findings, truncated };
 }

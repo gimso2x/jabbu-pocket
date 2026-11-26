@@ -137,13 +137,13 @@ export async function gateHandoff(
 	const origin = deps.originKey;
 	if (scan.verdict === "clear") return CLEAR_GATE;
 	if (scan.verdict === "advisory") {
-		const rules = [...new Set(scan.findings.map((finding) => finding.rule)), ...(scan.truncated ? ["truncated"] : [])];
+		const rules = [...new Set(scan.findings.map((finding) => finding.rule))];
 		deps.log.info("dispatch_risk_advisory", { origin, rules });
 		return { suffix: `\n위험 검사: advisory (${rules.join(", ")})`, approved: false };
 	}
 	const high = scan.findings.filter((finding) => finding.severity === "high_risk");
 	const rest = scan.findings.filter((finding) => finding.severity !== "high_risk");
-	const rules = [...new Set(high.map((finding) => finding.rule))];
+	const rules = [...new Set([...high.map((finding) => finding.rule), ...(scan.truncated ? ["truncated"] : [])])];
 	deps.log.warn("dispatch_risk_high", { origin, rules });
 	const detail: ApprovalDetail = {
 		action: [...high, ...rest]
@@ -152,10 +152,10 @@ export async function gateHandoff(
 			.join("\n"),
 		impact: "승인하면 이 지시문이 사람 없이 워커에서 실행됩니다",
 	};
-	const answer =
-		deps.approve === undefined
-			? "no_approver"
-			: await deps.approve("herdr 위임 지시문에 고위험 명령이 있습니다", detail, signal);
+	const summary = scan.truncated
+		? "herdr 위임 지시문이 64KiB를 넘어 끝까지 검사하지 못했습니다"
+		: "herdr 위임 지시문에 고위험 명령이 있습니다";
+	const answer = deps.approve === undefined ? "no_approver" : await deps.approve(summary, detail, signal);
 	if (answer === "approved") {
 		deps.afterApproval?.();
 		deps.log.info("dispatch_risk_approved", { origin, rules });
