@@ -193,9 +193,8 @@ export function migrateMonitorSchema(db: Database): void {
 	if (!columns.some((column) => column.name === "last_script_state")) {
 		db.run("ALTER TABLE monitors ADD COLUMN last_script_state TEXT CHECK (last_script_state IN ('met','unmet'))");
 	}
-	if (!columns.some((column) => column.name === "last_output_hash")) {
+	if (!columns.some((column) => column.name === "last_output_hash"))
 		db.run("ALTER TABLE monitors ADD COLUMN last_output_hash TEXT");
-	}
 	if (!columns.some((column) => column.name === "channel")) db.run("ALTER TABLE monitors ADD COLUMN channel TEXT");
 	if (!columns.some((column) => column.name === "copy_channel"))
 		db.run("ALTER TABLE monitors ADD COLUMN copy_channel TEXT");
@@ -211,18 +210,14 @@ export function migrateMonitorSchema(db: Database): void {
 			"ALTER TABLE monitors ADD COLUMN deliver TEXT NOT NULL DEFAULT 'turn' CHECK (deliver IN ('turn','verbatim'))",
 		);
 	}
-	if (!columns.some((column) => column.name === "procedure_files")) {
+	if (!columns.some((column) => column.name === "procedure_files"))
 		db.run("ALTER TABLE monitors ADD COLUMN procedure_files TEXT");
-	}
-	if (!columns.some((column) => column.name === "last_check_error")) {
+	if (!columns.some((column) => column.name === "last_check_error"))
 		db.run("ALTER TABLE monitors ADD COLUMN last_check_error TEXT");
-	}
-	if (!columns.some((column) => column.name === "last_check_error_at")) {
+	if (!columns.some((column) => column.name === "last_check_error_at"))
 		db.run("ALTER TABLE monitors ADD COLUMN last_check_error_at INTEGER");
-	}
-	if (!columns.some((column) => column.name === "check_error_streak")) {
+	if (!columns.some((column) => column.name === "check_error_streak"))
 		db.run("ALTER TABLE monitors ADD COLUMN check_error_streak INTEGER NOT NULL DEFAULT 0");
-	}
 }
 
 export interface MonitorSql {
@@ -648,6 +643,8 @@ export class MonitorLedger {
 	 */
 	recordScriptCheck(input: {
 		monitorId: string;
+		/** The trigger the check ran under; a result whose monitor was edited while it ran is dropped. */
+		ranTrigger: MonitorTrigger | UnsupportedTrigger;
 		outcome: ScriptState | "error";
 		/** Why an `error` check could not decide (spawn failure, timeout, killed). */
 		error?: string | undefined;
@@ -658,6 +655,9 @@ export class MonitorLedger {
 		/** A fired check that must not wake the agent (`wake_gate` from the script itself, or `no_change`). */
 		suppressReason?: string | undefined;
 	}): ClaimResult | undefined {
+		// The edit that changed the trigger already reset the check state; the stale run's outcome is not the new spec's.
+		if (JSON.stringify(this.getMonitor(input.monitorId)?.trigger) !== JSON.stringify(input.ranTrigger))
+			return undefined;
 		if (input.outcome === "error") {
 			this.recordCheckError(input.monitorId, input.error ?? "script check failed");
 			return undefined;
