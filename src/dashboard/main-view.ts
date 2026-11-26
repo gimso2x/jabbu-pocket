@@ -18,7 +18,7 @@ import {
 	TURN_LABELS,
 } from "./text";
 import { type Turn, type TurnGroup, turnOf } from "./turn";
-import { renderNavExtras, renderStatusPop, renderViewTools } from "./ux-renderers";
+import { renderFlowCards, renderNavExtras, renderStatusPop, renderSysStrip, renderViewTools } from "./ux-renderers";
 
 /** What the page is showing besides the data: the chosen view, the search text, the list order, the open entry and theme. */
 export interface DashboardUi {
@@ -754,24 +754,12 @@ export function renderDashboardMain(
 			const shown = flows.items.filter((chain) =>
 				hit(chain.title, chain.place, ...chain.tasks.flatMap((step) => [step.taskId, step.title, step.branch])),
 			);
-			const cards = shown.map((chain) => {
-				const first = chain.tasks[0]?.createdAt;
-				return `<section class="flow-card${chain.here === null ? " is-closed" : ""}" data-thread="${esc(
-					chain.threadRef,
-				)}"><h2 class="flow-title"><span>${esc(chain.title)}</span><small>${chain.done}/${chain.total} 끝남</small></h2><p class="flow-meta">${esc(
-					[`TASK ${chain.total}개`, `${at(first)} ~ ${at(chain.updatedAt)}`, chain.place ?? ""]
-						.filter((part) => part !== "")
-						.join(" · "),
-				)}</p>${renderFlowChain(chain, selected, false)}</section>`;
-			});
-			const lead =
-				'<p class="lead flow-lead">요청 하나가 어떤 TASK를 거쳐 끝나는지 보여 줘요. 시간이 겹쳐 같이 돈 TASK는 한 묶음 상자에 쌓이고, 묶음 사이 노란 알약은 다음 묶음까지 기다린 시간이에요. 노란 테두리 상자가 다음에 풀 고리예요. 상자를 누르면 오른쪽에 TASK 상세가 열려요.</p>';
-			return `${head("흐름", flows.items.length)}${banners.join("")}${lead}${
-				cards.length === 0
+			return `${head("흐름", flows.items.length)}${banners.join("")}${
+				shown.length === 0
 					? flows.items.length > 0
 						? nothing
 						: '<div class="empty-box"><p class="note">최근 7일 안에 TASK가 있는 요청이 없어요</p><p class="note-sub">요청이 TASK로 등록되면 여기에 고리로 표시됩니다.</p></div>'
-					: `<div class="flow-list">${cards.join("")}</div>`
+					: renderFlowCards(shown, selected, renderFlowChain)
 			}`;
 		}
 		if (view === "lanes") {
@@ -1051,6 +1039,7 @@ export function renderDashboardMain(
 			bad: ["문제", "is-danger"],
 		};
 		const cards: string[] = [];
+		const counts = { ok: 0, warn: 0, bad: 0 };
 		const pushCard = (
 			id: string,
 			title: string,
@@ -1061,12 +1050,13 @@ export function renderDashboardMain(
 		): void => {
 			const [word, tone] = LEVELS[level] ?? ["?", ""];
 			if (!hit(id, title, word, body.replace(/<[^>]*>/g, " "))) return;
+			counts[level === "bad" ? "bad" : level === "warn" ? "warn" : "ok"] += 1;
 			const anchor =
 				link === undefined
 					? ""
 					: `<a class="sys-link" href="${esc(link.href)}" target="_blank" rel="noopener noreferrer">${esc(link.text)}</a>`;
 			cards.push(
-				`<section class="sys-card${wide ? " is-wide" : ""}" data-card="${id}" aria-label="${esc(title)}"><header class="sys-head"><span class="sys-dot ${tone}" aria-hidden="true"></span><h3 class="h3">${esc(
+				`<section class="sys-card${wide ? " is-wide" : ""} is-${level}" data-card="${id}" aria-label="${esc(title)}"><header class="sys-head"><span class="sys-dot ${tone}" aria-hidden="true"></span><h3 class="h3">${esc(
 					title,
 				)}</h3>${anchor}${badge(word, tone)}</header>${body}</section>`,
 			);
@@ -1321,9 +1311,11 @@ export function renderDashboardMain(
 			}
 		}
 
-		return `${head("시스템", undefined)}${banners.join("")}${
-			cards.length === 0 ? nothing : `<div class="sys-grid">${cards.join("")}</div>`
-		}`;
+		const bodyHtml =
+			cards.length === 0
+				? nothing
+				: `${renderSysStrip(counts.ok, counts.warn, counts.bad)}<div class="sys-grid${counts.warn + counts.bad > 0 ? " has-issue is-compact-ok" : ""}">${cards.join("")}</div>`;
+		return `${head("시스템", undefined)}${banners.join("")}${bodyHtml}`;
 	};
 
 	// ---- top bar and side navigation ----
@@ -1383,7 +1375,7 @@ export function renderDashboardMain(
 		alerts: [openAlerts, openAlerts > 0 || !s.alerts.ok],
 		system: [d.ok ? d.openGates.length : 0, !d.ok || !d.running || d.openGates.length > 0 || d.frozen !== undefined],
 	};
-	const nav = VIEWS.map(([id, label]) => {
+	const navItem = ([id, label]: [string, string]): string => {
 		const [n, warn] = NAV[id] ?? [0, false];
 		const current = id === view || (id === "inbox" && view === "list");
 		return `<a class="nav-item" href="${id === "inbox" ? "./" : `?view=${id}`}" data-view="${id}"${
@@ -1391,7 +1383,14 @@ export function renderDashboardMain(
 		}><span>${esc(label)}</span>${
 			id === "alerts" && n === 0 && !warn ? "" : `<span class="nav-count${warn ? " is-warn" : ""}">${n}</span>`
 		}${navIcon(id)}</a>`;
-	}).join("");
+	};
+	const primary = new Set(["inbox", "turns", "flow", "approvals"]);
+	const navOf = (want: boolean) =>
+		VIEWS.filter(([id]) => primary.has(id) === want)
+			.map(navItem)
+			.join("");
+	const nav = navOf(true);
+	const secondaryNav = navOf(false);
 	const moreWarn = ["lanes", "monitors", "alerts", "system"].some((id) => NAV[id]?.[1]);
 	const statusPop = renderStatusPop(d, board !== undefined && !board.ok, chips.join(""));
 	// The test chip: hidden with nothing running or queued; the queue opens on click.
@@ -1410,7 +1409,7 @@ export function renderDashboardMain(
 		viewLabel,
 	)}</span></nav>${statusPop}${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools"><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
 	const content = view === "inbox" ? inboxView() : view === "list" ? listView() : sectionView();
-	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}${renderNavExtras(view, moreWarn, theme)}</nav><main class="view" id="view" aria-label="${esc(
+	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}${renderNavExtras(view, moreWarn, theme, secondaryNav)}</nav><main class="view" id="view" aria-label="${esc(
 		viewLabel,
 	)}" tabindex="-1">${content}</main>`;
 }

@@ -62,7 +62,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 	let settleTicket = Infinity;
 	let reloading = null;
 	let reloadAgain = false;
-	let toastTimer = null;
+	let toastTimer = null, toastUndo = null, keepUnread = "";
 	let chordTimer = null;
 	let gPending = false;
 	let cmdItems = [];
@@ -131,14 +131,14 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		});
 	}
 
-	const showToast = (text) => {
+	const showToast = (text, action) => {
 		if (!toast) return;
-		toast.textContent = text;
-		toast.hidden = false;
-		if (toastTimer) clearTimeout(toastTimer);
-		toastTimer = setTimeout(() => { toast.hidden = true; }, 2200);
+		toastUndo = uxShowToast(toast, text, action, () => {
+			if (toastTimer) clearTimeout(toastTimer);
+			toastTimer = setTimeout(() => { toast.hidden = true; toastUndo = null; }, action && action.ms ? action.ms : 2200);
+		});
 	};
-	const copyText = async (value, label) => {
+	const copyText = async (value, label, action) => {
 		let ok = false;
 		if (navigator.clipboard && navigator.clipboard.writeText) {
 			try {
@@ -158,7 +158,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 				area.remove();
 			} catch {}
 		}
-		showToast((label || "값") + (ok ? " 복사됨: " + value : " 복사 실패"));
+		showToast((label || "값") + (ok ? " 복사됨: " + value : " 복사 실패"), ok ? action : undefined);
 	};
 
 	const fromUrl = () => parseUrlState(location.search);
@@ -434,7 +434,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		const opened = open ? entries.find((entry) => entry.kind === open.kind && entry.id === open.id) : undefined;
 		if (!opened) return ids;
 		const key = opened.kind + ":" + opened.id;
-		if (seenOpen === key && !ids.includes(opened.id)) return ids;
+		if (keepUnread === key || (seenOpen === key && !ids.includes(opened.id))) return ids;
 		markSeen(store, opened, now);
 		seenOpen = key;
 		return ids.filter((id) => id !== opened.id);
@@ -564,7 +564,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			return;
 		}
 		const focused = document.activeElement && document.activeElement.id === "detail-title";
-		taskWork.paint(head, html);
+		taskWork.paint(head, html); uxEnhanceDetail(head);
 		drawnHead = html;
 		scrollToHere(head);
 		syncBarTitle();
@@ -850,9 +850,16 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			if (target && before) history.replaceState({ opened: opened }, "", toUrl(target));
 			else if (target) history.pushState({ opened: true }, "", toUrl(target));
 			else history.pushState(null, "", toUrl(null));
+		} else if (how === "peek") history.replaceState(history.state, "", toUrl(target));
+		if (same) {
+			if (how !== "peek" && target) {
+				if (keepUnread === target.kind + ":" + target.id) { keepUnread = ""; drawMain(false); }
+				const t = document.getElementById("detail-title");
+				if (t) t.focus({ preventScroll: true });
+			}
+			return;
 		}
-		if (same) return;
-		open = target;
+		open = target; keepUnread = how === "peek" && target ? target.kind + ":" + target.id : "";
 		loadedKey = null;
 		generation += 1;
 		turns = [];
@@ -891,8 +898,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		drawDetail();
 		sync();
 		syncLive();
-		const title = document.getElementById("detail-title");
-		if (title) title.focus({ preventScroll: true });
+		if (how !== "peek") { const title = document.getElementById("detail-title"); if (title) title.focus({ preventScroll: true }); }
 	}
 	const CARD_TRACE_NOTES = {
 		no_session: "이 워커의 omp 세션을 찾지 못했습니다",
@@ -1068,7 +1074,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		if (idx < 0) idx = delta > 0 ? 0 : list.length - 1;
 		else idx = Math.max(0, Math.min(list.length - 1, idx + delta));
 		const target = list[idx];
-		if (target && target.link) target.link.focus();
+		if (target && target.link) { target.link.focus(); uxPeekLink(target.link, show); }
 	}
 
 	const touchStack = () => {
@@ -1081,7 +1087,8 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		const target = event.target instanceof Element ? event.target : null;
 		if (!target) return;
 		if (!target.closest("#event-stack")) stackEl.classList.remove("is-open");
-		if (uxHandleClick(target, event, document)) return;
+		const runToastAct = () => { const fn = toastUndo; toastUndo = null; if (toastTimer) clearTimeout(toastTimer); toast.hidden = true; if (fn) fn(); };
+		if (uxHandleClick(target, event, document, { copyText, showToast, runToastAct })) return;
 		if (handleLimitsClick(target, event, document)) return;
 		if (target.closest("[data-es-close]")) {
 			event.preventDefault();
@@ -1369,16 +1376,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			moveRow(-1);
 			return;
 		}
-		if (event.key === "Enter" && event.target instanceof Element) {
-			const entry = event.target.closest("a[data-card], a[data-task], a[data-item]");
-			if (entry) {
-				event.preventDefault();
-				for (const kind of ["card", "task", "item"]) {
-					const id = entry.getAttribute("data-" + kind);
-					if (id) return show({ kind: kind, id: id }, "push");
-				}
-			}
-		}
+		if (uxHandleKeydown(event, { doc: document, view: ui.view, store: unreadStore, snapshot, board, open, show, copyText, showToast, getKeep: () => keepUnread, setKeep: (v) => { keepUnread = v; }, redraw: () => drawMain(false), toast: showToast })) return;
 		if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && event.target instanceof Element && event.target.matches("button[data-tab]")) {
 			event.preventDefault();
 			const order = Array.from(tabs.querySelectorAll("[data-tab]")).map((button) => button.getAttribute("data-tab"));
@@ -1429,6 +1427,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		traceTurn = /^\\d+$/.test(open.id) ? open.id : null;
 		tab = traceTurn ? "trace" : "conv";
 	}
+	uxEnhanceDetail(head);
 	refresh();
 	// A hidden tab skips the poll (each snapshot can run herdr over ssh) and catches up the moment it shows again.
 	setInterval(() => {
