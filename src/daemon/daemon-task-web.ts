@@ -111,7 +111,10 @@ async function webTaskIpc(
 		const changes = control === "pause" || ledger.isPaused(row);
 		const result = await controlSource.run("web", () => daemon.controlTask(row.taskId, control));
 		if (result.ok && changes) noticeWebIntervention(ctx, row, { kind: control });
-		return result.ok ? result : { ...result, error: "task_control_refused" };
+		// `paused` is the ledger re-read after the control, so the dashboard shows the state the server holds.
+		return result.ok
+			? { ...result, paused: ledger.isPaused(ledger.require(row.taskId)) }
+			: { ...result, error: "task_control_refused" };
 	}
 	const problem = followupTextProblem(request.text);
 	if (problem !== undefined) return { ok: false, ...problem };

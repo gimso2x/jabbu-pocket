@@ -501,16 +501,6 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			isPage ? "page" : url.searchParams.get("hidden") === "1" ? "snapshot_hidden" : "snapshot",
 			url.searchParams.get("view") || undefined,
 		);
-		let snapshot: DashboardSnapshot;
-		try {
-			snapshot = await options.snapshot();
-		} catch (error) {
-			options.onError?.(error);
-			return new Response("snapshot failed\n", {
-				status: 500,
-				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
-			});
-		}
 		const param = (name: string): string | undefined => url.searchParams.get(name) || undefined;
 		const [view, card, task, item, diff, layout, stale] = [
 			"view",
@@ -522,6 +512,16 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			"stale",
 		].map(param);
 		if (isPage && view === "chat") return webRouter.page(request, url, head, PAGE_CSP);
+		let snapshot: DashboardSnapshot;
+		try {
+			snapshot = await options.snapshot();
+		} catch (error) {
+			options.onError?.(error);
+			return new Response("snapshot failed\n", {
+				status: 500,
+				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
+			});
+		}
 		return isPage
 			? reply(
 					renderDashboardPage(snapshot, {

@@ -1,6 +1,6 @@
 import { redact } from "../redact";
 import { digest, type TaskJudgement } from "../tasks/checker";
-import type { TaskRow } from "../tasks/ledger";
+import { type TaskRow, taskPausedAt } from "../tasks/ledger";
 import type { TaskLandRecord } from "../tasks/ledger-schema";
 import type { InboxEntry } from "./inbox";
 
@@ -24,6 +24,8 @@ export interface Turn {
 
 /** The TASK fields {@link turnOf} reads beyond the TASK row's own: set by the snapshot from the ledger row. */
 export interface TaskTurnFields {
+	/** The owner paused this TASK (a notice mark; the status is unchanged): its pause time in ms. */
+	pausedAt?: number;
 	/** The repository's last path segment. */
 	repo?: string;
 	/** PROGRESS.md `question` of the owner decision; only when written. */
@@ -125,6 +127,8 @@ export function taskTurnFields(
 		.pop();
 	if (repo !== undefined) fields.repo = repo;
 	if (row.workerModel !== null) fields.workerModel = row.workerModel;
+	const pausedAt = taskPausedAt(row);
+	if (pausedAt !== undefined && row.status !== "done" && row.status !== "cancelled") fields.pausedAt = pausedAt;
 	if (row.land !== null) fields.land = row.land.state;
 	const question = judged?.decision.question.trim() ?? "";
 	if (question !== "") fields.decision = { question: redact(question) };

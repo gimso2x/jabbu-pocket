@@ -431,6 +431,16 @@ describe("qa50b K-12: a refused thread start retried", () => {
 	});
 });
 
+describe("postNotice truncation", () => {
+	test("an overlong notice is cut to 2000 chars instead of being dropped", async () => {
+		const made = await adapter();
+		expect(await made.postNotice(DM, "x".repeat(2500))).toBe(true);
+		expect(calls("createMessage")).toHaveLength(1);
+		expect(calls("createMessage")[0]?.content).toHaveLength(2000);
+		expect(logged("notice_failed")).toBe(false);
+	});
+});
+
 describe("peer bots", () => {
 	const PEER = "200000000000000001";
 	const OTHER_BOT = "200000000000000002";

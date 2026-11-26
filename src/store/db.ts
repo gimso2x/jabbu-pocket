@@ -1542,14 +1542,14 @@ export class Store {
 
 	/**
 	 * What a turn was asked and how it ended: the first inbound of the op (`text_ref` is already redacted) and the
-	 * body of its last delivery part (both `""` when the rows are gone).
+	 * body of its first delivery part (both `""` when the rows are gone).
 	 */
 	turnTexts(originKey: string, opRef: string): { inbound: string; conclusion: string } {
 		const inbound = this.db
 			.query("SELECT text_ref FROM inbound WHERE origin_key = ? AND op_ref = ? ORDER BY inbound_id LIMIT 1")
 			.get(originKey, opRef) as { text_ref: string } | null;
 		const delivery = this.db
-			.query("SELECT body FROM deliveries WHERE origin_key = ? AND op_ref = ? ORDER BY part DESC LIMIT 1")
+			.query("SELECT body FROM deliveries WHERE origin_key = ? AND op_ref = ? ORDER BY part ASC LIMIT 1")
 			.get(originKey, opRef) as { body: string } | null;
 		return { inbound: inbound?.text_ref ?? "", conclusion: delivery?.body ?? "" };
 	}
