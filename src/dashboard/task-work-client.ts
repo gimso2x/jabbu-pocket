@@ -50,6 +50,9 @@ export const TASK_WORK_STYLE = `.task-work { display: flex; flex-direction: colu
 `;
 
 /**
+ * `withPause` in the script: the snapshot lags the ledger by up to a poll, so until it agrees the header follows the
+ * `paused` that the pause/resume answer re-read from the ledger.
+ *
  * The page script of the panel (prepended to the boot script): `taskWork.paint(head, html)` replaces the detail head
  * and refills the panel from its own state, so a snapshot redraw keeps the conversation, the draft and the caret. The
  * conversation and live reads are the page's own GETs; writing needs the web chat's sign-in (`api/web/conversations`
@@ -63,12 +66,10 @@ const taskWork = (() => {
 	let lastHtml = "";
 	let known = null;
 	const PAUSED = '<span class="badge is-warning" title="스윕 재촉·stale 알림·자동 머지 보류 중">멈춤 중</span>';
-	/** The snapshot lags the ledger by up to a poll: until it agrees, the header follows what the pause/resume answer re-read from the ledger. */
 	function withPause(html) {
 		if (!known || Date.now() - known.at > 20000 || html.indexOf('data-task-work="' + known.id + '"') < 0) return html;
 		if ((html.indexOf(PAUSED) >= 0) === known.paused) known = null;
-		else if (known.paused) return html.replace('<button type="button" class="copy-btn"', PAUSED + '<button type="button" class="copy-btn"');
-		else return html.split(PAUSED).join("");
+		else return known.paused ? html.replace('<button type="button" class="copy-btn"', PAUSED + '<button type="button" class="copy-btn"') : html.split(PAUSED).join("");
 		return html;
 	}
 	const panelOf = () => {
