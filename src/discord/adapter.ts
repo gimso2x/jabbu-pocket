@@ -59,6 +59,7 @@ import {
 import { parseChatOrigin } from "../core/origin-key";
 import { parseCommand, parsePurposeCommand, TAKES_ARG } from "../core/types";
 import type { Logger } from "../log";
+import { redact } from "../redact";
 import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
@@ -75,6 +76,7 @@ import {
 	DiscordRateLimitedError,
 	type DiscordTransport,
 	deliveryNonce,
+	MESSAGE_CONTENT_LIMIT,
 } from "./transport";
 import { INTERVAL_TIMERS, TYPING_INTERVAL_MS, TYPING_MAX_MS, type TypingEntry, type TypingTimers } from "./typing";
 
@@ -100,7 +102,6 @@ const SEEN_INTERACTIONS_MAX = 1000;
 const THREAD_NOTICE_MEMORY = 1000;
 /** Characters of the replied-to post put in the prompt's context line. */
 const REPLY_CONTEXT_MAX = 300;
-
 export interface DiscordAdapterOptions {
 	/** The port: its transport carries every call, its channel cache tells threads from messages. */
 	channel: DiscordChannel;
@@ -431,7 +432,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			await this.#call("post", () =>
 				this.#transport.createMessage({
 					channelId: destination.channelId,
-					content: text,
+					content: cutCodePointSafe(text, MESSAGE_CONTENT_LIMIT),
 					messageReference: destination.messageReference,
 					allowedMentions: this.#port.allowedMentions(text),
 				}),
@@ -517,33 +518,30 @@ export class DiscordAdapter implements ChannelAdapter {
 					channel,
 					messageTs: message.id,
 					interactionId: interaction.id,
+					replyEphemeral: (text) => this.#followupEphemeral(interaction, text, "action_reply_failed"),
 				});
 			} catch (err) {
 				this.#log.error("action_failed", { error: errorText(err), ...actionContext });
-				await this.#actionFailureNotice(interaction);
+				await this.#followupEphemeral(interaction, ACTION_FAILURE_TEXT, "action_failure_notice_failed");
 			}
 		} catch (err) {
 			this.#log.error("action_failed", { error: errorText(err), ...actionContext });
 		}
 	}
 
-	/**
-	 * The click was acknowledged but nothing came of it (a refused ledger write, a core error): an ephemeral line in
-	 * the channel tells the owner to press again. The card itself is untouched — `@original` is the card message, and a
-	 * PATCH there would overwrite it. A failed notice is one warn line.
-	 */
-	async #actionFailureNotice(interaction: DiscordInteraction): Promise<void> {
+	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). */
+	async #followupEphemeral(interaction: DiscordInteraction, text: string, logEvent: string): Promise<void> {
 		try {
 			await this.#call("post", () =>
 				this.#transport.followupInteraction({
 					applicationId: interaction.application_id,
 					token: interaction.token,
-					content: ACTION_FAILURE_TEXT,
+					content: cutCodePointSafe(redact(text), MESSAGE_CONTENT_LIMIT),
 					flags: EPHEMERAL,
 				}),
 			);
 		} catch (err) {
-			this.#log.warn("action_failure_notice_failed", { id: interaction.id, error: errorText(err) });
+			this.#log.warn(logEvent, { id: interaction.id, error: errorText(err) });
 		}
 	}
 

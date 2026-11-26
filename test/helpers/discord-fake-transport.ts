@@ -32,6 +32,7 @@ export type FakeDiscordCall =
 	| ({ method: "addReaction" | "removeReaction" } & ReactionArgs)
 	| ({ method: "startThread"; id: string } & StartThreadArgs)
 	| { method: "archiveThread"; threadId: string }
+	| ({ method: "pinMessage" } & MessageTarget)
 	| ({ method: "uploadFile"; id: string } & UploadFileArgs)
 	| ({ method: "downloadAttachment" } & DownloadAttachmentArgs)
 	| ({ method: "respondInteraction" } & RespondInteractionArgs)
@@ -136,6 +137,11 @@ export class FakeDiscordTransport implements DiscordTransport {
 	async archiveThread(args: { threadId: string }): Promise<void> {
 		this.calls.push({ method: "archiveThread", ...args });
 		this.#maybeFail("archiveThread");
+	}
+
+	async pinMessage(args: MessageTarget): Promise<void> {
+		this.calls.push({ method: "pinMessage", ...args });
+		this.#maybeFail("pinMessage");
 	}
 
 	async getChannel(channelId: string): Promise<DiscordChannelInfo> {

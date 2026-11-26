@@ -1,5 +1,4 @@
-// What an adapter and the core say to each other, whatever the chat platform: inbound messages, the core's verdicts and
-// the delivery ledger view an adapter's pump works on.
+// Platform-neutral contract between an adapter and the core (inbound, verdicts, delivery ledger).
 import type { CommandKind } from "../core/types";
 import type { PeerInboundOutcome } from "./peer-outcome";
 
@@ -60,6 +59,7 @@ export interface CoreSink {
 		channel?: string | undefined;
 		messageTs?: string | undefined;
 		interactionId?: string | undefined;
+		replyEphemeral?: ((text: string) => Promise<void>) | undefined;
 	}): Promise<void> | void;
 	/**
 	 * An owner reply in a thread: if that thread is an approval card's, the core settles the card with the reply

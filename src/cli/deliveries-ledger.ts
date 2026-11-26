@@ -7,6 +7,7 @@ import { type DeliveryLedger, openDeliveryLedger } from "../store/db";
 function hasDeliveriesTable(path: string): boolean {
 	const db = new Database(path, { readonly: true, strict: true });
 	try {
+		db.run("PRAGMA busy_timeout = 5000");
 		return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deliveries'").get() !== null;
 	} finally {
 		db.close();

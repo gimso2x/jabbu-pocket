@@ -16,7 +16,7 @@ export function countLines(text: string): number {
 
 /** `root` 아래 src 트리의 `.ts` 파일 줄 수. 키는 `root` 기준 상대경로이고 이름순이다. */
 export function scanLoc(root: string): LocCounts {
-	const files = [...new Bun.Glob("src/**/*.ts").scanSync(root)].sort();
+	const files = [...new Bun.Glob("src/**/*.ts").scanSync(root)].map((f) => f.replaceAll("\\", "/")).sort();
 	return Object.fromEntries(files.map((file) => [file, countLines(readFileSync(join(root, file), "utf8"))]));
 }
 

@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- `monitors`: 장부가 아직 없는 홈에서 읽기(`list`·`show`·`update`·`remove`·`test`·`export`, `apply --dry-run`)가 장부 파일을 만들지 않고 빈 장부로 답합니다. 예전에는 `monitors list` 한 번이 모니터 표만 있는 `jabbu.db`를 남겨 `gates`·`status`가 `ledger_unreadable` 게이트를 열고 `deliveries list`가 `no such table: deliveries`로 실패했습니다. `add`와 실제 `apply`는 그대로 만듭니다(`tasks`가 이미 따르던 규칙).
 - `deliveries`: `deliveries list`·`ack`·`resend`가 장부가 반쯤 만들어진 홈(모니터 표만 있는 `jabbu.db`, 예: `monitors add`만 실행한 새 설치)에서 SQLite 원문 오류 `no such table: deliveries` 대신 `jabbu.db`에 아직 전달 표가 없다는 한 줄과 `run the daemon once` 안내로 답합니다(종료 코드 1, `jabbu.db`가 아예 없는 경우와 같은 태도). 데몬을 한 번 띄우면 그 첫 열기가 표를 만들어 같은 명령이 정상으로 답합니다.
 - 보안: 앞 64KiB를 넘어 끝까지 검사하지 못한 위임 지시문을 `advisory`(그대로 내보냄)에서 `high_risk`(오너 승인 필요)로 올립니다. 예전에는 `task` 상한(100,000바이트)까지의 지시문 가운데 64KiB를 넘는 부분이 검사되지 않은 채 사람 없이 실행될 수 있었습니다. 승인 카드에는 검사하지 못한 범위를 적고, 규칙 목록에 `truncated`가 붙습니다.
 

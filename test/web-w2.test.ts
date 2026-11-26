@@ -113,6 +113,7 @@ function startWebServer(
 	dir: string,
 	localTokenPath: string,
 	callDaemonFn: (req: unknown) => Promise<unknown>,
+	options?: { snapshot?: () => Promise<DashboardSnapshot> },
 ): { baseUrl: string } {
 	const web: WebDashboardOptions = {
 		homeDir: dir,
@@ -129,7 +130,7 @@ function startWebServer(
 		port: 0,
 		hostname: "127.0.0.1",
 		web,
-		snapshot: async () => STUB_SNAPSHOT,
+		snapshot: options?.snapshot ?? (async () => STUB_SNAPSHOT),
 	});
 	cleanups.push(() => server.stop(true));
 	return { baseUrl: `http://127.0.0.1:${server.port}` };
@@ -426,6 +427,37 @@ describe("Spec §5 & AC-10: json-render HTML cards/charts and ?view=chat SSR + i
 		expect(html).toContain('data-copy="bun run check"');
 		expect(html).toContain("{not-valid-json");
 		expect(html).toContain("https://example.com/docs");
+	});
+
+	test("?view=chat is served without building a snapshot; a plain page builds one", async () => {
+		const home = createHome();
+		const store = openStore({
+			path: join(home.dir, "jabbu.db"),
+			timezone: "Asia/Seoul",
+			clock: { now: () => 1_000 },
+			redact,
+		});
+		store.web.insert({
+			conversation: "w_nochat01",
+			role: "system",
+			text: "화면 점검",
+			cardJson: JSON.stringify({ kind: "conversation", title: "화면 점검" }),
+		});
+		store.close();
+		let snapshotCalls = 0;
+		const { baseUrl } = startWebServer(home.dir, home.localTokenPath, async () => ({ ok: true }), {
+			snapshot: async () => {
+				snapshotCalls += 1;
+				return STUB_SNAPSHOT;
+			},
+		});
+		const authHeaders = { authorization: `Bearer ${LOCAL_TOKEN}` };
+		const chatRes = await fetch(`${baseUrl}/?view=chat&c=w_nochat01`, { headers: authHeaders });
+		expect(chatRes.status).toBe(200);
+		expect(snapshotCalls).toBe(0);
+		const plainRes = await fetch(`${baseUrl}/`, { headers: authHeaders });
+		expect(plainRes.status).toBe(200);
+		expect(snapshotCalls).toBe(1);
 	});
 
 	test("?view=chat serves isolated chat assets, SSR messages, CSRF meta, and conversation inProgress status", async () => {

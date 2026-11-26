@@ -2,11 +2,11 @@
 // dead-letter verdict and the single-flight pass runner. Each platform keeps only its own page size (`PAGE_LIMIT`).
 import { errorText } from "./text";
 
-/** How far back the very first pass reaches when a target has no watermark (upstream: 24h bounded bootstrap). */
+/** How far back the very first pass reaches when a target has no watermark (24h bounded bootstrap). */
 export const BOOTSTRAP_LOOKBACK_MS = 24 * 60 * 60_000;
 /** Pages one target reads per pass; the rest waits for the next pass (the watermark keeps the place). */
 export const MAX_PAGES = 10;
-/** Definitive per-message failures before the message is dead-lettered and skipped (upstream: 3). */
+/** Definitive per-message failures before the message is dead-lettered and skipped. */
 export const MAX_MESSAGE_ATTEMPTS = 3;
 
 /** The notice a pass posts under the oldest message it recovered: the answers it brought back are being processed. */

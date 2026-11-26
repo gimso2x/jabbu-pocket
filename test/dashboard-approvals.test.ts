@@ -199,6 +199,46 @@ describe("dashboard approvals", () => {
 		}
 	});
 
+	test("an ask-form card without an intro is titled by its first question, not the generic header", async () => {
+		openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
+		const db = new Database(dbPath, { strict: true });
+		const insert = db.query(
+			`INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, origin_key)
+			 VALUES (?, 'C0123456789', ?, ?, 'pending', ?, ?, 'discord/dm/200000000000000001')`,
+		);
+		const HEAD = "❓ 항목 {n}개 — 답하지 않은 첫 항목부터 답장이 채워집니다";
+		const rows: Array<[string, string]> = [
+			[
+				"single",
+				`${HEAD.replace("{n}", "1")}\n*1. 배포를 진행할까요?*\n1. 예\n2. 아니오\n버튼을 누르거나 번호로 답장해 주세요`,
+			],
+			[
+				"multi",
+				`${HEAD.replace("{n}", "3")}\n*1. 어느 환경에 배포할까요? (필수)*\n1. 스테이징\n\n*2. 이유*\n답장으로 적어 주세요\n\n*3. 공지*\n예/아니오로 답해 주세요`,
+			],
+			["intro", "❓ 배포 전에 확인합니다\n항목 1개 — 답하지 않은 첫 항목부터 답장이 채워집니다\n*1. 진행할까요?*"],
+			["plain", "main을 push합니다. 토큰 없음"],
+			["noblock", `${HEAD.replace("{n}", "2")}\n그냥 본문`],
+			["empty", `${HEAD.replace("{n}", "1")}\n*1. *`],
+			["onlyhead", HEAD.replace("{n}", "1")],
+		];
+		for (const [index, [id, summary]] of rows.entries()) {
+			insert.run(`C0123456789:${id}`, `17937694${index}.000001`, summary, NOW - MINUTE, NOW + 20 * MINUTE);
+		}
+		db.close();
+		const items = approvalsOf(await buildSnapshot(deps()));
+		const title = (id: string): string => byId(items, `C0123456789:${id}`).title;
+		expect(title("single")).toBe("배포를 진행할까요?");
+		expect(title("multi")).toBe("어느 환경에 배포할까요? 외 2개");
+		expect(title("intro")).toBe("❓ 배포 전에 확인합니다");
+		expect(title("plain")).toBe("main을 push합니다.");
+		// A form whose first block is not a question line keeps the generic first-line title.
+		const generic = "❓ 항목 2개 — 답하지 않은 첫 항목부터 답장이 채워집니다";
+		expect(title("noblock")).toBe(generic);
+		expect(title("empty")).toBe("❓ 항목 1개 — 답하지 않은 첫 항목부터 답장이 채워집니다");
+		expect(title("onlyhead")).toBe("❓ 항목 1개 — 답하지 않은 첫 항목부터 답장이 채워집니다");
+	});
+
 	test("AC-6: the list shows the short title, remaining time and the irreversible badge, never the approval id", async () => {
 		seed();
 		const snapshot = await buildSnapshot(deps());

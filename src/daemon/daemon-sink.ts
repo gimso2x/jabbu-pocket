@@ -24,6 +24,7 @@ import {
 import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
+import { parseOpsPanelActionId } from "../ops/ops-panel";
 import { parseApprovalRetryActionId } from "../safety/approval";
 import { AMBIGUOUS_NOTICE_OP_PREFIX, INTERIM_INFIX, LOG_COPY_SUFFIX, PEER_SILENCE_OP_PREFIX } from "../store/db";
 import type { DeliveryRow, InboundRow } from "../store/db-rows";
@@ -37,6 +38,7 @@ import {
 	PEER_HOP_RESET_CURSOR,
 } from "./daemon-constants";
 import { approvalOf, type DaemonContext, dispatchPending, postThreadNotices, startedStore } from "./daemon-context";
+import type { DaemonOpsPanel } from "./daemon-ops-panel";
 import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
@@ -53,6 +55,7 @@ export interface CoreSinkDeps {
 	drainDeferNoticed: Set<string>;
 	pending: PendingDispatchSweep;
 	landing: DaemonTaskLanding;
+	opsPanel?: DaemonOpsPanel;
 	statusText: (originKey: string) => Promise<string>;
 }
 
@@ -76,10 +79,7 @@ export class DaemonInbound {
 		const sessionsRoot = deps.sessionsRoot;
 		const core: CoreSink = {
 			onInbound: (message) => {
-				// A message in a work lane's thread belongs to that lane's origin, not to the DM conversation.
-				// A closed lane stays closed for anything but `!reopen`: a question (or a `!followup` payload) reaches its
-				// session behind the answer-only notice; control commands stay as typed — the mailbox reads the recorded text.
-				// `머지해`/`폐기해` (the whole message, while the landing waits) are the card's buttons in words.
+				// Route lane-thread messages to the lane origin; closed-lane questions carry the answer-only prefix.
 				const { lane, closedAs } = inboundLane(store.getLaneByThread(message.threadRef), message.text);
 				const originKey = lane?.originKey ?? message.originKey;
 				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
@@ -228,9 +228,7 @@ export class DaemonInbound {
 			onPeerSeen: (seen) => void store.notePeerSeen(seen),
 			onCommand: ({ command, arg, originKey, channel }) => {
 				if (command === "status") return deps.statusText(originKey);
-				// A slash command leaves no message to thread under, so it is recorded as an owner message at the
-				// top level of the conversation it was typed in: the answer lands right there as the only trace (empty
-				// ack — no placeholder root post, no "see the thread" redirect).
+				// Slash commands run at the conversation top level with no placeholder root post.
 				core.onInbound({
 					platformMessageId: `slash:${channel}:${randomBytes(6).toString("hex")}`,
 					originKey,
@@ -238,8 +236,7 @@ export class DaemonInbound {
 					text: arg === "" ? COMMAND_TEXT[command] : `${COMMAND_TEXT[command]} ${arg}`,
 					threadRef: threadRefOf(channel, TOP_LEVEL_TS),
 				});
-				// A drain holds the recorded command for the next process; say so, or the owner sees nothing and retypes it.
-				// `!restart` is never held: its answer is already on the ledger.
+				// Commands during drain run after restart except `!restart` (already settled on ledger).
 				return ctx.router?.draining === true && command !== "restart" ? DRAIN_DEFERRED_COMMAND_TEXT : undefined;
 			},
 			knowsThread: (threadRef) => store.getLaneByThread(threadRef) !== undefined || store.hasInboundThread(threadRef),
@@ -252,8 +249,10 @@ export class DaemonInbound {
 				const ts = parseThreadRef(platformMessageId)?.threadTs ?? platformMessageId;
 				return approvalOf(ctx).handleCardReply({ approvalId: threadRef, ts, text, injected });
 			},
-			onAction: ({ actionId, value, userId, channel, messageTs, interactionId }) => {
+			onAction: ({ actionId, value, userId, channel, messageTs, interactionId, replyEphemeral }) => {
 				if (approvalOf(ctx).handleAction({ actionId, userId, answerId: interactionId })) return;
+				const opsAction = parseOpsPanelActionId(actionId);
+				if (opsAction !== undefined) return deps.opsPanel?.handleAction(opsAction, replyEphemeral);
 				const retry = parseApprovalRetryActionId(actionId);
 				if (retry !== undefined)
 					return deps.landing.handleApprovalRetry(`${retry.channel}:${retry.ts}`, channel, messageTs);
@@ -670,7 +669,7 @@ export function deliverySources(
 			if (outcome === "ambiguous") {
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
 				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
-				// One owner notice per held delivery, into the thread the answer was headed for (Cataly noticeHeld).
+				// One owner notice per held delivery, into the thread the answer was headed for.
 				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
 				return true;
 			}

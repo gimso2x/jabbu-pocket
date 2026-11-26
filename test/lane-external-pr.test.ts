@@ -317,9 +317,9 @@ describe("Outcome card buttons", () => {
 	});
 
 	test("④ parseLaneActionId reads publish and hold ids and refuses a bad name", () => {
-		expect(parseLaneActionId(lanePublishActionId("cataly-pr-오너-프로필"))).toEqual({
+		expect(parseLaneActionId(lanePublishActionId("ext-pr-오너-프로필"))).toEqual({
 			kind: "publish",
-			name: "cataly-pr-오너-프로필",
+			name: "ext-pr-오너-프로필",
 		});
 		expect(parseLaneActionId(laneHoldActionId("ext-2"))).toEqual({ kind: "hold", name: "ext-2" });
 		expect(parseLaneActionId("jabbu:lane:publish:Bad Name")).toBeUndefined();
