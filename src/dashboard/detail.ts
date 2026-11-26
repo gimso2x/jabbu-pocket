@@ -1064,4 +1064,4 @@ export function renderLiveTurn(
 		state.fail ? `<p class="turn-note">${esc(state.fail)}</p>` : "",
 	];
 	return `<article class="turn is-live${state.settling ? " is-settling" : ""}" aria-busy="${state.settling ? "false" : "true"}"><p class="turn-head"><b>omp</b>${head}</p>${parts.join("")}</article>`;
-								}
+}
