@@ -25,11 +25,11 @@ export interface AuditEntry {
 	ms: number;
 	timedOut?: boolean;
 	origin?: string;
+	/** `opRef` of the turn whose host tool call ran this, so one turn's calls group and match its log lines. */
+	turn?: string;
 }
 
-export interface AuditContext {
-	origin?: string;
-}
+export type AuditContext = Pick<AuditEntry, "origin" | "turn">;
 
 /** Who a call is for; set around a tool execution so the single wrapped runner can name the origin. */
 export const auditContext = new AsyncLocalStorage<AuditContext>();
@@ -107,7 +107,7 @@ export function createDispatchAudit(options: DispatchAuditOptions): ProcessAudit
 					rc: outcome.code,
 					ms,
 					...(outcome.timedOut ? { timedOut: true } : {}),
-					...(context?.origin === undefined ? {} : { origin: context.origin }),
+					...context,
 				};
 				if (sink === undefined) {
 					const dir = join(options.homeDir, "logs");

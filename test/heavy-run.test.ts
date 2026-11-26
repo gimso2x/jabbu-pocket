@@ -15,6 +15,8 @@ import {
 
 const RUNNER = join(import.meta.dir, "..", "scripts", "heavy-run");
 const DEADLINE_MS = 20_000;
+/** Per-test budget of the tests that spawn runners: up to six bun starts plus flock, slow on a loaded CI runner. */
+const RUN_TEST_MS = DEADLINE_MS + 10_000;
 
 let home: string;
 let paths: HeavyRunPaths;
@@ -86,69 +88,93 @@ async function readUntil(stream: ReadableStream<Uint8Array>, needle: string): Pr
 const HOLD = ["sh", "-c", "echo started; read line; echo released"];
 
 describe("heavy-run: serialising", () => {
-	test("the second run waits (waiting → running) until the first ends", async () => {
-		const first = runner(["--", ...HOLD]);
-		expect(await readUntil(first.stdout as ReadableStream<Uint8Array>, "started")).toContain("started");
-		expect(stateOf(first.pid)?.state).toBe("running");
+	test(
+		"the second run waits (waiting → running) until the first ends",
+		async () => {
+			const first = runner(["--", ...HOLD]);
+			expect(await readUntil(first.stdout as ReadableStream<Uint8Array>, "started")).toContain("started");
+			expect(stateOf(first.pid)?.state).toBe("running");
 
-		const second = runner(["--", "echo", "second-ran"]);
-		await untilState(() => stateOf(second.pid)?.state === "waiting");
-		expect(stateOf(first.pid)?.state).toBe("running");
+			const second = runner(["--", "echo", "second-ran"]);
+			await untilState(() => stateOf(second.pid)?.state === "waiting");
+			expect(stateOf(first.pid)?.state).toBe("running");
 
-		(first.stdin as FileSink).write("go\n");
-		(first.stdin as FileSink).end();
-		expect(await first.exited).toBe(0);
-		expect(await second.exited).toBe(0);
-		expect(await new Response(second.stdout as ReadableStream).text()).toContain("second-ran");
-		expect(readHeavyRunStates(paths)).toEqual([]);
-	});
+			(first.stdin as FileSink).write("go\n");
+			(first.stdin as FileSink).end();
+			expect(await first.exited).toBe(0);
+			expect(await second.exited).toBe(0);
+			expect(await new Response(second.stdout as ReadableStream).text()).toContain("second-ran");
+			expect(readHeavyRunStates(paths)).toEqual([]);
+		},
+		RUN_TEST_MS,
+	);
 
-	test("the waiting run starts after the running one's process group is kill -9'd", async () => {
-		const first = runner(["--", "sh", "-c", "echo started; exec sleep 60"]);
-		await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
-		const locked = stateOf(first.pid)?.lockedPid;
-		expect(locked).toBeGreaterThan(0);
-		const pgid = Number(procStat(locked as number)[2]);
-		expect(pgid).not.toBe(process.pid);
-		const second = runner(["--", "echo", "after-kill"]);
-		await untilState(() => stateOf(second.pid)?.state === "waiting");
+	test(
+		"the waiting run starts after the running one's process group is kill -9'd",
+		async () => {
+			const first = runner(["--", "sh", "-c", "echo started; exec sleep 60"]);
+			await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
+			const locked = stateOf(first.pid)?.lockedPid;
+			expect(locked).toBeGreaterThan(0);
+			const pgid = Number(procStat(locked as number)[2]);
+			expect(pgid).not.toBe(process.pid);
+			const second = runner(["--", "echo", "after-kill"]);
+			await untilState(() => stateOf(second.pid)?.state === "waiting");
 
-		process.kill(-pgid, "SIGKILL");
-		expect(await second.exited).toBe(0);
-		expect(await new Response(second.stdout as ReadableStream).text()).toContain("after-kill");
-	});
+			process.kill(-pgid, "SIGKILL");
+			expect(await second.exited).toBe(0);
+			expect(await new Response(second.stdout as ReadableStream).text()).toContain("after-kill");
+		},
+		RUN_TEST_MS,
+	);
 });
 
 describe("heavy-run: exit codes and re-entry", () => {
-	test("the command's exit code is passed on", async () => {
-		const proc = runner(["--", "sh", "-c", "exit 7"]);
-		expect(await proc.exited).toBe(7);
-	});
+	test(
+		"the command's exit code is passed on",
+		async () => {
+			const proc = runner(["--", "sh", "-c", "exit 7"]);
+			expect(await proc.exited).toBe(7);
+		},
+		RUN_TEST_MS,
+	);
 
-	test("a run that waits past --max-wait exits 75 with heavy-run: busy", async () => {
-		const first = runner(["--", ...HOLD]);
-		await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
-		const second = runner(["--max-wait", "1", "--", "echo", "never"]);
-		expect(await second.exited).toBe(75);
-		const err = await new Response(second.stderr as ReadableStream).text();
-		expect(err).toContain("heavy-run: busy");
-		expect(await new Response(second.stdout as ReadableStream).text()).not.toContain("never");
-		expect(readHeavyRunStates(paths).map((s) => s.pid)).toEqual([first.pid]);
-	});
+	test(
+		"a run that waits past --max-wait exits 75 with heavy-run: busy",
+		async () => {
+			const first = runner(["--", ...HOLD]);
+			await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
+			const second = runner(["--max-wait", "1", "--", "echo", "never"]);
+			expect(await second.exited).toBe(75);
+			const err = await new Response(second.stderr as ReadableStream).text();
+			expect(err).toContain("heavy-run: busy");
+			expect(await new Response(second.stdout as ReadableStream).text()).not.toContain("never");
+			expect(readHeavyRunStates(paths).map((s) => s.pid)).toEqual([first.pid]);
+		},
+		RUN_TEST_MS,
+	);
 
-	test("HEAVY_RUN_HELD with the same lock path runs at once while the lock is taken", async () => {
-		const first = runner(["--", ...HOLD]);
-		await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
-		const nested = runner(["--max-wait", "1", "--", "echo", "nested-ran"], { [HEAVY_RUN_HELD_ENV]: paths.lock });
-		expect(await nested.exited).toBe(0);
-		expect(await new Response(nested.stdout as ReadableStream).text()).toContain("nested-ran");
-	});
+	test(
+		"HEAVY_RUN_HELD with the same lock path runs at once while the lock is taken",
+		async () => {
+			const first = runner(["--", ...HOLD]);
+			await readUntil(first.stdout as ReadableStream<Uint8Array>, "started");
+			const nested = runner(["--max-wait", "1", "--", "echo", "nested-ran"], { [HEAVY_RUN_HELD_ENV]: paths.lock });
+			expect(await nested.exited).toBe(0);
+			expect(await new Response(nested.stdout as ReadableStream).text()).toContain("nested-ran");
+		},
+		RUN_TEST_MS,
+	);
 
-	test("heavy-run → heavy-run (the nested call inherits the held lock) does not deadlock", async () => {
-		const proc = runner(["--max-wait", "5", "--", RUNNER, "--max-wait", "1", "--", "echo", "inner-ran"]);
-		expect(await proc.exited).toBe(0);
-		expect(await new Response(proc.stdout as ReadableStream).text()).toContain("inner-ran");
-	});
+	test(
+		"heavy-run → heavy-run (the nested call inherits the held lock) does not deadlock",
+		async () => {
+			const proc = runner(["--max-wait", "5", "--", RUNNER, "--max-wait", "1", "--", "echo", "inner-ran"]);
+			expect(await proc.exited).toBe(0);
+			expect(await new Response(proc.stdout as ReadableStream).text()).toContain("inner-ran");
+		},
+		RUN_TEST_MS,
+	);
 });
 
 describe("heavy-run: stale state files", () => {

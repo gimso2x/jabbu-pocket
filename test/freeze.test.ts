@@ -138,7 +138,7 @@ describe("dispatch audit", () => {
 		});
 		// Assembled at runtime so secret scanners (gitleaks) do not flag the fixture; the value is unchanged.
 		const token = ["xoxb", "1234567890", "abcdefghijklmnop"].join("-");
-		auditContext.run({ origin: `discord/dm/${OWNER_DM}` }, () =>
+		auditContext.run({ origin: `discord/dm/${OWNER_DM}`, turn: "op-7" }, () =>
 			audit.record(
 				["ssh", "-o", "BatchMode=yes", "wsl", "--", "echo", token, "x".repeat(1_000)],
 				{ code: 7, timedOut: false },
@@ -154,6 +154,7 @@ describe("dispatch audit", () => {
 			rc: 7,
 			ms: 42,
 			origin: `discord/dm/${OWNER_DM}`,
+			turn: "op-7",
 		});
 		expect(first.cmd).not.toContain(token);
 		expect(first.cmd.length).toBeLessThanOrEqual(301);
@@ -161,6 +162,7 @@ describe("dispatch audit", () => {
 		const second = JSON.parse(lines[1] as string);
 		expect(second).toMatchObject({ host: "local", argv0: "herdr", rc: null, timedOut: true });
 		expect(second.origin).toBeUndefined();
+		expect(second.turn).toBeUndefined();
 	});
 
 	test("writes 0600 JSONL under <home>/logs through the real process runner", async () => {

@@ -15,6 +15,7 @@ import type { HerdrPromptInput } from "../store/db-rows";
 import { offsetLabel } from "../time";
 import { approvalOf, type DaemonContext } from "./daemon-context";
 import { taskMailboxPort, taskOfOrigin } from "./daemon-task-resume";
+import { runHostTool } from "./host-tool-run";
 import { laneChannelOf, uploadThreadTs } from "./thread-target";
 
 /** Longest wait for the recorded deliveries before a dialog card goes out anyway. */
@@ -68,8 +69,8 @@ export function floorsSurfaceFor(ctx: DaemonContext, originKey: string): FloorsS
  * Host tools for the omp child of `originKey`, fixed for the child's life. A child started after a peer bot wrote
  * here gets the reduced set. A child started before keeps the full set (no restart, no prompt-cache rewrite), and
  * every tool missing from the reduced set re-reads the ledger when it runs: once a peer row exists it throws
- * instead of running. Each call runs inside the origin's mailbox: no stall alert while the child waits on the host
- * (an approval click can take minutes), and `drain` counts it as unfinished work.
+ * instead of running. Each call runs through `runHostTool`: no stall alert while the child waits on the host (an
+ * approval click can take minutes), `drain` counts it, and its process calls are audited under the running turn.
  */
 export function hostToolsFor(ctx: DaemonContext, originKey: string): HostToolDef[] {
 	if (isTaskOrigin(originKey)) return []; // a [TASK] worker has no jabbu tools: its board is PROGRESS.md
@@ -82,10 +83,8 @@ export function hostToolsFor(ctx: DaemonContext, originKey: string): HostToolDef
 			);
 	return tools.map((tool) => ({
 		...tool,
-		execute: (params, context) => {
-			const mailbox = ctx.router?.mailbox(originKey);
-			return mailbox ? mailbox.trackHostTool(() => tool.execute(params, context)) : tool.execute(params, context);
-		},
+		execute: (params, context) =>
+			runHostTool(ctx.router?.mailbox(originKey), originKey, () => tool.execute(params, context)),
 	}));
 }
 

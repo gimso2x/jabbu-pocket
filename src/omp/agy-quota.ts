@@ -12,7 +12,7 @@ import { INJECTION_WARNING_HEAD, injectionWarning, scanForInjection } from "../s
 import type { Store } from "../store/db";
 import { formatLocal } from "../time";
 import type { AgyAccountPool, AgyBlockedAccount } from "./agy-account-pool";
-import { isQuotaErrorText, quotaRetryNotice } from "./agy-notice";
+import { finalLineQuotaNotice, isQuotaErrorText, quotaRetryNotice } from "./agy-notice";
 import { OmpDriverError } from "./driver";
 import { isRecord } from "./type-guards";
 
@@ -138,6 +138,25 @@ export function recordQuotaFailure(
 	const message = failure instanceof Error ? failure.message : String(failure);
 	if (!isQuotaErrorText(message)) return;
 	setQuotaNotice(turn, quotaRetryNotice(message) ?? message);
+}
+
+/** Records a final-line quota notice on a normal `end_turn` reply when no earlier notice or failure already did. */
+export function recordFinalQuotaNotice(
+	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number },
+	stopReason: string | undefined,
+	text: string,
+): boolean {
+	if (turn.rateLimit !== undefined || stopReason !== "end_turn") return false;
+	const detail = finalLineQuotaNotice(text);
+	if (detail === undefined) return false;
+	setQuotaNotice(turn, detail);
+	return true;
+}
+
+/** Extracts the quota detail from a print-mode result (error text when failed, final line when succeeded). */
+export function resultQuotaDetail(succeeded: boolean, error: string, text: string): string | undefined {
+	if (!succeeded) return isQuotaErrorText(error) ? (quotaRetryNotice(error) ?? error) : undefined;
+	return finalLineQuotaNotice(text);
 }
 
 export interface AgyPointer {

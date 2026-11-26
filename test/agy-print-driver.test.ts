@@ -458,3 +458,19 @@ test("abort with a steer queued ends the turn `aborted` and says the steer was n
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
 	await driver.stop();
 });
+
+test("a SUCCESS result ending with agy's standalone quota line turns into a 429 error and retires the child", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const quota = await started(driver, "@end-quota");
+	const firstPid = h.lastPid();
+	expect(quota.status).toBe("error");
+	expect(quota.error).toBe(
+		"agy rate limited (429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 15m59s.",
+	);
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(firstPid)).toBe(false);
+	expect(h.spawns()).toHaveLength(2);
+	await driver.stop();
+});

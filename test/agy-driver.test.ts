@@ -1798,3 +1798,71 @@ test("abort while the lost trajectory is being reopened ends the turn aborted wi
 	expect(await driver.state()).toMatchObject({ idle: true });
 	await driver.stop();
 });
+
+test("account pool: pre-tool end_turn quota line switches account before addAgyUsage and keeps reply clean", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const { harness, pool, log } = makePoolHarness(
+		"acct1 agy/gemini-pro-orchestrator-neon\nacct2 agy/gemini-pro-orchestrator-neon\n",
+		["acct1", "acct2"],
+		clock,
+	);
+	const driver = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: { FAKE_AGY_END_QUOTA_DIRS: "antigravity-cli-acct-acct1", FAKE_AGY_ECHO_DIR: "1" },
+	});
+	await driver.start();
+	const done = nextFinal(driver);
+	await driver.prompt("check quota");
+	const final = await done;
+	expect(final.status).toBe("completed");
+	expect(final.text).toBe("REPLY1:[antigravity-cli-acct-acct2] check quota");
+	expect(final.text).not.toContain("Individual quota reached");
+	expect(pool.isBlocked("acct1")).toBe(true);
+	expect(pool.status()?.current).toBe("acct2");
+	const entries = (await driver.entriesSince()).entries;
+	expect(entries.some((entry) => JSON.stringify(entry).includes("Individual quota reached"))).toBe(false);
+	await driver.stop();
+});
+
+test("account pool: post-tool end_turn quota line blocks account so another live driver skips it immediately", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const { harness, pool, log } = makePoolHarness(
+		"acct1 agy/gemini-pro-orchestrator-neon\nacct2 agy/gemini-pro-orchestrator-neon\n",
+		["acct1", "acct2"],
+		clock,
+	);
+	const d1 = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: { FAKE_AGY_ECHO_DIR: "1" },
+	});
+	const d2 = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: { FAKE_AGY_ECHO_DIR: "1" },
+	});
+	await d1.start();
+	await d2.start();
+	const firstDone = nextFinal(d1);
+	await d1.prompt("@tool-end-quota");
+	const first = await firstDone;
+	expect(first.status).toBe("error");
+	expect(first.error).toContain("도구 실행 후 중단 — 다음 계정 acct2으로 전환됨");
+	expect(pool.isBlocked("acct1")).toBe(true);
+
+	const secondDone = nextFinal(d2);
+	await d2.prompt("parallel thread");
+	expect(await secondDone).toMatchObject({
+		status: "completed",
+		text: "REPLY1:[antigravity-cli-acct-acct2] parallel thread",
+	});
+	await d1.stop();
+	await d2.stop();
+});

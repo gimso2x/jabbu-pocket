@@ -109,6 +109,8 @@ describe("startWatchdog (child bun process)", () => {
 		const line = JSON.parse(result.stderr.trim().split("\n").at(-1) ?? "{}");
 		expect(line).toMatchObject({ level: "error", event: "watchdog_kill" });
 		expect(line.stalled_ms).toBeGreaterThanOrEqual(STALL_MS);
+		expect(typeof line.host).toBe("object");
+		if (process.platform === "linux") expect(line.host.mem_available_kb).toBeGreaterThan(0);
 		expect(result.log).toContain('"event":"watchdog_kill"');
 	});
 
