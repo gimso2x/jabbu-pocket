@@ -126,6 +126,25 @@ describe("/queue with uncertain rows", () => {
 		expect(driver.calls.filter((c) => c.startsWith("steer:"))).toEqual(["steer:이미 읽었을지 모르는 지시"]);
 	});
 
+	test("parking posts exactly one owner notice in the row's thread, naming it and the retry/close path", async () => {
+		const row = await parked();
+		const notices = store
+			.listDeliveries({ originKey: ORIGIN })
+			.filter((d) => d.threadRef === row.threadRef)
+			.map((d) => d.body);
+		expect(notices).toHaveLength(1);
+		expect(notices[0]).toContain("전달 불확실");
+		expect(notices[0]).toContain("이미 읽었을지 모르는 지시");
+		expect(notices[0]).toContain("/queue-jabbu");
+		expect(notices[0]).toContain("retry");
+		expect(notices[0]).toContain("close");
+		expect(notices[0]).toContain("두 번 나올 수 있습니다");
+		// A retry still works from the notice state, and posts no second notice.
+		const reply = await send("!queue retry 1");
+		expect(reply).toContain("두 번 나올 수 있습니다");
+		expect(store.listDeliveries({ originKey: ORIGIN }).filter((d) => d.threadRef === row.threadRef)).toHaveLength(1);
+	});
+
 	test("close and retry with an unknown or waiting-row number change nothing", async () => {
 		const row = await parked();
 		expect(await send("!queue close 7")).toContain("전달 불확실 7번이 없습니다");
