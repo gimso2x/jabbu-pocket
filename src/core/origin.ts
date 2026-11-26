@@ -82,6 +82,10 @@ export interface OriginRouterDeps {
 	restartProvider?: MailboxDeps["restartProvider"];
 	/** Whether an origin's work is held (a paused lane); passed per mailbox (`MailboxDeps.isHeld`). */
 	isHeld?: (originKey: string) => boolean;
+	/** Reason an origin's queued turns are held by a provider quota limit; absent when open. */
+	quotaHoldReason?: (originKey: string) => string | undefined;
+	/** Called when a turn/send fails with a provider quota/rate-limit error. */
+	onQuotaError?: MailboxDeps["onQuotaError"];
 	/** Whether the bot is frozen; passed to every mailbox (`MailboxDeps.isFrozen`). */
 	isFrozen?: MailboxDeps["isFrozen"];
 	/** A held origin's driver started working on its own; passed per mailbox (`MailboxDeps.onHeldWork`). */
@@ -119,6 +123,8 @@ export class OriginRouter {
 			const {
 				sessionsRoot,
 				isHeld,
+				quotaHoldReason,
+				onQuotaError,
 				onHeldWork,
 				initialTodos,
 				launchRefusal,
@@ -134,6 +140,8 @@ export class OriginRouter {
 				sessionDirFor: (key, epoch) => sessionDirFor(sessionsRoot, key, epoch),
 				isDraining: () => this.draining,
 				...(isHeld === undefined ? {} : { isHeld: () => isHeld(originKey) }),
+				...(quotaHoldReason === undefined ? {} : { quotaHoldReason: () => quotaHoldReason(originKey) }),
+				...(onQuotaError === undefined ? {} : { onQuotaError }),
 				...(onHeldWork === undefined ? {} : { onHeldWork }),
 				...(initialTodos === undefined ? {} : { initialTodos: () => initialTodos(originKey) }),
 				...(launchRefusal === undefined ? {} : { launchRefusal: (driver) => launchRefusal(originKey, driver) }),
@@ -214,10 +222,7 @@ export class OriginRouter {
 		return [...this.#mailboxes.values()].reduce((sum, mailbox) => sum + mailbox.hostToolsRunning, 0);
 	}
 
-	/**
-	 * Shutdown drain mode: no mailbox dispatches pending rows anymore, so the drain below awaits already-running
-	 * turns only. A mailbox created later (a lane route racing the drain) inherits the mode.
-	 */
+	/** Shutdown drain mode: stop dispatching pending rows across all mailboxes. */
 	stopDispatching(): void {
 		this.#dispatchStopped = true;
 		for (const mailbox of this.#mailboxes.values()) mailbox.stopDispatching();
@@ -228,12 +233,7 @@ export class OriginRouter {
 		return [...this.#mailboxes.entries()].filter(([, mailbox]) => mailbox.state.busy).map(([originKey]) => originKey);
 	}
 
-	/**
-	 * Shutdown drain: wait bounded for every running turn to settle — a turn that finishes in time records its own
-	 * answer in the ledger, so the next boot's recovery finds it instead of reporting `interrupted_by_restart`.
-	 * Returns the origins still busy when the bound expired (empty when everything settled); reading `state.busy`
-	 * from outside the mailboxes' actor chains can never deadlock them.
-	 */
+	/** Shutdown drain: wait bounded for running turns to settle; returns origins still busy at timeout. */
 	async drainRunning(boundMs: number): Promise<string[]> {
 		const deadline = Date.now() + boundMs;
 		for (;;) {

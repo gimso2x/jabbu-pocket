@@ -281,19 +281,23 @@ Shutdown ==
     /\ UNCHANGED <<rstate, kind, sends, retried, fifoOut, origin3, frozen, freezes, restarts, fifoBroken, delVars>>
 
 (* recoverDispatched: 죽은 프로세스의 dispatched 행은 답이나 끊김 공지 하나로  *)
-(* 닫는다(closed). sending 행은 child에 닿았을 수 있으므로 cut 기록과 상관없이 *)
-(* uncertain으로 둔다(settleDeadProcessRows). prompt는 다시 보내지 않는다.      *)
-(* pump는 남은 inflight delivery를 recover로 pending(redelivered)에 돌린다.      *)
+(* 닫는다(closed). sending 행은 저널로 도구 미호출 실패가 증명된 건만 closed로 *)
+(* 닫고(settleBootToolFreeRows), 나머지는 uncertain으로 둔다. 재전송은 없다.  *)
 Boot ==
     /\ ~up
     /\ up' = TRUE /\ restarts' = restarts + 1
-    /\ rstate' = [r \in Rows |-> CASE rstate[r] = "dispatched" -> "closed"
-                                   [] rstate[r] = "sending" -> "uncertain"
-                                   [] OTHER -> rstate[r]]
-    /\ fifoOut' = [r \in Rows |-> fifoOut[r] \/ rstate[r] = "sending"]
+    /\ \E closedSends \in SUBSET {r \in Rows : rstate[r] = "sending"} :
+        /\ rstate' = [r \in Rows |-> CASE rstate[r] = "dispatched" -> "closed"
+                                       [] r \in closedSends -> "closed"
+                                       [] rstate[r] = "sending" -> "uncertain"
+                                       [] OTHER -> rstate[r]]
+        /\ kind' = [r \in Rows |-> IF r \in closedSends THEN "owner" ELSE kind[r]]
+        /\ sends' = [r \in Rows |-> IF r \in closedSends THEN 0 ELSE sends[r]]
+        /\ fifoOut' = [r \in Rows |-> IF r \in closedSends THEN FALSE
+                                      ELSE fifoOut[r] \/ rstate[r] = "sending"]
     /\ dstate' = IF dstate = "inflight" \/ (BugRecoverConfirmed /\ dstate = "confirmed")
                     THEN "pending" ELSE dstate
-    /\ UNCHANGED <<kind, sends, retried, step, originVars,
+    /\ UNCHANGED <<retried, step, originVars,
                    origin3, frozen, freezes, draining, fifoBroken, attempts, defFails, confirms>>
 
 ----------------------------------------------------------------------------

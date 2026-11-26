@@ -40,6 +40,7 @@ export interface DaemonContext {
 	/** Starts one idle sweep now (a lane or [TASK] start was refused for sessions or memory); a sweep already running absorbs it. */
 	readonly requestIdleSweep: () => void;
 	readonly quotaRefusal?: (model: string | undefined) => string | undefined;
+	readonly isQuotaHeld?: (originKey: string) => boolean;
 }
 
 /** The ledger of a started daemon; throws before `start()` opened it. */
