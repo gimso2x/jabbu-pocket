@@ -19,7 +19,7 @@ export interface ParkDeps {
  * later rows still go out; the owner closes or retries it with `/queue`.
  */
 export function parkUncertain(deps: ParkDeps, row: InboundRow, reason: UncertainReason, error?: unknown): boolean {
-	parkUncertainNotified(deps.store, row, reason);
+	parkUncertainNotified(deps.store, deps.log, row, reason);
 	deps.log.warn("inbound_uncertain", {
 		origin: deps.originKey,
 		id: row.platformMessageId,

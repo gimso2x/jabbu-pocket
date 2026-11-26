@@ -28,6 +28,7 @@ let dir: string;
 let store: Store;
 let router: OriginRouter;
 let driver: FlakySteerDriver;
+let logs: string[];
 let counter = 0;
 const clock = { now: () => 1_000_000 };
 
@@ -35,12 +36,13 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "jabbu-uncertain-"));
 	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
 	const sessionStore = new FakeSessionStore();
+	logs = [];
 	router = new OriginRouter({
 		timezone: "Asia/Seoul",
 		store,
 		clock,
 		sessionsRoot: join(dir, "sessions"),
-		log: createLogger({ sink: () => undefined, clock, redact }),
+		log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
 		statusProvider: () => "status",
 		driverFactory: (_origin, sessionDir) => {
 			driver = new FlakySteerDriver({ holdTurns: true, sessionDir, store: sessionStore });
@@ -150,5 +152,23 @@ describe("/queue with uncertain rows", () => {
 		expect(await send("!queue close 7")).toContain("전달 불확실 7번이 없습니다");
 		expect(await send("!queue retry 0")).toContain("전달 불확실 0번이 없습니다");
 		expect(store.getInbound(row.platformMessageId)?.state).toBe("uncertain");
+	});
+
+	test("a failing notice write is isolated: the row still parks uncertain and logs both warnings", async () => {
+		await router.route(msg("긴 작업"));
+		const origRecordAnswer = store.recordAnswer.bind(store);
+		store.recordAnswer = (input) => {
+			if (input.opRef.startsWith("uncertain:")) throw new Error("notice disk full");
+			return origRecordAnswer(input);
+		};
+		const row = msg("알림 쓰기 실패 건");
+		await router.route(row);
+		expect(store.getInbound(row.platformMessageId)).toMatchObject({
+			state: "uncertain",
+			uncertainReason: "steer_threw",
+		});
+		expect(logs.some((line) => line.includes("event=uncertain_notice_failed"))).toBe(true);
+		expect(logs.some((line) => line.includes("event=inbound_uncertain"))).toBe(true);
+		expect(await send("!queue")).toContain("1. [끼워넣기 전송 오류 · 불확실] 알림 쓰기 실패 건");
 	});
 });

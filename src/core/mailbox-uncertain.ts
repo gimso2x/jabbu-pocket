@@ -2,6 +2,8 @@
 // that never comes: the row showed only in `/queue` or on the dashboard, and nothing said so in the thread. The
 // notice is one delivery per row (op `uncertain:<id>`), so a repeated park cannot post it twice; its text mirrors
 // the `/queue` section and carries the retry reply's double-answer warning, so the owner acts with full context.
+import { isTaskOrigin } from "../lanes/status";
+import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { LEDGER_RETENTION_DAYS } from "../ops/gc-ledger";
 import { redact } from "../redact";
@@ -40,31 +42,48 @@ export function uncertainNoticeText(row: InboundRow, reason: UncertainReason): s
 }
 
 /** The notice of an already-parked row. Monitor origins have no owner thread; [TASK] rows get no delivery (`recordAnswer`). */
-export function notifyUncertainParked(store: UncertainNoticeStore, row: InboundRow, reason: UncertainReason): void {
-	if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) return;
-	store.recordAnswer({
-		originKey: row.originKey,
-		opRef: `uncertain:${row.platformMessageId}`,
-		threadRef: row.threadRef,
-		parts: [uncertainNoticeText(row, reason)],
-	});
+export function notifyUncertainParked(
+	store: UncertainNoticeStore,
+	log: Logger,
+	row: InboundRow,
+	reason: UncertainReason,
+): boolean {
+	if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX) || isTaskOrigin(row.originKey)) return false;
+	try {
+		store.recordAnswer({
+			originKey: row.originKey,
+			opRef: `uncertain:${row.platformMessageId}`,
+			threadRef: row.threadRef,
+			parts: [uncertainNoticeText(row, reason)],
+		});
+		return true;
+	} catch (error) {
+		log.warn("uncertain_notice_failed", {
+			origin: row.originKey,
+			id: row.platformMessageId,
+			reason,
+			error: String(error),
+		});
+		return false;
+	}
 }
 
 /**
  * The boot sweep for rows a crash parked between the park and the notice (the two are not one transaction): every
  * `uncertain` row with no `uncertain:<id>` delivery yet is told — exactly once. Rows the owner already retried or
- * closed left `uncertain`, so they are not here; monitor origins have no owner thread. A row parked past the ledger
- * retention is NOT told: gc may already have removed its delivered notice (`uncertain` rows never leave the ledger,
- * confirmed deliveries do), and re-posting it would be a duplicate. Returns the rows told.
+ * closed left `uncertain`, so they are not here; monitor and [TASK] origins get no owner thread notice. A row parked past
+ * the ledger retention is NOT told: gc may already have removed its delivered notice (`uncertain` rows never leave the
+ * ledger, confirmed deliveries do), and re-posting it would be a duplicate. Returns the rows told.
  */
 export function notifyUncertainMissingNotice(
 	store: UncertainNoticeStore & Pick<Store, "listInbound" | "listDeliveries">,
+	log: Logger,
 	now: number,
 ): InboundRow[] {
 	const seenByOrigin = new Map<string, Set<string | null>>();
 	const told: InboundRow[] = [];
 	for (const row of store.listInbound({ state: "uncertain" })) {
-		if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) continue;
+		if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX) || isTaskOrigin(row.originKey)) continue;
 		if (row.uncertainAt !== null && now - row.uncertainAt >= LEDGER_RETENTION_DAYS * 86_400_000) continue;
 		let seen = seenByOrigin.get(row.originKey);
 		if (!seen) {
@@ -72,14 +91,18 @@ export function notifyUncertainMissingNotice(
 			seenByOrigin.set(row.originKey, seen);
 		}
 		if (seen.has(`uncertain:${row.platformMessageId}`)) continue;
-		notifyUncertainParked(store, row, row.uncertainReason ?? "send_interrupted");
-		told.push(row);
+		if (notifyUncertainParked(store, log, row, row.uncertainReason ?? "send_interrupted")) told.push(row);
 	}
 	return told;
 }
 
 /** Parks the row and posts its notice: the only `uncertain` path an owner-facing origin should take. */
-export function parkUncertainNotified(store: UncertainNoticeStore, row: InboundRow, reason: UncertainReason): void {
+export function parkUncertainNotified(
+	store: UncertainNoticeStore,
+	log: Logger,
+	row: InboundRow,
+	reason: UncertainReason,
+): void {
 	store.markUncertain(row.platformMessageId, reason);
-	notifyUncertainParked(store, row, reason);
+	notifyUncertainParked(store, log, row, reason);
 }

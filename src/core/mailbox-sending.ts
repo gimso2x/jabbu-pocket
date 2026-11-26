@@ -21,7 +21,7 @@ export const REFUSED_OP_PREFIX = "refused:";
 /** `sending` rows of `originKey` (every origin without it) -> `uncertain` (`send_interrupted`): never sent again. */
 export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDeps["log"], originKey?: string): void {
 	for (const row of store.parkSending(originKey)) {
-		notifyUncertainParked(store, row, "send_interrupted");
+		notifyUncertainParked(store, log, row, "send_interrupted");
 		log.warn("inbound_uncertain", { origin: row.originKey, id: row.platformMessageId, reason: "send_interrupted" });
 	}
 }
@@ -33,7 +33,7 @@ export function parkInterruptedSends(store: MailboxDeps["store"], log: MailboxDe
  */
 export function settleDeadProcessRows(store: MailboxDeps["store"], log: MailboxDeps["log"], now?: number): void {
 	parkInterruptedSends(store, log);
-	for (const row of notifyUncertainMissingNotice(store, now ?? Date.now())) {
+	for (const row of notifyUncertainMissingNotice(store, log, now ?? Date.now())) {
 		log.warn("inbound_uncertain_notice_late", { origin: row.originKey, id: row.platformMessageId });
 	}
 	for (const row of store.listInbound({ state: "dispatched" })) {
@@ -78,7 +78,7 @@ export function settleFailedSend(deps: SendDeps, row: InboundRow, error: unknown
 			return "unsent";
 		}
 		if (code !== "request_timeout") return "failed";
-		parkUncertainNotified(store, row, "prompt_timeout");
+		parkUncertainNotified(store, log, row, "prompt_timeout");
 		log.warn("inbound_uncertain", { origin: originKey, id, reason: "prompt_timeout", error: String(error) });
 	} catch (writeError) {
 		// Left `sending`: the next resumePending or restart parks it; it is never sent again.

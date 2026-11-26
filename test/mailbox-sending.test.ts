@@ -7,6 +7,7 @@ import { openBotStore, sessionDirFor } from "../src/core/origin";
 import type { InboundRecord } from "../src/core/types";
 import { recoverDispatched, writeRestartCut } from "../src/daemon/recovery";
 import { buildSnapshot } from "../src/dashboard/snapshot";
+import { taskOriginKey } from "../src/lanes/status";
 import { createLogger, type Logger } from "../src/log";
 import { MONITOR_ORIGIN_PREFIX } from "../src/monitors/ledger";
 import type { OmpSessionDriver } from "../src/omp/driver";
@@ -25,6 +26,7 @@ let dir: string;
 let clock: { now(): number };
 let store: Store;
 let log: Logger;
+let logs: string[];
 let sessions: FakeSessionStore;
 let opened: SendFaultDriver[];
 /** Faults of the next drivers the factory builds, in order. */
@@ -37,7 +39,8 @@ beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "jabbu-mailbox-sending-"));
 	clock = { now: () => 1_700_000_000_000 };
 	store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
-	log = createLogger({ sink: () => undefined, clock, redact });
+	logs = [];
+	log = createLogger({ sink: (line) => logs.push(line), clock, redact });
 	sessions = new FakeSessionStore();
 	opened = [];
 	faults = [];
@@ -281,14 +284,50 @@ describe("the crash between a park and its notice (boot reconciliation)", () => 
 		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
 	});
 
-	test("rows the owner already retried or closed, and monitor rows, get no boot notice", async () => {
+	test("rows the owner already retried or closed, and monitor or [TASK] rows, get no boot notice", async () => {
 		const retried = parkSilently("다시 보낸 일");
 		store.retryUncertain(retried.id);
 		const closed = parkSilently("닫은 일");
 		store.discard(closed.id);
-		parkSilently("모니터 행", `${MONITOR_ORIGIN_PREFIX}test/heartbeat`);
+		const monitorOrigin = `${MONITOR_ORIGIN_PREFIX}test/heartbeat`;
+		const taskOrigin = taskOriginKey("t-1");
+		parkSilently("모니터 행", monitorOrigin);
+		parkSilently("태스크 행", taskOrigin);
+		let recordCalls = 0;
+		const origRecordAnswer = store.recordAnswer.bind(store);
+		store.recordAnswer = (input) => {
+			recordCalls += 1;
+			return origRecordAnswer(input);
+		};
 		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(recordCalls).toBe(0);
 		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
-		expect(store.listDeliveries({ originKey: `${MONITOR_ORIGIN_PREFIX}test/heartbeat` })).toHaveLength(0);
+		expect(store.listDeliveries({ originKey: monitorOrigin })).toHaveLength(0);
+		expect(store.listDeliveries({ originKey: taskOrigin })).toHaveLength(0);
+		expect(logs.some((line) => line.includes("event=inbound_uncertain_notice_late"))).toBe(false);
+	});
+
+	test("recordAnswer failure during boot park is isolated across multiple sending rows", async () => {
+		const id1 = `b${++counter}`;
+		const id2 = `b${++counter}`;
+		store.ensureOrigin(ORIGIN, join(dir, "sessions", "boot"));
+		for (const id of [id1, id2]) {
+			store.recordInbound({
+				originKey: ORIGIN,
+				platformMessageId: id,
+				textRef: `보내던 일 ${id}`,
+				threadRef: `300000000000000001:${id}`,
+			});
+			store.markSending(id, null);
+		}
+		store.recordAnswer = () => {
+			throw new Error("sqlite busy");
+		};
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.getInbound(id1)).toMatchObject({ state: "uncertain", uncertainReason: "send_interrupted" });
+		expect(store.getInbound(id2)).toMatchObject({ state: "uncertain", uncertainReason: "send_interrupted" });
+		expect(logs.filter((line) => line.includes("event=uncertain_notice_failed"))).toHaveLength(4);
+		expect(logs.filter((line) => line.includes("event=inbound_uncertain "))).toHaveLength(2);
+		expect(logs.some((line) => line.includes("event=inbound_uncertain_notice_late"))).toBe(false);
 	});
 });
