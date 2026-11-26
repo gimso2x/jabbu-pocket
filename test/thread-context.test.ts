@@ -123,6 +123,20 @@ describe("thread context injection", () => {
 		expect(prompt.endsWith("\n\n[현재 요청]\n이번 주 내용 정리해서줘")).toBe(true);
 	});
 
+	test("listThreadForeignDeliveries returns the oldest five, not the newest", () => {
+		for (let i = 1; i <= 6; i += 1) {
+			store.recordAnswer({ originKey: CHANNEL, opRef: `op-${i}`, threadRef: REF, parts: [`답 ${i}`] });
+		}
+		for (const row of store.listDeliveries({ originKey: CHANNEL })) confirmDelivery(row);
+		expect(store.listThreadForeignDeliveries(REF, THREAD, 5).map((d) => d.body)).toEqual([
+			"답 1",
+			"답 2",
+			"답 3",
+			"답 4",
+			"답 5",
+		]);
+	});
+
 	test("only the first prompt of the session carries the context", async () => {
 		await turn(router.mailbox(CHANNEL), 0, () => router.route(msg(CHANNEL, REF, "C1:111.222", "스레드 시작")));
 		confirmDelivery(store.listDeliveries({ originKey: CHANNEL }).find((d) => d.threadRef === REF));

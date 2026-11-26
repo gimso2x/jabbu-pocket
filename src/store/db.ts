@@ -1579,10 +1579,10 @@ export class Store {
 			.query(
 				`SELECT * FROM deliveries
 				 WHERE thread_ref = ? AND origin_key != ? AND state = 'confirmed' AND part = 0
-				 ORDER BY delivery_id DESC LIMIT ?`,
+				 ORDER BY delivery_id ASC LIMIT ?`,
 			)
 			.all(threadRef, excludeOriginKey, limit) as DeliverySql[];
-		return rows.map(toDelivery).reverse();
+		return rows.map(toDelivery);
 	}
 
 	/**
