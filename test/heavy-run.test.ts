@@ -15,6 +15,8 @@ import {
 
 const RUNNER = join(import.meta.dir, "..", "scripts", "heavy-run");
 const DEADLINE_MS = 20_000;
+/** Per-test budget of the tests that spawn runners: up to six bun starts plus flock, slow on a loaded CI runner. */
+const RUN_TEST_MS = DEADLINE_MS + 10_000;
 
 let home: string;
 let paths: HeavyRunPaths;
@@ -101,7 +103,7 @@ describe("heavy-run: serialising", () => {
 		expect(await second.exited).toBe(0);
 		expect(await new Response(second.stdout as ReadableStream).text()).toContain("second-ran");
 		expect(readHeavyRunStates(paths)).toEqual([]);
-	});
+	}, RUN_TEST_MS);
 
 	test("the waiting run starts after the running one's process group is kill -9'd", async () => {
 		const first = runner(["--", "sh", "-c", "echo started; exec sleep 60"]);
@@ -116,14 +118,14 @@ describe("heavy-run: serialising", () => {
 		process.kill(-pgid, "SIGKILL");
 		expect(await second.exited).toBe(0);
 		expect(await new Response(second.stdout as ReadableStream).text()).toContain("after-kill");
-	});
+	}, RUN_TEST_MS);
 });
 
 describe("heavy-run: exit codes and re-entry", () => {
 	test("the command's exit code is passed on", async () => {
 		const proc = runner(["--", "sh", "-c", "exit 7"]);
 		expect(await proc.exited).toBe(7);
-	});
+	}, RUN_TEST_MS);
 
 	test("a run that waits past --max-wait exits 75 with heavy-run: busy", async () => {
 		const first = runner(["--", ...HOLD]);
@@ -134,7 +136,7 @@ describe("heavy-run: exit codes and re-entry", () => {
 		expect(err).toContain("heavy-run: busy");
 		expect(await new Response(second.stdout as ReadableStream).text()).not.toContain("never");
 		expect(readHeavyRunStates(paths).map((s) => s.pid)).toEqual([first.pid]);
-	});
+	}, RUN_TEST_MS);
 
 	test("HEAVY_RUN_HELD with the same lock path runs at once while the lock is taken", async () => {
 		const first = runner(["--", ...HOLD]);
@@ -142,13 +144,13 @@ describe("heavy-run: exit codes and re-entry", () => {
 		const nested = runner(["--max-wait", "1", "--", "echo", "nested-ran"], { [HEAVY_RUN_HELD_ENV]: paths.lock });
 		expect(await nested.exited).toBe(0);
 		expect(await new Response(nested.stdout as ReadableStream).text()).toContain("nested-ran");
-	});
+	}, RUN_TEST_MS);
 
 	test("heavy-run → heavy-run (the nested call inherits the held lock) does not deadlock", async () => {
 		const proc = runner(["--max-wait", "5", "--", RUNNER, "--max-wait", "1", "--", "echo", "inner-ran"]);
 		expect(await proc.exited).toBe(0);
 		expect(await new Response(proc.stdout as ReadableStream).text()).toContain("inner-ran");
-	});
+	}, RUN_TEST_MS);
 });
 
 describe("heavy-run: stale state files", () => {
