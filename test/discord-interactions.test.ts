@@ -142,6 +142,7 @@ describe("owner clicks", () => {
 				channel: CH,
 				messageTs: card,
 				interactionId: interaction.id,
+				replyEphemeral: expect.any(Function),
 			},
 		]);
 	});
@@ -180,6 +181,7 @@ describe("owner clicks", () => {
 				channel: CH,
 				messageTs: status.messageId,
 				interactionId: expect.any(String),
+				replyEphemeral: expect.any(Function),
 			},
 		]);
 	});
@@ -200,6 +202,7 @@ describe("owner clicks", () => {
 				channel: DM,
 				messageTs: ref.messageId,
 				interactionId: expect.any(String),
+				replyEphemeral: expect.any(Function),
 			},
 		]);
 	});

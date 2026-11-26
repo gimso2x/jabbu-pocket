@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { toneColorInt } from "../channel/card";
 import type {
 	ActionButton,
 	ChannelPort,
@@ -98,11 +99,7 @@ export interface Destination {
 const isCard = (msg: OutboundMessage): boolean =>
 	msg.title !== undefined || msg.body !== undefined || msg.fields !== undefined;
 
-/**
- * An outbound message as Discord content and embeds (buttons go as components). A card (`title`, `body` or `fields`)
- * is one embed — title, body (else text) as the description, fields, the note as a small last line — with `text` as
- * the content, the line a notification shows. A plain message is its text, plus the note when it has buttons.
- */
+/** Converts an OutboundMessage to Discord content + optional embed (`title`/`body`/`fields`/`tone`). */
 export function messageOf(msg: OutboundMessage): { content: string; embeds?: DiscordEmbed[] } {
 	if (isCard(msg)) {
 		const note = msg.buttonsNote === undefined ? [] : [subtext(mrkdwnToDiscord(msg.buttonsNote))];
@@ -110,6 +107,7 @@ export function messageOf(msg: OutboundMessage): { content: string; embeds?: Dis
 			...(msg.title === undefined ? {} : { title: msg.title }),
 			description: [mrkdwnToDiscord(msg.body ?? msg.text), ...note].join("\n"),
 			fields: (msg.fields ?? []).map((field) => ({ name: field.label, value: mrkdwnToDiscord(field.value) })),
+			...(msg.tone === undefined ? {} : { color: toneColorInt(msg.tone) }),
 		});
 		return { content: cutCodePointSafe(mrkdwnToDiscord(msg.text), MESSAGE_CONTENT_LIMIT), embeds: [embed] };
 	}
@@ -120,11 +118,7 @@ export function messageOf(msg: OutboundMessage): { content: string; embeds?: Dis
 	return { content: cutCodePointSafe(lines.join("\n"), MESSAGE_CONTENT_LIMIT) };
 }
 
-/**
- * The Discord side of `ChannelPort` over `DiscordTransport`. Ids keep the core's shape: a conversation is the channel
- * (a server thread's parent), a thread id is the Discord thread (the id of the message it started from) — or, in a DM
- * or for a root command, the message the post replies to. It also keeps the channel cache the adapter shares.
- */
+/** Discord `ChannelPort` over `DiscordTransport`: maps conversation/thread/message ids and caches channel metadata. */
 export class DiscordChannel implements ChannelPort {
 	readonly platform = "discord";
 	readonly transport: DiscordTransport;
@@ -315,10 +309,12 @@ export class DiscordChannel implements ChannelPort {
 		await this.transport.archiveThread({ threadId: ref.threadId ?? ref.messageId });
 	}
 
-	/**
-	 * Starts the thread of `ref`'s message (a server channel message: the thread id is its id) and remembers it, so
-	 * posts with `threadId` = that id go into it. A thread already started from it counts as started.
-	 */
+	/** Pins `ref` in its channel. */
+	async pin(ref: MessageRef): Promise<void> {
+		await this.transport.pinMessage({ channelId: await this.#messageChannel(ref), messageId: ref.messageId });
+	}
+
+	/** Starts a thread from `ref`'s message (already-started threads succeed idempotently). */
 	async openThread(ref: MessageRef, name: string): Promise<void> {
 		try {
 			await this.transport.startThread({

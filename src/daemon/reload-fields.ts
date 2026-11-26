@@ -29,6 +29,7 @@ export const LIVE_FIELDS = [
 	"wikiNotes",
 	"costCap",
 	"quotaGate",
+	"opsPanel",
 	// The lane manager reads `lanes.models` at every lane start.
 	"lanes",
 	// The briefing renderer reads it on every `!brief` (a moved chromium applies without a restart).
