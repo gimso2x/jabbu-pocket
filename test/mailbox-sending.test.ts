@@ -272,6 +272,15 @@ describe("the crash between a park and its notice (boot reconciliation)", () => 
 		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(1);
 	});
 
+	test("a row parked past the ledger retention with no notice left is not re-told (gc may have taken it)", async () => {
+		const realNow = 1_700_000_000_000;
+		clock.now = () => realNow - 91 * 86_400_000;
+		parkSilently("아주 오래 전 파킹된 일");
+		clock.now = () => realNow;
+		await recoverDispatched({ store, driverFactory, log, homeDir: dir, now: () => clock.now() });
+		expect(store.listDeliveries({ originKey: ORIGIN })).toHaveLength(0);
+	});
+
 	test("rows the owner already retried or closed, and monitor rows, get no boot notice", async () => {
 		const retried = parkSilently("다시 보낸 일");
 		store.retryUncertain(retried.id);
