@@ -308,7 +308,7 @@ export function renderTaskDetail(
 		cardKey === undefined
 			? ""
 			: `<a class="button is-ghost" href="?card=${esc(encodeURIComponent(cardKey))}" data-card="${esc(cardKey)}">에이전트 패널 보기</a>`;
-	const actions = `<div class="detail-actions"><span class="badge ${tone}">${esc(label)}</span><button type="button" class="copy-btn" data-copy="${esc(task.taskId)}" data-copy-label="TASK ID" aria-label="TASK ID 복사">TASK ID 복사</button><button type="button" class="copy-btn" data-copy="${esc(task.branch)}" data-copy-label="브랜치" aria-label="브랜치 복사">브랜치 복사</button></div>`;
+	const actions = `<div class="detail-actions"><span class="badge ${tone}">${esc(label)}</span>${task.pausedAt === undefined ? "" : '<span class="badge is-warning" title="스윕 재촉·stale 알림·자동 머지 보류 중">멈춤 중</span>'}<button type="button" class="copy-btn" data-copy="${esc(task.taskId)}" data-copy-label="TASK ID" aria-label="TASK ID 복사">TASK ID 복사</button><button type="button" class="copy-btn" data-copy="${esc(task.branch)}" data-copy-label="브랜치" aria-label="브랜치 복사">브랜치 복사</button></div>`;
 	const leadText =
 		task.acChecked === undefined && !task.open
 			? `AC ${task.acTotal}개`
@@ -1064,4 +1064,4 @@ export function renderLiveTurn(
 		state.fail ? `<p class="turn-note">${esc(state.fail)}</p>` : "",
 	];
 	return `<article class="turn is-live${state.settling ? " is-settling" : ""}" aria-busy="${state.settling ? "false" : "true"}"><p class="turn-head"><b>omp</b>${head}</p>${parts.join("")}</article>`;
-}
+								}
