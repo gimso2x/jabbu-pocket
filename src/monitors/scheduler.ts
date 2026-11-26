@@ -288,7 +288,7 @@ export class MonitorScheduler {
 			);
 		}
 		// A span with no slot needs no cursor move: the next fire after the old cursor and after `now` is the same.
-		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now);
+		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOld.length + overLimit.length;
 		if (skipped > 0) {
 			summary.skippedCatchUp += skipped;
@@ -333,7 +333,7 @@ export class MonitorScheduler {
 		if (now < monitor.cursorAt + trigger.intervalMs || this.#scriptsRunning.has(monitor.id)) return;
 		const { store, log } = this.#deps;
 		// The cursor moves before the run, so a crash mid-check never causes an immediate rerun.
-		store.monitors.setCursor(monitor.id, now);
+		store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		this.#scriptsRunning.add(monitor.id);
 		this.#track(
 			(async () => {

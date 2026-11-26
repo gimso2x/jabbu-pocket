@@ -24,7 +24,8 @@ function convertPlain(text: string): string {
 			// would ping `@here`/`@everyone`, and nothing the core writes means to.
 			.replace(/<!([a-z]{1,30})[^>]{0,200}>/g, "$1")
 			.replace(/<#([0-9]+)\|[^>]{0,200}>/g, "<#$1>")
-			.replace(/<((?:https?|mailto):[^|>\s]{1,512})\|([^>]{1,500})>/g, (_, u: string, t: string) => `[${t}](${u})`)
+			// The label may not contain `[]()`: a label with `](` in it would move the link target into the label's own URL.
+			.replace(/<((?:https?|mailto):[^|>\s]{1,512})\|([^>[\]()]{1,500})>/g, (_, u: string, t: string) => `[${t}](${u})`)
 			.replace(/<((?:https?|mailto):[^|>\s]{1,512})>/g, "$1")
 			// A `\*` / `\~` (`escapeDiscordMarkdown`) is a literal character, never a delimiter.
 			.replace(/(^|[^\w*\\])\*(?=\S)([^*\n]+?)(?<=[^\s\\])\*(?![\w*])/g, "$1**$2**")
@@ -61,11 +62,9 @@ function stripCellMarkdown(cell: string): string {
 	return cell.replace(
 		CELL_INLINE,
 		(match, _ticks, code?: string, linkLabel?: string, boldStar?: string, boldUnder?: string) => {
+			const inner = linkLabel ?? boldStar ?? boldUnder;
 			if (code !== undefined) return code;
-			if (linkLabel !== undefined) return stripCellMarkdown(linkLabel);
-			if (boldStar !== undefined) return stripCellMarkdown(boldStar);
-			if (boldUnder !== undefined) return stripCellMarkdown(boldUnder);
-			return match;
+			return inner === undefined ? match : stripCellMarkdown(inner);
 		},
 	);
 }
