@@ -15,7 +15,7 @@ import {
 import { parseStoredTrigger, type UnsupportedTrigger } from "./stored-trigger";
 
 export const NO_REPORT = "NO_REPORT";
-/** Entire-response / first-line / last-line answer that skips the chat delivery (hermes monitor mode). */
+/** Entire-response / first-line / last-line answer that skips the chat delivery. */
 export const SILENT = "[SILENT]";
 export const MONITOR_ORIGIN_PREFIX = "monitor/";
 /** The same monitor failing with the same normalized error re-alerts after this long, not on every fire. */
@@ -669,7 +669,7 @@ export class MonitorLedger {
 			const unchanged = suppressUnchanged && input.outcome === "met" && monitor.lastOutputHash === input.hash;
 			const suppressReason =
 				input.suppressReason ?? (unchanged ? `no_change:${(input.hash ?? "").slice(0, 8)}` : undefined);
-			// The hash persists with the state (hermes: state before the agent): an agent failure never repeats one change.
+			// The hash persists with the state before calling the agent: an agent failure never repeats one change.
 			this.#db
 				.query("UPDATE monitors SET last_script_state = ?, last_output_hash = ? WHERE id = ?")
 				.run(
@@ -697,7 +697,7 @@ export class MonitorLedger {
 		})();
 	}
 
-	// ---- incidents (failure repeat suppression, hermes monitor mode) ----
+	// ---- incidents (failure repeat suppression) ----
 
 	/**
 	 * Counts one terminal monitor failure and decides whether the owner should be told (the shared incident state

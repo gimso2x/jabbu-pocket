@@ -10,7 +10,7 @@ import { STALL_MS } from "../src/core/types";
 import { LIVE_FIELDS } from "../src/daemon/reload";
 import { createLogger, type Logger } from "../src/log";
 import { AgyAccountPool } from "../src/omp/agy-account-pool";
-import { AGY_ACP_ARGS } from "../src/omp/agy-acp-client";
+import { AGY_ACP_ARGS, AgyAcpClient, watchChildExit } from "../src/omp/agy-acp-client";
 import { AgyOmpDriver, type AgyOmpDriverOptions } from "../src/omp/agy-driver";
 import {
 	AGY_TOOL_KEEPALIVE_EVENT,
@@ -134,6 +134,17 @@ function nextEvent(driver: AgyOmpDriver, match: (event: OmpEvent) => boolean): P
 		resolve(event);
 	});
 	return promise;
+}
+
+/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+	for (let hop = 0; hop < hops; hop += 1) {
+		if (ready()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	}
+	throw new Error(`never happened: ${what}`);
 }
 
 function alive(pid: number): boolean {
@@ -431,6 +442,108 @@ test("a cancel agy never answers kills the process group: no onExit, no turn lef
 	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
 	expect(finals).toHaveLength(2);
 	await driver.stop();
+});
+
+test("abort returns while a detached descendant holds stdout: exit settles on the code, not EOF", async () => {
+	const harness = makeHarness();
+	const exits: OmpExitInfo[] = [];
+	const driver = harness.make({ cancelTimeoutMs: 50 });
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const session = (await driver.openSession()).sessionId;
+	const pid = childPid(driver);
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	const chunk = nextEvent(driver, (event) => event.type === "message_update");
+	const opRef = await driver.prompt("@hold-stdout");
+	await chunk;
+	// The chunk can reach the driver while the grandchild spawn is still in flight: wait for the fake's
+	// log to prove the detached sleeper exists before aborting, or the test passes vacuously.
+	await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
+	await driver.abort();
+	// Returned: the turn is over and its final out. The detached sleeper kept stdout open, so only the exit
+	// code (plus a short drain grace) settled the exit.
+	expect(finals).toEqual([{ opRef, status: "aborted", text: "", error: "cancel unanswered; agy killed" }]);
+	expect(await driver.state()).toMatchObject({ idle: true });
+	expect(driver.pid).toBeUndefined();
+	expect(alive(pid)).toBe(false);
+
+	// The next prompt starts a new child on the same session.
+	const next = nextFinal(driver);
+	await driver.prompt("back");
+	expect(await next).toMatchObject({ status: "completed", text: "REPLY1:back" });
+	expect(spawns(harness)).toHaveLength(2);
+	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
+	expect(finals).toHaveLength(2);
+	await driver.stop();
+	// The detached sleeper outlives the group kill: end it so its pipe does not outlive the test file.
+	const grand = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
+	if (grand !== undefined) {
+		try {
+			process.kill(grand, "SIGKILL");
+		} catch {
+			// already gone
+		}
+	}
+	expect(exits).toEqual([]);
+});
+
+test("watchChildExit settles immediately when stdoutDone closes before the grace", async () => {
+	let codeSeen: number | undefined;
+	const start = performance.now();
+	await watchChildExit(Promise.resolve(7), Promise.resolve(), (code) => {
+		codeSeen = code;
+	});
+	expect(codeSeen).toBe(7);
+	expect(performance.now() - start).toBeLessThan(200);
+});
+
+test("AgyAcpClient ignores stdout notifications written after exit settles", async () => {
+	const harness = makeHarness();
+	const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+	const exited = Promise.withResolvers<number>();
+	const client = new AgyAcpClient(
+		{
+			executable: join(harness.root, "bin", "agy"),
+			cwd: harness.root,
+			env: { FAKE_AGY_LOG: harness.logFile, HOME: harness.root, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		},
+		{
+			onNotification: (method, params) => notifications.push({ method, params }),
+			onExit: (code) => exited.resolve(code),
+		},
+	);
+	let grand: number | undefined;
+	try {
+		await client.request("initialize", { protocolVersion: 1 });
+		const opened = await client.request("session/new", { cwd: harness.root, mcpServers: [] });
+		void client
+			.request("session/prompt", { sessionId: opened.sessionId, prompt: [{ type: "text", text: "@hold-stdout" }] })
+			.catch(() => undefined);
+		await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
+		grand = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
+		if (grand === undefined) throw new Error("missing detached sleeper pid");
+		client.kill("SIGKILL");
+		await exited.promise;
+		await client.gone;
+		const before = notifications.length;
+		process.kill(grand, "SIGUSR2");
+		await until(() => !alive(grand as number), "detached sleeper exits on SIGUSR2");
+		for (let i = 0; i < 3; i += 1) {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			setTimeout(resolve, 0);
+			await promise;
+		}
+		expect(notifications.slice(before).some((entry) => entry.params.late === true)).toBe(false);
+	} finally {
+		if (grand !== undefined) {
+			try {
+				process.kill(grand, "SIGKILL");
+			} catch {
+				// already gone
+			}
+		}
+	}
 });
 
 test("a resumed session is reused without session/new; one agy cannot read falls back to session/new", async () => {

@@ -1,5 +1,5 @@
 /**
- * herdr-web-ui task board links (gajae-way hub fleet `owner_link` pattern): a card is addressed by the pane id on
+ * herdr-web-ui task board links: a card is addressed by the pane id on
  * the web UI's own (local) machine and by `<machine id>:<pane id>` on a machine it reaches over ssh. The machine
  * list comes from the web UI's `/api/machines`; when the card cannot be resolved the board root is linked instead.
  */

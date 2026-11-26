@@ -1338,7 +1338,7 @@ export class Store {
 			const target = { originKey: monitorOrigin(settled.event.monitorId), opRef: `monitor-notice:${eventId}` };
 			const threadRef = this.ownerAlertThreadRef(target);
 			if (threadRef === undefined) return undefined;
-			// Same monitor + same normalized error inside the repeat window stays quiet (hermes incident dedup).
+			// Same monitor + same normalized error inside the repeat window stays quiet.
 			const incident = this.monitors.recordMonitorIncident(settled.event.monitorId, error, this.clock.now());
 			if (!incident.notify) return undefined;
 			const reason = error.replace(/^\[(?:turn|command) failed\]\s*/, "").replace(/\s+—.*$/, "");

@@ -27,6 +27,7 @@ import { LANES_USAGE, lanesCommand } from "./lanes";
 import { joinLines, stripExtensionPath } from "./linear-text";
 import { MONITORS_USAGE, monitorsCommand } from "./monitors";
 import { OMP_USAGE, ompCommand } from "./omp";
+import { QUOTA_USAGE, quotaCommand } from "./quota";
 import { RESTORE_USAGE, restoreCommand } from "./restore";
 import { SKILLS_USAGE, skillsCommand } from "./skills";
 import { TASKS_USAGE, tasksCommand } from "./tasks";
@@ -60,7 +61,7 @@ ${GATES_USAGE}  inject --origin discord/<dm|ch>/ID --as-owner --text <t> [--quot
                                  while no daemon listens (a restart) it tries again every 2s for up to 3 minutes
   reload                         running daemon re-reads config.json (also SIGHUP): policy fields apply live,
                                  startup-bound fields are listed as restart_required; an invalid file changes nothing
-${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
+${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${QUOTA_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
 
 /** The fields `renderStatusText` and `--json` readers rely on; a reply without them is not a status report. */
 function isStatusReport(value: unknown): value is StatusReport {
@@ -176,13 +177,7 @@ async function checkLocalHerdr(herdr: { bin?: string }, run: ProcessRunner): Pro
 	return { ok: false, line: `fail herdr: ${safeBin} ${reason}` };
 }
 
-/**
- * `jabbu-pocket doctor`: the doctor checks, then (herdr on) the local herdr version and its omp integration, then per dispatch
- * host one reach line and one omp integration line. A host may be switched off on purpose (a laptop), so its lines are
- * warnings and never change the exit code; an unreadable config was reported above. A local herdr that does not answer
- * while `herdr` is on is a failure (exit 1): dispatch and the [TASK] sweep need it. A missing omp integration is a
- * warning everywhere: herdr still runs the agents, only their waiting state goes unseen.
- */
+/** `jabbu-pocket doctor`: runs doctor checks, local/remote herdr status, and dispatchHost reachability (host lines warn only). */
 export async function doctorCommand(
 	homeDir: string,
 	write: (line: string) => void,
@@ -527,6 +522,8 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return await applyCommand(rest, homeDir, env);
 			case "omp":
 				return await ompCommand(rest, homeDir, env);
+			case "quota":
+				return quotaCommand(rest, homeDir);
 			case "restore":
 				return await restoreCommand(rest, homeDir);
 			case "reload":

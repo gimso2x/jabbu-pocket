@@ -48,6 +48,8 @@ export class DiscordSocketTransport implements DiscordTransport {
 	readonly #createdAt = Date.now();
 	#gateway: DiscordGateway | undefined;
 	readonly archiveThread = (args: { threadId: string }): Promise<void> => this.#rest.archiveThread(args);
+	readonly pinMessage = (args: MessageTarget): Promise<void> => this.#rest.pinMessage(args);
+	readonly triggerTyping = (channelId: string): Promise<void> => this.#rest.triggerTyping(channelId);
 
 	constructor(tokens: { botToken: string }, options: DiscordSocketTransportOptions = {}) {
 		this.#token = tokens.botToken;
@@ -86,7 +88,7 @@ export class DiscordSocketTransport implements DiscordTransport {
 		try {
 			ids = await gateway.start();
 		} catch (err) {
-			// A start that failed (fatal close, refused token) leaves a stopped gateway: let a later start() make its own.
+			// Failed start leaves no stale gateway so a later start() creates a fresh one.
 			if (this.#gateway === gateway) this.#gateway = undefined;
 			throw err;
 		}
@@ -163,9 +165,5 @@ export class DiscordSocketTransport implements DiscordTransport {
 
 	followupInteraction(args: FollowupInteractionArgs): Promise<void> {
 		return this.#rest.followupInteraction(args);
-	}
-
-	triggerTyping(channelId: string): Promise<void> {
-		return this.#rest.triggerTyping(channelId);
 	}
 }

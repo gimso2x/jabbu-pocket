@@ -29,7 +29,7 @@ export type MonitorTrigger =
 	/**
 	 * `fire`: `edge` (default) fires when the check turns met (exit 0) after not being met; `every` fires on every met
 	 * check. `once` disables the monitor after its first fire. Rows stored before these fields exist read as edge/false.
-	 * `suppressUnchanged`: with the agent call budgeted like hermes monitor mode, a met check whose stdout hashes
+	 * `suppressUnchanged`: a met check whose stdout hashes
 	 * identical to the previous met check is recorded as skipped (`no_change`) instead of waking the agent.
 	 */
 	| {

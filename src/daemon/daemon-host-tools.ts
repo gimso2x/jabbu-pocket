@@ -153,6 +153,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 							ceiling: resolvedCeiling(ctx.options.config.hostSessionCeiling),
 							onPressure: () => ctx.requestIdleSweep(),
 						},
+						...(ctx.quotaRefusal === undefined ? {} : { quotaRefusal: ctx.quotaRefusal }),
 					},
 					recordPrompt: (input: HerdrPromptInput) => ctx.store?.recordHerdrPrompt(input),
 				}),
@@ -189,12 +190,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 						: [...base, buildWorkStartTool(lanes, laneChannel, originKey), ...monitorTools, ...boardTools];
 }
 
-/**
- * Owner answers to the omp child's dialogs (select/confirm/input/editor/ask) as choice cards in the thread of the
- * origin's running turn. Undefined when the origin has no chat channel (monitors) — the driver then cancels them.
- * `flush` first sends the recorded deliveries (the text next to the `ask` call is an interim one), so the card lands
- * below that text; a flush slower than {@link DIALOG_FLUSH_MS} does not hold the card back.
- */
+/** Dialogs (select/confirm/input/editor/ask) as thread cards; `flush` runs first up to `DIALOG_FLUSH_MS`. */
 export function answerDialogsFor(
 	ctx: DaemonContext,
 	originKey: string,

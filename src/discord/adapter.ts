@@ -59,6 +59,7 @@ import {
 import { parseChatOrigin } from "../core/origin-key";
 import { parseCommand, parsePurposeCommand, TAKES_ARG } from "../core/types";
 import type { Logger } from "../log";
+import { redact } from "../redact";
 import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
@@ -517,33 +518,30 @@ export class DiscordAdapter implements ChannelAdapter {
 					channel,
 					messageTs: message.id,
 					interactionId: interaction.id,
+					replyEphemeral: (text) => this.#followupEphemeral(interaction, text, "action_reply_failed"),
 				});
 			} catch (err) {
 				this.#log.error("action_failed", { error: errorText(err), ...actionContext });
-				await this.#actionFailureNotice(interaction);
+				await this.#followupEphemeral(interaction, ACTION_FAILURE_TEXT, "action_failure_notice_failed");
 			}
 		} catch (err) {
 			this.#log.error("action_failed", { error: errorText(err), ...actionContext });
 		}
 	}
 
-	/**
-	 * The click was acknowledged but nothing came of it (a refused ledger write, a core error): an ephemeral line in
-	 * the channel tells the owner to press again. The card itself is untouched — `@original` is the card message, and a
-	 * PATCH there would overwrite it. A failed notice is one warn line.
-	 */
-	async #actionFailureNotice(interaction: DiscordInteraction): Promise<void> {
+	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). */
+	async #followupEphemeral(interaction: DiscordInteraction, text: string, logEvent: string): Promise<void> {
 		try {
 			await this.#call("post", () =>
 				this.#transport.followupInteraction({
 					applicationId: interaction.application_id,
 					token: interaction.token,
-					content: ACTION_FAILURE_TEXT,
+					content: cutCodePointSafe(redact(text), MESSAGE_CONTENT_LIMIT),
 					flags: EPHEMERAL,
 				}),
 			);
 		} catch (err) {
-			this.#log.warn("action_failure_notice_failed", { id: interaction.id, error: errorText(err) });
+			this.#log.warn(logEvent, { id: interaction.id, error: errorText(err) });
 		}
 	}
 

@@ -10,7 +10,7 @@ import type { Logger } from "../log";
 import { scanForInjection } from "../safety/injection";
 import { errorText, oneLine } from "./text";
 
-/** Inbound attachment budget (hermes-agent parity: images get more room than documents). */
+/** Inbound attachment budget (images get more room than documents). */
 export const MAX_INBOUND_FILES = 6;
 export const MAX_INBOUND_IMAGE_BYTES = 25 * 1024 * 1024;
 export const MAX_INBOUND_DOC_BYTES = 20 * 1024 * 1024;
@@ -97,7 +97,7 @@ export interface DownloadFileArgs {
 export type DownloadResult = { ok: true; bytes: number; mime: string | undefined } | { ok: false; error: string };
 
 /**
- * Downloads one attachment to `destPath`, mirroring the hermes-agent hardening: only allowed hosts are ever
+ * Downloads one attachment to `destPath` with hardened checks: only allowed hosts are ever
  * contacted, redirects are followed manually (max 3) and re-checked every hop, 429/5xx/timeouts retry 3 times, an
  * HTML login page is a scope error, and the size cap is enforced on both Content-Length and the streamed body. The
  * body streams straight to the tmp file (chunks are never buffered in memory). The file lands atomically (tmp + rename).

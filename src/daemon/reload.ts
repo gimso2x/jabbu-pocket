@@ -4,7 +4,7 @@ import { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS } from "./reload-fields";
 export { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS };
 
 /**
- * Config reload without a restart (gajae-way SIGHUP reload): `jabbu-pocket reload` or SIGHUP re-reads config.json. Policy
+ * Config reload without a restart: `jabbu-pocket reload` or SIGHUP re-reads config.json. Policy
  * fields apply live, fields bound to startup resources are reported as needing a restart and left untouched, and
  * fields only the CLI reads (gc, backup) take effect on its next run anyway. A config that fails validation changes
  * nothing.

@@ -31,13 +31,8 @@ export class FileFakeDiscordTransport implements DiscordTransport {
 			applicationId: "600000000000000009",
 		},
 	) {
-		this.#seq = existsSync(path)
-			? BigInt(
-					readFileSync(path, "utf8")
-						.split("\n")
-						.filter((line) => ID_METHODS.test(line)).length,
-				)
-			: 0n;
+		const lines = existsSync(path) ? readFileSync(path, "utf8").split("\n") : [];
+		this.#seq = BigInt(lines.filter((line) => ID_METHODS.test(line)).length);
 	}
 
 	async start(_handlers: DiscordHandlers): Promise<{ botUserId: string; applicationId: string }> {
@@ -84,6 +79,10 @@ export class FileFakeDiscordTransport implements DiscordTransport {
 
 	async archiveThread(args: { threadId: string }): Promise<void> {
 		this.#log({ method: "archiveThread", ...args });
+	}
+
+	async pinMessage(args: MessageTarget): Promise<void> {
+		this.#log({ method: "pinMessage", ...args });
 	}
 
 	async getChannel(channelId: string): Promise<DiscordChannelInfo> {

@@ -1,7 +1,8 @@
 import { esc } from "./text";
 import type { SpanKind, SpanStatus, TraceSpan, TurnTrace } from "./trace";
+import { buildTraceRows, renderTraceFilters, renderTraceInspector } from "./ux-renderers";
 
-/** What the waterfall shows besides the trace: the page clock, folds, the focused row and the open details. */
+/** What the waterfall shows besides the trace: the page clock, folds, the focused row, open details and filter. */
 export interface TraceViewState {
 	/** The page clock (epoch ms); running spans grow into it. */
 	now: number;
@@ -12,6 +13,7 @@ export interface TraceViewState {
 	open: string | null;
 	/** The turn's request line, after the root's name. */
 	title: string;
+	filter?: "all" | "llm" | "tool" | "error" | "slow";
 }
 
 /**
@@ -67,67 +69,23 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 	const count = (n: number): string =>
 		n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
-	// Roll-ups (agents add up their children), parents, and the slowest finished call.
-	interface Sum {
-		cost: number;
-		tokensIn: number;
-		tokensOut: number;
-		llm: number;
-		tool: number;
-		agents: number;
-	}
-	const sums = new Map<string, Sum>();
-	let slowest: TraceSpan | undefined;
-	let far = 0;
-	const walk = (span: TraceSpan): Sum => {
-		const sum: Sum = {
-			cost: span.cost ?? 0,
-			tokensIn: span.tokensIn ?? 0,
-			tokensOut: span.tokensOut ?? 0,
-			llm: span.kind === "llm" && span.end !== undefined ? 1 : 0,
-			tool: span.kind === "tool" ? 1 : 0,
-			agents: span.kind === "subagent" ? 1 : 0,
-		};
-		far = Math.max(far, endOf(span));
-		const ownTime = span.end === undefined ? -1 : span.end - span.start;
-		if ((span.kind === "llm" || span.kind === "tool") && span.status !== "running" && ownTime > 0) {
-			if (slowest === undefined || ownTime > (slowest.end ?? 0) - slowest.start) slowest = span;
-		}
-		for (const child of span.children ?? []) {
-			const part = walk(child);
-			sum.cost += part.cost;
-			sum.tokensIn += part.tokensIn;
-			sum.tokensOut += part.tokensOut;
-			sum.llm += part.llm;
-			sum.tool += part.tool;
-			sum.agents += part.agents;
-		}
-		sums.set(span.id, sum);
-		return sum;
-	};
-	const total = walk(answer.root);
+	const filter = state.filter ?? "all";
+	const { sums, total, slowest, far, rows } = buildTraceRows(answer.root, clock, state.fold, filter);
+	const folded = (span: TraceSpan): boolean =>
+		(span.children?.length ?? 0) > 0 &&
+		(state.fold[span.id] ?? (span.kind === "subagent" && span.status !== "running"));
 
 	// The axis grows in round steps; a live run keeps a little room ahead of "now".
 	const STEPS = [10, 20, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400].map((s) => s * 1000);
 	const need = answer.live ? Math.max(far, clock) * 1.06 : far;
 	const range = STEPS.find((step) => step >= need) ?? Math.ceil(need / 86_400_000) * 86_400_000;
 	const frac = (ms: number): string => (Math.min(1, Math.max(0, ms / range)) || 0).toFixed(4);
-
-	const folded = (span: TraceSpan): boolean =>
-		(span.children?.length ?? 0) > 0 &&
-		(state.fold[span.id] ?? (span.kind === "subagent" && span.status !== "running"));
-	const rows: Array<{ span: TraceSpan; level: number }> = [];
-	const visit = (span: TraceSpan, level: number): void => {
-		rows.push({ span, level });
-		if (!folded(span)) for (const child of span.children ?? []) visit(child, level + 1);
-	};
-	visit(answer.root, 1);
 	const focus = rows.some((row) => row.span.id === state.focus) ? state.focus : answer.root.id;
 	const chevron =
 		'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 	const rowHtml = ({ span, level }: { span: TraceSpan; level: number }): string => {
-		const sum = sums.get(span.id);
+		const sum = sums[span.id];
 		const own = endOf(span) - span.start;
 		const cost = money(span.kind === "agent" || span.kind === "subagent" ? (sum?.cost ?? 0) : (span.cost ?? 0));
 		const kids = (span.children?.length ?? 0) > 0;
@@ -174,13 +132,13 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 		.join('<span aria-hidden="true"> · </span>');
 	// Below the root: sub-agents are the only spans with children, so the button shows only when there are some.
 	const branches = rows.filter((row) => row.level > 1 && (row.span.children?.length ?? 0) > 0);
-	const foldable = branches.length > 0;
+	const foldable = filter === "all" && branches.length > 0;
 	const anyOpen = branches.some((row) => !folded(row.span));
 
 	const picked = state.open === null ? undefined : rows.find((row) => row.span.id === state.open)?.span;
 	let pop = "";
 	if (picked !== undefined) {
-		const sum = sums.get(picked.id);
+		const sum = sums[picked.id];
 		const agent = picked.kind === "agent" || picked.kind === "subagent";
 		const at = new Date(answer.startedAt + picked.start);
 		const clockText = [at.getHours(), at.getMinutes(), at.getSeconds()]
@@ -242,19 +200,19 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 			picked.kind === "agent" ? KIND.agent : picked.name,
 		)}</h4><span class="badge">${KIND[picked.kind]}</span><span class="badge ${tone}">${word}</span><button type="button" class="detail-close" data-trace-close>닫기 <kbd>Esc</kbd></button></div><dl class="facts">${facts
 			.map(([name, value]) => `<dt>${name}</dt><dd>${value}</dd>`)
-			.join("")}</dl>`;
+			.join("")}</dl>${renderTraceInspector(picked, sum, total.cost)}`;
 	}
 
 	// djb2 of the row ids, folds and the slowest mark: equal means the rows can be patched in place.
 	let hash = 5381;
-	const sigText = `${rows.map((row) => `${row.span.id}:${folded(row.span) ? 1 : 0}:${chips(row.span).join("/")}`).join(",")}|${slowest?.id ?? ""}`;
+	const sigText = `${rows.map((row) => `${row.span.id}:${folded(row.span) ? 1 : 0}:${chips(row.span).join("/")}`).join(",")}|${slowest?.id ?? ""}|${filter}`;
 	for (let i = 0; i < sigText.length; i++) hash = ((hash << 5) + hash + sigText.charCodeAt(i)) | 0;
 
 	return `<div class="tw" data-trace data-sig="${(hash >>> 0).toString(36)}-${rows.length}"><div class="tw-head"><h3 class="h3">트레이스</h3><span class="tw-state ${stateTone}" role="status" aria-live="polite" data-part="html"><i class="tw-dot" aria-hidden="true"></i>${stateWord}</span>${
 		foldable
 			? `<button type="button" class="button is-ghost is-sm tw-fold-all" data-trace-fold-all data-part="text">${anyOpen ? "모두 접기" : "모두 펼치기"}</button>`
 			: ""
-	}<p class="tw-sum" data-part="html">${summary}</p></div><div class="tw-body"><div class="tw-axis" aria-hidden="true"><span>단계</span><span class="tw-axis-track" data-part="html">${axis}</span><span class="tw-num">시간</span><span class="tw-num">비용</span></div><div class="tw-tree" role="tree" aria-label="턴 트레이스: 모델 호출·도구·하위 에이전트"><div class="tw-rows"><div class="tw-guides" aria-hidden="true"><span></span><span class="tw-gtrack" data-part="html">${guides}</span></div>${
+	}${renderTraceFilters(filter, total)}<p class="tw-sum" data-part="html">${summary}</p></div><div class="tw-body"><div class="tw-axis" aria-hidden="true"><span>단계</span><span class="tw-axis-track" data-part="html">${axis}</span><span class="tw-num">시간</span><span class="tw-num">비용</span></div><div class="tw-tree" role="tree" aria-label="턴 트레이스: 모델 호출·도구·하위 에이전트"><div class="tw-rows"><div class="tw-guides" aria-hidden="true"><span></span><span class="tw-gtrack" data-part="html">${guides}</span></div>${
 		answer.live
 			? `<div class="tw-guides" aria-hidden="true"><span></span><span class="tw-gtrack"><i class="tw-now" data-part="bar" style="--x:${frac(clock)}"></i></span></div>`
 			: ""

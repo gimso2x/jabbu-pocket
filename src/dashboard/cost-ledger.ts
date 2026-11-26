@@ -54,6 +54,8 @@ export interface CostLedgerInfo {
 	days: Array<{ day: string; cost: number }>;
 	/** At most {@link TOP}, costliest first. */
 	top: Array<{ title: string; kind: CostSessionKind; cost: number }>;
+	/** Per-day (`MM-DD`) top sessions for drilldown, costliest first. */
+	dayTop?: Record<string, Array<{ title: string; kind: CostSessionKind; cost: number }>>;
 	total: number;
 	/** Cache-write cost over all cost of the seven days, 0–100. */
 	cacheWritePct: number;
@@ -207,6 +209,7 @@ export function updateCostLedger(
 	}
 	const perDay = new Map(dayKeys.map((day) => [day, 0]));
 	const perOrigin = new Map<string, { cost: number; files: string[] }>();
+	const perDayOrigin = new Map<string, Map<string, number>>();
 	let cacheWrite = 0;
 	for (const [file, entry] of Object.entries(next.files)) {
 		const origin = originOf(sessionsRoot, file);
@@ -216,23 +219,53 @@ export function updateCostLedger(
 			perDay.set(day, (perDay.get(day) ?? 0) + costs.cost);
 			session.cost += costs.cost;
 			cacheWrite += costs.cacheWrite;
+			let dayMap = perDayOrigin.get(day);
+			if (dayMap === undefined) {
+				dayMap = new Map();
+				perDayOrigin.set(day, dayMap);
+			}
+			dayMap.set(origin, (dayMap.get(origin) ?? 0) + costs.cost);
 		}
 		perOrigin.set(origin, session);
 	}
+	const titles = new Map<string, string>();
+	const titleFor = (origin: string): string => {
+		const cached = titles.get(origin);
+		if (cached !== undefined) return cached;
+		const resolved = titleOf(origin, (perOrigin.get(origin)?.files ?? []).slice().sort());
+		titles.set(origin, resolved);
+		return resolved;
+	};
 	const total = [...perDay.values()].reduce((sum, cost) => sum + cost, 0);
 	const top = [...perOrigin.entries()]
 		.filter(([, session]) => session.cost > 0)
 		.sort((a, b) => b[1].cost - a[1].cost)
 		.slice(0, TOP)
 		.map(([origin, session]) => ({
-			title: titleOf(origin, session.files.sort()),
+			title: titleFor(origin),
 			kind: kindOf(origin),
 			cost: session.cost,
 		}));
+	const dayTop: NonNullable<CostLedgerInfo["dayTop"]> = {};
+	for (const dayKey of dayKeys) {
+		const map = perDayOrigin.get(dayKey);
+		if (map === undefined) continue;
+		const list = [...map.entries()]
+			.filter(([, cost]) => cost > 0)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, TOP)
+			.map(([origin, cost]) => ({
+				title: titleFor(origin),
+				kind: kindOf(origin),
+				cost,
+			}));
+		if (list.length > 0) dayTop[`${dayKey.slice(4, 6)}-${dayKey.slice(6)}`] = list;
+	}
 	return {
 		info: {
 			days: dayKeys.map((day) => ({ day: `${day.slice(4, 6)}-${day.slice(6)}`, cost: perDay.get(day) ?? 0 })),
 			top,
+			...(Object.keys(dayTop).length > 0 ? { dayTop } : {}),
 			total,
 			cacheWritePct: total === 0 ? 0 : Math.round((cacheWrite / total) * 100),
 		},

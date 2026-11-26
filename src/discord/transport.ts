@@ -51,10 +51,7 @@ export interface DiscordMessageEvent {
 	edited_timestamp?: string | null | undefined;
 }
 
-/**
- * `MESSAGE_UPDATE` payload: Discord sends only the changed fields for some updates (embed refresh, pin), so everything
- * but the ids may be missing.
- */
+/** `MESSAGE_UPDATE` payload: Discord sends only changed fields on some updates, so fields besides ids may be missing. */
 export type DiscordMessageUpdate = Pick<DiscordMessageEvent, "id" | "channel_id"> &
 	Partial<Omit<DiscordMessageEvent, "id" | "channel_id">>;
 
@@ -246,6 +243,7 @@ export interface DiscordTransport {
 	startThread(args: StartThreadArgs): Promise<{ id: string }>;
 	/** Archives a thread (`PATCH /channels/{threadId}` with `archived: true`); a new message in it reopens it. */
 	archiveThread(args: { threadId: string }): Promise<void>;
+	pinMessage(args: MessageTarget): Promise<void>;
 	getChannel(channelId: string): Promise<DiscordChannelInfo>;
 	/** Oldest-first page of a channel's messages after the watermark (missed-message backfill). */
 	listMessages(args: ListMessagesArgs): Promise<DiscordMessageEvent[]>;

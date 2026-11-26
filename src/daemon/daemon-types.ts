@@ -31,10 +31,7 @@ export interface DaemonOptions {
 	clock?: MailboxClock;
 	crash?: (point: CrashPoint) => void;
 	sweepMs?: number;
-	/**
-	 * Gate sweep cadence of the self-diagnosis loop (default 5 minutes); 0 disables gate reporting — a test-only
-	 * slim, not wired to any production config or env (the daemon always keeps the default).
-	 */
+	/** Gate sweep cadence (default 5 minutes); 0 disables gate reporting (test-only). */
 	gateSweepMs?: number;
 	/** Test seam for the `host_pressure` gate in sweeps and status (default this machine's readings). */
 	hostLoad?: Partial<HostLoadReader>;
@@ -81,6 +78,8 @@ export interface DaemonOptions {
 	restart?: Partial<Pick<RestartLauncherDeps, "run" | "isAlive" | "isExecutable" | "pathEnv" | "repoDir">>;
 	/** Test seam for `!brief`'s chromium capture; default runs the real chromium. */
 	briefingRun?: ProcessRunner;
+	/** Test seam for `#ops` panel `전체 한도` command execution (`dashboard.usageLimits` / `omp usage`). */
+	usageLimitsRun?: ProcessRunner;
 	/** Live `agy` account pool status when `agent: "agy"` uses an account pool. */
 	agyStatus?: () => AgyAccountsStatus | undefined;
 }

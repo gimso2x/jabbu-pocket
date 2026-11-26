@@ -1,7 +1,6 @@
 /*
- * Agent board of the dashboard. The card rules (columnFor, cardKey, buildCards, sortCards, displayLabel, deepLink)
- * and the machines stream reader follow the owner's herdr-board (shared/board.ts, server/machines-source.ts,
- * server/board-service.ts), ported to this codebase.
+ * Agent board of the dashboard: card rules (columnFor, cardKey, buildCards, sortCards, displayLabel, deepLink)
+ * and the machines stream reader.
  */
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { redact } from "../redact";

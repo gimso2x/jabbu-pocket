@@ -1,7 +1,7 @@
 import type { Server } from "bun";
 import type { LiveView } from "../core/live-turn";
-import { parseChatOrigin } from "../core/origin-key";
 import { type WebDashboardOptions, webDashboardRouter } from "../web/routes";
+import { isLiveOrigin } from "./agy-conversation";
 import { appAssets, PAGE_CSS, serveAsset, WEB_MANIFEST, withGzip } from "./assets";
 import {
 	type BoardCard,
@@ -222,10 +222,6 @@ interface LiveChannel {
 	said: string | undefined;
 	event: string | undefined;
 }
-
-/** Origins the dashboard itself subscribes to live: chat origins, `review/skills`, and the daemon's `monitor/`, `jabbu/task/` and `jabbu/work/` keys with a single-segment tail. Anything else is rejected on the events path. */
-const LIVE_ORIGIN = /^(?:monitor\/[^/]+|jabbu\/task\/[^/]+|jabbu\/work\/[^/]+|review\/skills)$/;
-const isLiveOrigin = (key: string): boolean => parseChatOrigin(key) !== undefined || LIVE_ORIGIN.test(key);
 
 /**
  * Live reads per origin, held only while a stream of that origin is open: one read at a time, the next scheduled
