@@ -274,7 +274,15 @@ describe("live routes", () => {
 	});
 
 	test("AC-7: the events path rejects malformed origins and caps distinct origins at 32", async () => {
-		const { base, scheduler } = setup([]);
+		const scheduler = new ManualScheduler();
+		const counts = new Map<string, number>();
+		const base = serve({
+			live: async () => null,
+			liveSchedule: scheduler.schedule,
+			onLiveSubscribers: (origin, count) => {
+				counts.set(origin, count);
+			},
+		});
 		const events = (origin: string) => fetch(`${base}/api/thread/live/events?origin=${encodeURIComponent(origin)}`);
 		for (const bad of [
 			"!!!",
@@ -313,9 +321,19 @@ describe("live routes", () => {
 		const over = await events("discord/ch/900000000000099");
 		expect(over.status).toBe(429);
 		expect(await over.json()).toEqual({ error: "too_many_live_origins" });
-		// Closing every stream frees the channels: a new origin is accepted again.
+		// Closing every stream frees the channels: a new origin is accepted again. The disconnect reaches the
+		// server as an event (each origin's subscriber count falling to 0), so wait for that event with a bound
+		// instead of hopping a fixed number of times: under load the socket close is slow to arrive.
 		await Promise.all(opened.map((res) => res.body?.cancel()));
-		for (let hop = 0; hop < 100 && scheduler.jobs.length > 0; hop += 1) await settle();
+		await bounded(
+			(async () => {
+				for (;;) {
+					if (counts.size === 32 && [...counts.values()].every((n) => n === 0)) return;
+					await settle();
+				}
+			})(),
+			"all live channels to close",
+		);
 		expect(scheduler.jobs).toHaveLength(0);
 		const again = await events("discord/ch/900000000000099");
 		expect(again.status).toBe(200);
