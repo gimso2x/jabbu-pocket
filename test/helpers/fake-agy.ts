@@ -183,9 +183,16 @@ function prompt(id: unknown, text: string): void {
 		// Detached (its own session, out of the driver's process group) and holding stdout: the sleeper is a
 		// bun `-e` so no new binary is needed (cf. @deaf). The chunk goes after the spawn, so a test waiting
 		// for it knows the sleeper already exists. No onCancel: the cancel goes unanswered, like @deaf, so the
-		// driver kills the group and must still settle.
+		// driver kills the group and must still settle. SIGUSR2 emits one late JSON-RPC notification then exits.
 		// sleep-ok: the sleeper's 30s bound is a safety cap, not a wait; the test kills it in cleanup.
-		const grand = spawn(process.execPath, ["-e", "await Bun.sleep(30_000);"], {
+		const sleeper = [
+			'process.on("SIGUSR2", () => {',
+			'  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { late: true } }) + "\\n");',
+			"  process.exit(0);",
+			"});",
+			"await Bun.sleep(30_000); // sleep-ok: safety cap, test kills sleeper",
+		].join("\n");
+		const grand = spawn(process.execPath, ["-e", sleeper], {
 			detached: true,
 			stdio: ["ignore", "inherit", "ignore"],
 		});

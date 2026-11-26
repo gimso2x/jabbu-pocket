@@ -63,7 +63,15 @@ export async function watchChildExit(
 	onExit: (code: number) => void,
 ): Promise<void> {
 	const code = await exited;
-	await Promise.race([stdoutDone.catch(() => {}), Bun.sleep(STREAM_CLOSE_GRACE_MS)]);
+	let timer: Timer | undefined;
+	const grace = new Promise<void>((resolve) => {
+		timer = setTimeout(resolve, STREAM_CLOSE_GRACE_MS);
+	});
+	try {
+		await Promise.race([stdoutDone.catch(() => {}), grace]);
+	} finally {
+		clearTimeout(timer);
+	}
 	onExit(code);
 }
 
@@ -210,7 +218,7 @@ export class AgyAcpClient {
 	}
 
 	#handleLine(line: string): void {
-		if (line.trim() === "") return;
+		if (this.#exited || line.trim() === "") return;
 		let message: unknown;
 		try {
 			message = JSON.parse(line);
@@ -266,6 +274,7 @@ export class AgyAcpClient {
 		let buffer = "";
 		try {
 			for await (const chunk of this.#proc.stdout) {
+				if (this.#exited) return;
 				buffer += decoder.decode(chunk, { stream: true });
 				let newline = buffer.indexOf("\n");
 				while (newline !== -1) {
