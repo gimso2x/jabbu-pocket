@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { LiveView } from "../core/live-turn";
+import { parseChatOrigin } from "../core/origin-key";
 import { DEFAULT_APP_DATA_PREFIX } from "../omp/agy-account-pool";
 import { readAgyPointer } from "../omp/agy-quota";
 import { isRecord } from "../omp/type-guards";
@@ -21,7 +22,18 @@ const SUMMARY_CHARS = 120;
 const CONVERSATION_ID = /^[A-Za-z0-9_-]{8,}$/;
 const ACCOUNT_NAME = /^[A-Za-z0-9_-]+$/;
 const APP_DATA_PREFIX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
+const PEER_LIVE_PREFIX = /^[^:/\s]{1,20}:/;
+const LIVE_ORIGIN = /^(?:monitor\/[^/]+|jabbu\/task\/[^/]+|jabbu\/work\/[^/]+|review\/skills)$/;
 const SUMMARY_KEYS = ["toolSummary", "Path", "CommandLine", "query", "Description", "Action", "i"] as const;
+
+/**
+ * Origins the dashboard subscribes to live (optionally `<peer>:`-prefixed): chat origins, `review/skills`,
+ * and the daemon's `monitor/`, `jabbu/task/` and `jabbu/work/` keys with a single-segment tail.
+ */
+export function isLiveOrigin(key: string): boolean {
+	const inner = key.replace(PEER_LIVE_PREFIX, "");
+	return parseChatOrigin(inner) !== undefined || LIVE_ORIGIN.test(inner);
+}
 
 export interface ThreadConversationOptions {
 	peers?: readonly Pick<PeerInstall, "name" | "home">[];

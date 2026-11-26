@@ -482,6 +482,43 @@ describe("peer routing for conversation and live", () => {
 			const liveRes = await fetch(`${base}/api/thread/live?origin=${encodeURIComponent(`서팍:${ORIGIN}`)}`);
 			expect(liveRes.status).toBe(200);
 			expect(await liveRes.json()).toEqual({ live: liveView });
+
+			const eventsRes = await fetch(`${base}/api/thread/live/events?origin=${encodeURIComponent(`서팍:${ORIGIN}`)}`);
+			expect(eventsRes.status).toBe(200);
+			expect(eventsRes.headers.get("content-type")).toStartWith("text/event-stream");
+			const reader = eventsRes.body?.getReader();
+			expect(reader).toBeDefined();
+			let sseText = "";
+			const decoder = new TextDecoder();
+			while (reader !== undefined && !sseText.includes("event: live")) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				sseText += decoder.decode(chunk.value, { stream: true });
+			}
+			expect(sseText).toContain("event: live");
+			expect(sseText).toContain(JSON.stringify({ live: liveView }));
+			await reader?.cancel();
+
+			const peerMonitorRes = await fetch(
+				`${base}/api/thread/live/events?origin=${encodeURIComponent("서팍:monitor/m1")}`,
+			);
+			expect(peerMonitorRes.status).toBe(200);
+			expect(peerMonitorRes.headers.get("content-type")).toStartWith("text/event-stream");
+			await peerMonitorRes.body?.cancel();
+
+			for (const bad of [
+				":discord/ch/100",
+				"서팍:discord/ch/abc",
+				"a b:discord/ch/100",
+				"a/b:discord/ch/100",
+				"a:b:discord/ch/100",
+				`${"a".repeat(21)}:discord/ch/100`,
+				"서팍:",
+			]) {
+				const badRes = await fetch(`${base}/api/thread/live/events?origin=${encodeURIComponent(bad)}`);
+				expect(badRes.status).toBe(400);
+				expect(await badRes.json()).toEqual({ error: "invalid_origin" });
+			}
 		} finally {
 			server.stop(true);
 		}
