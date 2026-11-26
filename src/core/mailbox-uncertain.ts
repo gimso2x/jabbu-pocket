@@ -3,6 +3,7 @@
 // notice is one delivery per row (op `uncertain:<id>`), so a repeated park cannot post it twice; its text mirrors
 // the `/queue` section and carries the retry reply's double-answer warning, so the owner acts with full context.
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
+import { LEDGER_RETENTION_DAYS } from "../ops/gc-ledger";
 import { redact } from "../redact";
 import type { Store } from "../store/db";
 
@@ -52,15 +53,19 @@ export function notifyUncertainParked(store: UncertainNoticeStore, row: InboundR
 /**
  * The boot sweep for rows a crash parked between the park and the notice (the two are not one transaction): every
  * `uncertain` row with no `uncertain:<id>` delivery yet is told — exactly once. Rows the owner already retried or
- * closed left `uncertain`, so they are not here; monitor origins have no owner thread. Returns the rows told.
+ * closed left `uncertain`, so they are not here; monitor origins have no owner thread. A row parked past the ledger
+ * retention is NOT told: gc may already have removed its delivered notice (`uncertain` rows never leave the ledger,
+ * confirmed deliveries do), and re-posting it would be a duplicate. Returns the rows told.
  */
 export function notifyUncertainMissingNotice(
 	store: UncertainNoticeStore & Pick<Store, "listInbound" | "listDeliveries">,
+	now: number,
 ): InboundRow[] {
 	const seenByOrigin = new Map<string, Set<string | null>>();
 	const told: InboundRow[] = [];
 	for (const row of store.listInbound({ state: "uncertain" })) {
 		if (row.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) continue;
+		if (row.uncertainAt !== null && now - row.uncertainAt >= LEDGER_RETENTION_DAYS * 86_400_000) continue;
 		let seen = seenByOrigin.get(row.originKey);
 		if (!seen) {
 			seen = new Set(store.listDeliveries({ originKey: row.originKey }).map((delivery) => delivery.opRef));
