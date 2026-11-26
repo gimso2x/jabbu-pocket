@@ -1,8 +1,8 @@
 // T-20261116-04: the system view's "모델 한도" card from config
 // `dashboard.usageLimits`, its parsers, failure isolation and the module-level 15-minute cache.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config";
 import { SCRIPT } from "../src/dashboard/html";
@@ -268,11 +268,22 @@ describe("AC-1: config validation", () => {
 			"/usage",
 		]);
 		expect(load({ agy: ["agy"], agyAccount: ["cat", "/a"] }).dashboard?.usageLimits?.agyAccount).toEqual(["cat", "/a"]);
+		expect(load({ agy: ["agy"], agyAccountsDir: "/accounts" }).dashboard?.usageLimits?.agyAccountsDir).toBe(
+			"/accounts",
+		);
+		expect(load({ agy: ["agy"], agyAccountsDir: "~/.test-agy-accounts" }).dashboard?.usageLimits?.agyAccountsDir).toBe(
+			join(homedir(), ".test-agy-accounts"),
+		);
 		for (const bad of [
 			{ other: 1 },
 			{ agy: [] },
 			{ agyAccount: [] },
 			{ agyAccount: [1] },
+			{ agyAccountsDir: "" },
+			{ agyAccountsDir: "relative/accounts" },
+			{ agyAccountsDir: "~other/accounts" },
+			{ agyAccountsDir: "/bad\u0000dir" },
+			{ agyAccountsDir: 123 },
 			{ omp: [[]] },
 			{ omp: [["omp", 1]] },
 			{ omp: ["omp"] },
@@ -436,5 +447,238 @@ describe("AC-1: html strip", () => {
 		expect(STYLE).toContain(".limits-pop.is-open .limits-panel");
 		expect(STYLE).toContain("@media (hover: hover) and (min-width: 641px)");
 		expect(strip(client(snapshot, undefined, NOW, { view: "system" }))).toBe(strip(server));
+	});
+
+	test("multi-account popover shows all accounts while keeping active account on the chip and matches client script", async () => {
+		const snapshot = await snapshotWith(healthy);
+		if (snapshot.usageLimits?.ok !== true) throw new Error("no usage section");
+		const mkRows = (fivePct: number, fiveMs: number, weekPct: number, weekMs: number) => [
+			{
+				label: "Gemini Models",
+				window: "5h" as const,
+				windowLabel: "Five Hour",
+				remainingPct: fivePct,
+				resetsAt: fiveMs,
+			},
+			{
+				label: "Gemini Models",
+				window: "weekly" as const,
+				windowLabel: "Weekly",
+				remainingPct: weekPct,
+				resetsAt: weekMs,
+			},
+			{ label: "Claude and GPT models", window: "5h" as const, windowLabel: "Five Hour", remainingPct: 100 },
+		];
+		const multiSources = snapshot.usageLimits.sources.map((s) =>
+			s.name !== "Antigravity"
+				? s
+				: {
+						...s,
+						account: "camelwise",
+						rows: mkRows(1, NOW + 3_600_000, 75, NOW + 3 * 86_400_000),
+						accounts: [
+							{ name: "sgkim", ok: true as const, rows: mkRows(80, NOW + 7_200_000, 50, NOW + 2 * 86_400_000) },
+							{
+								name: "camelwise",
+								active: true,
+								ok: true as const,
+								rows: mkRows(1, NOW + 3_600_000, 75, NOW + 3 * 86_400_000),
+							},
+							{ name: "woodcode278", ok: true as const, rows: mkRows(15, NOW + 1_800_000, 90, NOW + 4 * 86_400_000) },
+							{ name: "ssukcode", ok: false as const, error: "종료 코드 1" },
+						],
+					},
+		);
+		const multiSnap = { ...snapshot, usageLimits: { ...snapshot.usageLimits, sources: multiSources } };
+		const server = renderDashboardMain(multiSnap, undefined, NOW, { view: "system" });
+		const html = strip(server);
+		const shares = (chip: string): string => chip.replace(/<span class="roll-n"[^>]*>(\d+)<\/span>/g, "$1");
+		expect(shares(chipOf(html, "Antigravity"))).toMatch(
+			/limit-chip is-danger[\s\S]*<small>5h<\/small>1<small>주<\/small>75/,
+		);
+		expect(html).toContain('<span class="limit-acct">camelwise · 4계정</span>');
+		expect(html).toContain('data-account="camelwise"');
+		expect(html).toMatch(
+			/limit-acct-row is-danger is-active" data-account="camelwise"[\s\S]*?1%[\s\S]*?75%[\s\S]*?1h0m/,
+		);
+		expect(html).toMatch(/limit-acct-row is-warn" data-account="woodcode278"[\s\S]*?15%[\s\S]*?90%[\s\S]*?30m/);
+		expect(html).toMatch(/limit-acct-row is-failed" data-account="ssukcode"[\s\S]*?종료 코드 1/);
+		expect(STYLE).toContain(".limit-accts");
+		expect(STYLE).toContain(".limit-acct-row.is-active");
+		const client = new Function("document", "setInterval", `${SCRIPT}\nreturn renderDashboardMain;`)(
+			{ getElementById: () => ({}) },
+			() => 0,
+		) as typeof renderDashboardMain;
+		expect(strip(client(multiSnap, undefined, NOW, { view: "system" }))).toBe(html);
+
+		// When the active account itself fails, the chip shows ? and the tile still lists the other accounts.
+		const failedActiveSources = multiSources.map((s) =>
+			s.name !== "Antigravity"
+				? s
+				: {
+						name: "Antigravity",
+						account: "camelwise",
+						ok: false as const,
+						error: "20초 안에 끝나지 않음",
+						accounts: [
+							{ name: "sgkim", ok: true as const, rows: mkRows(80, NOW + 7_200_000, 50, NOW + 2 * 86_400_000) },
+							{ name: "camelwise", active: true, ok: false as const, error: "20초 안에 끝나지 않음" },
+						],
+					},
+		);
+		const failedActiveSnap = { ...snapshot, usageLimits: { ...snapshot.usageLimits, sources: failedActiveSources } };
+		const failedServer = strip(renderDashboardMain(failedActiveSnap, undefined, NOW, { view: "system" }));
+		expect(chipOf(failedServer, "Antigravity")).toContain("Antigravity ?");
+		expect(failedServer).toContain("20초 안에 끝나지 않음");
+		expect(failedServer).toContain('data-account="sgkim"');
+		expect(strip(client(failedActiveSnap, undefined, NOW, { view: "system" }))).toBe(failedServer);
+	});
+});
+
+describe("multi-account agy limits", () => {
+	function setupAccountsDir(files: { order?: string; current?: string; tokens: Record<string, string> }): string {
+		const dir = join(home, "agy-accounts");
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		if (files.order !== undefined) writeFileSync(join(dir, "order"), files.order);
+		if (files.current !== undefined) writeFileSync(join(dir, "current"), files.current);
+		for (const [name, email] of Object.entries(files.tokens)) {
+			const tokPath = join(dir, `${name}.token`);
+			writeFileSync(tokPath, JSON.stringify({ id_token_email: email, refresh_token: `TEST-tok-${name}` }));
+			chmodSync(tokPath, 0o600);
+		}
+		return dir;
+	}
+
+	const agyOut = (fivePct: number, weekPct: number) =>
+		[
+			`Gemini Models\tWeekly Limit Remaining\t${weekPct}%\t2026-11-20T23:00:32Z`,
+			`Gemini Models\tFive Hour Limit Remaining\t${fivePct}%\t2026-11-16T04:00:00Z`,
+			"Claude and GPT models\tWeekly Limit Remaining\t100%\t1970-01-01T00:00:00Z",
+			"Claude and GPT models\tFive Hour Limit Remaining\t100%\t1970-01-01T00:00:00Z",
+		].join("\n");
+
+	test("queries all order accounts in parallel with isolated temp HOME, cleans up, caches 15m, and redacts PII", async () => {
+		const accountsDir = setupAccountsDir({
+			order: "# primary\nacct1 agy/gemini\nacct2 agy/gemini\nmissing agy/gemini\nacct3 agy/hydrogen\n",
+			current: "acct2\n",
+			tokens: {
+				acct1: "secret-one@example.test",
+				acct2: "secret-two@example.test",
+				acct3: "secret-three@example.test",
+			},
+		});
+		const seenHomes: string[] = [];
+		const calls: string[][] = [];
+		const run: ProcessRunner = async (cmd, opts) => {
+			calls.push(cmd);
+			if (cmd[0] === "agy") {
+				const fakeHome = opts.env?.HOME ?? "";
+				seenHomes.push(fakeHome);
+				const tok = JSON.parse(
+					readFileSync(join(fakeHome, ".gemini", "antigravity-cli", "antigravity-oauth-token"), "utf8"),
+				) as { id_token_email: string };
+				if (tok.id_token_email.includes("one")) return { code: 0, stdout: agyOut(77, 69), timedOut: false };
+				if (tok.id_token_email.includes("two")) return { code: 0, stdout: agyOut(1, 75), timedOut: false };
+				if (tok.id_token_email.includes("three")) return { code: 0, stdout: agyOut(100, 100), timedOut: false };
+			}
+			const key = cmd[cmd.indexOf("-p") + 1] ?? "";
+			if (key === "anthropic") return { code: 0, stdout: anthropic, timedOut: false };
+			if (key === "zai") return { code: 0, stdout: zai, timedOut: false };
+			return { code: 1, stdout: "", timedOut: false };
+		};
+		const cfg: UsageLimitsConfig = { ...CONFIG, agyAccountsDir: accountsDir };
+		const section = await readUsageLimits(cfg, run, () => NOW);
+		if (!section.ok) throw new Error(section.error);
+		expect(seenHomes).toHaveLength(3);
+		for (const dir of seenHomes) expect(existsSync(dir)).toBe(false);
+		const agy = section.sources.find((s) => s.name === "Antigravity");
+		expect(agy?.account).toBe("acct2");
+		expect(agy?.ok).toBe(true);
+		if (agy?.ok) expect(agy.rows.slice(0, 2).map((r) => r.remainingPct)).toEqual([75, 1]);
+		expect(agy?.accounts?.map((a) => [a.name, a.ok, a.active])).toEqual([
+			["acct1", true, undefined],
+			["acct2", true, true],
+			["acct3", true, undefined],
+		]);
+		expect(JSON.stringify(section)).not.toMatch(/secret-|TEST-tok-|example\.test/);
+		expect(calls).toHaveLength(5);
+		await readUsageLimits(cfg, run, () => NOW + USAGE_LIMITS_TTL_MS - 1);
+		expect(calls).toHaveLength(5);
+	});
+
+	test("isolates per-account failure and handles active account failure while keeping other accounts", async () => {
+		const accountsDir = setupAccountsDir({
+			order: "acct1\nacct2\nacct3\n",
+			current: "acct2\n",
+			tokens: { acct1: "one@example.test", acct2: "two@example.test", acct3: "three@example.test" },
+		});
+		const runPartialFail: ProcessRunner = async (cmd, opts) => {
+			if (cmd[0] !== "agy") return { code: 1, stdout: "", timedOut: false };
+			const tok = JSON.parse(
+				readFileSync(join(opts.env?.HOME ?? "", ".gemini", "antigravity-cli", "antigravity-oauth-token"), "utf8"),
+			) as { id_token_email: string };
+			if (tok.id_token_email.startsWith("one")) return { code: 1, stdout: "", stderr: "boom", timedOut: false };
+			if (tok.id_token_email.startsWith("two")) return { code: 0, stdout: agyOut(45, 80), timedOut: false };
+			return { code: 0, stdout: agyOut(100, 100), timedOut: false };
+		};
+		const s1 = await readUsageLimits(
+			{ agy: ["agy", "-p", "/usage"], agyAccountsDir: accountsDir },
+			runPartialFail,
+			() => NOW,
+		);
+		if (!s1.ok) throw new Error(s1.error);
+		const agy1 = s1.sources[0];
+		expect(agy1?.ok).toBe(true);
+		expect(agy1?.accounts?.[0]).toEqual({ name: "acct1", ok: false, error: "종료 코드 1: boom" });
+		expect(agy1?.accounts?.[1]?.ok).toBe(true);
+		expect(agy1?.accounts?.[2]?.ok).toBe(true);
+
+		clearUsageLimitsCache();
+		const runActiveFail: ProcessRunner = async (cmd, opts) => {
+			if (cmd[0] !== "agy") return { code: 1, stdout: "", timedOut: false };
+			const tok = JSON.parse(
+				readFileSync(join(opts.env?.HOME ?? "", ".gemini", "antigravity-cli", "antigravity-oauth-token"), "utf8"),
+			) as { id_token_email: string };
+			if (tok.id_token_email.startsWith("two")) return { code: 0, stdout: "", timedOut: true };
+			return { code: 0, stdout: agyOut(90, 90), timedOut: false };
+		};
+		const s2 = await readUsageLimits(
+			{ agy: ["agy", "-p", "/usage"], agyAccountsDir: accountsDir },
+			runActiveFail,
+			() => NOW,
+		);
+		if (!s2.ok) throw new Error(s2.error);
+		const agy2 = s2.sources[0];
+		expect(agy2?.ok).toBe(false);
+		expect(agy2?.account).toBe("acct2");
+		expect(agy2?.accounts?.map((a) => [a.name, a.ok])).toEqual([
+			["acct1", true],
+			["acct2", false],
+			["acct3", true],
+		]);
+	});
+
+	test("falls back to single-account agy query when order is absent or has no valid token", async () => {
+		const emptyDir = setupAccountsDir({ order: "# empty\nmissing\n", tokens: {} });
+		const calls: Array<{ home?: string }> = [];
+		const run: ProcessRunner = async (_cmd, opts) => {
+			calls.push({ home: opts.env?.HOME });
+			return { code: 0, stdout: agyOut(60, 70), timedOut: false };
+		};
+		const s1 = await readUsageLimits({ agy: ["agy", "-p", "/usage"], agyAccountsDir: emptyDir }, run, () => NOW);
+		if (!s1.ok) throw new Error(s1.error);
+		expect(s1.sources[0]?.ok).toBe(true);
+		expect(s1.sources[0]?.accounts).toBeUndefined();
+		expect(calls).toEqual([{ home: undefined }]);
+
+		clearUsageLimitsCache();
+		const s2 = await readUsageLimits(
+			{ agy: ["agy", "-p", "/usage"], agyAccountsDir: join(home, "no-such-dir") },
+			run,
+			() => NOW,
+		);
+		if (!s2.ok) throw new Error(s2.error);
+		expect(s2.sources[0]?.accounts).toBeUndefined();
+		expect(calls).toHaveLength(2);
 	});
 });
