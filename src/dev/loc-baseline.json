@@ -5,7 +5,7 @@
 	"src/channel/card.ts": 351,
 	"src/channel/inbound.ts": 155,
 	"src/channel/port.ts": 82,
-	"src/channel/pump.ts": 252,
+	"src/channel/pump.ts": 251,
 	"src/channel/registry.ts": 96,
 	"src/channel/retry.ts": 55,
 	"src/channel/socket-base.ts": 203,
