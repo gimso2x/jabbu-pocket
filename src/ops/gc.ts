@@ -42,6 +42,8 @@ export interface GcResult {
 	monitorOriginsRemoved: string[];
 	/** Kept file evidence of closed lanes (`<home>/lanes/<lane>`) removed whole past retention. */
 	laneArtifactsRemoved: string[];
+	/** Lane directories gc could not read (a permission change, a race with the lane's own cleanup): left for the next gc. */
+	laneArtifactsSkipped: string[];
 	/** Finished conversation rows past `LEDGER_RETENTION_DAYS` deleted (counted only on a dry run). */
 	ledgerRemoved: ledgerGc.LedgerRemoved;
 }
@@ -72,6 +74,7 @@ export function gcSessions(options: GcOptions): GcResult {
 		threadOriginsRemoved: [],
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
+		laneArtifactsSkipped: [],
 		ledgerRemoved: ledgerGc.emptyLedgerRemoved(),
 	};
 	const dbPath = join(options.homeDir, "jabbu.db");
@@ -98,9 +101,8 @@ export function gcSessions(options: GcOptions): GcResult {
 		);
 		// Before anything is deleted: a ledger from a newer build must stop gc while every directory is still there.
 		if (!options.dryRun) checkSchemaVersion(db);
-		if (ledgerGc.hasTable(db, "monitors")) {
+		if (ledgerGc.hasTable(db, "monitors"))
 			monitorIds = new Set((db.query("SELECT id FROM monitors").all() as Array<{ id: string }>).map((row) => row.id));
-		}
 	} finally {
 		db.close();
 	}
@@ -134,12 +136,10 @@ export function gcSessions(options: GcOptions): GcResult {
 			// Compared by real path: a symlinked home must not make the live directory look like another one.
 			if (realpathOrResolve(path) === realpathOrResolve(origin.session_dir)) continue;
 			if (!lstatSync(path).isDirectory()) continue;
-			if (newestMtimeMs(path) >= cutoff) {
-				result.retained.push(path);
-				continue;
-			}
-			if (!options.dryRun) rmSync(path, { recursive: true, force: true });
-			result.removed.push(path);
+			if (newestMtimeMs(path) < cutoff) {
+				if (!options.dryRun) rmSync(path, { recursive: true, force: true });
+				result.removed.push(path);
+			} else result.retained.push(path);
 		}
 	}
 	// The read-only handle is closed before the cleanup pass opens, so the writable short-lived connection
@@ -180,6 +180,6 @@ export function gcSessions(options: GcOptions): GcResult {
 	} finally {
 		write.close();
 	}
-	result.laneArtifactsRemoved = gcLaneArtifacts(options);
+	({ removed: result.laneArtifactsRemoved, skipped: result.laneArtifactsSkipped } = gcLaneArtifacts(options));
 	return result;
 }

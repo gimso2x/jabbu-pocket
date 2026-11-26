@@ -138,4 +138,26 @@ describe("lane evidence artifacts (AC-2)", () => {
 		expect(existsSync(fresh)).toBe(true);
 		rmSync(lanesDir(), { recursive: true, force: true });
 	});
+
+	test("gc reports a lane it cannot read as skipped instead of silently dropping it", () => {
+		const deep = join(lanesDir(), "L-deep");
+		mkdirSync(deep, { recursive: true });
+		// Paths past PATH_MAX make lstat throw (root cannot chmod a directory unreadable):
+		// 25 levels of 200-char names push the walk past 4096 bytes. The tree is built by
+		// bash cds down one relative name at a time: neither an absolute path past PATH_MAX
+		// nor Node's chdir (which getcwd's afterwards) can go that deep, and dash's cd cannot.
+		const name = "d".repeat(200);
+		expect(
+			Bun.spawnSync(["bash", "-c", 'for i in $(seq 1 25); do mkdir "$1" && cd "$1" || exit 1; done', "bash", name], {
+				cwd: deep,
+			}).exitCode,
+		).toBe(0);
+		const h = laneHarness(home.dir);
+		h.close();
+		const result = gcSessions({ homeDir: home.dir, retentionDays: 30, now: Date.now() });
+		expect(result.laneArtifactsRemoved).toEqual([]);
+		expect(result.laneArtifactsSkipped).toEqual([deep]);
+		expect(existsSync(deep)).toBe(true);
+		rmSync(lanesDir(), { recursive: true, force: true });
+	});
 });

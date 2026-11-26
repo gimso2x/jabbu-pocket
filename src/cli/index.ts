@@ -105,7 +105,7 @@ function gcCommand(args: string[], homeDir: string): number {
 	for (const key of result.monitorOriginsRemoved) process.stdout.write(`gc monitor_${verb} origin=${key}\n`);
 	for (const path of result.laneArtifactsRemoved) process.stdout.write(`gc lane_artifacts_${verb} path=${path}\n`);
 	process.stdout.write(
-		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts} web_messages=${result.ledgerRemoved.webMessages}\n`,
+		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} lane_artifacts_skipped=${result.laneArtifactsSkipped.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts} web_messages=${result.ledgerRemoved.webMessages}\n`,
 	);
 	return 0;
 }
