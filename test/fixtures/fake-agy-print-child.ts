@@ -143,13 +143,14 @@ lines.on("line", (line) => {
 	const message = JSON.parse(line) as { event?: string; message?: { content?: string } };
 	if (message.event !== "user") return;
 	const content = message.message?.content ?? "";
-	turn(content);
+	if (!content.includes("@close-stdin")) turn(content);
 	if (content.includes("@close-stdin")) {
 		stdinClosedAlive = true;
 		// Close fd 0 at the OS level: Bun's stdin.destroy() only stops the stream, the pipe stays open.
 		closeSync(0);
 		// Liveness handle, not a sleep: the child must stay up with stdin closed so the next write hits EPIPE.
 		setInterval(() => {}, 1000);
+		turn(content);
 	}
 });
 lines.on("close", () => {
