@@ -75,6 +75,7 @@ import {
 	DiscordRateLimitedError,
 	type DiscordTransport,
 	deliveryNonce,
+	MESSAGE_CONTENT_LIMIT,
 } from "./transport";
 import { INTERVAL_TIMERS, TYPING_INTERVAL_MS, TYPING_MAX_MS, type TypingEntry, type TypingTimers } from "./typing";
 
@@ -100,7 +101,6 @@ const SEEN_INTERACTIONS_MAX = 1000;
 const THREAD_NOTICE_MEMORY = 1000;
 /** Characters of the replied-to post put in the prompt's context line. */
 const REPLY_CONTEXT_MAX = 300;
-
 export interface DiscordAdapterOptions {
 	/** The port: its transport carries every call, its channel cache tells threads from messages. */
 	channel: DiscordChannel;
@@ -431,7 +431,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			await this.#call("post", () =>
 				this.#transport.createMessage({
 					channelId: destination.channelId,
-					content: text,
+					content: cutCodePointSafe(text, MESSAGE_CONTENT_LIMIT),
 					messageReference: destination.messageReference,
 					allowedMentions: this.#port.allowedMentions(text),
 				}),
