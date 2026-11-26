@@ -71,6 +71,8 @@ import {
 import { TRACE_CLIENT } from "./trace-client";
 import { flowDoing, renderFlow, renderTrace } from "./trace-view";
 import { turnOf } from "./turn";
+import { stripClientComments } from "./ux-client";
+import { renderNavExtras, renderStatusPop, renderViewTools } from "./ux-renderers";
 
 /**
  * Page script (served as `app-<hash>.js`): the renderers above as shipped source, then the page wiring — the 15-second snapshot refresh, the
@@ -79,11 +81,8 @@ import { turnOf } from "./turn";
  * detail panel (`?card=`, `?task=`, `?item=` in the address; a card's conversation and plan read through
  * `api/pane/*`). Every request is relative to the page, so any tunnel prefix works.
  */
-export const SCRIPT = `const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)};
-const TURN_LABELS = ${JSON.stringify(TURN_LABELS)};
-const JOB_LABELS = ${JSON.stringify(JOB_LABELS)};
-const MONITOR_STAGES = ${JSON.stringify(MONITOR_STAGES)};
-const APPROVAL_OUTCOMES = ${JSON.stringify(APPROVAL_OUTCOMES)};
+export const SCRIPT =
+	`const GATE_LIMITS = ${JSON.stringify(GATE_LIMITS)}, TURN_LABELS = ${JSON.stringify(TURN_LABELS)}, JOB_LABELS = ${JSON.stringify(JOB_LABELS)}, MONITOR_STAGES = ${JSON.stringify(MONITOR_STAGES)}, APPROVAL_OUTCOMES = ${JSON.stringify(APPROVAL_OUTCOMES)};
 const esc = ${esc.toString()};
 const monitorTook = ${monitorTook.toString()};
 const gateText = ${gateText.toString()};
@@ -115,34 +114,20 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()}, repoCountsText = ${repoCountsText.toString()};
 const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, monitorModelDetail = ${monitorModelDetail.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()}, renderLimitsPop = ${renderLimitsPop.toString()};
+const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
-const renderTaskFacts = ${renderTaskFacts.toString()};
-const renderFlowChain = ${renderFlowChain.toString()};
-const discordThreadHref = ${discordThreadHref.toString()};
-const renderTaskDetail = ${renderTaskDetail.toString()};
-const renderDetailHead = ${renderDetailHead.toString()};
-const renderItemDetail = ${renderItemDetail.toString()};
-const renderMonitorDetail = ${renderMonitorDetail.toString()};
-const renderDiffDetail = ${renderDiffDetail.toString()};
-const renderDetailTabs = ${renderDetailTabs.toString()};
-const renderPlan = ${renderPlan.toString()};
-const renderConversation = ${renderConversation.toString()};
-const renderLiveTurn = ${renderLiveTurn.toString()};
-const rollDiff = ${rollDiff.toString()};
-const rollEffects = ${rollEffects.toString()};
-const rollLabel = ${rollLabel.toString()};
-const freshCards = ${freshCards.toString()};
-const pushStack = ${pushStack.toString()};
-const expireStack = ${expireStack.toString()};
-const stackHtml = ${stackHtml.toString()};
-const pillMotion = ${pillMotion.toString()};
-const freshSteps = ${freshSteps.toString()};
+const renderTaskFacts = ${renderTaskFacts.toString()}, renderFlowChain = ${renderFlowChain.toString()}, discordThreadHref = ${discordThreadHref.toString()};
+const renderTaskDetail = ${renderTaskDetail.toString()}, renderDetailHead = ${renderDetailHead.toString()}, renderItemDetail = ${renderItemDetail.toString()};
+const renderMonitorDetail = ${renderMonitorDetail.toString()}, renderDiffDetail = ${renderDiffDetail.toString()}, renderDetailTabs = ${renderDetailTabs.toString()};
+const renderPlan = ${renderPlan.toString()}, renderConversation = ${renderConversation.toString()}, renderLiveTurn = ${renderLiveTurn.toString()};
+const rollDiff = ${rollDiff.toString()}, rollEffects = ${rollEffects.toString()}, rollLabel = ${rollLabel.toString()};
+const freshCards = ${freshCards.toString()}, pushStack = ${pushStack.toString()}, expireStack = ${expireStack.toString()}, stackHtml = ${stackHtml.toString()}, pillMotion = ${pillMotion.toString()}, freshSteps = ${freshSteps.toString()};
 const renderMarkdown = ${renderMarkdown.toString()};
 const renderTrace = ${renderTrace.toString()};
 const flowDoing = ${flowDoing.toString()};
 const renderFlow = ${renderFlow.toString()};
-${TRACE_CLIENT}
-${BOOT_CLIENT}`.replace(/<\/script/gi, "<\\/script");
+${stripClientComments(TRACE_CLIENT)}
+${stripClientComments(BOOT_CLIENT)}`.replace(/<\/script/gi, "<\\/script");
 
 export interface DashboardPageOptions {
 	/** The agent board (config has `herdrBoard`); absent = no board stream, TASKs only in the inbox. */

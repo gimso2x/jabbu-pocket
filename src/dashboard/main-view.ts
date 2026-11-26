@@ -18,6 +18,7 @@ import {
 	TURN_LABELS,
 } from "./text";
 import { type Turn, type TurnGroup, turnOf } from "./turn";
+import { renderNavExtras, renderStatusPop, renderViewTools } from "./ux-renderers";
 
 /** What the page is showing besides the data: the chosen view, the search text, the list order, the open entry and theme. */
 export interface DashboardUi {
@@ -271,7 +272,7 @@ export function renderDashboardMain(
 		const title = line.length > 24 ? `${line.slice(0, 23)}…` : line;
 		const where = [next.machine, next.task?.branch || next.taskId].filter((part) => part).join(" · ");
 		const reply = next.card?.replyUrl;
-		return `<div class="next-line"><a class="next-up" ${linkOf(next)}><span class="next-label">다음</span><span class="next-title">${esc(
+		return `<div class="next-line${attention.length === 1 && !reply && q === "" ? " is-single" : ""}"><a class="next-up" ${linkOf(next)}><span class="next-label">다음</span><span class="next-title">${esc(
 			title,
 		)}</span><span class="next-why">${esc([turnFor(next).reason, next.task?.overlap ?? []].flat().join(" · "))}${
 			where === "" ? "" : ` · ${esc(where)}`
@@ -328,6 +329,11 @@ export function renderDashboardMain(
 			count === undefined ? "" : `<span class="count-chip">${esc(count)}</span>`
 		}${extra}${clearBtn}</div>`;
 
+	const hasLayout = view === "inbox" || view === "list" || view === "turns";
+	const layout = view === "list" || (view === "turns" && ui.layout === "list") ? "list" : "board";
+	const [boardHref, listHref] =
+		view === "turns" ? ["?view=turns", "?view=turns&amp;layout=list"] : ["./", "?view=list"];
+	const viewTools = renderViewTools(hasLayout, boardHref, listHref, layout);
 	/** The four group counts, the same line on the inbox and the list. */
 	const groupSum = `<p class="badges group-sum">${GROUPS.map(
 		([id, label]) =>
@@ -339,7 +345,9 @@ export function renderDashboardMain(
 				? ""
 				: `<div class="badges">${live.machines
 						.map((machine) =>
-							badge(`${machine.name}${machine.connected ? "" : " · 끊김"}`, machine.connected ? "" : "is-danger"),
+							machine.connected
+								? `<span class="host-ok"><i class="sys-dot is-success" aria-hidden="true"></i>${esc(machine.name)}</span>`
+								: badge(`${machine.name} · 끊김`, "is-danger"),
 						)
 						.join("")}</div>`;
 		const columns = GROUPS.map(([id, label, keep]) => {
@@ -415,7 +423,7 @@ export function renderDashboardMain(
 							: `<div class="notice is-danger">${badge("herdr 조회 실패", "is-danger")}<span>${esc(herdr.error)}</span><span class="notice-next">다음 행동: 로컬 herdr 실행 파일과 데몬 설정을 확인하세요(<code>jabbu-pocket doctor</code>).</span></div>`
 					}</section>`;
 		// The head's 확인 필요 is the 내 차례 rows, the same number as the tab title.
-		const top = `${head("에이전트 인박스", undefined, `<span class="view-sum">확인 필요 <b>${attention.length}</b></span>${staleHead}${machines}`)}${banners.join("")}${nextLine()}`;
+		const top = `${head("에이전트 인박스", undefined, `<span class="view-sum">확인 필요 <b>${attention.length}</b></span>${staleHead}${machines}${viewTools}`)}${banners.join("")}${nextLine()}`;
 		return `${top}${hits === 0 ? nothing : ""}${groupSum}<div class="groups">${columns}</div>${agents}`;
 	};
 
@@ -469,7 +477,7 @@ export function renderDashboardMain(
 					}</td><td class="num">${ago(entry.since)}</td></tr>`,
 			)
 			.join("");
-		return `${head("에이전트 목록", rows.length, staleHead)}${banners.join("")}${
+		return `${head("에이전트 목록", rows.length, `${staleHead}${viewTools}`)}${banners.join("")}${
 			rows.length === 0
 				? '<div class="empty-box"><p class="note">보여 줄 에이전트나 TASK가 없어요.</p><p class="note-sub">새로운 작업이 시작되면 목록에 표시됩니다.</p></div>'
 				: `${hits === 0 ? nothing : ""}${groupSum}<table class="list"><thead><tr>${heads}</tr></thead><tbody>${body}</tbody></table>`
@@ -545,7 +553,8 @@ export function renderDashboardMain(
 					? ""
 					: `<details class="closed" id="closed"><summary>끝난 백그라운드 작업 <span class="count-chip">${doneJobs.length}</span></summary><div class="rows">${doneJobs.map(jobRow).join("")}</div></details>`;
 			const runningJobs = jobs.ok ? jobs.items.filter((job) => job.state === "running").length : 0;
-			if (!turns.ok) return `${head("턴", undefined)}${banners.join("")}${failed(turns.error)}${jobTop}${jobDone}`;
+			if (!turns.ok)
+				return `${head("턴", undefined, viewTools)}${banners.join("")}${failed(turns.error)}${jobTop}${jobDone}`;
 			const draining = d.ok && (d.drain !== undefined || d.heartbeat?.draining === true);
 			const holding = turns.items.filter((turn) => turn.blocksRestart);
 			const oldest = holding.reduce((max, turn) => Math.max(max, turn.ageMs), 0);
@@ -564,7 +573,7 @@ export function renderDashboardMain(
 			// Every number in the head says what it counts: open threads match the 진행 중 column, jobs link to their block.
 			const bg = runningJobs > 0 ? ` · <a href="#jobs">백그라운드 작업 <b>${runningJobs}</b></a>` : "";
 			const sum = q === "" ? `진행 중 스레드 <b>${openThreads}</b>` : `검색 결과 <b>${threads.length}</b>건`;
-			const title = head("턴", undefined, `<span class="view-sum">${sum}${bg}</span>`);
+			const title = head("턴", undefined, `<span class="view-sum">${sum}${bg}</span>${viewTools}`);
 			// No thread but live jobs: the jobs stand in for the empty board.
 			if (turns.threads.length === 0) {
 				return liveJobs.length > 0
@@ -1383,18 +1392,8 @@ export function renderDashboardMain(
 			id === "alerts" && n === 0 && !warn ? "" : `<span class="nav-count${warn ? " is-warn" : ""}">${n}</span>`
 		}${navIcon(id)}</a>`;
 	}).join("");
-	const hasLayout = view === "inbox" || view === "list" || view === "turns";
-	const layout = view === "list" || (view === "turns" && ui.layout === "list") ? "list" : "board";
-	// The turns view switches between its own board and table; inbox and list switch between theirs.
-	const [boardHref, listHref] =
-		view === "turns" ? ["?view=turns", "?view=turns&amp;layout=list"] : ["./", "?view=list"];
-	const layoutSeg = hasLayout
-		? `<div class="seg" role="group" aria-label="보기 방식"><a class="seg-item" href="${boardHref}" data-layout="board"${
-				layout === "board" ? ' aria-current="true"' : ""
-			}>Board</a><a class="seg-item" href="${listHref}" data-layout="list"${layout === "list" ? ' aria-current="true"' : ""}>List</a></div>`
-		: "";
-	const themeBtn = (mode: string, text: string): string =>
-		`<button type="button" class="seg-item" data-theme-set="${mode}" aria-pressed="${theme === mode}">${text}</button>`;
+	const moreWarn = ["lanes", "monitors", "alerts", "system"].some((id) => NAV[id]?.[1]);
+	const statusPop = renderStatusPop(d, board !== undefined && !board.ok, chips.join(""));
 	// The test chip: hidden with nothing running or queued; the queue opens on click.
 	const heavy = s.heavyRun;
 	const heavyChip =
@@ -1409,9 +1408,9 @@ export function renderDashboardMain(
 			: "";
 	const topbar = `<header class="topbar"><nav class="crumbs" aria-label="위치"><span>jabbu</span><span aria-hidden="true">/</span><span aria-current="page">${esc(
 		viewLabel,
-	)}</span></nav><div class="status-chips" aria-label="봇 상태">${chips.join("")}</div>${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools">${layoutSeg}<div class="seg" role="group" aria-label="테마">${themeBtn("system", "시스템")}${themeBtn("light", "라이트")}${themeBtn("dark", "다크")}</div><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
+	)}</span></nav>${statusPop}${heavyChip}${renderLimitsPop(s.usageLimits, clock, roll)}<div class="top-tools"><button type="button" class="cmd-trigger" data-cmd-open aria-label="명령 팔레트 열기"><span>명령</span><kbd>⌘K</kbd></button></div></header>`;
 	const content = view === "inbox" ? inboxView() : view === "list" ? listView() : sectionView();
-	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}</nav><main class="view" id="view" aria-label="${esc(
+	return `${topbar}<nav class="sidenav" aria-label="보기">${nav}${renderNavExtras(view, moreWarn, theme)}</nav><main class="view" id="view" aria-label="${esc(
 		viewLabel,
 	)}" tabindex="-1">${content}</main>`;
 }

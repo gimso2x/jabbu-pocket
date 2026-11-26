@@ -1,7 +1,8 @@
 import { CLIENT_UI_HELPERS } from "./client-ui-helpers";
 import { TASK_WORK_CLIENT } from "./task-work-client";
+import { UX_CLIENT } from "./ux-client";
 /** The page wiring of the inline script (`SCRIPT` in html.ts): `boot()` and its call, shipped after its renderers. */
-export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot() {
+export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}function boot() {
 	const main = document.getElementById("main");
 	const stale = document.getElementById("stale");
 	const search = document.getElementById("search");
@@ -120,16 +121,10 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		}
 		document.documentElement.setAttribute("data-theme", resolveTheme(valid));
 		document.documentElement.setAttribute("data-theme-mode", valid);
-		for (const btn of document.querySelectorAll("[data-theme-set]")) {
-			btn.setAttribute("aria-pressed", String(btn.getAttribute("data-theme-set") === valid));
-		}
+		for (const btn of document.querySelectorAll("[data-theme-set]")) btn.setAttribute("aria-pressed", String(btn.getAttribute("data-theme-set") === valid));
 		if (snapshot) drawMain(false);
 	};
-	try {
-		applyTheme(localStorage.getItem("jabbu-theme") || "system", false);
-	} catch {
-		applyTheme("system", false);
-	}
+	try { applyTheme(localStorage.getItem("jabbu-theme") || "system", false); } catch { applyTheme("system", false); }
 	if (window.matchMedia) {
 		window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
 			if (ui.theme === "system") applyTheme("system", false);
@@ -141,9 +136,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		toast.textContent = text;
 		toast.hidden = false;
 		if (toastTimer) clearTimeout(toastTimer);
-		toastTimer = setTimeout(() => {
-			toast.hidden = true;
-		}, 2200);
+		toastTimer = setTimeout(() => { toast.hidden = true; }, 2200);
 	};
 	const copyText = async (value, label) => {
 		let ok = false;
@@ -474,8 +467,10 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		// Folds with an id (최근 닫힘, 더 보기) and an open limits popover stay open across the redraw.
 		const folds = Array.from(main.querySelectorAll("details[open][id]"), (fold) => fold.id);
 		const limitsOpen = main.querySelector(".limits-pop.is-open") !== null;
+		const uxOpen = readUxOpenState(document);
 		main.innerHTML = html;
 		restoreLimitsPop(main, limitsOpen);
+		restoreUxOpenState(document, uxOpen);
 		drawnMain = html;
 		markChanges();
 		drawRolls();
@@ -952,6 +947,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		ui.layout = "";
 		ui.sort = "";
 		ui.desc = false;
+		setNavMore(document, false);
 		if (open) show(null, "none");
 		history.pushState(null, "", toUrl(null));
 		drawMain(true);
@@ -1085,6 +1081,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 		const target = event.target instanceof Element ? event.target : null;
 		if (!target) return;
 		if (!target.closest("#event-stack")) stackEl.classList.remove("is-open");
+		if (uxHandleClick(target, event, document)) return;
 		if (handleLimitsClick(target, event, document)) return;
 		if (target.closest("[data-es-close]")) {
 			event.preventDefault();
@@ -1303,7 +1300,9 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}function boot
 			}
 		}
 		if (event.key === "Escape") {
-			if (document.querySelector(".limits-pop.is-open, .limits-pop:focus-within")) {
+			if (uxHandleEscape(document)) {
+				event.preventDefault();
+			} else if (document.querySelector(".limits-pop.is-open, .limits-pop:focus-within")) {
 				event.preventDefault();
 				closeLimits();
 			} else if (open) {
