@@ -73,6 +73,22 @@ test("a daemon registering tasks and a CLI pausing one never fail each other (tw
 	}
 }, 60_000);
 
+async function spawnLockHolder(path: string, holdMs = 1000): Promise<() => Promise<void>> {
+	const holder = Bun.spawn(
+		[process.execPath, join(import.meta.dir, "fixtures", "ledger-lock-child.ts"), path, String(holdMs)],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	const reader = holder.stdout.getReader();
+	const first = await reader.read();
+	reader.releaseLock();
+	expect(new TextDecoder().decode(first.value)).toContain("locked");
+	return async () => {
+		const code = await holder.exited;
+		const stderr = await new Response(holder.stderr).text();
+		if (code !== 0) throw new Error(`lock holder exited ${code}: ${stderr.trim().slice(-1200)}`);
+	};
+}
+
 // Persona: the owner's CLI opens the ledger while another jabbu process holds the file — what a WAL recovery (a crash,
 // a killed daemon) or a plain writer holds it for. The open's first statement has to wait out that lock; answering
 // SQLITE_BUSY at once kills the CLI before it ever reaches a transaction (`openTaskLedger` sets busy_timeout first).
@@ -83,20 +99,28 @@ test("an open waits for another process's write lock instead of failing with SQL
 		const fresh = new Database(path, { create: true, strict: true });
 		migrateTaskSchema(fresh); // an older ledger still in rollback-journal mode: nothing has switched it to WAL yet
 		fresh.close();
-		const holder = Bun.spawn(
-			[process.execPath, join(import.meta.dir, "fixtures", "ledger-lock-child.ts"), path, "1000"],
-			{ stdout: "pipe", stderr: "pipe" },
-		);
-		const reader = holder.stdout.getReader();
-		const first = await reader.read();
-		reader.releaseLock();
-		expect(new TextDecoder().decode(first.value)).toContain("locked");
+		const finishHolder = await spawnLockHolder(path);
 		const ledger = openTaskLedger(path, "Asia/Seoul");
-		const code = await holder.exited;
-		const stderr = await new Response(holder.stderr).text();
-		if (code !== 0) throw new Error(`lock holder exited ${code}: ${stderr.trim().slice(-1200)}`);
+		await finishHolder();
 		expect(ledger.list()).toEqual([]);
 		expect(ledger.register(victimTask).status).toBe("working");
+		ledger.close();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 60_000);
+
+test("a readonly open also waits for another process's write lock instead of failing with SQLITE_BUSY", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-xproc-ro-lock-"));
+	try {
+		const path = join(dir, "jabbu.db");
+		const fresh = new Database(path, { create: true, strict: true });
+		migrateTaskSchema(fresh);
+		fresh.close();
+		const finishHolder = await spawnLockHolder(path);
+		const ledger = openTaskLedger(path, "Asia/Seoul", undefined, { readonly: true });
+		await finishHolder();
+		expect(ledger.list()).toEqual([]);
 		ledger.close();
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

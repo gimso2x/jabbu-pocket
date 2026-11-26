@@ -598,14 +598,11 @@ export class TaskLedger {
 	}
 }
 
-/**
- * A read-only handle. A WAL ledger on a read-only medium cannot create its -shm/-wal files, so the plain read-only
- * open fails (`SQLITE_READONLY_DIRECTORY`); then the file is read as `immutable` (no locks, no -wal: a medium that
- * cannot be written cannot have a writer either).
- */
+/** Read-only handle: waits out locks first, and falls back to `immutable` on a read-only directory. */
 function openReadonly(path: string): Database {
 	const db = new Database(path, { readonly: true, strict: true });
 	try {
+		db.run("PRAGMA busy_timeout = 5000");
 		db.query("SELECT 1 FROM sqlite_master LIMIT 1").get();
 		return db;
 	} catch (error) {
@@ -616,22 +613,24 @@ function openReadonly(path: string): Database {
 	return new Database(`${pathToFileURL(path).href}?immutable=1`, flags);
 }
 
-/** Standalone connection for the CLI. `readonly` (the read commands) opens without write access: no WAL switch, no
- * table creation, so a read-only medium or a 0444 ledger still lists and shows. */
+/** Standalone connection for the CLI; `readonly` skips WAL switch and table creation (0444/read-only media). */
 export function openTaskLedger(
 	path: string,
 	timezone: string,
 	clock: TaskClock = { now: () => Date.now() },
 	options: { readonly?: boolean } = {},
 ): TaskLedger {
-	if (options.readonly === true) {
-		return new TaskLedger(openReadonly(path), { clock, timezone, readonly: true });
-	}
+	if (options.readonly === true) return new TaskLedger(openReadonly(path), { clock, timezone, readonly: true });
 	const db = new Database(path, { create: true, strict: true });
-	// Before the first statement: at the default 0ms timeout the schema check below answers SQLITE_BUSY_RECOVERY at
-	// once while another process recovers the WAL or holds an exclusive lock, so the CLI would die at open.
-	db.run("PRAGMA busy_timeout = 5000");
-	checkSchemaVersion(db);
-	db.run("PRAGMA journal_mode = WAL");
-	return new TaskLedger(db, { clock, timezone });
+	try {
+		// Before the first statement so schema check and WAL switch wait during WAL recovery or another writer's lock.
+		db.run("PRAGMA busy_timeout = 5000");
+		checkSchemaVersion(db);
+		db.run("PRAGMA journal_mode = WAL");
+		db.run("PRAGMA synchronous = NORMAL");
+		return new TaskLedger(db, { clock, timezone });
+	} catch (error) {
+		db.close();
+		throw error;
+	}
 }
