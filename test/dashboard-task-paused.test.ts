@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderTaskDetail } from "../src/dashboard/detail";
+import { SCRIPT } from "../src/dashboard/html";
 import { buildSnapshot, type SnapshotDeps, type TaskInfo } from "../src/dashboard/snapshot";
 import { openStore } from "../src/store/db";
 
@@ -32,6 +33,18 @@ describe("a paused TASK shows it in the detail panel", () => {
 		const running = renderTaskDetail(TASK_ID, task());
 		expect(running).toContain("진행 중");
 		expect(running).not.toContain("멈춤 중");
+	});
+});
+
+describe("the panel's read-after-write patch", () => {
+	test("the badge the page script injects after a pause/resume answer is the one the server renders", () => {
+		const rendered = renderTaskDetail(TASK_ID, task({ pausedAt: NOW }));
+		const badge = rendered.slice(
+			rendered.indexOf('<span class="badge is-warning"'),
+			rendered.indexOf("</span>", rendered.indexOf("멈춤 중")) + 7,
+		);
+		expect(badge).toContain(">멈춤 중</span>");
+		expect(SCRIPT).toContain(`const PAUSED = '${badge}';`);
 	});
 });
 
