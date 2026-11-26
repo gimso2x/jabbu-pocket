@@ -198,6 +198,7 @@ jobs:
           rm -rf "$HOME/repo"
           mkdir -p "$HOME/repo" "$HOME/.local/bin"
           git config --global --add safe.directory "$src_dir"
+          git config --global --add safe.directory "$src_dir/.git"
           git init --quiet "$HOME/repo"
           git -C "$HOME/repo" fetch --quiet --depth=1 "$src_dir" HEAD
           git -C "$HOME/repo" checkout --quiet FETCH_HEAD
