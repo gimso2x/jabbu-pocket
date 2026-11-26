@@ -123,6 +123,57 @@ describe("thread context injection", () => {
 		expect(prompt.endsWith("\n\n[현재 요청]\n이번 주 내용 정리해서줘")).toBe(true);
 	});
 
+	test("a discarded earliest message is not the thread root", async () => {
+		const channelMailbox = router.mailbox(CHANNEL);
+		// The first message's turn is held: its row is dispatched, so it can still be discarded.
+		await router.route(msg(CHANNEL, REF, "C1:111.222", "버려질 첫 메시지"));
+		store.discard("C1:111.222");
+		const held = driverAt(0);
+		const { promise, resolve } = Promise.withResolvers<void>();
+		const off = held.onFinal(() => {
+			off();
+			resolve();
+		});
+		held.release();
+		await promise;
+		await channelMailbox.sweepIdle();
+		await turn(channelMailbox, 0, () => router.route(msg(CHANNEL, REF, "C1:111.223", "진짜 시작 메시지")));
+
+		const threadMailbox = router.mailbox(THREAD);
+		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.333", "이번 주 내용 정리해서줘")));
+		const prompt = promptsOf(driverAt(1))[0] ?? "";
+		expect(prompt).toContain(THREAD_CONTEXT_HEADER);
+		expect(prompt).toContain("진짜 시작 메시지");
+		expect(prompt).not.toContain("버려질 첫 메시지");
+	});
+
+	test("getThreadRootInbound skips discarded and peer rows", () => {
+		store.ensureOrigin(CHANNEL, join(dir, "sessions"));
+		store.recordInbound({
+			originKey: CHANNEL,
+			platformMessageId: "C1:111.222",
+			textRef: "버려질 첫 메시지",
+			threadRef: REF,
+		});
+		store.recordInbound({
+			originKey: CHANNEL,
+			platformMessageId: "C1:111.223",
+			textRef: "피어 봇 메시지",
+			threadRef: REF,
+			peerUserId: "peer-1",
+		});
+		store.recordInbound({
+			originKey: CHANNEL,
+			platformMessageId: "C1:111.224",
+			textRef: "진짜 시작 메시지",
+			threadRef: REF,
+		});
+		store.discard("C1:111.222");
+		expect(store.getThreadRootInbound(REF, "C1:999.999")?.textRef).toBe("진짜 시작 메시지");
+		store.discard("C1:111.224");
+		expect(store.getThreadRootInbound(REF, "C1:999.999")).toBeUndefined();
+	});
+
 	test("only the first prompt of the session carries the context", async () => {
 		await turn(router.mailbox(CHANNEL), 0, () => router.route(msg(CHANNEL, REF, "C1:111.222", "스레드 시작")));
 		confirmDelivery(store.listDeliveries({ originKey: CHANNEL }).find((d) => d.threadRef === REF));
