@@ -16,7 +16,7 @@ afterAll(() => {
 });
 
 interface LogEntry {
-	kind: "argv" | "env" | "in" | "exit";
+	kind: "argv" | "env" | "in" | "exit" | "grand";
 	pid?: number;
 	argv?: string[];
 	env?: Record<string, string | undefined>;
@@ -76,6 +76,17 @@ function nextFinal(driver: AgyPrintDriver): Promise<OmpFinal> {
 		resolve(final);
 	});
 	return promise;
+}
+
+/** A bounded hop-by-hop wait (one macrotask per hop, no fixed delay) until `ready` holds. */
+async function until(ready: () => boolean, what: string, hops = 2000): Promise<void> {
+	for (let hop = 0; hop < hops; hop += 1) {
+		if (ready()) return;
+		const { promise, resolve } = Promise.withResolvers<void>();
+		setTimeout(resolve, 0);
+		await promise;
+	}
+	throw new Error(`never happened: ${what}`);
 }
 
 /** Prompts `text` and resolves with that turn's final (subscribed before the prompt goes out). */
@@ -185,6 +196,64 @@ test("an error turn ends `error` and the child goes on to the next turn", async 
 	expect(await started(driver, "@error")).toMatchObject({ status: "error", error: "model exploded" });
 	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY2:after" });
 	expect(h.spawns()).toHaveLength(1);
+	await driver.stop();
+});
+
+test("a stdin failure ends the turn after prompt() resolves, never inside it", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	await driver.openSession();
+	expect(await started(driver, "first @close-stdin")).toMatchObject({ status: "completed" });
+	// The mailbox creates its turn only after prompt() resolves, so a final delivered inside prompt() is ignored
+	// (final_ignored) and the turn hangs: record whether the final arrives before prompt() returns.
+	let promptReturned = false;
+	let deliveredBeforeReturn = false;
+	const finalPromise = new Promise<OmpFinal>((resolve) => {
+		const off = driver.onFinal((final) => {
+			off();
+			if (!promptReturned) deliveredBeforeReturn = true;
+			resolve(final);
+		});
+	});
+	const opRef = await driver.prompt("second");
+	promptReturned = true;
+	const final = await finalPromise;
+	expect(final.opRef).toBe(opRef);
+	expect(final).toMatchObject({ status: "error" });
+	expect(final.error).toContain("agy stdin closed");
+	expect(deliveredBeforeReturn).toBe(false);
+	await driver.stop();
+});
+
+test("a stdout line past 1MiB ends the turn as a protocol error and the child is retired; the next prompt resumes", async () => {
+	const h = harness();
+	const driver = h.make();
+	const exits: OmpExitInfo[] = [];
+	driver.onExit((info) => exits.push(info));
+	await driver.start();
+	const long = await started(driver, "@longline");
+	expect(long.status).toBe("error");
+	expect(long.error).toBe("agy line over 1MiB");
+	const first = h.lastPid();
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(first)).toBe(false);
+	expect(h.spawns()).toHaveLength(2);
+	expect(flagOf(h.spawns()[1]?.argv, "--conversation")).toStartWith("fake-");
+	expect(exits).toEqual([]);
+	await driver.stop();
+});
+
+test("a completed stdout line past 1MiB (with trailing newline) also ends the turn and retires the child", async () => {
+	const h = harness();
+	const driver = h.make();
+	await driver.start();
+	const long = await started(driver, "@longline-nl");
+	expect(long.status).toBe("error");
+	expect(long.error).toBe("agy line over 1MiB");
+	const first = h.lastPid();
+	expect(await started(driver, "after")).toMatchObject({ status: "completed", text: "REPLY1:after" });
+	expect(alive(first)).toBe(false);
 	await driver.stop();
 });
 
@@ -322,6 +391,38 @@ test("newSession mid-turn ends the turn `aborted` with cancelled=true and the ne
 	expect((await driver.state()).idle).toBe(true);
 	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
 	await driver.stop();
+});
+
+test("abort returns while a detached descendant still holds stdout: exit settles on the code, not EOF", async () => {
+	const h = harness();
+	const driver = h.make();
+	const finals: OmpFinal[] = [];
+	driver.onFinal((final) => finals.push(final));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold-stdout");
+	await working.promise;
+	// The delta can reach the driver while the grandchild spawn is still in flight: wait for the fake's
+	// log to prove the detached sleeper exists before aborting, or the test passes vacuously.
+	await until(() => h.entries().some((entry) => entry.kind === "grand"), "the detached sleeper");
+	const held = h.lastPid();
+	await driver.abort();
+	expect(finals.map((final) => final.status)).toEqual(["aborted"]);
+	expect(finals[0]?.error).toBe("cancelled");
+	expect(alive(held)).toBe(false);
+	expect((await driver.state()).idle).toBe(true);
+	expect(await started(driver, "next")).toMatchObject({ status: "completed", text: "REPLY1:next" });
+	await driver.stop();
+	// The detached sleeper outlives the group kill: end it so its pipe does not outlive the test file.
+	const grand = h.entries().find((entry) => entry.kind === "grand")?.pid;
+	if (grand !== undefined) {
+		try {
+			process.kill(grand, "SIGKILL");
+		} catch {
+			// already gone
+		}
+	}
 });
 
 test("switchSession mid-turn ends the turn `aborted` with cancelled=true and resumes the given conversation", async () => {

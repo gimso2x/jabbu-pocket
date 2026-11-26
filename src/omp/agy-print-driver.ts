@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { resolveAgyExecutable } from "./agy-acp-client";
+import { oversizedLineBytes, resolveAgyExecutable, watchChildExit } from "./agy-acp-client";
 import { appendTurnChunk, resetTurnText } from "./agy-notice";
 import * as Quota from "./agy-quota";
 import * as Switch from "./agy-switch";
@@ -9,10 +9,9 @@ import { AgyToolKeepalive } from "./agy-tool-keepalive";
 import type * as Omp from "./driver";
 import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
+import { parseObject } from "./rpc-client";
 import { isRecord } from "./type-guards";
-
 // A [TASK] worker's agy print child (agy 1.5.17, T-20261126-08 S0): stdin one `{"event":"user",…}` line per turn; stdout `init` → `step_update`s → `result`. Applies `--settings` deny rules; abort kills child, next prompt resumes.
-
 /** sessionDir file with the latest turn's final assistant text: the task `read` of a driver that is gone. */
 export const AGY_LAST_ANSWER_FILE = "agy-last-answer.txt";
 const POINTER_FILE = "agy-conversation.json";
@@ -22,7 +21,6 @@ const STREAM_ARGS = "--input-format stream-json --output-format stream-json --da
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000;
 const KILL_GRACE_MS = 2_000;
 const QUIET_STEPS: Record<string, true> = { user_input: true, system_message: true };
-
 /** `model`, `settings`, `addDirs`, `workerFloors` (new-conversation prefix), `logName`, `logDir` for child logs. */
 export interface AgyPrintDriverOptions extends Pick<Switch.AgyOmpDriverOptions, SharedOption | "startupTimeoutMs"> {
 	model: string;
@@ -42,7 +40,6 @@ const subscribe = <T>(set: Set<(value: T) => void>, listener: (value: T) => void
 	set.add(listener);
 	return () => set.delete(listener);
 };
-
 export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	readonly #options: AgyPrintDriverOptions;
 	readonly #pointerPath: string;
@@ -203,7 +200,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const child: Child = { proc, init, gone: Promise.resolve(), stderr: "", ended: false, ready: false };
 		const stdoutDone = this.#pumpStdout(child);
 		void this.#pumpStderr(child);
-		child.gone = Promise.all([proc.exited, stdoutDone]).then(([code]) => this.#onExit(child, code));
+		child.gone = watchChildExit(proc.exited, stdoutDone, (code) => this.#onExit(child, code));
 		this.#child = child;
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		const timer = setTimeout(() => init.reject(new Error(`no init in ${timeoutMs}ms`)), timeoutMs);
@@ -253,24 +250,28 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const decoder = new TextDecoder();
 		let buffer = "";
 		for await (const chunk of child.proc.stdout) {
+			if (child.ended || child !== this.#child) return;
 			const lines = (buffer + decoder.decode(chunk, { stream: true })).split("\n");
 			buffer = lines.pop() ?? "";
+			if (oversizedLineBytes(lines, buffer) > 0) {
+				const turn = this.#turn;
+				this.#options.log?.warn("agy.print.line_too_long", { origin: this.#options.originKey, pid: child.proc.pid });
+				this.#retire();
+				if (turn)
+					this.#finish(turn, { opRef: turn.opRef, status: "error", text: turn.text, error: "agy line over 1MiB" });
+				return;
+			}
 			for (const line of lines) this.#onLine(child, line);
 		}
-		this.#onLine(child, buffer);
+		if (!child.ended && child === this.#child) this.#onLine(child, buffer);
 	}
 	async #pumpStderr(child: Child): Promise<void> {
 		const decoder = new TextDecoder();
 		for await (const chunk of child.proc.stderr) child.stderr = (child.stderr + decoder.decode(chunk)).slice(-4_000);
 	}
 	#onLine(child: Child, line: string): void {
-		let message: unknown;
-		try {
-			message = JSON.parse(line);
-		} catch {
-			return;
-		}
-		if (!isRecord(message)) return;
+		const message = parseObject(line);
+		if (message === undefined) return;
 		const event = str(message.event) ?? "?";
 		const id = str(message.conversation_id);
 		if (event === "init" && id !== undefined && id !== "") {
@@ -304,15 +305,13 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 	#onTool(turn: Switch.PendingTurn, step: Record<string, unknown>): void {
 		turn.hadToolCall = true;
 		const info = isRecord(step.tool_info) ? step.tool_info : {};
-		const error = isRecord(info.error) ? str(info.error.message) : undefined;
-		const state = str(step.state);
 		Switch.applyAgyToolUpdate({
 			update: {
 				toolCallId: `${str(step.conversation_id) ?? ""}#${num(step.step_index)}`,
 				name: str(step.tool_name) ?? str(info.name) ?? "tool",
 				rawInput: info.parameters ?? {},
-				status: state === "DONE" ? "completed" : state === "ERROR" ? "failed" : "in_progress",
-				rawOutput: { output: str(info.output) ?? error ?? "" },
+				status: str(step.state) === "DONE" ? "completed" : str(step.state) === "ERROR" ? "failed" : "in_progress",
+				rawOutput: { output: str(info.output) ?? (isRecord(info.error) ? str(info.error.message) : undefined) ?? "" },
 			},
 			entries: this.#entries,
 			nextSeq: () => ++this.#seq,
@@ -364,7 +363,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 			child.proc.stdin.flush();
 		} catch (cause) {
 			this.#retire();
-			this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error: `agy stdin closed: ${String(cause)}` });
+			const error = `agy stdin closed: ${String(cause)}`; // Delivered after prompt() resolves: the mailbox creates its turn only then.
+			setTimeout(() => this.#finish(turn, { opRef: turn.opRef, status: "error", text: "", error }), 0);
 		}
 	}
 	/** Ends `turn` once: notes queued steers it drops, clears it and the queue, keeps its answer, sends its final. */

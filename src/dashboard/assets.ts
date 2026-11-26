@@ -1,8 +1,20 @@
 import { STYLE } from "./style";
 import { TASK_WORK_STYLE } from "./task-work-client";
+import { UX_STYLE } from "./ux-style";
 
-/** The page's stylesheet: the shared style plus the card-link rules only the page uses. */
-export const PAGE_CSS = `${STYLE}${TASK_WORK_STYLE}.card-thread{position:relative}.card-link{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}.card-link::after{content:"";position:absolute;inset:0;border-radius:var(--r-m)}.card-job{position:relative;z-index:1}.card-job:hover{text-decoration:underline}`;
+const compactCss = (css: string): string =>
+	css
+		.replace(/\/\*[^*]*(?:\*(?!\/)[^*]*)*\*\//g, "")
+		.replace(/\s+/g, " ")
+		.replace(/\s*([{};,])\s*/g, "$1")
+		.replace(/:\s+/g, ":")
+		.replace(/;}/g, "}")
+		.trim();
+
+/** The page's stylesheet: the shared style plus UX layers and card-link rules, safely compacted within gzip budget. */
+export const PAGE_CSS = compactCss(
+	`${STYLE}${TASK_WORK_STYLE}${UX_STYLE}.card-thread{position:relative}.card-link{display:flex;flex-direction:column;gap:var(--sp-1);min-width:0}.card-link::after{content:"";position:absolute;inset:0;border-radius:var(--r-m)}.card-job{position:relative;z-index:1}.card-job:hover{text-decoration:underline}`,
+);
 
 /** Web app manifest for "install as app" in Chrome/Edge; URLs are relative so any tunnel prefix keeps working. */
 export const WEB_MANIFEST = JSON.stringify({

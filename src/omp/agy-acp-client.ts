@@ -3,12 +3,11 @@ import { resolve } from "node:path";
 import type { AgyMcpServer } from "../config-agy";
 import type { Logger } from "../log";
 import { OmpDriverError, type OmpUsage } from "./driver";
+import { MAX_RPC_FRAME_BYTES } from "./rpc-client";
 import { isRecord } from "./type-guards";
 
 /*
- * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line). Modelled on omp's
- * antigravity-cli provider (oh-my-pi eca7acfa45, MIT: `packages/ai/src/providers/antigravity-cli/host.ts`,
- * `packages/utils/src/acp/`); written here, nothing imported.
+ * One `agy acp` child and its JSON-RPC 2.0 wire (agy 1.5.16, both directions one message per line).
  * - out requests `initialize`, `session/new|load`, `session/set_config_option`, `session/prompt`; out notification
  *   `session/cancel`.
  * - in  responses (paired by `id`), `session/update` notifications, and agent→client requests: `session/request_permission`
@@ -21,12 +20,24 @@ import { isRecord } from "./type-guards";
 /** The child's arguments after the executable: ACP over stdio, no telemetry, tools without prompts. */
 export const AGY_ACP_ARGS = ["acp", "--disable-telemetry", "--dangerously-skip-permissions"] as const;
 /**
- * Env omp gives agy (`host.ts` startTransport, `credentials.ts` agyCredentialEnv): no self-update mid-session, and a
+ * Env passed to agy: no self-update mid-session, and a
  * non-empty SSH_TTY so agy keeps its login in files instead of probing a desktop keychain.
  */
 const AGY_ENV = { AGY_CLI_DISABLE_AUTO_UPDATE: "1", SSH_TTY: "jabbu-agy-file-auth" };
 
 const STDERR_TAIL_BYTES = 4_000;
+/** SIGTERM to SIGKILL grace when a protocol error ends the child (the driver's retire grace). */
+const ACP_KILL_GRACE_MS = 2_000;
+
+/** Returns the byte length of the first line (or newline-less residual) over `MAX_RPC_FRAME_BYTES`, or 0. */
+export function oversizedLineBytes(lines: readonly string[], residual = ""): number {
+	for (const line of lines) {
+		const bytes = Buffer.byteLength(line);
+		if (bytes > MAX_RPC_FRAME_BYTES) return bytes;
+	}
+	const bytes = Buffer.byteLength(residual);
+	return bytes > MAX_RPC_FRAME_BYTES ? bytes : 0;
+}
 
 /** The agy CLI to spawn: a path must be executable, a name is looked up on the child's PATH. */
 export function resolveAgyExecutable(given: string, env: Record<string, string>): string {
@@ -43,6 +54,36 @@ export function resolveAgyExecutable(given: string, env: Record<string, string>)
 	const found = Bun.which(given, { PATH: env.PATH ?? "" });
 	if (!found) throw new OmpDriverError("agy_executable_missing", `agy executable not found on PATH: ${given}`);
 	return found;
+}
+
+/**
+ * How long the stdio streams may still take to close after "exit": a descendant that left the process group
+ * (`setsid`, its own `detached` spawn) while holding a pipe end delays EOF forever — cf. `src/monitors/script.ts`,
+ * same grace.
+ */
+export const STREAM_CLOSE_GRACE_MS = 1_000;
+
+/**
+ * Settles a child exit on its exit code: the stdout stream gets a short grace to drain, then `onExit` runs even
+ * if a detached descendant still holds a pipe end. The pump keeps draining detached, so its handler must ignore
+ * lines once the child is gone. Shared with the print driver (`agy-print-driver.ts`).
+ */
+export async function watchChildExit(
+	exited: Promise<number>,
+	stdoutDone: Promise<void>,
+	onExit: (code: number) => void,
+): Promise<void> {
+	const code = await exited;
+	let timer: Timer | undefined;
+	const grace = new Promise<void>((resolve) => {
+		timer = setTimeout(resolve, STREAM_CLOSE_GRACE_MS);
+	});
+	try {
+		await Promise.race([stdoutDone.catch(() => {}), grace]);
+	} finally {
+		clearTimeout(timer);
+	}
+	onExit(code);
 }
 
 /** `session/new|load` params: the cwd, the MCP servers (read now) and the system prompt agy appends to its own. */
@@ -64,7 +105,7 @@ export interface AgyAcpHandlers {
 	onNotification(method: string, params: Record<string, unknown>): void;
 	/** An agent→client request the client answered by itself (logged by the driver). */
 	onRequest?(method: string, params: Record<string, unknown>): void;
-	/** The child exited and stdout is drained; every pending request was already rejected. */
+	/** The child exited and its exit was settled; every pending request was already rejected. */
 	onExit(code: number, stderrTail: string): void;
 }
 
@@ -88,7 +129,7 @@ interface Pending {
 
 export class AgyAcpClient {
 	readonly pid: number;
-	/** Resolves once the exit was handled (stdout drained, pending requests rejected, `onExit` called). */
+	/** Resolves once the exit was handled (exit code known, stdout given a short drain grace, pending requests rejected, `onExit` called). */
 	readonly gone: Promise<void>;
 	readonly #proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
 	readonly #handlers: AgyAcpHandlers;
@@ -113,7 +154,7 @@ export class AgyAcpClient {
 		this.pid = this.#proc.pid;
 		const stdoutClosed = this.#pumpStdout();
 		void this.#pumpStderr();
-		this.gone = Promise.all([this.#proc.exited, stdoutClosed]).then(([code]) => {
+		this.gone = watchChildExit(this.#proc.exited, stdoutClosed, (code) => {
 			this.#exited = true;
 			const error = new OmpDriverError("rpc_error", `agy acp exited (code=${code})`);
 			for (const pending of this.#pending.values()) pending.reject(error);
@@ -188,7 +229,7 @@ export class AgyAcpClient {
 	}
 
 	#handleLine(line: string): void {
-		if (line.trim() === "") return;
+		if (this.#exited || line.trim() === "") return;
 		let message: unknown;
 		try {
 			message = JSON.parse(line);
@@ -244,13 +285,32 @@ export class AgyAcpClient {
 		let buffer = "";
 		try {
 			for await (const chunk of this.#proc.stdout) {
+				if (this.#exited) return;
 				buffer += decoder.decode(chunk, { stream: true });
 				let newline = buffer.indexOf("\n");
 				while (newline !== -1) {
 					const line = buffer.slice(0, newline);
+					const lineBytes = Buffer.byteLength(line);
+					if (lineBytes > MAX_RPC_FRAME_BYTES) {
+						this.#options.log?.warn("agy.acp.line_too_long", {
+							origin: this.#options.originKey,
+							pid: this.pid,
+							bytes: lineBytes,
+						});
+						void this.end(ACP_KILL_GRACE_MS);
+						return;
+					}
 					buffer = buffer.slice(newline + 1);
 					newline = buffer.indexOf("\n");
 					this.#handleLine(line);
+				}
+				// A line still without its newline past the RPC frame cap is never a valid frame: end the child
+				// (its exit rejects every pending request and reports `onExit`, like any unexpected death).
+				const bytes = Buffer.byteLength(buffer);
+				if (bytes > MAX_RPC_FRAME_BYTES) {
+					this.#options.log?.warn("agy.acp.line_too_long", { origin: this.#options.originKey, pid: this.pid, bytes });
+					void this.end(ACP_KILL_GRACE_MS);
+					return;
 				}
 			}
 		} catch {

@@ -1,9 +1,9 @@
-import { Database } from "bun:sqlite";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { newestSessionFile } from "../omp/session-heal";
 import { isRecord } from "../omp/type-guards";
 import { maskPersonal, redact } from "../redact";
+import * as agy from "./agy-conversation";
 import { readJsonlRecords } from "./trace-transcript";
 
 /**
@@ -217,27 +217,17 @@ export function readSessionConversation(file: string, before?: string): Extract<
 	return { ok: true, turns, ...(cursor === undefined ? {} : { cursor }) };
 }
 
-/**
- * The conversation of origin `originKey`: its current session file (`origins.session_file`, else the newest
- * `*.jsonl` of its `session_dir`, as the trace finds it), a page ending before entry `before`.
- */
-export function readThreadConversation(homeDir: string, originKey: string, before?: string): ThreadConversation {
-	const dbPath = join(homeDir, "jabbu.db");
-	if (!existsSync(dbPath)) return { ok: false, error: "no_database" };
-	const db = new Database(dbPath, { readonly: true, strict: true });
-	let origin: { session_dir: string; session_file: string | null } | null;
-	try {
-		origin = db
-			.query<{ session_dir: string; session_file: string | null }, [string]>(
-				"SELECT session_dir, session_file FROM origins WHERE origin_key = ?",
-			)
-			.get(originKey);
-	} finally {
-		db.close();
-	}
-	if (origin === null) return { ok: false, error: "unknown_origin" };
-	const file =
-		origin.session_file ?? (existsSync(origin.session_dir) ? newestSessionFile(origin.session_dir) : undefined);
-	if (file === undefined || !existsSync(file)) return { ok: false, error: "no_session" };
-	return readSessionConversation(file, before);
+/** Conversation of `originKey` (own or `<peer>:<origin>`): omp session file, else agy transcript. */
+export function readThreadConversation(
+	homeDir: string,
+	originKey: string,
+	before?: string,
+	opts?: agy.ThreadConversationOptions,
+): ThreadConversation {
+	const found = agy.lookupOriginSession(homeDir, originKey, opts?.peers);
+	if (!found.ok) return found;
+	const file = found.sessionFile ?? (existsSync(found.sessionDir) ? newestSessionFile(found.sessionDir) : undefined);
+	if (file !== undefined && existsSync(file)) return readSessionConversation(file, before);
+	const transcript = agy.agyTranscriptFile(found.sessionDir, found.homeDir, opts);
+	return transcript === undefined ? { ok: false, error: "no_session" } : agy.readAgyConversation(transcript, before);
 }

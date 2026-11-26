@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { writeAtomic0600 } from "../ops/stamp";
 
 /**
- * Restart notices around a drain restart (gajae-way `restartNotice`): conversations that were active when the drain
+ * Restart notices around a drain restart: conversations that were active when the drain
  * started hear "재시작합니다", then "다시 연결됐습니다" from the next process or "재시작 취소" when the drain ends without
  * a restart. The marker file carries the notified threads across the restart; notices are best-effort, never ledgered.
  */

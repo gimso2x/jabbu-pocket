@@ -273,7 +273,7 @@ function refusal(
 }
 
 /**
- * Pure judge of a lane's completion claim (hermes completion_integrity, word lists rewritten for this repo):
+ * Pure judge of a lane's completion claim:
  * refuses added TODO/FIXME markers, skipped tests, stub bodies, guard deletions without an adversarial test, and
  * verification words with no command behind them. It runs no commands and proves nothing itself — git already
  * proved the commit; this only rejects claims whose own text/diff contradicts "done".

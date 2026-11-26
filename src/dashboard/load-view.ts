@@ -22,24 +22,33 @@ export function contextBar(context: { percent: number; tokens: number } | undefi
 	}</b></span>`;
 }
 
-/** The body of the "7일 비용" card: a bar per day, the costliest sessions and the cache-write share; a failed read says so. */
+/** The body of the "7일 비용" card: daily bars with average marker, day drilldown lists, top sessions and cache share. */
 export function costCardBody(cost: Section<CostLedgerInfo>): string {
 	if (!cost.ok) return `<p class="note">${esc(`읽지 못했어요: ${cost.error}`)}</p>`;
 	const usd = (amount: number): string => `$${amount.toFixed(amount >= 100 ? 0 : 2)}`;
 	const peak = Math.max(0.01, ...cost.days.map((day) => day.cost));
+	const avg = cost.days.length > 0 ? cost.total / cost.days.length : 0;
+	const avgPct = cost.total > 0 ? Math.min(100, Math.round((avg / peak) * 100)) : 0;
+	const marker = avgPct > 0 ? `<em class="cost-avg" style="left:${avgPct}%"></em>` : "";
 	const days = cost.days
 		.map(
 			(day) =>
-				`<div class="limit-row" data-day="${esc(day.day)}"><span class="limit-name">${esc(day.day)}</span><span class="meter" role="img" aria-label="${esc(day.day)} ${usd(day.cost)}"><i style="width:${Math.round((day.cost / peak) * 100)}%"></i></span><b class="limit-pct">${usd(day.cost)}</b></div>`,
+				`<div class="limit-row" data-day="${esc(day.day)}"><span class="limit-name">${esc(day.day)}</span><span class="meter" role="img" aria-label="${esc(day.day)} ${usd(day.cost)}"><i style="width:${Math.round((day.cost / peak) * 100)}%"></i>${marker}</span><b class="limit-pct">${usd(day.cost)}</b></div>`,
 		)
 		.join("");
-	const top = cost.top
-		.map(
-			(session) =>
-				`<li class="gate-row"><span class="sys-dot" aria-hidden="true"></span><span class="gate-word">${esc(session.kind)}</span><span class="gate-label">${esc(session.title)}</span><code class="gate-detail">${usd(session.cost)}</code></li>`,
-		)
+	const row = (session: { kind: string; title: string; cost: number }): string =>
+		`<li class="gate-row"><span class="sys-dot" aria-hidden="true"></span><span class="gate-word">${esc(session.kind)}</span><span class="gate-label">${esc(session.title)}</span><code class="gate-detail">${usd(session.cost)}</code></li>`;
+	const top = cost.top.map(row).join("");
+	const dayLists = Object.entries(cost.dayTop ?? {})
+		.map(([d, list]) => `<ul class="gate-list" data-cost-day="${esc(d)}" hidden>${list.map(row).join("")}</ul>`)
 		.join("");
-	return `${days}${top === "" ? "" : `<ul class="gate-list">${top}</ul>`}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
+	const meta =
+		cost.total > 0
+			? `<div class="cost-meta"><span>일평균 ${usd(avg)} · 날짜 클릭 시 상세</span><button type="button" class="button is-ghost is-sm" data-cost-day-reset hidden>전체 7일</button></div>`
+			: "";
+	return `${days}${meta}${top === "" ? "" : `<ul class="gate-list" data-cost-all>${top}</ul>`}${dayLists}${
+		cost.total > 0 ? '<p class="note-sub" data-cost-day-empty hidden>선택한 날짜에 집계된 세션 비용이 없어요</p>' : ""
+	}<p class="note">7일 합계 ${usd(cost.total)} · 캐시 쓰기 ${cost.cacheWritePct}% · 이 기기 세션만 집계 (원격 호스트 제외)</p>`;
 }
 
 /** `warn` under 20% remaining, `danger` under 5%; serialized into the page script, so it stays self-contained. */
@@ -181,8 +190,8 @@ export function renderLimitsPop(
 		const least = Math.min(...rows.map((r) => r.row.remainingPct));
 		if (rows.length > 0 && least < best.pct) Object.assign(best, { label: shortName, pct: least });
 		return {
-			chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5h</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
-				week === "" ? "" : `<small>주</small>${roll(`lim:${source.name}:week`, week, "down")}`
+			chip: `<span class="limit-chip is-${worst}" data-source="${esc(source.name)}"><i class="dot is-${worst}" aria-hidden="true"></i><b>${esc(shortName)}</b><span class="lc-full">${short === "" ? "" : `<small>5시간</small>${roll(`lim:${source.name}:5h`, short, "down")}`}${
+				week === "" ? "" : `<small>주간</small>${roll(`lim:${source.name}:week`, week, "down")}`
 			}</span><span class="lc-min">${rows.length === 0 ? "" : `${roll(`lim:${source.name}:min`, least, "down")}%`}</span></span>`,
 			tile: `<div class="limit-tile is-${worst}" data-source="${esc(source.name)}">${headOf(worst)}${hasAccounts ? acctsHtml : lines.join("")}</div>`,
 			tone: worst,

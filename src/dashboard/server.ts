@@ -1,6 +1,7 @@
 import type { Server } from "bun";
 import type { LiveView } from "../core/live-turn";
 import { type WebDashboardOptions, webDashboardRouter } from "../web/routes";
+import { isLiveOrigin } from "./agy-conversation";
 import { appAssets, PAGE_CSS, serveAsset, WEB_MANIFEST, withGzip } from "./assets";
 import {
 	type BoardCard,
@@ -89,6 +90,8 @@ const KEEP_ALIVE_MS = 15_000;
 
 const DEBOUNCE_MS = 200;
 const LIVE_INTERVAL_MS = 1000;
+/** At most this many distinct live origins at once: one origin is one daemon read per second while any stream is open. */
+const MAX_LIVE_CHANNELS = 32;
 
 const COMMON_HEADERS = {
 	"cache-control": "no-store",
@@ -228,7 +231,7 @@ interface LiveChannel {
 function liveFanout(
 	live: (originKey: string) => Promise<LiveView | null>,
 	options: Pick<DashboardServerOptions, "liveSchedule" | "onLiveSubscribers">,
-): { add(originKey: string, send: (chunk: string) => void): () => void } {
+): { add(originKey: string, send: (chunk: string) => void): () => void; canAdd(originKey: string): boolean } {
 	const channels = new Map<string, LiveChannel>();
 	const schedule =
 		options.liveSchedule ??
@@ -267,6 +270,7 @@ function liveFanout(
 		plan(originKey, channel, LIVE_INTERVAL_MS);
 	};
 	return {
+		canAdd: (originKey: string): boolean => channels.has(originKey) || channels.size < MAX_LIVE_CHANNELS,
 		add(originKey, send) {
 			let channel = channels.get(originKey);
 			if (channel === undefined) {
@@ -329,17 +333,15 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 		if (refused !== undefined) return refused;
 		const url = new URL(request.url);
 		const { pathname } = url;
-		if (route.WEB_ANY.test(pathname)) return webRouter.api(request, pathname, url);
-		if (request.method !== "GET" && !head) {
-			return new Response("method not allowed\n", {
-				status: 405,
-				headers: { ...COMMON_HEADERS, allow: "GET, HEAD", "content-type": "text/plain; charset=utf-8" },
-			});
-		}
-		const reply = (body: string, contentType: string, extra: Record<string, string> = {}) =>
+		const reply = (body: string, contentType: string, extra: Record<string, string> = {}, status = 200) =>
 			new Response(head ? null : body, {
+				status,
 				headers: { ...COMMON_HEADERS, ...extra, "content-type": contentType },
 			});
+		if (route.WEB_ANY.test(pathname)) return webRouter.api(request, pathname, url);
+		if (request.method !== "GET" && !head) {
+			return reply("method not allowed\n", "text/plain; charset=utf-8", { allow: "GET, HEAD" }, 405);
+		}
 		if (route.HEALTH.test(pathname)) return reply("ok", "text/plain; charset=utf-8");
 		if (route.MANIFEST.test(pathname)) return reply(WEB_MANIFEST, "application/manifest+json; charset=utf-8");
 		const served = serveAsset(request, pathname, assets, COMMON_HEADERS) ?? webRouter.asset(request, pathname);
@@ -384,6 +386,8 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			const origin = (url.searchParams.get("origin") ?? "").trim();
 			if (origin === "") return jsonReply({ error: "invalid_origin" }, 400, head);
 			if (liveEvents) {
+				if (!isLiveOrigin(origin)) return jsonReply({ error: "invalid_origin" }, 400, head);
+				if (!live.canAdd(origin)) return jsonReply({ error: "too_many_live_origins" }, 429, head);
 				return head
 					? new Response(null, {
 							headers: { ...COMMON_HEADERS, "content-type": "text/event-stream; charset=utf-8" },
@@ -492,25 +496,10 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 		}
 		const isPage = route.PAGE.test(pathname);
 		if (!isPage && !route.SNAPSHOT.test(pathname)) {
-			return new Response("not found\n", {
-				status: 404,
-				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
-			});
+			return reply("not found\n", "text/plain; charset=utf-8", {}, 404);
 		}
-		heard(
-			isPage ? "page" : url.searchParams.get("hidden") === "1" ? "snapshot_hidden" : "snapshot",
-			url.searchParams.get("view") || undefined,
-		);
-		let snapshot: DashboardSnapshot;
-		try {
-			snapshot = await options.snapshot();
-		} catch (error) {
-			options.onError?.(error);
-			return new Response("snapshot failed\n", {
-				status: 500,
-				headers: { ...COMMON_HEADERS, "content-type": "text/plain; charset=utf-8" },
-			});
-		}
+		const kind = isPage ? "page" : url.searchParams.get("hidden") === "1" ? "snapshot_hidden" : "snapshot";
+		heard(kind, url.searchParams.get("view") || undefined);
 		const param = (name: string): string | undefined => url.searchParams.get(name) || undefined;
 		const [view, card, task, item, diff, layout, stale] = [
 			"view",
@@ -522,6 +511,13 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 			"stale",
 		].map(param);
 		if (isPage && view === "chat") return webRouter.page(request, url, head, PAGE_CSP);
+		let snapshot: DashboardSnapshot;
+		try {
+			snapshot = await options.snapshot();
+		} catch (error) {
+			options.onError?.(error);
+			return reply("snapshot failed\n", "text/plain; charset=utf-8", {}, 500);
+		}
 		return isPage
 			? reply(
 					renderDashboardPage(snapshot, {

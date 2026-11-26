@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
 import { createLogger } from "../src/log";
@@ -633,6 +634,84 @@ describe("daemon with monitors", () => {
 			expect(transport.calls.filter((call) => call.method === "addReaction")).toHaveLength(0);
 		} finally {
 			await daemon.stop();
+		}
+	});
+});
+
+describe("a monitors read on a home with no ledger", () => {
+	const ledgerPath = () => join(home.dir, "jabbu.db");
+
+	test("list, show, update, remove, test and export answer without creating jabbu.db", async () => {
+		// A ledger holding only the monitor tables makes `gates`·`status` report `ledger_unreadable` and breaks
+		// `deliveries list` with a raw `no such table`: a read must not leave one (`cli/tasks.ts` follows the same rule).
+		const listed = await monitors("list");
+		expect([listed.code, listed.stdout]).toEqual([0, "no monitors\n"]);
+		const json = await monitors("list", "--json");
+		expect(json.code).toBe(0);
+		expect(parse(json.stdout)).toMatchObject({ monitors: [], schedules: {} });
+		const shown = await monitors("show", "morning");
+		expect([shown.code, shown.stderr]).toEqual([1, "monitors show: monitor not found: morning\n"]);
+		expect((await monitors("update", "morning", "--json", "{}")).stderr).toBe(
+			"monitors update: monitor not found: morning\n",
+		);
+		expect((await monitors("remove", "morning")).code).toBe(1);
+		expect((await monitors("test", "morning")).code).toBe(1);
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-monitors-export-"));
+		try {
+			const exported = await monitors("export", "--dir", dir);
+			expect([exported.code, exported.stdout]).toEqual([0, "exported=0 removed=0\n"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		expect(existsSync(ledgerPath())).toBe(false);
+		// What the created ledger broke: the sibling command's own answer and the health gates.
+		const deliveries = await runCliCapture(home.dir, ["deliveries", "list"]);
+		expect(deliveries.stderr).toBe(`deliveries: no ledger at ${ledgerPath()} (run the daemon once)\n`);
+		const status = await runCliCapture(home.dir, ["status"]);
+		expect(`${status.stdout}${status.stderr}`).toContain(`no database at ${ledgerPath()}`);
+	});
+
+	test("apply --dry-run reads without creating it; add and a writing apply still create it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-monitors-spec-"));
+		// A cron trigger needs no script, so the spec applies on a home without a config-editing step.
+		writeFileSync(
+			join(dir, "morning.json"),
+			JSON.stringify({ name: "morning", trigger: { kind: "cron", schedule: "30 9 * * *" }, instruction: "hi" }),
+		);
+		try {
+			const dry = await monitors("apply", "--dir", dir, "--dry-run");
+			expect([dry.code, dry.stdout]).toEqual([0, "added=1 updated=0 unchanged=0 removed=0\n"]);
+			expect(existsSync(ledgerPath())).toBe(false);
+			expect((await monitors("apply", "--dir", dir)).code).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		expect(parse((await monitors("list", "--json")).stdout).monitors).toHaveLength(1);
+	});
+
+	test("a failing add or a failing/empty apply never leaves an empty jabbu.db", async () => {
+		const missing = await monitors("add");
+		expect(missing.code).toBe(1);
+		const badJson = await monitors("add", "--json", "{invalid");
+		expect(badJson.code).toBe(1);
+		const badSpec = await monitors("add", "--json", JSON.stringify({ name: "only-name" }));
+		expect(badSpec.code).toBe(1);
+		expect(existsSync(ledgerPath())).toBe(false);
+
+		const emptyDir = mkdtempSync(join(tmpdir(), "jabbu-monitors-empty-"));
+		const badDir = mkdtempSync(join(tmpdir(), "jabbu-monitors-bad-"));
+		writeFileSync(join(badDir, "broken.json"), "{not-json");
+		try {
+			const emptyApply = await monitors("apply", "--dir", emptyDir);
+			expect([emptyApply.code, emptyApply.stdout]).toEqual([0, "added=0 updated=0 unchanged=0 removed=0\n"]);
+			expect(existsSync(ledgerPath())).toBe(false);
+
+			const badApply = await monitors("apply", "--dir", badDir);
+			expect(badApply.code).toBe(2);
+			expect(existsSync(ledgerPath())).toBe(false);
+		} finally {
+			rmSync(emptyDir, { recursive: true, force: true });
+			rmSync(badDir, { recursive: true, force: true });
 		}
 	});
 });

@@ -308,12 +308,11 @@ export class Store {
 	// ---- origins ----
 
 	ensureOrigin(originKey: string, sessionDir: string): OriginRow {
-		const now = this.clock.now();
 		this.db
 			.query(
 				"INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 1, ?, ?) ON CONFLICT DO NOTHING",
 			)
-			.run(originKey, sessionDir, now);
+			.run(originKey, sessionDir, this.clock.now());
 		return this.requireOrigin(originKey);
 	}
 
@@ -790,7 +789,9 @@ export class Store {
 	 */
 	getThreadRootInbound(threadRef: string, excludeMessageId: string): InboundRow | undefined {
 		const row = this.db
-			.query("SELECT * FROM inbound WHERE thread_ref = ? AND platform_message_id != ? ORDER BY inbound_id LIMIT 1")
+			.query(
+				"SELECT * FROM inbound WHERE thread_ref = ? AND platform_message_id != ? AND state <> 'discarded' AND peer_user_id IS NULL ORDER BY inbound_id LIMIT 1",
+			)
 			.get(threadRef, excludeMessageId) as InboundSql | null;
 		return row === null ? undefined : toInbound(row);
 	}
@@ -1337,7 +1338,7 @@ export class Store {
 			const target = { originKey: monitorOrigin(settled.event.monitorId), opRef: `monitor-notice:${eventId}` };
 			const threadRef = this.ownerAlertThreadRef(target);
 			if (threadRef === undefined) return undefined;
-			// Same monitor + same normalized error inside the repeat window stays quiet (hermes incident dedup).
+			// Same monitor + same normalized error inside the repeat window stays quiet.
 			const incident = this.monitors.recordMonitorIncident(settled.event.monitorId, error, this.clock.now());
 			if (!incident.notify) return undefined;
 			const reason = error.replace(/^\[(?:turn|command) failed\]\s*/, "").replace(/\s+—.*$/, "");
@@ -1361,8 +1362,7 @@ export class Store {
 
 	/** A script check or watch that keeps failing: one notice at the top of the owner home, like a failed_no_retry one. */
 	private postCheckErrorNotice(alert: CheckErrorAlert): void {
-		const now = this.clock.now();
-		const target = { originKey: monitorOrigin(alert.monitorId), opRef: `monitor-check-error:${now}` };
+		const target = { originKey: monitorOrigin(alert.monitorId), opRef: `monitor-check-error:${this.clock.now()}` };
 		const threadRef = this.ownerAlertThreadRef(target);
 		if (threadRef === undefined) return;
 		const repeat = alert.count > 1 ? ` · 반복 ${alert.count}회차` : "";
@@ -1542,14 +1542,14 @@ export class Store {
 
 	/**
 	 * What a turn was asked and how it ended: the first inbound of the op (`text_ref` is already redacted) and the
-	 * body of its last delivery part (both `""` when the rows are gone).
+	 * body of its first delivery part (both `""` when the rows are gone).
 	 */
 	turnTexts(originKey: string, opRef: string): { inbound: string; conclusion: string } {
 		const inbound = this.db
 			.query("SELECT text_ref FROM inbound WHERE origin_key = ? AND op_ref = ? ORDER BY inbound_id LIMIT 1")
 			.get(originKey, opRef) as { text_ref: string } | null;
 		const delivery = this.db
-			.query("SELECT body FROM deliveries WHERE origin_key = ? AND op_ref = ? ORDER BY part DESC LIMIT 1")
+			.query("SELECT body FROM deliveries WHERE origin_key = ? AND op_ref = ? ORDER BY part ASC LIMIT 1")
 			.get(originKey, opRef) as { body: string } | null;
 		return { inbound: inbound?.text_ref ?? "", conclusion: delivery?.body ?? "" };
 	}

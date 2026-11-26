@@ -1,10 +1,7 @@
 /**
- * Agent message markdown → HTML (the owner's herdr-board shared/markdown.ts subset): fenced code, headings, lists,
- * quotes, tables, rules and inline code/bold/italic/strike/links. Message text is escaped before it is wrapped in a
- * fixed tag, links are http(s) only, and there are no images, raw HTML, scripts or iframes. Inline spans are capped (link
- * text 512, emphasis 1,000 chars, like the discord renderer's labels) and quotes nest at most MAX_QUOTE_DEPTH deep, so
- * one message cannot scan quadratically or overflow the stack. Self-contained: the page ships this source in its inline
- * script and renders conversations with this very code.
+ * Agent message markdown → HTML for the card detail panel (fenced code, headings, lists, quotes, tables, rules, inline).
+ * Escaped before tagging, http(s) links only, no images/HTML/scripts; inline spans (code/emphasis 1,000, link 512,
+ * URL 2,048) and quote depth (MAX_QUOTE_DEPTH) are bounded. Self-contained: shipped verbatim in the page script.
  */
 export function renderMarkdown(source: string): string {
 	const esc = (value: string): string =>
@@ -14,14 +11,14 @@ export function renderMarkdown(source: string): string {
 			.replace(/>/g, "&gt;")
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#39;");
-	const FENCE = /^ {0,3}(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/;
+	const FENCE = /^ {0,3}(`{3,}(?!`)|~{3,}(?!~))[^`]*$/;
 	const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 	const RULE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 	const QUOTE = /^ {0,3}>\s?(.*)$/;
 	const LIST = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 	const TABLE_SEPARATOR = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 	const INLINE =
-		/(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]{1,512})\]\((https?:\/\/[^\s)]+)\)|\*\*(?=\S)([\s\S]{0,999}?\S)\*\*|__(?=\S)([\s\S]{0,999}?\S)__(?!\w)|~~(?=\S)([\s\S]{0,999}?\S)~~|(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<![\w_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![\w_])/g;
+		/(?<!`)(`{1,16})(?!`)([\s\S]{0,999}?[^`])\1(?!`)|\[([^\]\n]{1,512})\]\((https?:\/\/[^\s)]{1,2048})\)|\*\*(?=\S)([\s\S]{0,999}?\S)\*\*|__(?=\S)([\s\S]{0,999}?\S)__(?!\w)|~~(?=\S)([\s\S]{0,999}?\S)~~|(?<![\w*])\*(?=[^\s*])([^*\n]{0,999}?[^\s*])\*(?![\w*])|(?<![\w_])_(?=[^\s_])([^_\n]{0,999}?[^\s_])_(?![\w_])/g;
 	const MAX_QUOTE_DEPTH = 16; // a deeper `>` mark stays text: a `>` run must not recurse once per character
 
 	const inline = (text: string): string => {

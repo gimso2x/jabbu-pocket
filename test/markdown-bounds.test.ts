@@ -45,11 +45,21 @@ describe("markdown rendering is bounded for one message", () => {
 		const link = (n: number): string => `[${"가".repeat(n)}](https://example.test/a)`;
 		expect(renderMarkdown(link(500))).toContain('<a href="https://example.test/a"');
 		expect(renderMarkdown(link(600))).not.toContain("<a href=");
+		expect(renderMarkdown(`[x](https://example.test/${"a".repeat(2_200)})`)).not.toContain("<a href=");
 		expect(renderMarkdown(`**${"가".repeat(900)}**`)).toContain("<strong>");
 		expect(renderMarkdown(`**${"가".repeat(1_200)}**`)).not.toContain("<strong>");
+		expect(renderMarkdown(`\`${"가".repeat(900)}\``)).toContain("<code>");
+		expect(renderMarkdown(`\`${"가".repeat(1_200)}\``)).not.toContain("<code>");
+		expect(renderMarkdown("`` ` ``")).toBe("<p><code>`</code></p>");
 		expect(renderMarkdown("**bold** _em_ ~~del~~ `code`")).toBe(
 			"<p><strong>bold</strong> <em>em</em> <del>del</del> <code>code</code></p>",
 		);
+	});
+
+	test("long backtick runs and fence prefixes stay linear", () => {
+		expect(ms(() => renderMarkdown(`a ${"`".repeat(200_000)}x`))).toBeLessThan(5_000);
+		expect(ms(() => renderMarkdown(`${"```"}${" ".repeat(20_000)}\``))).toBeLessThan(5_000);
+		expect(ms(() => renderMarkdown(`${"~".repeat(20_000)}\``))).toBeLessThan(5_000);
 	});
 
 	test("the web chat renders a hostile message instead of throwing", () => {
