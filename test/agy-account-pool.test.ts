@@ -314,6 +314,13 @@ test("renderStatusText formats agyAccounts line with blocked reset time", () => 
 	expect(rendered).toContain("agy 계정: acct2 (총 3개 · 막힘: acct1 ");
 	expect(rendered).toContain("2026-11-25 08:52");
 
+	const counted = renderStatusText({
+		...baseReport,
+		ledger: { pending: 1, inflight: 2, confirmed: 3, ambiguous: 4, expired: 5 },
+	});
+	expect(counted).toContain("장부 대기/진행/확정/모호/만료: 1/2/3/4/5");
+	expect(counted).not.toContain("장부 p/i/c/a/e:");
+
 	const clean = renderStatusText({
 		...baseReport,
 		agyAccounts: { current: "acct1", total: 2, blocked: [] },
