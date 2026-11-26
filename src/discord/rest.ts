@@ -58,12 +58,11 @@ function routeKey(method: string, path: string): string {
 }
 
 function checkContent(content: string | undefined): void {
-	if (content !== undefined && content.length > MESSAGE_CONTENT_LIMIT) {
+	if (content !== undefined && content.length > MESSAGE_CONTENT_LIMIT)
 		throw new DiscordCallError(
 			"definitive",
 			`discord content too long: ${content.length} > ${MESSAGE_CONTENT_LIMIT} characters`,
 		);
-	}
 }
 
 /** A delivery nonce goes out together with `enforce_nonce`, so Discord drops a repost of the same part. */
@@ -147,7 +146,11 @@ export class DiscordRest {
 				signal: AbortSignal.timeout(this.#timeoutMs),
 			});
 		} catch (err) {
-			throw new DiscordCallError("ambiguous", `discord request failed: ${(err as Error).name}`);
+			const error = err as Error;
+			throw new DiscordCallError(
+				"ambiguous",
+				`discord request failed: ${method} /${path.split("/")[1] ?? ""}: ${error.name}: ${error.message}`,
+			);
 		}
 
 		const text = await res.text().catch(() => "");
@@ -182,9 +185,8 @@ export class DiscordRest {
 		}
 
 		if (res.ok) {
-			if (res.status !== 204 && text !== "" && parsed === undefined) {
+			if (res.status !== 204 && text !== "" && parsed === undefined)
 				throw new DiscordCallError("ambiguous", `discord ${method} returned HTTP ${res.status} without JSON`);
-			}
 			return parsed;
 		}
 		const code = typeof fields.code === "number" ? fields.code : undefined;
@@ -278,9 +280,8 @@ export class DiscordRest {
 
 	async listMessages(args: ListMessagesArgs): Promise<DiscordMessageEvent[]> {
 		const limit = args.limit ?? 50;
-		if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+		if (!Number.isInteger(limit) || limit < 1 || limit > 100)
 			throw new DiscordCallError("definitive", `discord message list limit must be 1-100, got ${limit}`);
-		}
 		const query = new URLSearchParams();
 		if (args.after !== undefined) query.set("after", args.after);
 		query.set("limit", String(limit));
@@ -301,9 +302,8 @@ export class DiscordRest {
 				`discord upload: cannot read file (${(err as NodeJS.ErrnoException).code})`,
 			);
 		}
-		if (size > UPLOAD_LIMIT_BYTES) {
+		if (size > UPLOAD_LIMIT_BYTES)
 			throw new DiscordCallError("definitive", `discord upload too large: ${size} bytes > 25 MiB`);
-		}
 		const filename = args.filename ?? basename(args.filePath);
 		const form = new FormData();
 		form.append(
