@@ -14,22 +14,9 @@ import {
 	type TodoPhase,
 } from "./driver";
 
-const FAKE_COMMANDS: readonly OmpCommand[] = [
-	"super",
-	"super-graph",
-	"super-plan",
-	"super-loop",
-	"super-run",
-	"super-research",
-].map((name) => ({ name, source: "extension", description: `Run the ${name} workflow` }));
-
-/** A fresh real omp session already holds entries (model_change, thinking_level_change, ...), so its leafId is never null. */
-function seedEntries(): OmpEntry[] {
-	return [
-		{ id: "e1", parentId: null, type: "model_change" },
-		{ id: "e2", parentId: "e1", type: "thinking_level_change" },
-	];
-}
+const FAKE_COMMANDS: readonly OmpCommand[] = "super super-graph super-plan super-loop super-run super-research"
+	.split(" ")
+	.map((name) => ({ name, source: "extension", description: `Run the ${name} workflow` }));
 
 /** Conversation storage shared between fake drivers, so stop/start + openSession resumes like a real sessionDir. */
 export class FakeSessionStore {
@@ -41,15 +28,18 @@ export class FakeSessionStore {
 	 */
 	#prompts = 0;
 
-	nextOpRefNumber(): number {
-		return ++this.#prompts;
-	}
+	nextOpRefNumber = (): number => ++this.#prompts;
 
-	open(sessionDir: string): { sessionId: string; entries: OmpEntry[]; nextId: number; resumed: boolean } {
-		const existing = this.sessions.get(sessionDir);
+	open(dir: string, suffix?: string): { sessionId: string; entries: OmpEntry[]; nextId: number; resumed: boolean } {
+		const existing = suffix === undefined ? this.sessions.get(dir) : undefined;
 		if (existing) return { ...existing, resumed: true };
-		const created = { sessionId: `fake-session-${this.sessions.size + 1}`, entries: seedEntries(), nextId: 3 };
-		this.sessions.set(sessionDir, created);
+		// A fresh real omp session already holds entries (model_change, thinking_level_change), so leafId is never null.
+		const entries: OmpEntry[] = [
+			{ id: "e1", parentId: null, type: "model_change" },
+			{ id: "e2", parentId: "e1", type: "thinking_level_change" },
+		];
+		const created = { sessionId: `fake-session-${this.sessions.size + 1}${suffix ?? ""}`, entries, nextId: 3 };
+		this.sessions.set(dir, created);
 		return { ...created, resumed: false };
 	}
 }
@@ -75,6 +65,8 @@ export interface FakeOmpDriverOptions {
 	sessionFile?: string;
 	/** Reported as `state().context` (omp `contextUsage`); absent = the driver cannot tell. */
 	context?: OmpState["context"];
+	fastMode?: boolean;
+	fastModeSupported?: boolean;
 	/** Emitted in order right after each turn starts, before `toolCalls` (omp payload shape, e.g. `auto_retry_start`). */
 	events?: readonly OmpEvent[];
 	/** Reported as `tool_execution_start` events right after each turn starts (omp payload shape). */
@@ -133,6 +125,7 @@ export class FakeOmpDriver implements OmpSessionDriver {
 	#opCounter = 0;
 	#model: string;
 	#thinking = "medium";
+	#fastMode: boolean;
 	readonly #finalListeners = new Set<(final: OmpFinal) => void>();
 	readonly #eventListeners = new Set<(event: OmpEvent) => void>();
 	readonly #exitListeners = new Set<(info: OmpExitInfo) => void>();
@@ -147,6 +140,7 @@ export class FakeOmpDriver implements OmpSessionDriver {
 		this.#store = options.store ?? new FakeSessionStore();
 		this.#sessionDir = options.sessionDir ?? "fake-session-dir";
 		this.#model = options.restoredModel ?? (options.models ?? FAKE_MODELS)[0] ?? "fake/alpha";
+		this.#fastMode = options.fastMode ?? false;
 	}
 
 	async start(): Promise<void> {
@@ -290,49 +284,36 @@ export class FakeOmpDriver implements OmpSessionDriver {
 	}
 
 	/** Test control: finish a held turn normally. */
-	release(): void {
-		this.#turn?.release();
-	}
+	release = (): void => this.#turn?.release();
 
 	/** Test control: emit an event outside a turn (a queued steer omp started on its own while the lane is held). */
-	emitTestEvent(event: OmpEvent): void {
-		this.#emit(event);
-	}
+	emitTestEvent = (event: OmpEvent): void => this.#emit(event);
 
 	/** Test control: resolves once the running `messageEvents` turn emitted all its scripted messages. */
 	untilScripted(): Promise<void> {
-		const turn = this.#turn;
-		if (!turn) return Promise.reject(new OmpDriverError("rpc_error", "no running turn"));
-		return turn.scripted.promise;
+		return this.#turn?.scripted.promise ?? Promise.reject(new OmpDriverError("rpc_error", "no running turn"));
+	}
+
+	#bind(call: string, dir: string, suffix?: string): OmpOpenResult {
+		this.#require();
+		this.calls.push(call);
+		const opened = this.#store.open(dir, suffix);
+		this.#current = this.#store.sessions.get(dir);
+		return { resumed: opened.resumed, sessionId: opened.sessionId };
 	}
 
 	async newSession(): Promise<{ cancelled: boolean }> {
-		this.#require();
-		this.calls.push("newSession");
-		const created = {
-			sessionId: `fake-session-${this.#store.sessions.size + 1}-${this.#opCounter}`,
-			entries: seedEntries(),
-			nextId: 3,
-		};
-		this.#store.sessions.set(this.#sessionDir, created);
-		this.#current = created;
+		this.#bind("newSession", this.#sessionDir, `-${this.#opCounter}`);
 		return { cancelled: false };
 	}
 
 	async openSession(): Promise<OmpOpenResult> {
-		this.#require();
-		this.calls.push("openSession");
-		const opened = this.#store.open(this.#sessionDir);
-		this.#current = this.#store.sessions.get(this.#sessionDir);
-		return { resumed: opened.resumed, sessionId: opened.sessionId };
+		return this.#bind("openSession", this.#sessionDir);
 	}
 
 	/** Like omp's `switch_session`: binds the session stored under that file path (created on first use). */
 	async switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
-		this.#require();
-		this.calls.push(`switchSession:${sessionFile}`);
-		this.#store.open(sessionFile);
-		this.#current = this.#store.sessions.get(sessionFile);
+		this.#bind(`switchSession:${sessionFile}`, sessionFile);
 		return { cancelled: false };
 	}
 
@@ -369,6 +350,15 @@ export class FakeOmpDriver implements OmpSessionDriver {
 		this.#append({ type: "thinking_level_change" });
 	}
 
+	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+		this.#require();
+		this.calls.push(`setFastMode:${enabled}`);
+		const active = enabled && this.#options.fastModeSupported !== false;
+		if (enabled && !active) throw new OmpDriverError("rpc_error", "Fast mode is unavailable for the current model.");
+		this.#fastMode = enabled;
+		return { enabled, active };
+	}
+
 	async setTodos(phases: TodoPhase[]): Promise<void> {
 		this.#require();
 		this.calls.push("setTodos");
@@ -396,6 +386,8 @@ export class FakeOmpDriver implements OmpSessionDriver {
 			messageCount: session.entries.length,
 			model: this.#model,
 			thinking: this.#thinking,
+			fastModeEnabled: this.#fastMode,
+			fastModeActive: this.#fastMode && this.#options.fastModeSupported !== false,
 			...(this.#options.sessionFile === undefined ? {} : { sessionFile: this.#options.sessionFile }),
 			...(this.#options.context === undefined ? {} : { context: this.#options.context }),
 		};

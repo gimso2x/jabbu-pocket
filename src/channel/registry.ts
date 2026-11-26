@@ -1,31 +1,29 @@
 import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import { type ChatPlatform, platformOfConversationId } from "../core/origin-key";
 import { redact } from "../redact";
+import { redactSelectMenus } from "./components";
 import type { ChannelPort, OutboundMessage, PostTarget } from "./port";
 
 function redactMessage(msg: OutboundMessage): OutboundMessage {
+	const fields = msg.fields?.map((field) => ({ label: redact(field.label), value: redact(field.value) }));
+	const buttons = msg.buttons?.map((button) => ({
+		...button,
+		label: redact(button.label),
+		...(button.value === undefined ? {} : { value: redact(button.value) }),
+	}));
 	return {
 		...msg,
 		text: redact(msg.text),
 		...(msg.buttonsNote === undefined ? {} : { buttonsNote: redact(msg.buttonsNote) }),
 		...(msg.title === undefined ? {} : { title: redact(msg.title) }),
 		...(msg.body === undefined ? {} : { body: redact(msg.body) }),
-		...(msg.fields === undefined
-			? {}
-			: { fields: msg.fields.map((field) => ({ label: redact(field.label), value: redact(field.value) })) }),
-		...(msg.buttons === undefined
-			? {}
-			: {
-					buttons: msg.buttons.map((button) => ({
-						...button,
-						label: redact(button.label),
-						...(button.value === undefined ? {} : { value: redact(button.value) }),
-					})),
-				}),
+		...(fields === undefined ? {} : { fields }),
+		...(msg.selectMenus === undefined ? {} : { selectMenus: redactSelectMenus(msg.selectMenus, redact) }),
+		...(buttons === undefined ? {} : { buttons }),
 	};
 }
 
-// The single outbound writer: masks every text, card, button, and upload field before an adapter sees it.
+// Single outbound writer: masks every text, card, button, selectMenu, and upload field before an adapter sees it.
 function redacting(port: ChannelPort): ChannelPort {
 	const openThread = port.openThread?.bind(port);
 	const archiveThread = port.archiveThread?.bind(port);

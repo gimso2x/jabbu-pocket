@@ -27,19 +27,11 @@ const TERMINATION_GRACE_MS = 1_000;
 const STDERR_TAIL_BYTES = 64 * 1024;
 
 /** Agent events (`onEvent`); the session listener hears these too. */
-const AGENT_EVENT_TYPES: ReadonlySet<string> = new Set([
-	"agent_start",
-	"agent_end",
-	"turn_start",
-	"turn_end",
-	"message_start",
-	"message_update",
-	"message_end",
-	"tool_execution_start",
-	"tool_execution_update",
-	"tool_stream_update",
-	"tool_execution_end",
-]);
+const AGENT_EVENT_TYPES: ReadonlySet<string> = new Set(
+	"agent_start agent_end turn_start turn_end message_start message_update message_end tool_execution_start tool_execution_update tool_stream_update tool_execution_end".split(
+		" ",
+	),
+);
 
 /** Session-level events (`onSessionEvent`), on top of the agent events. */
 const SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -123,6 +115,8 @@ export interface RpcState {
 	thinkingLevels?: unknown;
 	/** `{ tokens, contextWindow, percent }`; read field by field, never trusted as typed. */
 	contextUsage?: unknown;
+	fastModeEnabled?: unknown;
+	fastModeActive?: unknown;
 }
 
 /** A tool result as omp's `AgentToolResult`; a tool may return a plain string instead. */
@@ -704,6 +698,10 @@ export class OmpRpcClient {
 
 	async setThinkingLevel(level: string): Promise<void> {
 		await this.#request({ type: "set_thinking_level", level });
+	}
+
+	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
+		return this.#data(await this.#request({ type: "set_fast_mode", enabled }));
 	}
 
 	/** Aborts and withdraws omp's steer/follow-up queue, resolving with what was withdrawn. */

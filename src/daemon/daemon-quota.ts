@@ -2,6 +2,7 @@
 import { classifyFailure } from "../core/failure-kind";
 import { type ProcessRunner, realProcessRunner } from "../dispatch/omp";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
+import type { AgyAccountPool } from "../omp/agy-account-pool";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
 import { readOmpUsage } from "../omp/usage-json";
 import {
@@ -21,6 +22,7 @@ import {
 	QuotaRecoveryTracker,
 	type QuotaReleaseEvent,
 } from "../ops/quota-recovery";
+import { buildQuotaResetSnapshot, executeQuotaReset, type QuotaResetSnapshot } from "../ops/quota-reset";
 import { redact } from "../redact";
 import { type DaemonContext, dispatchPending, postThreadNotices } from "./daemon-context";
 import { taskOfOrigin } from "./daemon-task-resume";
@@ -40,10 +42,57 @@ export class DaemonQuotaGate {
 	#wasEnabled = false;
 	#liftCheckedAt = Number.NEGATIVE_INFINITY;
 	#lifts = new Map<string, QuotaLiftEntry>();
+	#agyPool: AgyAccountPool | undefined;
 
 	constructor(ctx: DaemonContext, run?: ProcessRunner) {
 		this.#ctx = ctx;
 		this.#run = run;
+	}
+
+	/** `agy` 계정 풀을 연결해 `/usage-reset-jabbu`가 차단된 계정도 조회·해제할 수 있게 한다. */
+	setAgyPool(pool: AgyAccountPool | undefined): void {
+		this.#agyPool = pool;
+	}
+
+	/** `/usage-reset-jabbu` 피커·안내 문구용 현재 보류·차단·수동 해제 스냅샷을 반환한다. */
+	resetSnapshot(): QuotaResetSnapshot {
+		const config = this.#ctx.options.config;
+		this.#ensureLoaded();
+		const now = this.#ctx.clock.now();
+		return buildQuotaResetSnapshot({
+			isAgy: config.agent === "agy",
+			agyStatus: config.agent === "agy" ? this.#agyPool?.status(now) : undefined,
+			runtimeHolds: this.#recovery.listHolds(),
+			gateHolds: this.#gate.snapshot(now).held,
+			lifts: this.#currentLifts(now),
+			timezone: config.timezone,
+		});
+	}
+
+	/** `/usage-reset-jabbu [arg]`: 현재 상태를 보이거나 전체·개별 프로바이더/agy 차단 보류를 해제한다. */
+	async resetUsage(rawArg: string): Promise<string> {
+		const config = this.#ctx.options.config;
+		this.#ensureLoaded();
+		const now = this.#ctx.clock.now();
+		return executeQuotaReset({
+			rawArg,
+			homeDir: config.homeDir,
+			now,
+			isAgy: config.agent === "agy",
+			agyPool: this.#agyPool,
+			recovery: this.#recovery,
+			gate: this.#gate,
+			log: this.#ctx.log,
+			resetSnapshot: () => this.resetSnapshot(),
+			onClearLifts: () => {
+				this.#liftCheckedAt = Number.NEGATIVE_INFINITY;
+			},
+			onReleaseEvents: (events) => this.#releaseEvents(events),
+			onSaveSnapshot: () => this.#saveSnapshot(config.homeDir, now),
+			onPollNow: () => {
+				void this.pollNow();
+			},
+		});
 	}
 
 	/** 진행 중인 사용량 조회가 끝날 때까지 기다린다(종료 전 store 닫기 동기화용). */

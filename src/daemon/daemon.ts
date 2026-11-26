@@ -77,6 +77,7 @@ import { answerDialogsFor, cwdFor, floorsSurfaceFor, hostToolsFor, peerTouched }
 import { handleIpc } from "./daemon-ipc";
 import { DaemonOpsPanel } from "./daemon-ops-panel";
 import { escalateTurnFailures, notifyProviderLimit } from "./daemon-owner-post";
+import { DaemonCommandPicker } from "./daemon-picker";
 import { DaemonQuotaGate } from "./daemon-quota";
 import { DaemonSkillReview } from "./daemon-review";
 import { DaemonInbound, deliverySources } from "./daemon-sink";
@@ -137,8 +138,7 @@ export class Daemon {
 	#checkRunner: TaskCheckRunner | undefined; // the `[check: …]` queue of local tasks: the sweep asks it for checks instead of running them
 	#herdrHealth: HerdrHealthProbe | undefined; // local `herdr status server` check on the sweep cadence (herdr on only); feeds `herdr_unreachable`
 	/** Background lane tick / mailbox idle sweep in flight: the sweep never awaits them, and never overlaps them. */
-	#laneTicking = false;
-	#idleSweeping = false;
+	readonly #bgSweeps = new Set<"lane" | "idle">();
 	/** The peer silence sweep runs only once the startup Discord recovery pass has fed in the posts missed meanwhile. */
 	#peerSilenceArmed = false;
 	#pumping: Promise<void> = Promise.resolve();
@@ -162,6 +162,7 @@ export class Daemon {
 	readonly #pending: PendingDispatchSweep;
 	readonly #quota: DaemonQuotaGate;
 	readonly #opsPanel: DaemonOpsPanel;
+	readonly #picker: DaemonCommandPicker;
 
 	constructor(options: DaemonOptions) {
 		const daemon = this;
@@ -224,7 +225,9 @@ export class Daemon {
 		this.#gates = new GateSweep(this.#ctx);
 		this.#pending = new PendingDispatchSweep(this.#ctx);
 		this.#quota = new DaemonQuotaGate(this.#ctx);
+		this.#quota.setAgyPool(options.agyPool);
 		this.#opsPanel = new DaemonOpsPanel(this.#ctx, { status: () => this.status() });
+		this.#picker = new DaemonCommandPicker(this.#ctx, this.#quota);
 		this.#options = options;
 		const channels = new ChannelRegistry();
 		for (const binding of options.channels) channels.register(binding.port);
@@ -462,6 +465,8 @@ export class Daemon {
 			budgetProvider: () => this.#budgetCommand(),
 			briefingProvider: (originKey, threadRef) => this.#brief(originKey, threadRef),
 			restartProvider: (originKey, threadRef) => restart.request(originKey, threadRef),
+			usageResetProvider: (arg) => this.#quota.resetUsage(arg),
+			commandPicker: (info) => this.#picker.open(info),
 			distillProvider: (originKey) => this.#review.distill(originKey),
 			// Discord channels only (DMs, lanes and monitors have no cached place): the port's cache, no call.
 			conversationContext: (originKey) => {
@@ -638,6 +643,7 @@ export class Daemon {
 			pending: this.#pending,
 			landing: this.#landing,
 			opsPanel: this.#opsPanel,
+			picker: this.#picker,
 			statusText: (originKey) => this.#statusText(originKey),
 		});
 		const deliveriesOf = deliverySources(store, config, crash);
@@ -788,6 +794,7 @@ export class Daemon {
 			this.#pending.sweep();
 			this.#quota.maybePoll();
 			this.#opsPanel.maybeTick();
+			this.#picker.pruneExpired();
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
@@ -810,29 +817,23 @@ export class Daemon {
 		}
 	}
 
-	/** Run lane tick in the background so gates, approval expiry, and heartbeat keep their cadence. */
+	/** Run lane tick / idle sweep in the background without awaiting or overlapping them. */
+	#runBgSweep(kind: "lane" | "idle", work: () => Promise<unknown>, errEvent: string): void {
+		if (this.#bgSweeps.has(kind) || this.#stopped) return;
+		this.#bgSweeps.add(kind);
+		void work()
+			.catch((error: unknown) => this.#log.error(errEvent, { error: String(error) }))
+			.finally(() => this.#bgSweeps.delete(kind));
+	}
+
 	#startLaneTick(): void {
 		const lanes = this.#lanes;
-		if (lanes === undefined || this.#laneTicking || this.#stopped) return;
-		this.#laneTicking = true;
-		void lanes
-			.tick()
-			.catch((error: unknown) => this.#log.error("lane_tick_failed", { error: String(error) }))
-			.finally(() => {
-				this.#laneTicking = false;
-			});
+		if (lanes !== undefined) this.#runBgSweep("lane", () => lanes.tick(), "lane_tick_failed");
 	}
 
 	#startIdleSweep(): void {
 		const router = this.#router;
-		if (router === undefined || this.#idleSweeping || this.#stopped) return;
-		this.#idleSweeping = true;
-		void router
-			.sweepIdle()
-			.catch((error: unknown) => this.#log.error("sweep_idle_failed", { error: String(error) }))
-			.finally(() => {
-				this.#idleSweeping = false;
-			});
+		if (router !== undefined) this.#runBgSweep("idle", () => router.sweepIdle(), "sweep_idle_failed");
 	}
 
 	/** Records a finished sweep in the heartbeat stamp; a stale stamp opens the `sweep_stalled` gate. */
@@ -1353,10 +1354,7 @@ export class Daemon {
 		if (busy.length === 0) return;
 		const startedAt = this.#clock.now();
 		const stillBusy = await router.drainRunning(boundMs);
-		if (stillBusy.length > 0) {
-			this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
-		} else {
-			this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
-		}
+		if (stillBusy.length > 0) this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
+		else this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 	}
 }

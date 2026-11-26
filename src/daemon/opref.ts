@@ -19,6 +19,8 @@ export class NamespacedDriver implements OmpSessionDriver {
 	readonly btw?: (question: string) => Promise<string>;
 	/** Queue-clearing abort, defined only when the wrapped driver has one (`!stop` falls back otherwise). */
 	readonly abortAndClearQueue?: () => Promise<void>;
+	/** Fast mode toggle, defined only when the wrapped driver supports it (absent = unsupported, e.g. agy). */
+	readonly setFastMode?: (enabled: boolean) => Promise<{ enabled: boolean; active: boolean }>;
 
 	constructor(
 		private readonly inner: OmpSessionDriver,
@@ -26,6 +28,7 @@ export class NamespacedDriver implements OmpSessionDriver {
 	) {
 		if (inner.btw !== undefined) this.btw = inner.btw.bind(inner);
 		if (inner.abortAndClearQueue !== undefined) this.abortAndClearQueue = inner.abortAndClearQueue.bind(inner);
+		if (inner.setFastMode !== undefined) this.setFastMode = inner.setFastMode.bind(inner);
 	}
 
 	/** Pid of the omp child when the wrapped driver exposes one (`RpcOmpDriver`). */
@@ -33,21 +36,15 @@ export class NamespacedDriver implements OmpSessionDriver {
 		return "pid" in this.inner && typeof this.inner.pid === "number" ? this.inner.pid : undefined;
 	}
 
-	start(): Promise<void> {
-		return this.inner.start();
-	}
+	start = (): Promise<void> => this.inner.start();
 
 	async prompt(text: string): Promise<string> {
 		return `${this.prefix}:${await this.inner.prompt(text)}`;
 	}
 
-	steer(text: string): Promise<void> {
-		return this.inner.steer(text);
-	}
+	steer = (text: string): Promise<void> => this.inner.steer(text);
 
-	abort(): Promise<void> {
-		return this.inner.abort();
-	}
+	abort = (): Promise<void> => this.inner.abort();
 
 	newSession(): Promise<{ cancelled: boolean }> {
 		return this.inner.newSession();
@@ -115,7 +112,5 @@ export class NamespacedDriver implements OmpSessionDriver {
 		return this.inner.onExit(listener);
 	}
 
-	stop(): Promise<void> {
-		return this.inner.stop();
-	}
+	stop = (): Promise<void> => this.inner.stop();
 }

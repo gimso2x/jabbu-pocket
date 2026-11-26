@@ -188,11 +188,10 @@ export interface OmpState {
 	thinking?: string;
 	/** The configured selector when omp reports one that differs from `thinking` (e.g. `auto`); absent otherwise. */
 	configuredThinking?: string;
-	/**
-	 * The conversation's context use (omp `get_state.contextUsage`); absent when the driver cannot tell or omp sent
-	 * something else. `tokens`/`percent` are null when omp does not know them yet — never a made-up 0.
-	 */
+	/** Context use (`get_state.contextUsage`); tokens/percent are null when omp does not know them yet. */
 	context?: { tokens: number | null; window: number; percent: number | null };
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
 }
 
 export interface OmpCompactResult {
@@ -239,8 +238,7 @@ export interface OmpSessionDriver {
 	/** Queue a steering message into the running turn. */
 	steer(text: string): Promise<void>;
 	abort(): Promise<void>;
-	/** Abort and empty omp's steer/follow-up queue (`abort_and_restore_queue`; the queue is dropped). Absent on drivers
-	 * without it: `!stop` aborts, stops the child when still queued, and counts the driver's `droppedSteers` instead. */
+	/** Abort and empty omp's steer/follow-up queue (`abort_and_restore_queue`); absent on drivers without it. */
 	abortAndClearQueue?(): Promise<void>;
 	newSession(): Promise<{ cancelled: boolean }>;
 	/** Continue the newest session in this driver's `sessionDir` (or start a fresh one). */
@@ -256,6 +254,7 @@ export interface OmpSessionDriver {
 	/** Slash commands the omp session offers (omp RPC `get_available_commands`); drivers without any report none. */
 	availableCommands(): Promise<OmpCommand[]>;
 	setThinking(level: string): Promise<void>;
+	setFastMode?(enabled: boolean): Promise<{ enabled: boolean; active: boolean }>;
 	/**
 	 * Replaces the session's task list (omp RPC `set_todos`). Drivers without omp todos (agy) resolve without
 	 * doing anything and log `set_todos_unsupported`; the caller never treats that as a failure.
