@@ -322,4 +322,41 @@ describe("mailbox live context", () => {
 		memory.watch({ state: async () => state({}) } as never);
 		expect(memory.attach(live())?.context).toBeUndefined();
 	});
+
+	test("an older state() answer resolving after a newer one does not overwrite it", async () => {
+		const memory = new ContextMemory();
+		const resolvers: Array<(answer: OmpState) => void> = [];
+		const answers = [0, 1].map(
+			() =>
+				new Promise<OmpState>((resolve) => {
+					resolvers.push(resolve);
+				}),
+		);
+		const driver = { state: async () => answers.shift() as Promise<OmpState> };
+		memory.watch(driver as never);
+		const first = driver.state();
+		const second = driver.state();
+		resolvers[1]?.(state({ context: { tokens: 2, window: WINDOW, percent: 2 } }));
+		await second;
+		expect(memory.attach(live())?.context?.tokens).toBe(2);
+		resolvers[0]?.(state({ context: { tokens: 1, window: WINDOW, percent: 1 } }));
+		await first;
+		expect(memory.attach(live())?.context?.tokens).toBe(2);
+	});
+
+	test("an in-flight answer of a replaced driver does not resurrect its context", async () => {
+		const memory = new ContextMemory();
+		let resolveOld: (answer: OmpState) => void = () => undefined;
+		const old = new Promise<OmpState>((resolve) => {
+			resolveOld = resolve;
+		});
+		const driver = { state: async () => old };
+		memory.watch(driver as never);
+		const pending = driver.state();
+		memory.watch({ state: async () => state({}) } as never);
+		expect(memory.attach(live())?.context).toBeUndefined();
+		resolveOld(state({ context: { tokens: 9, window: WINDOW, percent: 9 } }));
+		await pending;
+		expect(memory.attach(live())?.context).toBeUndefined();
+	});
 });

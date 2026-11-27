@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { DiscordGateway, type DiscordGatewayOptions, type GatewayTimers } from "../src/discord/gateway";
-import { DiscordSocketTransport } from "../src/discord/socket-transport";
+import { DiscordSocketTransport, type GatewayLifecycleEvent } from "../src/discord/socket-transport";
 import {
 	DISCORD_INTENTS,
 	type DiscordChannelInfo,
@@ -977,13 +977,18 @@ describe("DiscordSocketTransport", () => {
 				return Response.json({ id: BOT });
 			},
 		});
+		const lifecycle: GatewayLifecycleEvent[] = [];
 		const errors: string[] = [];
 		const original = console.error;
 		console.error = (line: string) => errors.push(String(line));
 		try {
 			transport = new DiscordSocketTransport(
 				{ botToken: TOKEN },
-				{ baseUrl: `http://localhost:${api.port}/api/v10`, displayName: "송박" },
+				{
+					baseUrl: `http://localhost:${api.port}/api/v10`,
+					displayName: "송박",
+					onLifecycle: (event) => lifecycle.push(event),
+				},
 			);
 			const started = await transport.start({
 				message: async () => {},
@@ -992,8 +997,59 @@ describe("DiscordSocketTransport", () => {
 			expect(started).toEqual({ botUserId: BOT, applicationId: APP });
 			expect(transport.connectionState().state).toBe("up");
 			expect(patches).toEqual([{ name: "송박" }]);
-			expect(errors).toHaveLength(1);
-			expect(errors[0]).toContain("discord display_name");
+			expect(lifecycle).toEqual([
+				{ type: "connected" },
+				{ type: "display_name_failed", detail: "discord_http_400 Invalid Form Body" },
+			]);
+			expect(errors).toEqual([]);
+		} finally {
+			console.error = original;
+			void api.stop(true);
+		}
+	});
+
+	test("a gateway error reaches the lifecycle callback only, never console.error", async () => {
+		const h = startHarness();
+		harness = h;
+		const api = Bun.serve({
+			port: 0,
+			fetch(req) {
+				const url = new URL(req.url);
+				if (url.pathname.endsWith("/gateway/bot")) return Response.json({ url: `ws://localhost:${h.port}/gateway` });
+				return Response.json({ id: BOT });
+			},
+		});
+		const lifecycle: GatewayLifecycleEvent[] = [];
+		const errors: string[] = [];
+		const original = console.error;
+		console.error = (line: string) => errors.push(String(line));
+		try {
+			transport = new DiscordSocketTransport(
+				{ botToken: TOKEN },
+				{
+					baseUrl: `http://localhost:${api.port}/api/v10`,
+					onLifecycle: (event) => {
+						lifecycle.push(event);
+						h.notify();
+					},
+				},
+			);
+			await transport.start({
+				message: async () => {
+					throw new Error("handler boom");
+				},
+				interaction: async () => {},
+			});
+			h.send(0, {
+				op: 0,
+				t: "MESSAGE_CREATE",
+				s: 2,
+				d: { id: "1", channel_id: "2", author: { id: "3" }, content: "x", type: 0 },
+			});
+			await h.until(() => lifecycle.some((event) => event.type === "error"));
+			expect(lifecycle).toContainEqual({ type: "error", detail: "handler boom" });
+			expect(errors).toEqual([]);
+			expect(transport.connectionState().state).toBe("up");
 		} finally {
 			console.error = original;
 			void api.stop(true);

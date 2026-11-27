@@ -78,8 +78,10 @@ function decodeAnsiCBody(body: string, newline: string): string {
 		if (esc === "f" || esc === "v") return newline === " " ? " " : "";
 		if (esc === "a" || esc === "b" || esc === "e" || esc === "E") return "";
 		if (esc.length === 2 && esc.startsWith("c")) return decodeCodePoint(esc.charCodeAt(1) & 0x1f, newline);
-		if (esc.startsWith("x")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
-		if (esc.startsWith("u") || esc.startsWith("U")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
+		// A bare `x`, `u` or `U` is an escape with no digits (`\xZZ`): not a code point, like any other unknown escape.
+		if (esc.length > 1 && esc.startsWith("x")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
+		if (esc.length > 1 && (esc.startsWith("u") || esc.startsWith("U")))
+			return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
 		if (/^[0-7]{1,3}$/.test(esc)) return decodeCodePoint(Number.parseInt(esc, 8) & 0xff, newline);
 		return esc;
 	});
