@@ -1,6 +1,7 @@
 import { lstatSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
+import { errorFields } from "../channel/text";
 import { type JabbuConfig, readDiscordToken } from "../config";
 import { DiscordBinding } from "../discord/binding";
 import { DiscordChannel } from "../discord/channel";
@@ -69,7 +70,7 @@ function discordBindings(config: JabbuConfig, env: Record<string, string | undef
 								log.warn("discord_gateway_reconnecting", { reason: event.detail });
 							else log.warn("discord_gateway_error", { error: event.detail });
 						},
-						onFatal: (error) => log.error("discord_gateway_fatal", { code: error.code, error: error.message }),
+						onFatal: (error) => log.error("discord_gateway_fatal", { code: error.code, ...errorFields(error) }),
 					},
 				);
 	return [
@@ -220,7 +221,7 @@ export async function runDaemon(
 		daemon.stop().then(
 			() => exited.resolve(0),
 			(error: unknown) => {
-				log.error("stop_failed", { error: String(error) });
+				log.error("stop_failed", { ...errorFields(error) });
 				exited.resolve(1);
 			},
 		);
@@ -296,10 +297,10 @@ export async function runDaemon(
 				kind: "newer_schema",
 				db_version: error.dbVersion,
 				code_version: SCHEMA_VERSION,
-				error: error.message,
+				...errorFields(error),
 			});
 		} else {
-			log.error("daemon_start_failed", { error: String(error) });
+			log.error("daemon_start_failed", { ...errorFields(error) });
 		}
 		await daemon.stop().catch(() => undefined);
 		log.stop();

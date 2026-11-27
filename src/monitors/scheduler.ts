@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { errorFields } from "../channel/text";
 import { TOP_LEVEL_TS, threadRefOf, wrapQuoted } from "../core/normalize";
 import type { InboundRecord, MailboxClock } from "../core/types";
 import type { Logger } from "../log";
@@ -190,7 +191,7 @@ export class MonitorScheduler {
 		try {
 			return this.#dispatchReady();
 		} catch (error) {
-			this.#deps.log.error("monitor_kick_failed", { error: String(error) });
+			this.#deps.log.error("monitor_kick_failed", { ...errorFields(error) });
 			return 0;
 		}
 	}
@@ -234,7 +235,7 @@ export class MonitorScheduler {
 					this.#kickScript(monitor, monitor.trigger, now);
 				// A row of a no longer supported kind (`unsupported`) never fires.
 			} catch (error) {
-				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, error: String(error) });
+				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, ...errorFields(error) });
 			}
 		}
 		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
@@ -381,12 +382,11 @@ export class MonitorScheduler {
 						...(hash === undefined ? {} : { hash }),
 						...(suppressReason === undefined ? {} : { suppressReason }),
 					});
-					if (suppressReason !== undefined && claim !== undefined) {
+					if (suppressReason !== undefined && claim !== undefined)
 						log.info("monitor_suppressed", { monitor: monitor.id, reason: suppressReason });
-					}
 					if (claim) this.#dispatchReady();
 				} catch (error) {
-					log.error("monitor_script_failed", { monitor: monitor.id, error: String(error) });
+					log.error("monitor_script_failed", { monitor: monitor.id, ...errorFields(error) });
 				} finally {
 					this.#scriptsRunning.delete(monitor.id);
 				}
@@ -476,7 +476,7 @@ export class MonitorScheduler {
 							threadRef: threadRefOf(destination, TOP_LEVEL_TS),
 						})
 						.catch((error: unknown) => {
-							log.error("monitor_route_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
+							log.error("monitor_route_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
 							store.failMonitorEvent(event.eventId, `[turn failed] route_error`);
 						});
 				})(),
@@ -542,14 +542,14 @@ export class MonitorScheduler {
 					});
 				} catch (error) {
 					// Never rethrown: a rejection here would take the daemon down and rerun the command on every boot.
-					log.error("monitor_command_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
+					log.error("monitor_command_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
 					try {
 						store.failMonitorEvent(event.eventId, `[command failed] ${String(error)}`, { retry: false });
 					} catch (settleError) {
 						log.error("monitor_command_settle_failed", {
 							monitor: monitor.id,
 							event: event.eventId,
-							error: String(settleError),
+							...errorFields(settleError),
 						});
 					}
 				} finally {
@@ -575,7 +575,7 @@ export class MonitorScheduler {
 			log.info("monitor_verbatim", { monitor: monitor.id, event: event.eventId, attempt });
 			return true;
 		} catch (error) {
-			log.error("monitor_verbatim_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
+			log.error("monitor_verbatim_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
 			if (store.monitors.markDispatched(event.eventId, opRef)) {
 				store.failMonitorEvent(event.eventId, `[verbatim failed] ${String(error)}`);
 			}

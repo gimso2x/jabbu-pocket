@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { errorFields } from "../channel/text";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { type OmpCompactResult, OmpDriverError } from "../omp/driver";
 import type { InboundRow } from "../store/db-rows";
@@ -326,13 +327,13 @@ export function askBtw(
 			},
 			(error: unknown) => {
 				const reason = error instanceof OmpDriverError ? error.message : String(error);
-				log.error("command_failed", { origin: originKey, command: "btw", error: reason });
+				log.error("command_failed", { origin: originKey, command: "btw", ...errorFields(error) });
 				if (discarded()) return;
 				store.recordTurnFailure({ originKey, opRef, threadRef, notice: failedNotice(`btw: ${reason}`) });
 			},
 		)
 		.catch((error: unknown) => {
-			log.error("btw_settle_failed", { origin: originKey, opRef, error: String(error) });
+			log.error("btw_settle_failed", { origin: originKey, opRef, ...errorFields(error) });
 		});
 }
 
@@ -373,6 +374,6 @@ export function startBrief(deps: MailboxDeps, platformMessageId: string, opRef: 
 			},
 		)
 		.catch((error: unknown) => {
-			log.error("briefing_settle_failed", { origin: originKey, opRef, error: String(error) });
+			log.error("briefing_settle_failed", { origin: originKey, opRef, ...errorFields(error) });
 		});
 }

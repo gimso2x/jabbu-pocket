@@ -185,6 +185,19 @@ export function formatFooter(outcome: "done" | "failed", elapsedMs: number, tool
 /** A thrown value as one log field: its message, or the value itself when it is not an Error. */
 export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** Frames of an error stack kept in the log; the message line is the `error` field, so frames start after it. */
+export const ERROR_STACK_FRAMES = 5;
+
+/** Log fields for an error: message + first stack frames, so a recurring `*_failed` line names the throw site. */
+export function errorFields(err: unknown): { error: string; stack?: string } {
+	if (err instanceof Error) {
+		const lines = (err.stack ?? "").split("\n");
+		const frames = lines.slice(1, 1 + ERROR_STACK_FRAMES).join("\n");
+		return frames === "" ? { error: err.message } : { error: err.message, stack: frames };
+	}
+	return { error: String(err) };
+}
+
 /** Collapses control characters, line separators and bidi overrides so untrusted text cannot start a new prompt line. */
 export const oneLine = (text: string, max: number): string =>
 	cutCodePointSafe(text.replace(/[\p{Cc}\u2028\u2029\u202a-\u202e\u2066-\u2069]+/gu, " ").trim(), max);

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { errorFields } from "../channel/text";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
 import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
@@ -295,7 +296,7 @@ export class DaemonInbound {
 				return chatStartReply(lane, await this.#lanes.threadLink(lane));
 			} catch (error) {
 				if (error instanceof LaneInputError) return `⚠️ 작업 레인을 시작하지 못했습니다: ${error.message}`;
-				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, error: String(error) });
+				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, ...errorFields(error) });
 				return "⚠️ 작업 레인을 시작하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -370,7 +371,7 @@ export class DaemonInbound {
 				}
 				return (command.kind === "land" ? await lanes.requestLand(name, "owner") : await lanes.discard(name)).text;
 			} catch (error) {
-				this.#ctx.log.error("lane_command_failed", { lane: name, command: command.kind, error: String(error) });
+				this.#ctx.log.error("lane_command_failed", { lane: name, command: command.kind, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -390,7 +391,7 @@ export class DaemonInbound {
 					control === "pause" ? await lanes.pause(name, "owner-message") : await lanes.resume(name, "owner-message")
 				).text;
 			} catch (error) {
-				this.#ctx.log.error("lane_control_failed", { lane: name, control, error: String(error) });
+				this.#ctx.log.error("lane_control_failed", { lane: name, control, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -416,7 +417,7 @@ export class DaemonInbound {
 					? `이 스레드에 활성 TASK가 여럿입니다(${active.map((task) => task.taskId).join(", ")}) — 아무것도 ${control === "pause" ? "멈추지" : "재개하지"} 않았습니다. \`jabbu-pocket tasks ${control} <id>\`로 하나를 고르세요.`
 					: (await this.controlTask(only.taskId, control)).text;
 			} catch (error) {
-				this.#ctx.log.error("task_control_failed", { thread: row.threadRef, control, error: String(error) });
+				this.#ctx.log.error("task_control_failed", { thread: row.threadRef, control, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -428,7 +429,7 @@ export class DaemonInbound {
 	 * interrupted notice for a turn that never ran.
 	 */
 	#settleFailed(kind: string, row: InboundRow, error: unknown): void {
-		this.#ctx.log.error("lane_settle_failed", { kind, id: row.platformMessageId, error: String(error) });
+		this.#ctx.log.error("lane_settle_failed", { kind, id: row.platformMessageId, ...errorFields(error) });
 		try {
 			if (startedStore(this.#ctx).getInbound(row.platformMessageId)?.state === "dispatched") {
 				startedStore(this.#ctx).discard(row.platformMessageId);
@@ -437,7 +438,7 @@ export class DaemonInbound {
 			this.#ctx.log.error("lane_settle_discard_failed", {
 				kind,
 				id: row.platformMessageId,
-				error: String(discardError),
+				...errorFields(discardError),
 			});
 		}
 	}

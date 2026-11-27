@@ -39,6 +39,7 @@ import {
 import {
 	cutCodePointSafe,
 	DENIED_TEXT,
+	errorFields,
 	errorText,
 	type FinalOutcome,
 	oneLine,
@@ -346,7 +347,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				return botUserId;
 			},
 			(err: unknown) => {
-				this.#log.error("discord_start_failed", { error: errorText(err) });
+				this.#log.error("discord_start_failed", { ...errorFields(err) });
 				return undefined;
 			},
 		);
@@ -518,11 +519,11 @@ export class DiscordAdapter implements ChannelAdapter {
 					replyEphemeral: (text) => this.#followupEphemeral(interaction, text, "action_reply_failed"),
 				});
 			} catch (err) {
-				this.#log.error("action_failed", { error: errorText(err), ...actionContext });
+				this.#log.error("action_failed", { ...errorFields(err), ...actionContext });
 				await this.#followupEphemeral(interaction, ACTION_FAILURE_TEXT, "action_failure_notice_failed");
 			}
 		} catch (err) {
-			this.#log.error("action_failed", { error: errorText(err), ...actionContext });
+			this.#log.error("action_failed", { ...errorFields(err), ...actionContext });
 		}
 	}
 
