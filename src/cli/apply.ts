@@ -99,16 +99,14 @@ export async function applyCommand(
 		return 0;
 	}
 	const timeoutMin = values.timeout === undefined ? DEFAULT_DRAIN_TIMEOUT_MIN : Number(values.timeout);
-	if (values.timeout !== undefined && (!/^\d+(\.\d+)?$/.test(values.timeout) || !Number.isFinite(timeoutMin))) {
+	if (values.timeout !== undefined && (!/^\d+(\.\d+)?$/.test(values.timeout) || !Number.isFinite(timeoutMin)))
 		return usageError("--timeout must be a non-negative number of minutes");
-	}
 	const cutAfterMin = values["cut-after"] === undefined ? DEFAULT_DRAIN_CUT_MIN : Number(values["cut-after"]);
 	if (
 		values["cut-after"] !== undefined &&
 		(!/^\d+(\.\d+)?$/.test(values["cut-after"]) || !Number.isFinite(cutAfterMin))
-	) {
+	)
 		return usageError("--cut-after must be a non-negative number of minutes");
-	}
 	let mergedAt: Date | undefined;
 	if (values["merged-at"] !== undefined) {
 		mergedAt = new Date(values["merged-at"]);
@@ -116,12 +114,10 @@ export async function applyCommand(
 	}
 	const reportOrigin = values["report-origin"];
 	const reportThread = values["report-thread"];
-	if (reportOrigin !== undefined && !isReportOrigin(reportOrigin)) {
+	if (reportOrigin !== undefined && !isReportOrigin(reportOrigin))
 		return usageError("--report-origin must be discord/ch/<channel id> or discord/dm/<dm id>");
-	}
-	if (reportThread !== undefined && (reportOrigin === undefined || !reportThreadPattern().test(reportThread))) {
+	if (reportThread !== undefined && (reportOrigin === undefined || !reportThreadPattern().test(reportThread)))
 		return usageError("--report-thread needs --report-origin and a Discord message id");
-	}
 	if (values["report-plain"] === true && reportOrigin === undefined)
 		return usageError("--report-plain needs --report-origin");
 	if (values.stamp !== undefined && !STAMP_PATTERN.test(values.stamp))
@@ -259,12 +255,19 @@ export function homeDeps(homeDir: string, unit: string, pathEnv: string, guard?:
 			checkBackupMigrates(result.file, config?.timezone ?? timezoneOfHome(homeDir));
 			return result;
 		},
-		gates: () =>
-			collectGates({
-				homeDir,
-				now: Date.now(),
-				...gateOptionsFromConfig(config),
-			}),
+		// HEAD moved after preflight: re-open the snapshot with the checkout's current code (fresh process) before restarting.
+		revalidateBackup: async (backupFile) => {
+			const bun = findBun(pathEnv, isExecutableFile);
+			if (bun === undefined) throw new Error(`bun을 PATH에서 찾지 못했습니다(${pathEnv})`);
+			const checked = await spawnRunner(
+				[bun, join(REPO_DIR, "src", "main.ts"), "check-backup-migrates", backupFile, "--home", homeDir],
+				{ env: { PATH: pathEnv }, timeoutMs: SYSTEMCTL_TIMEOUT_MS },
+			);
+			if (checked.code === 0) return;
+			const cause = checked.stderr.trim().split("\n").at(0) ?? "";
+			throw new BackupUnusableError(backupFile, `the new code cannot open the ledger snapshot: ${cause}`);
+		},
+		gates: () => collectGates({ homeDir, now: Date.now(), ...gateOptionsFromConfig(config) }),
 		doctor: async () => {
 			const lines: string[] = [];
 			const code = await runDoctor(homeDir, (line) => lines.push(line), REPO_DIR);
@@ -329,14 +332,11 @@ async function detach(input: {
 		return 3;
 	}
 	const childArgs = ["apply", "--stamp", stamp];
-	for (const key of ["timeout", "cut-after", "merged-at", "report-origin", "report-thread"] as const) {
-		const value = values[key];
-		if (value !== undefined) childArgs.push(`--${key}`, value);
-	}
+	for (const key of ["timeout", "cut-after", "merged-at", "report-origin", "report-thread"] as const)
+		if (values[key] !== undefined) childArgs.push(`--${key}`, values[key]);
 	if (values.json === true) childArgs.push("--json");
-	for (const key of ["no-code-rollback", "clear-rollback", "allow-detached", "report-plain"] as const) {
+	for (const key of ["no-code-rollback", "clear-rollback", "allow-detached", "report-plain"] as const)
 		if (values[key] === true) childArgs.push(`--${key}`);
-	}
 	const { unit, argv } = detachedApplyCommand({
 		bun,
 		repoDir: REPO_DIR,

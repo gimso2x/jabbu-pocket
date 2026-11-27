@@ -17,6 +17,7 @@ import { DEFAULT_SESSION_RETENTION_DAYS, gcSessions } from "../ops/gc";
 import { OffsiteError, type OffsiteResult, runOffsite } from "../ops/offsite";
 import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { APPLY_USAGE, applyCommand } from "./apply";
+import { checkBackupMigratesCommand } from "./check-backup-migrates";
 import { DASHBOARD_USAGE, dashboardCommand } from "./dashboard";
 import { DELIVERIES_USAGE, deliveriesCommand } from "./deliveries";
 import { DRAIN_USAGE, drainCommand } from "./drain";
@@ -285,10 +286,7 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 function hostLoadDeps(env: Record<string, string | undefined>): GatesCommandDeps {
 	const hostLoad = testHostLoad(env);
 	const statfs = testStatfs(env);
-	return {
-		...(hostLoad === undefined ? {} : { hostLoad }),
-		...(statfs === undefined ? {} : { statfs }),
-	};
+	return { ...(hostLoad === undefined ? {} : { hostLoad }), ...(statfs === undefined ? {} : { statfs }) };
 }
 
 async function statusCommand(
@@ -503,6 +501,8 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return gcCommand(rest, homeDir);
 			case "backup":
 				return await backupCommand(rest, homeDir);
+			case "check-backup-migrates":
+				return checkBackupMigratesCommand(rest);
 			case "freeze":
 				return freezeCommand(rest, homeDir);
 			case "unfreeze":
