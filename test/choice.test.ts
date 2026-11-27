@@ -447,6 +447,28 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("select with an Other row: an out-of-range number is refused, not taken as Other free text", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "0")).toBe(false);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		const hint = await h.port.writes.waitFor((w) => w.kind === "edit" && w.msg.text.includes("번호나 선택지 이름으로"));
+		expect(h.port.writes.items.filter((w) => w.msg.text.includes("번호나 선택지 이름으로"))).toHaveLength(1);
+		expect(hint.msg.buttons?.map((b) => b.label)).toEqual([...FOUR, OTHER]);
+		// In-range numbers still pick their option, and outside text still picks Other.
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "b" }));
+		h.send({ method: "select", id: "s2", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "분석부터 보여줘")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s2")).toEqual(reply("s2", { value: OTHER }));
+		await h.close();
+	});
+
 	test("a held text is only used by an input of the same turn (opRef)", async () => {
 		const h = harness();
 		const ask = (opRef: string, request: Parameters<typeof answerDialog>[2]) =>
