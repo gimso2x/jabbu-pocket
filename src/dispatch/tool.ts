@@ -215,7 +215,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				taskSpec: {
 					type: "object",
 					description:
-						"여러 단계·하루 넘는 작업의 [TASK] 상태 문서 등록. 신규: title·risk·goal·acceptance·repo 필수(+scope·exclusions·background·tier·tierReason·tierConfidence·worker). 재개: {id}(기본: 처음 등록한 모델로 뜬다). tier(·tierReason)나 worker를 함께 주면 그 모델로 바꿔 재개하고 인계 브리프(마지막 PROGRESS·이전 워커 화면 80줄·spec 경로)를 새 워커 첫 입력에 넣는다. host가 있으면 그 호스트에, 없으면 로컬에 워크트리를 만든다",
+						"여러 단계·하루 넘는 작업의 [TASK] 상태 문서 등록. 신규: title·risk·goal·acceptance·repo 필수(+scope·exclusions·falsePasses·background·tier·tierReason·tierConfidence·worker). falsePasses는 수락기준을 채워도 실패로 볼 통과 방식(테스트 빼기·실경로 대신 목업 등)으로, spec.md '# 이렇게 통과하면 실패'에 들어가 워커·리뷰·QA가 읽는다. 재개: {id}(기본: 처음 등록한 모델로 뜬다). tier(·tierReason)나 worker를 함께 주면 그 모델로 바꿔 재개하고 인계 브리프(마지막 PROGRESS·이전 워커 화면 80줄·spec 경로)를 새 워커 첫 입력에 넣는다. host가 있으면 그 호스트에, 없으면 로컬에 워크트리를 만든다",
 					properties: {
 						id: { type: "string", description: "재개할 TASKID(T-YYYYMMDD-NN). 이것만 준다" },
 						title: { type: "string" },
@@ -223,6 +223,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						goal: { type: "string" },
 						scope: { type: "array", items: { type: "string" } },
 						exclusions: { type: "array", items: { type: "string" } },
+						falsePasses: { type: "array", items: { type: "string" } },
 						acceptance: {
 							type: "array",
 							items: { type: "string" },
@@ -395,9 +396,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			const approvedRisk = gate.approved && ["L0", "L1", "L2"].includes(spec.risk) ? "L3" : spec.risk;
 			// Topic keywords put a floor under the class (raise only); `task` is the how, not the topic.
 			const floored = applyRiskFloor(approvedRisk, topics);
-			if (floored.note !== undefined) {
+			if (floored.note !== undefined)
 				deps.log.info("dispatch_risk_floor_raised", { origin: deps.originKey, from: approvedRisk, to: floored.risk });
-			}
 			// The tier follows the final risk (approval and floor applied) and the live `lanes.models` of this call.
 			const tier = resolveWorkerTier(floored.risk, spec, deps.laneModels?.());
 			const worker =

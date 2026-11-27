@@ -197,6 +197,24 @@ describe("document round trip", () => {
 		expect(parsed.acceptance).toEqual(snapshot.map((item) => ({ ...item, checked: false })));
 	});
 
+	test("falsePasses become a `# 이렇게 통과하면 실패` section before the criteria; absent or empty, no section", () => {
+		const input = { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo: "/r" };
+		const given = parseTaskSpecInput({ ...input, falsePasses: ["테스트를  빼고\n통과"] });
+		if (given.kind !== "new") throw new Error("expected a new spec");
+		expect(given.spec.falsePasses).toEqual(["테스트를 빼고 통과"]);
+		const text = renderSpec(meta, given.spec, acceptanceItems(given.spec.acceptance));
+		expect(text).toContain("# 이렇게 통과하면 실패\n- 테스트를 빼고 통과\n# 수락기준");
+		expect(parseSpec(text).acceptance).toEqual([{ id: "AC-1", text: "a", checked: false }]);
+		expect(parseSpec(text).malformed).toEqual([]);
+		for (const raw of [input, { ...input, falsePasses: [] }]) {
+			const parsed = parseTaskSpecInput(raw);
+			if (parsed.kind !== "new") throw new Error("expected a new spec");
+			expect(parsed.spec.falsePasses).toBeUndefined();
+			expect(renderSpec(meta, parsed.spec, snapshot)).not.toContain("통과하면 실패");
+		}
+		expect(() => parseTaskSpecInput({ ...input, falsePasses: [""] })).toThrow(TaskSpecError);
+	});
+
 	test("context carries the original request and metadata", () => {
 		const text = renderContext(meta, spec, "원문 그대로\n두 줄");
 		expect(text).toContain("## 요청 원문\n원문 그대로\n두 줄");
