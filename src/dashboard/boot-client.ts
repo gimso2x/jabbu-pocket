@@ -454,8 +454,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			selected: open ? open.id : "",
 			theme: ui.theme,
 			layout: ui.layout,
-			stale: ui.stale,
-			unread: unread,
+			stale: ui.stale, unread: unread, bot: ui.bot,
 		});
 		if (html === drawnMain) return;
 		const view = document.getElementById("view");

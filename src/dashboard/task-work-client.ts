@@ -13,27 +13,34 @@ export interface TaskRuntimeField {
 	runtime: TaskRow["runtime"];
 }
 
-/** The turn section without [TASK] worker threads: their conversation is shown in the TASK detail, not again here. */
+const innerOrigin = (key: string): string => {
+	const colon = key.indexOf(":");
+	return colon >= 0 && !key.slice(0, colon).includes("/") ? key.slice(colon + 1) : key;
+};
+
+/** The turn section without [TASK] worker threads (own or peer): their conversation is shown in TASK detail. */
 export function withoutTaskThreads(section: DashboardSnapshot["turns"]): DashboardSnapshot["turns"] {
 	return section.ok
-		? { ...section, threads: section.threads.filter((thread) => !isTaskOrigin(thread.originKey)) }
+		? { ...section, threads: section.threads.filter((thread) => !isTaskOrigin(innerOrigin(thread.originKey))) }
 		: section;
 }
 
 /**
  * The 작업 내역 panel of a headless TASK (`""` for a herdr one, which keeps its board card): its worker session's
  * conversation (`api/thread/conversation`) and running turn (`api/thread/live/events`) on origin `jabbu/task/<agent>`,
- * and — for an open TASK — the 지시 넣기 · 멈춤 · 재개 form the page shows only once the web chat's sign-in answered.
+ * and — for an open own TASK — the 지시 넣기 · 멈춤 · 재개 form the page shows only once the web chat's sign-in answered.
  * Self-contained (shipped to the page; {@link TASK_WORK_CLIENT} fills the slots).
  */
 export function renderTaskWork(task: TaskInfo): string {
 	if (task.runtime !== "headless") return "";
 	// `taskOriginKey` of src/lanes/status.ts, spelled out: this function runs in the page too.
-	const origin = encodeURIComponent(`jabbu/task/${task.agent}`);
+	const raw = task.install ? `${task.install}:jabbu/task/${task.agent}` : `jabbu/task/${task.agent}`;
+	const origin = encodeURIComponent(raw);
 	const running = task.herdr?.ok === true && task.herdr.status === "working";
-	const form = task.open
-		? `<form class="task-work-form" data-task-work-form hidden><textarea name="text" rows="3" aria-label="워커에 넣을 지시" placeholder="워커에 넣을 지시"></textarea><div class="task-work-buttons"><button type="submit" class="button">지시 넣기</button><button type="button" class="button is-ghost" data-task-work-control="pause">멈춤</button><button type="button" class="button is-ghost" data-task-work-control="resume">재개</button></div></form>`
-		: "";
+	const form =
+		task.open && task.install === undefined
+			? `<form class="task-work-form" data-task-work-form hidden><textarea name="text" rows="3" aria-label="워커에 넣을 지시" placeholder="워커에 넣을 지시"></textarea><div class="task-work-buttons"><button type="submit" class="button">지시 넣기</button><button type="button" class="button is-ghost" data-task-work-control="pause">멈춤</button><button type="button" class="button is-ghost" data-task-work-control="resume">재개</button></div></form>`
+			: "";
 	return `<section class="task-work" aria-label="작업 내역" data-task-work="${esc(task.taskId)}" data-conversation="api/thread/conversation?origin=${origin}" data-live="api/thread/live/events?origin=${origin}" data-running="${running ? "1" : ""}"><h3 class="h3">작업 내역</h3><div class="task-work-conv" data-task-work-conv><p class="block-note">대화를 불러오는 중이에요</p></div><div class="live-slot" data-task-work-live></div><p class="task-work-note" data-task-work-note role="status"></p>${form}</section>`;
 }
 

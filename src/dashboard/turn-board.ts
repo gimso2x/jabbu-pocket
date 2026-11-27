@@ -8,6 +8,7 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { INBOUND_STARVATION_MS } from "../ops/gates";
 import { redact } from "../redact";
 import type { ContextLoad } from "./context-load";
+import { readLaneTitleMap } from "./peer-work";
 import type { PeerInstall } from "./peers";
 import type { SessionModel } from "./session-model";
 
@@ -170,8 +171,7 @@ function readInstallTurns(
 		`SELECT ${TURN_COLUMNS} FROM inbound WHERE state IN ${openStates} ORDER BY created_at, inbound_id LIMIT ?`,
 		TURN_LIMIT,
 	);
-	// Origins waiting on a live approval card, as `inbound_starved` counts them: a card past `expires_at` waits
-	// on nobody even while its row still reads `pending`.
+	// Origins waiting on a live approval card, as `inbound_starved` counts them.
 	const approvalColumns = new Set(
 		rows<{ name: string }>(handle, "PRAGMA table_info(approvals)").map((column) => column.name),
 	);
@@ -264,6 +264,7 @@ function readInstallTurns(
 	const monitorNames = new Map(
 		rows<{ id: string; name: string }>(handle, "SELECT id, name FROM monitors").map((m) => [m.id, m.name]),
 	);
+	const laneTitles = readLaneTitleMap(handle);
 	const activeThreads = [...new Set(activeJobs.map((job) => job.thread as string))];
 	const jobSelect =
 		activeThreads.length === 0
@@ -331,7 +332,7 @@ function readInstallTurns(
 				originKey: install === undefined ? key : `${install}:${key}`,
 				threadRef,
 				kind: latest.kind,
-				title: `${install === undefined ? "" : `${install} · `}${monitor ?? first.preview ?? key}`,
+				title: `${install === undefined ? "" : `${install} · `}${monitor ?? laneTitles.get(key) ?? first.preview ?? key}`,
 				column,
 				latest: {
 					...brief(latest),
@@ -356,10 +357,7 @@ function readInstallTurns(
 	return { items: open.map(turnOf), threads };
 }
 
-/**
- * Own open turns and recent threads, plus each peer install's open (`pending`/`dispatched`) turns read-only.
- * A missing or unreadable peer database records one masked line in `peerErrors` without failing the own turns.
- */
+/** Own open turns and recent threads, plus each peer install's open (`pending`/`dispatched`) turns read-only. */
 export function buildTurnsSection(
 	handle: Database,
 	opts: TurnsSectionDeps,
@@ -387,10 +385,8 @@ export function buildTurnsSection(
 			items.push(...peerTurns.items);
 			threads.push(...peerTurns.threads);
 		} catch (error) {
-			const detail = redact(error instanceof Error ? error.message : String(error))
-				.replace(/\s+/g, " ")
-				.trim()
-				.slice(0, ERROR_CHARS);
+			const msg = error instanceof Error ? error.message : String(error);
+			const detail = redact(msg).replace(/\s+/g, " ").trim().slice(0, ERROR_CHARS);
 			peerErrors.push({ install: peer.name, error: `db를 읽지 못함: ${detail}` });
 		} finally {
 			peerDb?.close();
