@@ -57,7 +57,7 @@ export function replaced(spelling: Spelling, pattern: RegExp, insert = ""): Spel
 }
 
 const ANSI_C_QUOTE = /\$'((?:\\.|[^'\\])*)'/g;
-const ANSI_C_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|[\s\S])/g;
+const ANSI_C_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|c[@-_a-z]|[\s\S])/g;
 
 function decodeCodePoint(cp: number, newline: string): string {
 	// 개행·복귀 문자는 절 경계(`;`)로 바꿔 뒤따른 금지 문구가 앞 명령 절로 섞이지 않게 막는다.
@@ -74,7 +74,10 @@ function decodeAnsiCBody(body: string, newline: string): string {
 		if (esc === "\\") return "\\";
 		if (esc === "'") return "'";
 		if (esc === '"') return '"';
-		if (esc === "a" || esc === "b" || esc === "e" || esc === "E" || esc === "f" || esc === "v") return "";
+		// `\f`·`\v`는 SQL에서 공백이다: SQL 읽기(`newline`이 공백)에서만 공백으로, 셸 읽기에서는 단어 안에서 사라진다.
+		if (esc === "f" || esc === "v") return newline === " " ? " " : "";
+		if (esc === "a" || esc === "b" || esc === "e" || esc === "E") return "";
+		if (esc.length === 2 && esc.startsWith("c")) return decodeCodePoint(esc.charCodeAt(1) & 0x1f, newline);
 		if (esc.startsWith("x")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
 		if (esc.startsWith("u") || esc.startsWith("U")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
 		if (/^[0-7]{1,3}$/.test(esc)) return decodeCodePoint(Number.parseInt(esc, 8) & 0xff, newline);
