@@ -610,7 +610,8 @@ describe("Daemon #ops panel and hysteresis alerts", () => {
 		await daemon.opsPanelIdle();
 		const edited = transport.calls.filter((c) => c.method === "editMessage").at(-1);
 		if (edited?.method !== "editMessage") throw new Error("expected panel editMessage");
-		const editedFields = (edited.embeds?.[0] as { fields?: Array<{ name: string; value: string }> } | undefined)?.fields;
+		const editedFields = (edited.embeds?.[0] as { fields?: Array<{ name: string; value: string }> } | undefined)
+			?.fields;
 		const quotaValue = editedFields?.find((f) => f.name === "쿼터 게이트")?.value;
 		expect(quotaValue).toContain("경보 전용(차단 안 함)");
 		expect(quotaValue).toContain("• anthropic: 5시간 97%");

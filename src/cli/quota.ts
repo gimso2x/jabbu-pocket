@@ -39,7 +39,9 @@ export function quotaCommand(args: string[], homeDir: string, now: () => number 
 		const updated = snapshot.updatedAt === null ? "never" : new Date(snapshot.updatedAt).toISOString();
 		const mode = snapshot.mode === "warn" ? " mode=warn" : "";
 		const err = snapshot.lastError === undefined ? "" : ` last_error=${JSON.stringify(snapshot.lastError)}`;
-		process.stdout.write(`quota_status held=${snapshot.held.length} lifts=${lifts.length} updated=${updated}${mode}${err}\n`);
+		process.stdout.write(
+			`quota_status held=${snapshot.held.length} lifts=${lifts.length} updated=${updated}${mode}${err}\n`,
+		);
 		for (const hold of snapshot.held) {
 			const causes = hold.causes
 				.map((cause) => `${cause.label}:${Math.round(cause.usedPct)}%->${new Date(cause.releaseAt).toISOString()}`)

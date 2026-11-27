@@ -854,7 +854,7 @@ describe("scanHandoffBrief: ANSI-C quoting, quote splicing, escaped slash, and s
 			["bash -c $'git reset --hard\\n하지 마'", "git_reset_hard"],
 			['r""m -rf /', "rm_rf_absolute"],
 			["r''m -rf /", "rm_rf_absolute"],
-			['g\'\'it reset --h""ard', "git_reset_hard"],
+			["g''it reset --h\"\"ard", "git_reset_hard"],
 			['cat ~/.jabbu/s""ecrets/token', "secret_path"],
 			["cat ~/.jabbu\\/secrets/token", "secret_path"],
 			["rm -rf \\/etc", "rm_rf_absolute"],

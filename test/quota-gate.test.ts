@@ -318,7 +318,9 @@ describe("config validation and live reload", () => {
 		expect(LIVE_FIELDS).toContain("quotaGate");
 		expect(loadConfig(home.dir).quotaGate).toBeUndefined();
 
-		writeHomeConfig({ quotaGate: { holdPct: 90, pollMinutes: 3, providers: ["Anthropic", "zai", "anthropic"], mode: "warn" } });
+		writeHomeConfig({
+			quotaGate: { holdPct: 90, pollMinutes: 3, providers: ["Anthropic", "zai", "anthropic"], mode: "warn" },
+		});
 		expect(loadConfig(home.dir).quotaGate).toEqual({
 			holdPct: 90,
 			pollMinutes: 3,
@@ -729,7 +731,7 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 	});
 
 	test("quotaGate mode=warn records snapshot and logs without blocking starts, and switches live to hold", async () => {
-		let now = BASE_NOW;
+		const now = BASE_NOW;
 		const logs: string[] = [];
 		let currentConfig: JabbuConfig = { ...home.config, quotaGate: { holdPct: 95, pollMinutes: 5, mode: "warn" } };
 		const ctx = {

@@ -240,8 +240,7 @@ export function readQuotaGateSnapshot(homeDir: string, now: number): QuotaGateSn
 		const parsed = JSON.parse(readRegularText(path)) as Partial<QuotaGateSnapshot>;
 		const updatedAt =
 			typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : null;
-		const mode: QuotaGateMode | undefined =
-			parsed.mode === "hold" || parsed.mode === "warn" ? parsed.mode : undefined;
+		const mode: QuotaGateMode | undefined = parsed.mode === "hold" || parsed.mode === "warn" ? parsed.mode : undefined;
 		const lastError = typeof parsed.lastError === "string" && parsed.lastError !== "" ? parsed.lastError : undefined;
 		const held: ProviderHold[] = [];
 		if (Array.isArray(parsed.held)) {
