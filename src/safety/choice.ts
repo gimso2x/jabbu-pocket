@@ -1,7 +1,7 @@
 import { cutCodePointSafe } from "../channel/text";
 import type { OmpDialogRequest, OmpDialogResponse } from "../omp/driver";
 import type { ApprovalBroker, ApprovalOrigin } from "./approval";
-import { type AskAnswer, answerLine, applyAskEvent, askButtons, askText, numbered } from "./choice-ask";
+import { type AskAnswer, answerLine, applyAskEvent, askAcceptsText, askButtons, askText, numbered } from "./choice-ask";
 import { CANCELLED_LINE, deadlineOf, endUnanswered, MAX_CHOICE_BUTTONS, optionOf } from "./choice-common";
 import { ASK_FALLBACK, ASK_TIMEOUT_LINE } from "./choice-types";
 import { answerForm } from "./form-choice";
@@ -125,12 +125,7 @@ async function answerText(
 		await card.close(CANCELLED_LINE);
 		return { cancelled: true };
 	}
-	const hint =
-		request.method === "input"
-			? request.placeholder
-			: request.prefill === undefined
-				? undefined
-				: "(편집할 기존 내용 있음)";
+	const hint = request.method === "input" ? request.placeholder : request.prefill && "(편집할 기존 내용 있음)";
 	const card = await broker.choose(
 		origin,
 		{
@@ -172,6 +167,8 @@ async function answerAsk(
 			recommended,
 			fallback: ASK_FALLBACK,
 			timeoutMs: deadlineOf(request),
+			acceptsText: (reply: string) => askAcceptsText(questions, answers, reply),
+			rejectHint: OPTION_ONLY_HINT,
 		},
 		{ signal },
 	);

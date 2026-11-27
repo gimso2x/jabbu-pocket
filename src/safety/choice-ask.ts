@@ -138,3 +138,26 @@ export function applyAskEvent(
 	const question = questions[first];
 	if (question !== undefined) answers[first] = textAnswer(question, event.text);
 }
+
+/**
+ * Whether a text reply may answer the `ask` card: a bare number must name an option of the first unanswered
+ * question, so a mistyped number is refused and the card stays open instead of becoming free-text `customInput`.
+ * Any other text (a label, free text) is left to `textAnswer`.
+ */
+export function askAcceptsText(
+	questions: readonly OmpAskQuestion[],
+	answers: ReadonlyArray<AskAnswer | undefined>,
+	reply: string,
+): boolean {
+	const trimmed = reply.trim();
+	if (!/^\d+$/.test(trimmed)) return true;
+	const first = answers.indexOf(undefined);
+	const question = questions[first];
+	if (question === undefined) return false;
+	return (
+		optionOf(
+			question.options.map((option) => option.label),
+			trimmed,
+		) !== undefined
+	);
+}
