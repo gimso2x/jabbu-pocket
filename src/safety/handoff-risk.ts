@@ -1014,8 +1014,8 @@ function gitAliasEdits(text: string): Edit[] {
 /**
  * The findings of one line of a brief (`line` is its 1-based number for the report) in three spellings: as written,
  * as the shell reads its words (`shellSpelling`), and with its git aliases expanded, invisible characters dropped and
- * markdown rendered before the shell reading. A rule keeps the more severe finding, its excerpt cut from the line as
- * written.
+ * markdown rendered before the shell reading (plus one only the SQL rule reads, `$'..\n..'` newline as a space). A
+ * rule keeps the more severe finding, its excerpt cut from the line as written.
  */
 function scanLine(text: string, line: number, branches: readonly string[], cwd: Cwd): HandoffFinding[] {
 	const written: Spelling = { text };
@@ -1028,10 +1028,12 @@ function scanLine(text: string, line: number, branches: readonly string[], cwd: 
 		/['"\\]/.test(spelling.text) ? shellSpelling(spelling) : spelling;
 	const findings: HandoffFinding[] = [];
 	const scanned = new Set<string>();
-	for (const spelling of [written, shellRead(written), shellRead(rendered)]) {
+	const sqlRead = /\$'/.test(text) ? shellSpelling(rendered, " ") : undefined;
+	for (const spelling of [written, shellRead(written), shellRead(rendered), ...(sqlRead ? [sqlRead] : [])]) {
 		if (scanned.has(spelling.text)) continue;
 		scanned.add(spelling.text);
 		for (const finding of scanSpelling(spelling, line, branches, text, cwd)) {
+			if (spelling === sqlRead && finding.rule !== "sql_destructive") continue;
 			const index = findings.findIndex((found) => found.rule === finding.rule);
 			const found = findings[index];
 			if (found === undefined) findings.push(finding);

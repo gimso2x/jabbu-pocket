@@ -218,6 +218,18 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 				"invalid_iss",
 			],
 			[
+				"missing_iss",
+				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), iss: undefined }),
+				403,
+				"invalid_iss",
+			],
+			[
+				"non_string_iss",
+				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), iss: 123 }),
+				403,
+				"invalid_iss",
+			],
+			[
 				"bad_email",
 				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), email: "attacker@example.com" }),
 				403,

@@ -301,7 +301,7 @@ esac
 		expect(real.ledgerRemoved.inboundOrphans).toBe(totalExpired);
 	});
 
-	test.skipIf(isRoot)(
+	test.skipIf(isRoot /* root ignores permission bits, so the 0o000 dir gives no EACCES (qa-ad #12) */)(
 		"#12: 0o000 EACCES session directories are skipped (never deleted in pass 2) while the rest of gc succeeds",
 		async () => {
 			const home = makeHome("jabbu-qa-ad-gc-skip-");

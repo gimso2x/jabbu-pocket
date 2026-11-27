@@ -88,6 +88,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
 import { pidAlive } from "./lock";
@@ -1113,17 +1114,15 @@ export class Daemon {
 		else plan.next.warnings = fresh.warnings;
 		for (const { field, reason } of fresh.warnings ?? []) this.#log.warn("config_warning", { field, reason, trigger });
 		this.#options.config = plan.next;
-		// `channels` is a restart key, so `plan.next` still carries the Discord values the daemon started with.
+		// `channels` stays restart-bound apart from Discord's live policy keys, so these still carry the started values.
 		this.#store?.setLogChannel({ discord: plan.next.channels.discord?.logChannelId });
 		this.#store?.setAlertChannel({ discord: plan.next.channels.discord?.alertChannelId });
 		if (plan.changed.includes("peerSilenceAlert")) this.#store?.setPeerCallPolicy(peerCallPolicyOf(plan.next));
 		if (plan.changed.includes("quotaGate")) this.#quota.maybePoll();
 		if (plan.changed.includes("opsPanel")) this.#opsPanel.maybeTick();
 		this.#broker?.setEscalationChannel({ discord: plan.next.channels.discord?.escalationChannelId });
-		// Of the top-level keys only the peer hop cap reaches the adapter (its own policy is under `channels.discord`).
-		this.#adapters
-			.get("discord")
-			?.setChannelPolicy(plan.next.peerHopLimit === undefined ? {} : { peerHopLimit: plan.next.peerHopLimit });
+		// The reload-carried Discord policy: `channels.discord`'s connection keys plus the top-level peer hop cap.
+		this.#adapters.get("discord")?.setChannelPolicy(discordPolicyOf(plan.next));
 		this.#log.info("config_reloaded", {
 			trigger,
 			changed: plan.changed.join(",") || "-",
@@ -1329,6 +1328,7 @@ export class Daemon {
 	async #shutdown(): Promise<void> {
 		clearInterval(this.#timer);
 		this.#lanes?.stop();
+		this.#landing.stop();
 		await this.#taskGates?.stop();
 		await this.#checkRunner?.stop();
 		this.#heartbeat?.stop();
