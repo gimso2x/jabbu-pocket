@@ -155,8 +155,8 @@ interface MessageSpot {
 	messageId: string;
 }
 
-/** One adapter-level block per kind of call: a 429 on posting must not stop status edits, and the other way round. */
-type Route = "post" | "edit" | "delete" | "react" | "typing";
+/** One adapter-level block per kind of call, and per destination channel for posts: a 429 on one channel must not stop another channel's posts or status edits. */
+type Route = `post:${string}` | "edit" | "delete" | "react" | "typing";
 
 export class DiscordAdapter implements ChannelAdapter {
 	readonly platform = "discord" as const;
@@ -226,7 +226,10 @@ export class DiscordAdapter implements ChannelAdapter {
 			source: options.deliveries,
 			sender: deliverySender({
 				gate: this.#gate,
-				key: "post",
+				key: (delivery) => {
+					const target = delivery === undefined ? undefined : parseThreadRef(delivery.threadRef);
+					return `post:${target === undefined ? "" : target.threadTs === TOP_LEVEL_TS ? target.channel : target.threadTs}`;
+				},
 				blockedReason: "discord createMessage",
 				send: (delivery) => this.#send(delivery),
 				finish: (delivery, result) => this.#finishDelivered(delivery, result),
@@ -300,9 +303,7 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	/** `<@&role>` tokens of the managed roles of the bot with this user id. */
 	#roleTokensOf(userId: string): string[] {
-		const tokens: string[] = [];
-		for (const [roleId, botId] of this.#botRoles) if (botId === userId) tokens.push(`<@&${roleId}>`);
-		return tokens;
+		return [...this.#botRoles].filter(([, botId]) => botId === userId).map(([roleId]) => `<@&${roleId}>`);
 	}
 
 	/**
@@ -426,7 +427,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	async #postText(conversationId: string, threadId: string | undefined, text: string, event: string): Promise<boolean> {
 		try {
 			const destination = await this.#port.destination(conversationId, threadId);
-			await this.#call("post", () =>
+			await this.#call(`post:${destination.channelId}`, () =>
 				this.#transport.createMessage({
 					channelId: destination.channelId,
 					content: cutCodePointSafe(text, MESSAGE_CONTENT_LIMIT),
@@ -471,10 +472,8 @@ export class DiscordAdapter implements ChannelAdapter {
 			return;
 		}
 		this.#seenInteractions.add(interaction.id);
-		if (this.#seenInteractions.size > SEEN_INTERACTIONS_MAX) {
-			const oldest = this.#seenInteractions.values().next().value;
-			if (oldest !== undefined) this.#seenInteractions.delete(oldest);
-		}
+		if (this.#seenInteractions.size > SEEN_INTERACTIONS_MAX)
+			this.#seenInteractions.delete(this.#seenInteractions.values().next().value as string);
 		const userId = (interaction.member?.user ?? interaction.user)?.id ?? "";
 		const actionContext = {
 			customId: interaction.data?.custom_id,
@@ -526,7 +525,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). */
 	async #followupEphemeral(interaction: DiscordInteraction, text: string, logEvent: string): Promise<void> {
 		try {
-			await this.#call("post", () =>
+			await this.#call("post:interaction", () =>
 				this.#transport.followupInteraction({
 					applicationId: interaction.application_id,
 					token: interaction.token,
@@ -1080,7 +1079,7 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	#haltTyping(typing: TypingEntry): void {
 		typing.stopped = true;
-		if (typing.handle !== undefined) this.#typingTimers.clear(typing.handle);
+		this.#typingTimers.clear(typing.handle);
 		typing.handle = undefined;
 	}
 
@@ -1095,7 +1094,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	async #createStatus(entry: StatusEntry, text: string): Promise<void> {
 		return createStatusMessage(entry, this.#log, async () => {
 			const destination = await this.#port.destination(entry.channel, entry.root);
-			const posted = await this.#call("post", () =>
+			const posted = await this.#call(`post:${destination.channelId}`, () =>
 				this.#transport.createMessage({
 					channelId: destination.channelId,
 					content: text,
@@ -1182,14 +1181,14 @@ export class DiscordAdapter implements ChannelAdapter {
 		let sent = delivery.sentParts ?? 0;
 		// A top-level answer is one message: parts 2+ reply to part 1 instead of standing alone.
 		let replyTo = topLevel && sent > 0 ? (delivery.replyTs ?? undefined) : undefined;
-		const deferred = (err: DiscordRateLimitedError): DeliverySendResult => ({
+		const deferred = (err: DiscordRateLimitedError, key: string): DeliverySendResult => ({
 			kind: "deferred",
 			error: err,
 			retry: {
 				// `untilOf` also returns a block that already passed (one parked by an unrelated call): a 429 raised
 				// off the gate's path (a channel lookup inside `destination()`) must not schedule the retry in the
 				// past — the row would be claimable again at once and spin without ever counting a failure.
-				at: Math.max(this.#gate.untilOf("post") ?? 0, this.#clock.now() + err.retryAfterMs),
+				at: Math.max(this.#gate.untilOf(key) ?? 0, this.#clock.now() + err.retryAfterMs),
 				sentParts: sent,
 				...(topLevel && replyTo !== undefined ? { replyTs: replyTo } : {}),
 			},
@@ -1214,7 +1213,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			destination = topLevel ? undefined : await this.#port.destination(target.channel, target.threadTs);
 		} catch (err) {
 			// Nothing was posted for this attempt: a failed lookup is a definitive failure, retried with backoff.
-			if (err instanceof DiscordRateLimitedError) return deferred(err);
+			if (err instanceof DiscordRateLimitedError) return deferred(err, `post:${target.channel}`);
 			return { kind: "failed", error: errorText(err), outcome: "definitive", sentParts: sent };
 		}
 		try {
@@ -1228,7 +1227,7 @@ export class DiscordAdapter implements ChannelAdapter {
 							? undefined
 							: { messageId: replyTo }
 						: destination.messageReference;
-				const posted = await this.#call("post", () =>
+				const posted = await this.#call(`post:${channelId}`, () =>
 					this.#transport.createMessage({
 						channelId,
 						content: part.content,
@@ -1245,7 +1244,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			}
 			return { kind: "sent", parts: parts.length };
 		} catch (err) {
-			if (err instanceof DiscordRateLimitedError) return deferred(err);
+			if (err instanceof DiscordRateLimitedError) return deferred(err, `post:${target.channel}`);
 			// Discord refused the first message (4xx): nothing of the answer exists. Anything else — a network or 5xx
 			// error, or a refusal after parts went out — may leave a partial answer, so it is never resent blindly.
 			return failedDelivery(err, sent, (e) => e instanceof DiscordCallError && e.kind === "definitive", replyTo);
