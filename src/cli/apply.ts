@@ -30,6 +30,7 @@ import {
 	spawnRunner,
 } from "../ops/apply";
 import { STAMP_PATTERN } from "../ops/apply-lock";
+import { restoreBackupFile } from "../ops/apply-rollback-db";
 import { backupStamp, runBackup } from "../ops/backup";
 import { collectGates, gateOptionsFromConfig } from "../ops/gates";
 import { DrainSignalGuard, socketDrainCall, waitForDrain } from "./drain";
@@ -99,9 +100,8 @@ export async function applyCommand(
 		return 0;
 	}
 	const timeoutMin = values.timeout === undefined ? DEFAULT_DRAIN_TIMEOUT_MIN : Number(values.timeout);
-	if (values.timeout !== undefined && (!/^\d+(\.\d+)?$/.test(values.timeout) || !Number.isFinite(timeoutMin))) {
+	if (values.timeout !== undefined && (!/^\d+(\.\d+)?$/.test(values.timeout) || !Number.isFinite(timeoutMin)))
 		return usageError("--timeout must be a non-negative number of minutes");
-	}
 	const cutAfterMin = values["cut-after"] === undefined ? DEFAULT_DRAIN_CUT_MIN : Number(values["cut-after"]);
 	if (
 		values["cut-after"] !== undefined &&
@@ -109,13 +109,11 @@ export async function applyCommand(
 	) {
 		return usageError("--cut-after must be a non-negative number of minutes");
 	}
-	let mergedAt: Date | undefined;
-	if (values["merged-at"] !== undefined) {
-		mergedAt = new Date(values["merged-at"]);
-		if (Number.isNaN(mergedAt.getTime())) return usageError("--merged-at must be an ISO timestamp");
-	}
-	const reportOrigin = values["report-origin"];
-	const reportThread = values["report-thread"];
+	const mergedAt = values["merged-at"] === undefined ? undefined : new Date(values["merged-at"]);
+	if (mergedAt !== undefined && Number.isNaN(mergedAt.getTime()))
+		return usageError("--merged-at must be an ISO timestamp");
+	const reportOrigin = values["report-origin"],
+		reportThread = values["report-thread"];
 	if (reportOrigin !== undefined && !isReportOrigin(reportOrigin)) {
 		return usageError("--report-origin must be discord/ch/<channel id> or discord/dm/<dm id>");
 	}
@@ -259,6 +257,9 @@ export function homeDeps(homeDir: string, unit: string, pathEnv: string, guard?:
 			checkBackupMigrates(result.file, config?.timezone ?? timezoneOfHome(homeDir));
 			return result;
 		},
+		// The code rollback restores the snapshot when the ledger is newer than the rolled-back code's schema.
+		restoreBackup: (backupFile) =>
+			restoreBackupFile(homeDir, () => callDaemon(socketPath, { op: "status" }, 5_000), backupFile),
 		gates: () =>
 			collectGates({
 				homeDir,
@@ -329,10 +330,8 @@ async function detach(input: {
 		return 3;
 	}
 	const childArgs = ["apply", "--stamp", stamp];
-	for (const key of ["timeout", "cut-after", "merged-at", "report-origin", "report-thread"] as const) {
-		const value = values[key];
-		if (value !== undefined) childArgs.push(`--${key}`, value);
-	}
+	for (const key of ["timeout", "cut-after", "merged-at", "report-origin", "report-thread"] as const)
+		if (values[key] !== undefined) childArgs.push(`--${key}`, values[key]);
 	if (values.json === true) childArgs.push("--json");
 	for (const key of ["no-code-rollback", "clear-rollback", "allow-detached", "report-plain"] as const) {
 		if (values[key] === true) childArgs.push(`--${key}`);

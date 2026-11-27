@@ -1,7 +1,6 @@
 // Config field-validation primitives (the `ConfigError` contract and the field parsers `loadConfig` judges with):
 // messages carry the offending path and field names only, never file contents or values.
 import { isAbsolute } from "node:path";
-import type { DispatchHostConfig } from "./config";
 import { LANE_MODEL_TIERS } from "./model-tiers";
 import { TASK_PATH_PATTERN } from "./tasks/docs";
 
@@ -209,8 +208,32 @@ export function checkLaneLandRemotes(
 	}
 }
 
+/** One `dispatchHosts` entry: ssh target, remote work directory, remote herdr binary, worker omp extra arguments. */
+export interface DispatchHostConfig {
+	ssh: string;
+	workDir?: string;
+	herdrBin?: string;
+	ompArgs?: string[];
+	recordsDir?: string;
+	/** Branch-name rules of [TASK]s in this host's repositories (see {@link BranchRule}). */
+	branchRules?: BranchRule[];
+}
+
+/** A branch-name rule for the repositories under `repoPrefix` on a host: a new [TASK] there must give a matching `taskSpec.branch`. */
+export interface BranchRule {
+	/** Absolute directory on the host; matches on a path boundary, the longest prefix wins. */
+	repoPrefix: string;
+	/** Absolute repository paths the rule leaves out. */
+	exclude?: string[];
+	/** Regular expression the branch name must match. */
+	pattern: string;
+	/** A conforming name, shown when a branch is refused. */
+	example: string;
+}
+
 /** The keys of a `dispatchHosts` entry; a typo (`workdir`) must not silently fall back to the default. */
-const DISPATCH_HOST_KEYS = new Set(["ssh", "workDir", "herdrBin", "ompArgs", "recordsDir"]);
+const DISPATCH_HOST_KEYS = new Set(["ssh", "workDir", "herdrBin", "ompArgs", "recordsDir", "branchRules"]);
+const BRANCH_RULE_KEYS = new Set(["repoPrefix", "exclude", "pattern", "example"]);
 /** A `dispatchHosts.<h>.ssh` target: not an ssh option (no leading `-`), no whitespace or control character (NUL throws in spawn). */
 const DISPATCH_SSH = /^[^\s-][^\s\p{Cc}]*$/u;
 /** A `dispatchHosts.<h>.workDir` / `herdrBin`: non-empty (an empty word would reach the remote command) and no control character (NUL throws in spawn). */
@@ -220,6 +243,29 @@ export const isRecordsPath = (value: unknown): boolean =>
 	typeof value === "string" && TASK_PATH_PATTERN.test(value) && !value.includes("..");
 
 const FORBIDDEN_HOST_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+/** `dispatchHosts.<h>.branchRules`: absolute prefixes and excludes, a compilable pattern and a one-line example; throws `config_invalid`. */
+function checkBranchRules(configPath: string, value: unknown, field: string): void {
+	if (!Array.isArray(value)) invalid(configPath, field);
+	value.forEach((entry, index) => {
+		const at = `${field}[${index}]`;
+		const rule = asRecord(entry);
+		if (rule === undefined) invalid(configPath, at);
+		for (const key of Object.keys(rule)) if (!BRANCH_RULE_KEYS.has(key)) invalid(configPath, `${at}.${key}`);
+		if (!isRecordsPath(rule.repoPrefix)) invalid(configPath, `${at}.repoPrefix`);
+		const exclude = rule.exclude;
+		if (exclude !== undefined && (!Array.isArray(exclude) || !exclude.every(isRecordsPath))) {
+			invalid(configPath, `${at}.exclude`);
+		}
+		if (typeof rule.pattern !== "string" || rule.pattern === "") invalid(configPath, `${at}.pattern`);
+		try {
+			new RegExp(rule.pattern);
+		} catch {
+			invalid(configPath, `${at}.pattern`);
+		}
+		if (typeof rule.example !== "string" || !/^[^\p{Cc}]+$/u.test(rule.example)) invalid(configPath, `${at}.example`);
+	});
+}
 
 /** `dispatchHosts`: each entry's ssh target, paths and arguments judged; `undefined` when the key is absent. */
 export function dispatchHostsOf(
@@ -241,6 +287,8 @@ export function dispatchHostsOf(
 			if (record[key] !== undefined && !valid(record[key])) invalid(configPath, `dispatchHosts.${name}.${key}`);
 		}
 		optionalArgList(configPath, record, "ompArgs", `dispatchHosts.${name}.ompArgs`);
+		if (record.branchRules !== undefined)
+			checkBranchRules(configPath, record.branchRules, `dispatchHosts.${name}.branchRules`);
 		for (const key of Object.keys(record)) {
 			if (!DISPATCH_HOST_KEYS.has(key)) invalid(configPath, `dispatchHosts.${name}.${key}`);
 		}

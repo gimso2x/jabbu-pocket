@@ -1511,6 +1511,12 @@ export class OriginMailbox {
 		if (final.status === "completed") {
 			const answer = await this.#turnAnswer(driver, turn, final.text);
 			store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
+			log.info("turn_completed", {
+				origin: originKey,
+				opRef: turn.opRef,
+				ms: this.#deps.clock.now() - turn.startedAt,
+				chars: answer.whole.length,
+			});
 			if (isTaskOrigin(originKey))
 				log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
 			this.#consecFailures = 0;
