@@ -80,8 +80,13 @@ describe("qa-ab agy·스레드 맥락 수정", () => {
 			}
 			return performance.now() - t0;
 		};
-		expect(stream(300_000, 0)).toBeLessThan(200);
-		expect(stream(300_000, 40)).toBeLessThan(200);
+		// Scale the bound by this machine's own 30k pass instead of a fixed 200 ms. Twenty times the input costs a
+		// linear scan about twenty times and a quadratic one about four hundred; 60× separates them on any disk speed.
+		// A fixed bound failed on slow CI disks (WSL2 measured 251 ms for the 40-chunk pass).
+		for (const newlineEvery of [0, 40]) {
+			const base = stream(30_000, newlineEvery);
+			expect(stream(600_000, newlineEvery)).toBeLessThan(Math.max(base * 60, 800));
+		}
 
 		const state: NoticeScanState = { text: "", lastNewline: -1, quotaScanFrom: 0, quotaLineDead: false };
 		expect(appendTurnChunk(state, "앞 줄\n⚠️ API error (attempt 1): ")).toEqual({ shown: "앞 줄\n" });
