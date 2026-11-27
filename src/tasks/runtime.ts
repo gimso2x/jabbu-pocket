@@ -191,9 +191,9 @@ export function runtimeFor(
 	return headlessRuntime(using.headless, using.warn);
 }
 
-/** A held (owner-paused) headless task takes new work only after the hold is lifted; herdr rows have no such hold. */
+/** An owner-paused task takes new work only after the hold is lifted. */
 export function releaseHold(ledger: Pick<TaskLedger, "isPaused" | "unpauseTask">, row: TaskRow): void {
-	if (row.runtime === "headless" && ledger.isPaused(row)) ledger.unpauseTask(row.taskId);
+	if (ledger.isPaused(row)) ledger.unpauseTask(row.taskId);
 }
 
 /**

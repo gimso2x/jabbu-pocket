@@ -25,11 +25,18 @@ function realOrResolved(path: string): string {
  * path is judged after symlinks; a remote one, which this machine cannot resolve, by any `secrets` path component.
  */
 export function secretsCwdProblem(cwd: string, remote: boolean, homeDir: string): string | undefined {
+	if (cwd.includes("\0")) return "워커 cwd에 허용되지 않는 문자(NUL)가 들어 있습니다";
+	if (homeDir.includes("\0")) return "봇 홈 경로에 허용되지 않는 문자(NUL)가 들어 있습니다";
 	const refused = `워커 cwd를 비밀 디렉터리 안으로 줄 수 없습니다: ${cwd}`;
 	if (remote) return cwd.split("/").includes("secrets") ? refused : undefined;
 	if (!isAbsolute(cwd)) return undefined;
-	const real = realOrResolved(cwd);
-	const secrets = realOrResolved(join(homeDir, "secrets"));
-	const inside = real === secrets || real.startsWith(`${secrets}${sep}`) || BOT_SECRETS_PATH.test(real);
-	return inside ? refused : undefined;
+	try {
+		const real = realOrResolved(cwd);
+		const secrets = realOrResolved(join(homeDir, "secrets"));
+		const inside = real === secrets || real.startsWith(`${secrets}${sep}`) || BOT_SECRETS_PATH.test(real);
+		return inside ? refused : undefined;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.name : "ERROR");
+		return `워커 cwd 경로를 확인할 수 없습니다(${code}): ${cwd}`;
+	}
 }

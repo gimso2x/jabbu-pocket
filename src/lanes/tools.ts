@@ -102,7 +102,7 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 				force: {
 					type: "boolean",
 					description:
-						"Only true when the owner explicitly accepted the tight host after a `시작 거부: 호스트 여유` refusal (memory·disk). Anything else (including a busy load) is not force: pass the refusal to the owner instead.",
+						"Only true when the owner explicitly accepted a `시작 거부:` refusal for tight host (`호스트 여유`, 메모리·디스크) or provider quota hold (`프로바이더 쿼터 보류`). Anything else (including a busy load) is not force: pass the refusal to the owner instead.",
 				},
 			},
 			required: ["title", "cwd"],

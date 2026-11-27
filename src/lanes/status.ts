@@ -166,10 +166,7 @@ export interface LaneLeftover {
 	blocking: boolean;
 }
 
-/**
- * A lane whose work goes out as a GitHub pull request instead of a merge into its base branch
- *: its Outcome card offers `PR 게시`·`보류`·`폐기`, and `requestLand` refuses it.
- */
+/** A lane whose work goes out as a GitHub pull request instead of a merge into its base branch: its Outcome card offers `PR 게시`·`보류`·`폐기`, and `requestLand` refuses it. */
 export interface LaneExternalPr {
 	/** The GitHub `owner/name` that receives the PR. */
 	repo: string;
@@ -269,6 +266,8 @@ export interface LaneMeta {
 	worktree?: string;
 	branch?: string;
 	baseBranch?: string;
+	/** Sha256 of the normalized title before `MAX_TITLE_CHARS` truncation; absent when not truncated. */
+	titleHash?: string;
 	/** The conversation (origin key) that started the lane; absent on lanes started before it was recorded (no backfill). */
 	parentOrigin?: string;
 	/** The start's `cwd` after realpath: with `parentOrigin` and the title, the key a repeated start is matched on. */
