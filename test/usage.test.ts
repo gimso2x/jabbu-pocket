@@ -182,6 +182,58 @@ describe("formatLimits / limitLine", () => {
 		expect(text).not.toContain("계정 1");
 	});
 
+	test("a passed timezone renders the reset in that zone, and names it in the header", () => {
+		const resetsAt = Date.UTC(2026, 10, 21, 8, 30, 0);
+		const text = formatLimits(
+			response({
+				generatedAt: Date.UTC(2026, 10, 21, 0, 0, 0),
+				reports: [
+					{
+						provider: "zai",
+						limits: [
+							{
+								label: "ZAI 5 Hours Token Quota",
+								amount: { unit: "tokens", usedFraction: 1, remainingFraction: 0 },
+								window: { id: "5h", label: "5 Hours", resetsAt, resetLabel: "tick" },
+								status: "exhausted",
+							},
+						],
+					},
+				],
+			}),
+			"Asia/Seoul",
+		);
+		expect(text).toContain("OMP 사용량 · Asia/Seoul");
+		// 08:30 UTC is 17:30 in Seoul, on the same Seoul day as the 00:00 UTC generation.
+		expect(text).toContain("오늘 17:30 충전");
+	});
+
+	test("a reset past midnight in the passed zone is a date, not 오늘", () => {
+		const resetsAt = Date.UTC(2026, 10, 20, 16, 30, 0);
+		const text = formatLimits(
+			response({
+				generatedAt: Date.UTC(2026, 10, 20, 14, 0, 0),
+				reports: [
+					{
+						provider: "zai",
+						limits: [
+							{
+								label: "ZAI 5 Hours Token Quota",
+								amount: { unit: "tokens", remainingFraction: 0.5 },
+								window: { id: "5h", label: "5 Hours", resetsAt, resetLabel: "tick" },
+							},
+						],
+					},
+				],
+			}),
+			"Asia/Seoul",
+		);
+		// 14:00 UTC is 23:00 in Seoul on the 20th; the 01:30 reset is already the next Seoul day,
+		// while both instants are still the 20th in UTC — the host zone would say 오늘.
+		expect(text).toContain("11. 21. (토) 01:30 충전");
+		expect(text).not.toContain("오늘");
+	});
+
 	test("a weekly window is 주간; a remaining count is shown; expires/tick pick 만료/충전", () => {
 		const resetsAt = new Date(2026, 10, 21, 8, 30, 0).getTime();
 		const text = formatLimits(
@@ -307,6 +359,32 @@ describe("usageLimitsBlock (a fake omp executable)", () => {
 		const text = await limits(fakeOmp(`echo '${payload}'`));
 		expect(text).toContain("• Claude Weekly  42% 남음");
 		expect(text).not.toContain("확인 실패");
+	});
+
+	test("a passed timezone reaches the reset times (the !usage caller passes config.timezone)", async () => {
+		const payload = JSON.stringify({
+			generatedAt: Date.UTC(2026, 10, 21, 0, 0, 0),
+			reports: [
+				{
+					provider: "zai",
+					limits: [
+						{
+							label: "ZAI 5 Hours Token Quota",
+							amount: { unit: "tokens", remainingFraction: 0.5 },
+							window: { id: "5h", label: "5 Hours", resetsAt: Date.UTC(2026, 10, 21, 8, 30, 0), resetLabel: "tick" },
+						},
+					],
+				},
+			],
+		});
+		const text = await usageLimitsBlock({
+			executable: fakeOmp(`echo '${payload}'`),
+			env: {},
+			timezone: "Asia/Seoul",
+			run: realProcessRunner,
+		});
+		expect(text).toContain("OMP 사용량 · Asia/Seoul");
+		expect(text).toContain("오늘 17:30 충전");
 	});
 
 	test("a failing, garbled or unsupported answer is one 확인 실패 line with the reason", async () => {
