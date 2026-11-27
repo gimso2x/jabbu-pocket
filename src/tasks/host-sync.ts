@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { type ProcessRunner, remoteShellQuote } from "../dispatch/omp";
 import { githubRepoOfUrl } from "../lanes/pr";
 import { redactThenClip } from "../redact";
@@ -54,9 +55,64 @@ const unreachable = (result: RemoteResult): string =>
 const failureOf = (result: RemoteResult, what: string): string =>
 	`${what} 실패: ${redactThenClip(result.lines.find((line) => /error|fatal/i.test(line)) ?? result.lines[0] ?? `exit ${result.code}`, LINE_MAX)}`;
 
+/** `git ls-files` listing every path git ignores in a worktree; a wholly ignored directory is one `dir/` line. */
+const IGNORED_LIST_ARGS = ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"];
+/** Ignored paths a cleanup may delete: dependency, build and cache output that is made again from the sources. */
+const REBUILT_DIRS = new Set([
+	"node_modules",
+	".venv",
+	"venv",
+	"__pycache__",
+	".pytest_cache",
+	".mypy_cache",
+	".ruff_cache",
+	".cache",
+	".turbo",
+	".next",
+	"dist",
+	"build",
+	"target",
+	"coverage",
+]);
+const REBUILT_FILE = /(?:\.pyc|\.pyo|\.tsbuildinfo|(?:^|\/)\.DS_Store)$/;
+const KEPT_SHOWN = 5;
+
+/**
+ * The paths of an `IGNORED_LIST_ARGS` listing a cleanup must not delete unseen (a `.env`, local data, a worker's
+ * notes): every ignored path but rebuilt output (`REBUILT_DIRS` anywhere in the path, `REBUILT_FILE`).
+ */
+function keptIgnoredOf(listing: string): string[] {
+	return listing
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((path) => path !== "")
+		.filter((path) => !REBUILT_FILE.test(path) && !path.split("/").some((part) => REBUILT_DIRS.has(part)));
+}
+
+/** Why the worktree stays: the kept ignored paths (count and the first few). */
+const keptReason = (kept: string[], where: string): string =>
+	`git이 무시하는 파일 ${kept.length}건(${redactThenClip(kept.slice(0, KEPT_SHOWN).join("; "), LINE_MAX)}${kept.length > KEPT_SHOWN ? "; …" : ""})이 있어 worktree를 지우지 않았습니다: ${where} — 옮길 것을 옮긴 뒤 손으로 지우세요`;
+
+/**
+ * The local twin of `removeRemoteWorktree`'s ignored-file check, for a lane or task landing on this machine: why its
+ * cleanup must leave the worktree at `dir`, or `undefined` (nothing to keep, or no worktree at that path).
+ */
+export async function keptIgnoredNote(
+	git: (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>,
+	dir: string,
+): Promise<string | undefined> {
+	if (!existsSync(dir)) return undefined;
+	const listed = await git(["-C", dir, ...IGNORED_LIST_ARGS]);
+	if (listed.code !== 0)
+		return `git ls-files 실패(${dir}): ${redactThenClip(listed.stderr.trim().split("\n")[0] ?? "", LINE_MAX)} — worktree를 지우지 않았습니다. 확인 뒤 손으로 지우세요`;
+	const kept = keptIgnoredOf(listed.stdout);
+	return kept.length === 0 ? undefined : keptReason(kept, dir);
+}
+
 /**
  * `git worktree remove --force` and `git branch -D` in the task's repository on the host, both always tried (a worktree
- * that is gone must not leave its branch); a worktree or branch that is gone already counts as done. Returns the first
+ * that is gone must not leave its branch); a worktree or branch that is gone already counts as done. Neither runs while
+ * the worktree holds ignored files that are not rebuilt output (`keptIgnoredOf`). Returns the first
  * failure line (an unreachable host: that), `undefined` when both are gone.
  */
 export async function removeRemoteWorktree(
@@ -67,6 +123,12 @@ export async function removeRemoteWorktree(
 	const { repo, worktree, branch } = input;
 	if (!safePath(repo) || !safePath(worktree) || !safeBranch(branch))
 		return `원격 정리 거절: 위험한 경로·브랜치 이름(${repo} ${worktree} ${branch})`;
+	const ignored = await remote(run, sshTarget, ["git", "-C", worktree, ...IGNORED_LIST_ARGS]);
+	if (ignored.down) return unreachable(ignored);
+	if (ignored.code !== 0 && !ignored.lines.some((line) => ALREADY_GONE.test(line)))
+		return `${failureOf(ignored, "git ls-files")} — worktree를 지우지 않았습니다`;
+	const kept = ignored.code === 0 ? keptIgnoredOf(ignored.lines.join("\n")) : [];
+	if (kept.length > 0) return keptReason(kept, worktree);
 	let first: string | undefined;
 	const steps: [string, string[]][] = [
 		["worktree 제거", ["git", "-C", repo, "worktree", "remove", "--force", worktree]],
