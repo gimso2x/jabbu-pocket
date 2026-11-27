@@ -5,6 +5,7 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
 import {
 	OmpDriverError,
+	type OmpEntry,
 	type OmpEvent,
 	type OmpExitInfo,
 	type OmpFinal,
@@ -18,6 +19,7 @@ import {
 	CACHE_MISS_NOTIFY_MS,
 	CACHE_MISS_NOTIFY_TOKENS,
 	type CacheBaseline,
+	type CacheCall,
 	CacheMonitor,
 	cacheCallOf,
 } from "../ops/cache-monitor";
@@ -105,7 +107,7 @@ import { parseChatOrigin } from "./origin-key";
 import { buildRecallBlock } from "./recall";
 import { epochDirIsFresh } from "./sessions";
 import { stuckCancelReason, stuckSteerText } from "./stuck";
-import { tryCloseToolFreeFromFile } from "./tool-free-recovery";
+import { readLastAssistantEntry, tryCloseToolFreeFromFile } from "./tool-free-recovery";
 import {
 	composeTurnPrompt,
 	EVENT_PERSIST_MS,
@@ -140,6 +142,13 @@ export type {
 	TurnSettledInfo,
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
+
+/** `cacheCallOf` for a session entry, or `undefined` when it carries no usable call. */
+function seedCallOf(entry: OmpEntry | undefined): CacheCall | undefined {
+	const stamp = entry?.timestamp;
+	const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
+	return Number.isNaN(at) ? undefined : cacheCallOf(entry?.message, at);
+}
 
 /** Serial actor per origin: processes inbound messages, driver finals, and exits on one promise chain. */
 export class OriginMailbox {
@@ -368,63 +377,44 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed through the normal failure
-	 * path (`recordTurnFailure` → monitor event failed with retry/backoff). The child is stopped afterwards — it was
-	 * wedged, and a monitor's next fire starts a fresh session anyway. A real `aborted` final that wins the race settles
-	 * the turn first; this then does nothing.
+	 * Aborts the turn's child and settles the turn as failed with `error` through the normal failure path
+	 * (`recordTurnFailure` → monitor event failed with retry/backoff); a final that settled the turn first wins, this
+	 * then does nothing. `stopFirst` stops the child before the drain; an abort that failed may leave it running, so
+	 * that also stops it, before an answer could arrive after the failure notice. `warnEvent` names a refused abort.
 	 */
-	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+	async #abortTurnWith(turn: ActiveTurn, error: string, stopFirst: boolean, warnEvent: string): Promise<void> {
 		const driver = this.#driver;
 		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		try {
-			await driver.abort();
-		} catch (error) {
-			log.warn("stall_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
-		}
-		if (this.#turn !== turn || this.#driver !== driver) return;
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: `stall_abort silent=${minutes(totalSilentMs)}`,
-			},
-			true,
-		);
-	}
-
-	/**
-	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: …`) through the
-	 * normal failure path. The child is kept — not wedged, its session holds the conversation — unless the abort itself
-	 * failed: then it is stopped before the drain. A final that settled the turn first wins; this then does nothing.
-	 */
-	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
-		const driver = this.#driver;
-		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
-		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
 		let abortFailed = false;
 		try {
 			await driver.abort();
-		} catch (error) {
+		} catch (abortError) {
 			abortFailed = true;
-			log.warn("stuck_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
+			this.#deps.log.warn(warnEvent, { origin: this.#deps.originKey, opRef: turn.opRef, error: String(abortError) });
 		}
 		if (this.#turn !== turn || this.#driver !== driver) return;
-		// An abort that failed may leave the child running: stop it, so no answer arrives after the failure notice.
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: stuckCancelReason(toolName, count),
-			},
-			abortFailed,
-		);
+		await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error }, stopFirst || abortFailed);
+	}
+
+	/**
+	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed. The child is stopped
+	 * afterwards — it was wedged, and a monitor's next fire starts a fresh session anyway.
+	 */
+	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+		await this.#abortTurnWith(turn, `stall_abort silent=${minutes(totalSilentMs)}`, true, "stall_abort_failed");
+	}
+
+	/**
+	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: ...`). The child is
+	 * kept — not wedged, its session holds the conversation — unless the abort itself failed: then it is stopped
+	 * before the drain.
+	 */
+	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
+		if (!this.#driver || this.#turn !== turn) return;
+		const { originKey, log } = this.#deps;
+		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
+		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
+		await this.#abortTurnWith(turn, stuckCancelReason(toolName, count), false, "stuck_abort_failed");
 	}
 
 	/**
@@ -667,13 +657,14 @@ export class OriginMailbox {
 	}
 
 	/** Seeds an empty cache baseline from the session's last assistant entry (a new mailbox after a daemon restart). */
-	async #seedCache(driver: OmpSessionDriver): Promise<void> {
+	async #seedCache(driver: OmpSessionDriver, sessionFile?: string): Promise<void> {
 		if (this.#cache.baseline !== undefined) return;
 		try {
-			const last = (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
-			const stamp = last?.timestamp;
-			const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
-			const call = Number.isNaN(at) ? undefined : cacheCallOf(last?.message, at);
+			// The session file's tail holds the same last assistant entry the full history would give, without the transfer.
+			const tail = sessionFile === undefined ? undefined : readLastAssistantEntry(sessionFile);
+			const last =
+				tail ?? (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
+			const call = seedCallOf(last);
 			if (call !== undefined) this.#cache.seed(call);
 		} catch (error) {
 			this.#deps.log.warn("cache_seed_failed", { origin: this.#deps.originKey, error: String(error) });
@@ -1401,7 +1392,7 @@ export class OriginMailbox {
 			defaultModel: this.#deps.defaultModel,
 			log,
 		});
-		await this.#seedCache(driver);
+		await this.#seedCache(driver, expected);
 		this.#cache.markChildRestart();
 		this.#unsubscribe = [
 			driver.onFinal((final) => {

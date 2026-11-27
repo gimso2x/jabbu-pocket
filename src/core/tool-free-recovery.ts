@@ -1,5 +1,5 @@
 // 세션 저널(.jsonl)을 역추적해 도구 호출이 전혀 없었던 실패 턴만 증명하고 재전송 없이 안전 종료한다.
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { isTaskOrigin } from "../lanes/status";
 import type { Logger } from "../log";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
@@ -59,6 +59,42 @@ export function readSessionEntriesSince(sessionFile: string, since?: string | nu
 	const tail = parsed.slice(sliceStart);
 	if (tail.some((entry) => entry === undefined)) return undefined;
 	return tail as OmpEntry[];
+}
+
+/** 캐시 기준선을 심을 때 세션 `.jsonl`에서 읽는 꼬리 크기(전체 히스토리를 다시 읽지 않기 위함). */
+const SEED_TAIL_BYTES = 64 * 1024;
+
+/**
+ * 세션 `.jsonl`의 꼬리에서 usage를 가진 마지막 어시스턴트 메시지 엔트리를 읽는다. 파일이 없거나 읽을 수
+ * 없거나 꼬리에 해당 엔트리가 없으면 `undefined`를 반환한다(호출자는 드라이버의 `entriesSince`로 되돌아간다).
+ * 꼬리 경계에서 잘린 줄은 파싱에 실패해 건너뛴다.
+ */
+export function readLastAssistantEntry(sessionFile: string): OmpEntry | undefined {
+	let fd: number;
+	try {
+		fd = openSync(sessionFile, "r");
+	} catch {
+		return undefined;
+	}
+	try {
+		const size = fstatSync(fd).size;
+		const start = Math.max(0, size - SEED_TAIL_BYTES);
+		const buffer = Buffer.alloc(size - start);
+		readSync(fd, buffer, 0, buffer.length, start);
+		const lines = buffer.toString("utf8").split(/\r?\n/);
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const entry = parseEntryLine(lines[i] ?? "");
+			if (entry?.type !== "message") continue;
+			const message = entry.message;
+			if (message?.role !== "assistant" || typeof message.usage !== "object" || message.usage === null) continue;
+			return entry;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function isAssistantErrorMessage(message: Record<string, unknown>): boolean {
