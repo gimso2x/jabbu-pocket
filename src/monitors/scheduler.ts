@@ -4,7 +4,7 @@ import { errorFields } from "../channel/text";
 import { TOP_LEVEL_TS, threadRefOf, wrapQuoted } from "../core/normalize";
 import type { InboundRecord, MailboxClock } from "../core/types";
 import type { Logger } from "../log";
-import type { FreezeState } from "../ops/freeze";
+import { type FreezeState, readUnfrozenAt } from "../ops/freeze";
 import type { Store } from "../store/db";
 import { countFiresBetween, firesBetween } from "./cron";
 import { type ClaimResult, type MonitorEventRow, type MonitorRow, monitorOrigin, NO_REPORT, SILENT } from "./ledger";
@@ -319,7 +319,13 @@ export class MonitorScheduler {
 			}
 			return;
 		}
-		if (now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id)) {
+		// A freeze lifted while the daemon was down leaves no in-memory hold record; the lift stamp is the durable
+		// evidence. A slot that came due before the lift effectively came due at the lift, so the catch-up age runs
+		// from there — but only for a day after the lift, after which the fire is stale like any other.
+		const stale = now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id);
+		const unfrozenAt = stale ? readUnfrozenAt(this.#deps.homeDir) : undefined;
+		const heldByFreeze = unfrozenAt !== undefined && slotAt <= unfrozenAt && now - unfrozenAt <= CATCHUP_MAX_AGE_MS;
+		if (stale && !heldByFreeze) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
