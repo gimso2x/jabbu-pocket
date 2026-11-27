@@ -25,13 +25,13 @@ from pathlib import Path
 TITLE = re.compile(r"^# 주간 개선 회의 (\d{4})-W(\d{2})\s*$")
 AGENDA_ID = re.compile(r"^P-(\d{4})W(\d{2})-([1-5])$")
 EVIDENCE = re.compile(
-    r"\((자체회고 \d{4}-\d{2}-\d{2}|모니터 [^)]+|TASK T-\d{8}-\d{2}|로그 event=[a-z_]+|회의 \d{4}-W\d{2})\)"
+    r"\((자체회고 \d{4}-\d{2}-\d{2}|모니터 [^)]+|TASK T-\d{8}-\d{2,}|로그 event=[a-z_]+|회의 \d{4}-W\d{2})\)"
 )
 REVIEW_PREFIXES = ("동의:", "수정:", "반대:", "검토 실패:")
 DECISIONS = ("대기", "채택", "기각", "보류")
 OPEN_DECISIONS = ("대기", "보류")
 NEW_DECISIONS = ("채택", "기각", "보류")
-TASK_ID = re.compile(r"^T-\d{8}-\d{2}$")
+TASK_ID = re.compile(r"^T-\d{8}-\d{2,}$")
 COLUMNS = ["ID", "제목", "근거", "제안", "검토", "결정", "TASK"]
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 MAX_ROWS = 5

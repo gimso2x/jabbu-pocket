@@ -102,10 +102,7 @@ function peerGuarded(ctx: DaemonContext, originKey: string, tool: HostToolDef): 
 	};
 }
 
-/**
- * The host tool set of `originKey` with (`peerTouched`) or without a peer bot in the conversation; `hostToolsFor`
- * builds both from here so the guarded difference follows any tool added later.
- */
+/** The host tool set of `originKey`, with (`peerTouched`) or without a peer bot; `hostToolsFor` builds both from here. */
 function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean): HostToolDef[] {
 	const { config } = ctx.options;
 	const lane = isLaneOrigin(originKey) ? ctx.store?.getLaneByOrigin(originKey) : undefined;
@@ -144,6 +141,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 						headless: taskMailboxPort(ctx),
 						now: () => ctx.clock.now(),
 						timezone: config.timezone,
+						idStart: () => ctx.options.config.idStart, // live: each new [TASK] reads it
 						...(config.recordsRepo === undefined ? {} : { recordsRepo: config.recordsRepo }),
 						...(ctx.options.statfs === undefined
 							? {}

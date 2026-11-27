@@ -131,9 +131,9 @@ export async function laneIdsOnBranches(repo: string, git: GitRunner = defaultGi
 	);
 }
 
-/** The smallest `L-<day>-NN` (NN from 01) that `taken` does not claim. */
-export function nextLaneId(day: string, taken: (laneId: string) => boolean): string {
-	for (let seq = 1; ; seq += 1) {
+/** The smallest `L-<day>-NN` (NN from `start`, default 01) that `taken` does not claim. */
+export function nextLaneId(day: string, taken: (laneId: string) => boolean, start = 1): string {
+	for (let seq = start; ; seq += 1) {
 		const laneId = `L-${day}-${String(seq).padStart(2, "0")}`;
 		if (!taken(laneId)) return laneId;
 	}

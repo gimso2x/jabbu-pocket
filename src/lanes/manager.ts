@@ -447,13 +447,13 @@ export class LaneManager {
 			if (refusals.length > 0) log.info("lane_start_forced", { channel: input.channel, repo });
 			const branchIds = await laneIdsOnBranches(repo);
 			if (store.countOpenLanes() + this.#starting >= this.#max) throw new LaneCapError(this.#max);
-
 			// No await between picking the id and reserving it: a concurrent start sees the reservation.
 			const rowIds = laneRowIdsReportingOrphans(store, repo, branchIds, log);
 			const laneId = nextLaneId(
 				localDay(clock.now(), this.#deps.timezone),
 				(id) =>
 					rowIds.has(id) || branchIds.has(id) || this.#reservedLaneIds.has(id) || existsSync(worktreePathOf(repo, id)),
+				this.#deps.idStart?.() ?? 1,
 			);
 			const worktree = worktreePathOf(repo, laneId);
 			const branch = laneBranchOf(laneId);
