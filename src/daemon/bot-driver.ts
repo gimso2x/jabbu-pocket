@@ -11,6 +11,7 @@ import type { OmpDialogAnswerer, OmpSessionDriver } from "../omp/driver";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
 import { RpcOmpDriver } from "../omp/rpc-driver";
 import { usageLimitsBlock } from "../omp/usage-json";
+import { recordSpawnPrompt } from "../ops/cache-miss-cause";
 import { allSessionFiles, conversationSessionFiles, renderUsage, summarizeSessionFiles } from "../ops/usage";
 import type { HostToolDef } from "../safety/host-tools";
 import { type FloorsSurface, spawnSystemPrompt } from "../safety/prompt";
@@ -63,6 +64,7 @@ export function createBotDriverFactory(deps: BotDriverFactoryDeps): DriverFactor
 			now: deps.clock.now(),
 			log: deps.log,
 		});
+		if (omp) recordSpawnPromptHash(deps.log, sessionDir, systemPrompt);
 		return config.agent === "agy"
 			? new AgyOmpDriver({
 					agyExecutable: config.agyExecutable ?? "agy",
@@ -94,6 +96,15 @@ export function createBotDriverFactory(deps: BotDriverFactoryDeps): DriverFactor
 					log: deps.log,
 				});
 	};
+}
+
+/** The spawn prompt's hash goes to the session dir (`child_restart` cache misses compare it); a failed write only warns. */
+function recordSpawnPromptHash(log: Logger, sessionDir: string, prompt: string): void {
+	try {
+		recordSpawnPrompt(sessionDir, prompt);
+	} catch (error) {
+		log.warn("spawn_prompt_hash_failed", { sessionDir, error: String(error) });
+	}
 }
 
 /** Formats `/usage-jabbu` for either `agy` (not metered) or `omp` session files + limits. */

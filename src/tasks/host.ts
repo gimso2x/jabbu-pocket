@@ -9,6 +9,7 @@ import {
 	remoteShellQuote,
 } from "../dispatch/omp";
 import { redactThenClip } from "../redact";
+import { createBasedWorktree } from "./base-ref";
 import { assertBranchSafe } from "./branch";
 import type { CommitCheck } from "./checker";
 import { TASK_PATH_PATTERN, taskDocsCommitTitle } from "./docs";
@@ -36,8 +37,8 @@ const SSH_FAILURE = 255;
 /** File and git operations of a task on one machine (the bot's own, or a `dispatchHosts` entry over ssh). */
 export interface TaskHostOps {
 	pathExists(path: string): Promise<HostResult<boolean>>;
-	/** `git -C <repo> worktree add -b <branch> <worktree> HEAD`; fails when the branch or path already exists. */
-	createWorktree(input: { repo: string; worktree: string; branch: string }): Promise<HostResult<null>>;
+	/** Forks `branch` into `worktree` from `base` (default `HEAD`; a remote-tracking base is fetched first), `--no-track`; fails when the base, branch or path is unusable. */
+	createWorktree(input: { repo: string; worktree: string; branch: string; base?: string }): Promise<HostResult<null>>;
 	/** Best-effort removal of a worktree and its branch (a failed registration, a landed or discarded lane). */
 	removeWorktree(input: { repo: string; worktree: string; branch: string }): Promise<void>;
 	/** Best-effort removal of a failed start's records directory (a `…/docs/tasks/<id>` path only). */
@@ -206,12 +207,9 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 			return { ok: true, value: result.code === 0 };
 		},
 
-		async createWorktree({ repo, worktree, branch }) {
-			assertPath(repo, worktree);
-			assertBranchSafe(branch);
-			const result = await exec(["git", "-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"], GIT_TIMEOUT_MS);
-			if (result.code === 0 && !result.timedOut) return { ok: true, value: null };
-			return { ok: false, error: `git worktree add failed: ${redactThenClip(result.stdout.trim(), 200)}` };
+		async createWorktree(input) {
+			assertPath(input.repo, input.worktree);
+			return createBasedWorktree((argv) => exec(argv, GIT_TIMEOUT_MS), input);
 		},
 
 		async removeWorktree({ repo, worktree, branch }) {

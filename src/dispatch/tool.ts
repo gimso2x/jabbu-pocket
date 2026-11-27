@@ -8,6 +8,7 @@ import { scanHandoffBrief } from "../safety/handoff-risk";
 import type { HostToolDef } from "../safety/host-tools";
 import { buildFloorsPrompt } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
+import { resolveTaskBase } from "../tasks/base-ref";
 import { resolveTaskBranch } from "../tasks/branch";
 import {
 	agyOccupant,
@@ -342,6 +343,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			const { spec } = input;
 			// Before the approval card: a refused branch must not raise one (nothing is reserved yet).
 			resolveTaskBranch(hostEntry?.branchRules, spec.repo, spec.branch);
+			resolveTaskBase(hostEntry?.branchRules, spec.repo, spec.base);
 			const topics = [
 				spec.title,
 				spec.goal,
