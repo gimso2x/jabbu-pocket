@@ -23,11 +23,16 @@ import {
 	parsePersistedOpsPanelState,
 	summarizeLanes,
 } from "./daemon-ops-panel-state";
+import { OpsUsageCache } from "./daemon-ops-panel-usage";
 import type { StatusReport } from "./status";
 
 export const OPS_PANEL_CURSOR = "ops_panel:state";
 
+/** Incident rows read per table; the panel shows the newest 3 of the merged list. */
+const OPS_RECENT_ROWS = 10;
 const SAME_FINGERPRINT_REFRESH_MS = 5 * 60_000;
+/** After a failed pin (e.g. missing permission) the pin is tried again at most this often. */
+const PIN_RETRY_MS = 60 * 60_000;
 
 /** Discord `#ops` 고정 패널과 부하 히스테리시스 경보 수명주기를 관리한다. */
 export class DaemonOpsPanel {
@@ -40,10 +45,13 @@ export class DaemonOpsPanel {
 	#lastFingerprint: string | undefined;
 	#queue: Promise<void> = Promise.resolve();
 	#busy = false;
+	readonly #usage: OpsUsageCache;
+	#lastPinAttemptAt = 0;
 
 	constructor(ctx: DaemonContext, deps: { status: () => StatusReport }) {
 		this.#ctx = ctx;
 		this.#status = deps.status;
+		this.#usage = new OpsUsageCache(ctx);
 	}
 
 	/** 스윕마다 호출: `opsPanel`이 켜져 있고 직렬 작업이 비어 있으면 백그라운드로 갱신한다. */
@@ -305,6 +313,8 @@ export class DaemonOpsPanel {
 						lifts: new Map<string, QuotaLiftEntry>(),
 					}
 				: { snapshot: readQuotaGateSnapshot(config.homeDir, now), lifts: readQuotaLifts(config.homeDir, now) };
+		const incidents = this.#ctx.store?.opsIncidents(OPS_RECENT_ROWS);
+		const usage = this.#usage.read(now);
 		const { message, fingerprint } = renderOpsPanel({
 			now,
 			timezone: config.timezone,
@@ -314,12 +324,18 @@ export class DaemonOpsPanel {
 			quota,
 			mutedUntil: this.#state.mutedUntil,
 			config: cfg,
+			...(incidents === undefined ? {} : incidents),
+			...(usage === undefined ? {} : { usage }),
 		});
 
 		const panel = this.#state.panel;
 		if (panel === undefined) {
 			await this.#createAndPinPanel(cfg.channelId, route, message, fingerprint, now);
 			return;
+		}
+
+		if (panel.pinned !== true && now - this.#lastPinAttemptAt >= PIN_RETRY_MS) {
+			await this.#pinPanel(panel, route);
 		}
 
 		const minRefreshMs = Math.max(60_000, (cfg.minRefreshSec ?? DEFAULT_OPS_MIN_REFRESH_SEC) * 1000);
@@ -346,6 +362,24 @@ export class DaemonOpsPanel {
 		}
 	}
 
+	async #pinPanel(
+		panel: NonNullable<PersistedOpsPanelState["panel"]>,
+		route: NonNullable<ReturnType<DaemonContext["channels"]["forConversation"]>>,
+	): Promise<void> {
+		this.#lastPinAttemptAt = this.#ctx.clock.now();
+		try {
+			await route.port.pin?.({ platform: "discord", conversationId: panel.channelId, messageId: panel.messageId });
+			panel.pinned = true;
+		} catch (pinError) {
+			panel.pinned = false;
+			this.#ctx.log.warn("ops_panel_pin_failed", {
+				channel: panel.channelId,
+				messageId: panel.messageId,
+				error: String(pinError),
+			});
+		}
+	}
+
 	async #createAndPinPanel(
 		channelId: string,
 		route: NonNullable<ReturnType<DaemonContext["channels"]["forConversation"]>>,
@@ -358,15 +392,7 @@ export class DaemonOpsPanel {
 			this.#state.panel = { channelId, messageId: ref.messageId };
 			this.#lastEditAt = now;
 			this.#lastFingerprint = fingerprint;
-			try {
-				await route.port.pin?.(ref);
-			} catch (pinError) {
-				this.#ctx.log.warn("ops_panel_pin_failed", {
-					channel: channelId,
-					messageId: ref.messageId,
-					error: String(pinError),
-				});
-			}
+			await this.#pinPanel(this.#state.panel, route);
 		} catch (error) {
 			this.#ctx.log.warn("ops_panel_create_failed", { channel: channelId, error: String(error) });
 		}

@@ -1,11 +1,6 @@
 // `#ops` 고정 상태 패널의 영속 상태 직렬화, 레인 집계, 전체 모델 한도 수집기.
 
-import type { Section } from "../dashboard/snapshot";
-import { readUsageLimits, type UsageLimitsInfo } from "../dashboard/usage-limits";
 import { DiscordCallError } from "../discord/transport";
-import { realProcessRunner } from "../dispatch/omp";
-import { buildChildEnv, withOmpProfile } from "../omp/env";
-import { readOmpUsage, type UsageResponse } from "../omp/usage-json";
 import {
 	LOAD_METRIC_KEYS,
 	type LoadHysteresisSnapshot,
@@ -14,8 +9,8 @@ import {
 } from "../ops/load-hysteresis";
 import { formatFullLimitsText, type OpsLanesSummary } from "../ops/ops-panel";
 import { type QuotaLiftEntry, readQuotaGateSnapshot, readQuotaLifts } from "../ops/quota-gate";
-import { redact } from "../redact";
 import type { DaemonContext } from "./daemon-context";
+import { collectUsage } from "./daemon-ops-panel-usage";
 import type { DaemonStore } from "./daemon-store";
 
 export interface PersistedOpsPanelAlert {
@@ -32,7 +27,7 @@ export interface PersistedOpsPanelAlert {
 
 export interface PersistedOpsPanelState {
 	version: 1;
-	panel?: { channelId: string; messageId: string };
+	panel?: { channelId: string; messageId: string; pinned?: boolean };
 	mutedUntil?: number;
 	alert?: PersistedOpsPanelAlert;
 	hysteresis?: LoadHysteresisSnapshot;
@@ -85,7 +80,11 @@ export function parsePersistedOpsPanelState(raw: string | undefined): {
 			typeof parsed.panel.channelId === "string" &&
 			typeof parsed.panel.messageId === "string"
 		) {
-			state.panel = { channelId: parsed.panel.channelId, messageId: parsed.panel.messageId };
+			state.panel = {
+				channelId: parsed.panel.channelId,
+				messageId: parsed.panel.messageId,
+				...(typeof parsed.panel.pinned === "boolean" ? { pinned: parsed.panel.pinned } : {}),
+			};
 		}
 		if (typeof parsed.mutedUntil === "number" && Number.isFinite(parsed.mutedUntil)) {
 			state.mutedUntil = parsed.mutedUntil;
@@ -110,38 +109,9 @@ export function parsePersistedOpsPanelState(raw: string | undefined): {
 
 export async function collectFullLimitsText(ctx: DaemonContext, now: number): Promise<string> {
 	const config = ctx.options.config;
-	const run = ctx.options.usageLimitsRun ?? realProcessRunner;
 	const quota =
 		config.quotaGate === undefined ? { updatedAt: null, held: [] } : readQuotaGateSnapshot(config.homeDir, now);
 	const lifts =
 		config.quotaGate === undefined ? new Map<string, QuotaLiftEntry>() : readQuotaLifts(config.homeDir, now);
-	let limits: Section<UsageLimitsInfo> | undefined;
-	let ompUsage: UsageResponse | undefined;
-	let ompError: string | undefined;
-
-	if (config.dashboard?.usageLimits !== undefined) {
-		limits = await readUsageLimits(config.dashboard.usageLimits, run, () => now);
-	} else if (config.agent !== "agy") {
-		try {
-			ompUsage = await readOmpUsage({
-				executable: config.ompExecutable,
-				...(config.ompProfile === undefined ? {} : { profile: config.ompProfile }),
-				...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
-				env: buildChildEnv({}, withOmpProfile(process.env, config.ompProfile)),
-				run,
-			});
-		} catch (error) {
-			ompError = redact(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	return formatFullLimitsText({
-		now,
-		timezone: config.timezone,
-		...(limits === undefined ? {} : { limits }),
-		...(ompUsage === undefined ? {} : { ompUsage }),
-		...(ompError === undefined ? {} : { ompError }),
-		quota,
-		lifts,
-	});
+	return formatFullLimitsText({ now, timezone: config.timezone, ...(await collectUsage(ctx, now)), quota, lifts });
 }
