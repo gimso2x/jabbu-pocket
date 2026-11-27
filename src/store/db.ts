@@ -1640,22 +1640,17 @@ export class Store {
 		// Rows of a platform no adapter takes would wait forever: only the newest are kept; the trimmed ones are reported.
 		this.expiredUnfinished.push(...expired);
 		const dropped = this.expiredUnfinished.splice(0, Math.max(0, this.expiredUnfinished.length - EXPIRED_HANDOFF_MAX));
-		if (dropped.length > 0) {
-			try {
-				this.hooks.onExpiredDropped?.(dropped);
-			} catch {
-				// observers only; the trim already happened
-			}
-		}
+		try {
+			if (dropped.length > 0) this.hooks.onExpiredDropped?.(dropped);
+		} catch {} // observers only; the trim already happened
 		return expired.length;
 	}
 
 	/** The rows `sweepExpired` expired whose thread ref posts to `platform` (all without one), each handed over once. */
 	takeExpired(platform?: ChatPlatform): DeliveryRow[] {
-		const taken = this.expiredUnfinished.filter(
-			(row) => platform === undefined || platformOfThreadRef(row.threadRef) === platform,
-		);
-		this.expiredUnfinished = this.expiredUnfinished.filter((row) => !taken.includes(row));
+		const mine = (row: DeliveryRow) => platform === undefined || platformOfThreadRef(row.threadRef) === platform;
+		const taken = this.expiredUnfinished.filter(mine);
+		this.expiredUnfinished = this.expiredUnfinished.filter((row) => !mine(row));
 		return taken;
 	}
 
