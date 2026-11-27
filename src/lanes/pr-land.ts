@@ -146,10 +146,29 @@ async function ensurePr(run: PrRun): Promise<void> {
 		"--state",
 		"open",
 		"--json",
-		"number,url",
+		"number,url,headRefOid,headRepositoryOwner",
 	]);
-	const open = Array.isArray(listed) ? (listed[0] as { number?: unknown; url?: unknown } | undefined) : undefined;
-	if (typeof open?.number === "number" && typeof open.url === "string") {
+	// `--head` matches the branch name across forks too: adopt only this repository's own PR whose head is the
+	// pushed commit — a foreign PR of the same name would wedge the landing in `held` ("PR head가 바뀜") forever.
+	const pushed = run.state.pushedSha ?? input.sha;
+	const slugOwner = slug.split("/")[0] ?? "";
+	const open = (Array.isArray(listed) ? listed : []).find((entry) => {
+		if (typeof entry !== "object" || entry === null) return false;
+		const pr = entry as {
+			number?: unknown;
+			url?: unknown;
+			headRefOid?: unknown;
+			headRepositoryOwner?: { login?: unknown };
+		};
+		return (
+			typeof pr.number === "number" &&
+			typeof pr.url === "string" &&
+			pr.headRefOid === pushed &&
+			typeof pr.headRepositoryOwner?.login === "string" &&
+			pr.headRepositoryOwner.login.toLowerCase() === slugOwner.toLowerCase()
+		);
+	}) as { number: number; url: string } | undefined;
+	if (open !== undefined) {
 		advance(run, { number: open.number, url: open.url, createdAt: run.deps.now(), step: "pr-created" });
 		return;
 	}

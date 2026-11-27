@@ -10,7 +10,7 @@ const { beats, stallMs, logPath } = workerData as { beats: SharedArrayBuffer; st
 const counter = new Int32Array(beats);
 let seen = Atomics.load(counter, 0);
 let movedAt = performance.now(); // monotonic clock: a wall-clock step (NTP, suspend/resume) must not read as a stall
-const KILL_GRACE_MS = 500;
+const KILL_GRACE_MS = 2_000; // a loaded host (the moment a stall happens) can take over 500ms to land the log append
 
 const timer = setInterval(() => {
 	const now = performance.now();
@@ -22,11 +22,11 @@ const timer = setInterval(() => {
 	}
 	if (now - movedAt < stallMs) return;
 	clearInterval(timer);
-	// The record goes through the thread pool: a write that blocks (a FIFO log, a full stderr pipe) or a slow host
-	// sample must not keep the kill from happening, so SIGKILL follows when the writes settle or after KILL_GRACE_MS.
+	// The record goes through the thread pool: a write that blocks (a FIFO log, a full stderr pipe) must not keep the
+	// kill from happening, so SIGKILL follows when the writes settle or after KILL_GRACE_MS.
 	const kill = () => process.kill(process.pid, "SIGKILL");
-	setTimeout(kill, KILL_GRACE_MS);
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), level: "error", event: "watchdog_kill", stalled_ms: Math.round(now - movedAt), pid: process.pid, host: sampleHostPressure() })}\n`;
+	setTimeout(kill, KILL_GRACE_MS); // after the host sample: its /proc reads must not eat the writes' grace
 	let pending = logPath === undefined ? 1 : 2;
 	const settled = () => {
 		pending -= 1;

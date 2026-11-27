@@ -281,6 +281,27 @@ describe("AC-6 PR 생성", () => {
 		h.close();
 	});
 
+	test("AC-6 남의 포크 PR이 같은 브랜치 이름으로 열려 있어도 채택하지 않고 자기 PR을 만든다", async () => {
+		const fx = fixture();
+		const h = prHarness(fx);
+		const lane = await closeLane(h, fx.repo);
+		fx.fake.prs.push({
+			number: 7,
+			url: "https://github.com/other-dev/widgets/pull/7",
+			head: lane.branch,
+			base: "main",
+			title: "foreign",
+			body: "",
+			state: "OPEN",
+			headSha: "f".repeat(40),
+			owner: "other-dev",
+		});
+		await land(h, lane.name);
+		expect(fx.fake.callsOf("gh", "pr", "create")).toHaveLength(1);
+		expect(landOf(h, lane.name)?.prLand).toMatchObject({ number: 2, step: "pr-created" });
+		h.close();
+	});
+
 	test("AC-6 이미 열린 PR이 있으면 `gh pr create`를 부르지 않고 그 번호를 쓴다", async () => {
 		const fx = fixture();
 		const h = prHarness(fx);
