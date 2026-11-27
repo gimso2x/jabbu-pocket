@@ -7,6 +7,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -2155,6 +2156,30 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(existsSync(join(home, "autoland.hold"))).toBe(true);
 	});
 
+	test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+		"AC-4: the manual command of a failed install after a code rollback cds into a checkout at %j and runs nothing else",
+		async (name) => {
+			const plain = repo;
+			repo = join(root, name);
+			mkdirSync(join(repo, "src"), { recursive: true });
+			writeFileSync(join(repo, "src", "main.ts"), "");
+			writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+			writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+			markDepsInstalled();
+			initRepo({ lockChanges: true });
+			const { deps } = repoDeps(failingWorld(), { installRc: 1 });
+			const { receipt } = await runApply(base, deps);
+			const detail = codeStep(receipt)?.detail ?? "";
+			// Only the `cd` part is run: the rest of the line is the fixed install and restart text.
+			const cd = /by hand: (cd [\s\S]*?) && bun install/.exec(detail)?.[1] ?? "";
+			const out = Bun.spawnSync(["sh", "-c", `${cd} && pwd -P`], { cwd: root });
+			expect(out.stderr.toString()).toBe("");
+			expect(out.stdout.toString().trim()).toBe(realpathSync(repo));
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+			repo = plain;
+		},
+	);
+
 	test("AC-4: rolled-back code that does not come up either: no second code rollback, failed, no peers", async () => {
 		const r = initRepo();
 		const world = failingWorld(99);
@@ -2786,6 +2811,31 @@ describe("ensureDeps install marker (apply-deps-install)", () => {
 		expect(world.installs).toHaveLength(1);
 		expect(marker()).toBe(`${depsHash(repo)}\n`);
 	});
+
+	test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+		"the manual command of a failed forward install cds into a checkout at %j and runs nothing else",
+		async (name) => {
+			const plain = repo;
+			repo = join(root, name);
+			mkdirSync(join(repo, "src"), { recursive: true });
+			writeFileSync(join(repo, "src", "main.ts"), "");
+			writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+			writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+			markDepsInstalled();
+			writeFileSync(join(repo, "bun.lock"), "lock-2\n");
+			const world = makeWorld();
+			world.installRc = 1;
+			const { receipt } = await runApply(base, makeDeps(world));
+			const detail = readReceipt(receipt).steps.at(-1)?.detail ?? "";
+			// Only the `cd` part is run: the rest of the line is the fixed install and restart text.
+			const cd = /by hand: (cd [\s\S]*?) && bun install/.exec(detail)?.[1] ?? "";
+			const out = Bun.spawnSync(["sh", "-c", `${cd} && pwd -P`], { cwd: root });
+			expect(out.stderr.toString()).toBe("");
+			expect(out.stdout.toString().trim()).toBe(realpathSync(repo));
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+			repo = plain;
+		},
+	);
 
 	test("AC-2: a failed forward install cancels the drain, restarts nothing and fails with the manual command", async () => {
 		writeFileSync(join(repo, "bun.lock"), "lock-2\n");
