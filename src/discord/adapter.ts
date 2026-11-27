@@ -1176,8 +1176,7 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	async #send(delivery: DeliveryItem): Promise<DeliverySendResult> {
 		const target = parseThreadRef(delivery.threadRef);
-		if (target === undefined)
-			return { kind: "failed", error: `invalid thread_ref ${delivery.threadRef}`, outcome: "definitive", sentParts: 0 };
+		if (target === undefined) return failedDelivery(`invalid thread_ref ${delivery.threadRef}`, 0, () => true);
 		const topLevel = target.threadTs === TOP_LEVEL_TS;
 		const footer = answerFooter(delivery, (ref, origin, outcome) => this.#status.footer(ref, origin, outcome));
 		let sent = delivery.sentParts ?? 0;
@@ -1204,14 +1203,14 @@ export class DiscordAdapter implements ChannelAdapter {
 				this.#port.permalink({ platform: "discord", conversationId: id, messageId: root, threadId: root }),
 			);
 			const rendered = renderDiscordMessages(body, delivery.redelivered, footer);
-			if (rendered.cardIssues !== undefined) {
-				this.#log.warn("card_spec_invalid", {
-					id: delivery.deliveryId,
-					issues: rendered.cardIssues.slice(0, 5).map((issue) => issue.slice(0, 200)),
-				});
-			}
+			const issues = rendered.cardIssues?.slice(0, 5).map((issue) => issue.slice(0, 200));
+			if (issues !== undefined) this.#log.warn("card_spec_invalid", { id: delivery.deliveryId, issues });
 			parts = rendered;
 			sent = Math.min(sent, parts.length);
+			// A resume that re-rendered into no more parts than were already sent has nothing left to post: confirming
+			// it would mark an answer sent that never went out (round 14 F1). Hold it for the owner instead.
+			if (sent >= parts.length)
+				return failedDelivery(`resume rendered ${parts.length} parts, ${sent} already sent`, sent);
 			destination = topLevel ? undefined : await this.#port.destination(target.channel, target.threadTs);
 		} catch (err) {
 			// Nothing was posted for this attempt: a failed lookup is a definitive failure, retried with backoff.
