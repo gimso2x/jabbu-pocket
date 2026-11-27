@@ -8,6 +8,7 @@ import { Daemon } from "../src/daemon/daemon";
 import { OPS_PANEL_CURSOR } from "../src/daemon/daemon-ops-panel";
 import { LIVE_FIELDS, planReload } from "../src/daemon/reload";
 import { clearUsageLimitsCache } from "../src/dashboard/usage-limits";
+import { snowflakeAt } from "../src/discord/backfill";
 import { DiscordChannel } from "../src/discord/channel";
 import { DiscordRest } from "../src/discord/rest";
 import { DiscordCallError, type DiscordInteraction } from "../src/discord/transport";
@@ -107,8 +108,9 @@ function makeHostLoad(initial: { load15?: number; cpus?: number; memAvailPct?: n
 
 function clickButton(customId: string, messageId: string, userId = OWNER): DiscordInteraction {
 	seq += 1n;
+	// Interaction ids are snowflakes minted at the test clock, so the follow-up token reads as fresh.
 	return {
-		id: String(810_000_000_000_000_000n + seq),
+		id: String(BigInt(snowflakeAt(now)) + seq),
 		application_id: APP,
 		type: 3,
 		token: `tok-${seq}`,

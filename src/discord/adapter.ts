@@ -486,7 +486,6 @@ export class DiscordAdapter implements ChannelAdapter {
 				await respond({ type: CHANNEL_MESSAGE, data: { content: DENIED_TEXT, flags: EPHEMERAL } });
 				return;
 			}
-			const customId = interaction.data?.custom_id;
 			const message = interaction.message;
 			try {
 				await respond({ type: DEFERRED_UPDATE_MESSAGE });
@@ -494,15 +493,15 @@ export class DiscordAdapter implements ChannelAdapter {
 				// The click is the owner's either way; only Discord's "interaction failed" hint shows.
 				this.#log.warn("interaction_ack_failed", { id: interaction.id, error: errorText(err) });
 			}
-			if (customId === undefined || message === undefined) return;
+			if (interaction.data?.custom_id === undefined || message === undefined) return;
 			try {
 				this.#port.rememberMessage(message.id, message.channel_id);
 				// The core's channel is the conversation: a thread's parent, a DM or channel itself.
 				const info = interaction.guild_id === undefined ? undefined : await this.#port.channelInfo(message.channel_id);
 				const channel = info?.parentId !== undefined && info.type !== 0 ? info.parentId : message.channel_id;
 				await this.#core.onAction({
-					actionId: customId,
-					value: this.#port.buttonValue(message.id, customId),
+					actionId: interaction.data?.custom_id,
+					value: this.#port.buttonValue(message.id, interaction.data?.custom_id),
 					...(Array.isArray(interaction.data?.values) ? { values: interaction.data.values } : {}),
 					userId,
 					channel,
@@ -519,10 +518,11 @@ export class DiscordAdapter implements ChannelAdapter {
 		}
 	}
 
-	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). Past the token's near-expiry — 14 of its 15 minutes from the interaction id's own snowflake — the confirmation goes as a normal reply under the card instead, so a slow action's confirmation is not silently lost. */
+	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). Past the token's near-expiry — 14 of its 15 minutes from the interaction id's own snowflake — the confirmation goes as a normal reply under the card instead, so a slow action's confirmation is not silently lost. An id that is not a snowflake takes the webhook path (its age is unknown). */
 	async #followupEphemeral(interaction: DiscordInteraction, text: string, logEvent: string): Promise<void> {
 		const message = interaction.message;
-		if (message !== undefined && this.#clock.now() - snowflakeTime(interaction.id) >= 14 * 60_000) {
+		const created = /^\d+$/.test(interaction.id) ? snowflakeTime(interaction.id) : undefined;
+		if (message !== undefined && created !== undefined && this.#clock.now() - created >= 14 * 60_000) {
 			await this.#postText(message.channel_id, message.id, redact(text), "action_reply_fallback_failed");
 			return;
 		}
