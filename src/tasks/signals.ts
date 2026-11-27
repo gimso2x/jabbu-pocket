@@ -7,7 +7,8 @@
  *   file <worktree-relative path> [sha256=<hex>] [json:.a.b=<json value>]
  */
 import { createHash } from "node:crypto";
-import { redact, redactThenClip } from "../redact";
+import { redactThenClip } from "../redact";
+import { hasNonFiniteNumber, signalTail, testRegexBounded, verifyJsonField } from "./signal-eval";
 import { CHECK_OPEN, closingBracket, skipString, trailingCheckOpen, unescapedQuotes } from "./signal-scan";
 
 export const CHECK_TIMEOUT_MS = 900_000;
@@ -223,6 +224,7 @@ function parseFile(s: string, at: number): Signal {
 			.filter((field) => field !== "")
 			.map((field) => (/^\d+$/.test(field) ? Number(field) : field));
 		if (fields.length === 0) throw new SignalSyntaxError("json:에는 json:.version 같은 필드 경로가 필요합니다");
+		if (hasNonFiniteNumber(option.value)) throw new SignalSyntaxError("json: 값에 유한하지 않은 수는 쓸 수 없습니다");
 		signal.json = { path: fields, value: option.value };
 	}
 	return signal;
@@ -248,26 +250,6 @@ export interface SignalIo {
 	readBytes(path: string): Promise<Uint8Array | undefined>;
 }
 
-/**
- * The last characters of an output on one line: where a test runner prints its verdict. Masked before it is cut, so a
- * secret the check printed reaches neither the card nor the ledger's `check_json`, whole or in part (qa-x #39).
- */
-const tail = (text: string): string => {
-	const line = redact(text).replace(/\s+/g, " ").trim();
-	return line.length > 80 ? `…${line.slice(-80)}` : line;
-};
-
-function dig(value: unknown, path: readonly (string | number)[]): { found: boolean; value: unknown } {
-	let current = value;
-	for (const key of path) {
-		// Own fields only: `__proto__`/`constructor` are not fields of the file.
-		if (current === null || typeof current !== "object" || !Object.hasOwn(current, key))
-			return { found: false, value: undefined };
-		current = (current as Record<string | number, unknown>)[key];
-	}
-	return { found: true, value: current };
-}
-
 /** Runs one signal; a malformed signal is a failed check (registration rejects them, older tasks may carry one). */
 export async function runSignal(raw: string, io: SignalIo): Promise<SignalCheck> {
 	const signal = raw.trim();
@@ -287,12 +269,27 @@ export async function runSignal(raw: string, io: SignalIo): Promise<SignalCheck>
 				detail: `${CHECK_TIMEOUT_MS / 1000}초 안에 끝나지 않았습니다(확인 불가)`,
 				inconclusive: true,
 			};
-		if (result.code !== 0) return verdict(false, `exit ${result.code}: ${tail(result.output) || "(출력 없음)"}`);
+		if (result.code !== 0) return verdict(false, `exit ${result.code}: ${signalTail(result.output) || "(출력 없음)"}`);
 		// Only the head of an over-cap output was kept: a regex on it (a tail anchor above all) proves nothing.
 		if (parsed.stdout !== undefined && result.truncated === true)
 			return verdict(false, "출력이 수집 상한을 넘어 끝부분을 볼 수 없어 stdout~ 검사를 판정하지 못했습니다");
-		if (parsed.stdout !== undefined && !parsed.stdout.test(result.output))
-			return verdict(false, `exit 0, 출력이 ${parsed.stdout}와 맞지 않습니다: ${tail(result.output) || "(출력 없음)"}`);
+		if (parsed.stdout !== undefined) {
+			const matched = await testRegexBounded(parsed.stdout, result.output);
+			if (matched === "timeout") {
+				return {
+					signal,
+					ok: false,
+					detail: "stdout~ 정규식 판정이 시간 제한을 넘었습니다(확인 불가)",
+					inconclusive: true,
+				};
+			}
+			if (matched === "no_match") {
+				return verdict(
+					false,
+					`exit 0, 출력이 ${parsed.stdout}와 맞지 않습니다: ${signalTail(result.output) || "(출력 없음)"}`,
+				);
+			}
+		}
 		return verdict(true, parsed.stdout === undefined ? "exit 0" : `exit 0, 출력이 ${parsed.stdout}와 맞습니다`);
 	}
 	const bytes = await io.readBytes(parsed.path);
@@ -302,18 +299,8 @@ export async function runSignal(raw: string, io: SignalIo): Promise<SignalCheck>
 		if (got !== parsed.sha256) return verdict(false, `sha256 ${got.slice(0, 12)}… ≠ ${parsed.sha256.slice(0, 12)}…`);
 	}
 	if (parsed.json !== undefined) {
-		let document: unknown;
-		try {
-			document = JSON.parse(Buffer.from(bytes).toString("utf8"));
-		} catch {
-			return verdict(false, `JSON이 아닙니다: ${parsed.path}`);
-		}
-		const field = `.${parsed.json.path.join(".")}`;
-		const hit = dig(document, parsed.json.path);
-		const want = JSON.stringify(parsed.json.value);
-		if (!hit.found) return verdict(false, `${field} 필드가 없습니다`);
-		const got = JSON.stringify(hit.value) ?? "undefined";
-		if (got !== want) return verdict(false, `${field}가 ${tail(got)}입니다(기대 ${tail(want)})`);
+		const problem = verifyJsonField(bytes, parsed.path, parsed.json.path, parsed.json.value);
+		if (problem !== undefined) return verdict(false, problem);
 	}
 	return verdict(
 		true,

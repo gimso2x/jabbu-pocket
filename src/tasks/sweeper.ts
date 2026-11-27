@@ -13,7 +13,8 @@ import { ledgerTaskChecks, type TaskCheckCache, type TaskEvaluation } from "./ev
 import type { TaskGateHooks } from "./gate";
 import { gateCardHooks } from "./gate-cards";
 import type { TaskLandOutcome } from "./land";
-import { type TaskLedger, type TaskRow, type TaskTransitionRow, taskPausedAt } from "./ledger";
+import type { TaskLedger, TaskRow } from "./ledger";
+import { taskPausedAt } from "./ledger";
 import {
 	agyLimitLine,
 	autoLandBlockers,
@@ -45,6 +46,14 @@ import { TASK_DOCS_PREFIX } from "./progress-evidence";
 import { insideWorktree } from "./records";
 import { RemoteJudgeClock } from "./remote-judge";
 import { restatedHash } from "./resume-check";
+import {
+	agyLimitHeld,
+	blockRetriesSince,
+	lastResumeAt,
+	nudgeBase,
+	nudgesSince,
+	pendingBlockRetry,
+} from "./sweeper-notices";
 import { agyModelOf } from "./worker-tier";
 
 /** Sweep cadence of the daemon. */
@@ -77,69 +86,6 @@ export const BLOCK_RETRY_WAIT_MS = 30 * 60_000;
 
 /** Shared paths an overlap notice names before it counts the rest. */
 const OVERLAP_PATHS_SHOWN = 5;
-
-/** Where the nudge count starts: the latest `resume:<ms>` mark of `resumeTask`, else the registration. */
-function nudgeBase(row: TaskRow): number {
-	const resumes = Object.keys(row.notices)
-		.filter((key) => key.startsWith("resume:"))
-		.map((key) => Number(key.slice("resume:".length)))
-		.filter((at) => Number.isFinite(at));
-	return Math.max(row.createdAt, ...resumes);
-}
-
-/**
- * When the task was last resumed: the latest `resume:<ms>` mark of `resumeTask`, or a `resume dispatch` transition of
- * the ledger (resumes marked before the marks existed); `undefined` for a task never resumed.
- */
-function lastResumeAt(row: TaskRow, history: readonly TaskTransitionRow[]): number | undefined {
-	const resumes = [
-		...Object.keys(row.notices)
-			.filter((key) => key.startsWith("resume:"))
-			.map((key) => Number(key.slice("resume:".length)))
-			.filter((at) => Number.isFinite(at)),
-		...history.filter((entry) => entry.reason === "resume dispatch").map((entry) => entry.at),
-	];
-	return resumes.length === 0 ? undefined : Math.max(...resumes);
-}
-
-/** An agy limit block since `nudgeBase` (the latest resume, else the registration): no prompt goes to the worker. */
-function agyLimitHeld(row: TaskRow): boolean {
-	return Object.entries(row.notices).some(([key, at]) => key.startsWith("agylimit:") && at >= nudgeBase(row));
-}
-
-/** Unmet-condition nudges recorded since `nudgeBase`. */
-function nudgesSince(row: TaskRow): number {
-	return Object.entries(row.notices).filter(([key, at]) => key.startsWith("unmet:") && at >= nudgeBase(row)).length;
-}
-
-/** The `<ms>` of every `blockretry:<ms>` mark (one per retry prompt, sent or not). */
-function blockRetryMarks(row: TaskRow): number[] {
-	return Object.keys(row.notices)
-		.filter((key) => key.startsWith("blockretry:"))
-		.map((key) => Number(key.slice("blockretry:".length)))
-		.filter((at) => Number.isFinite(at));
-}
-
-/** Retry prompts since `nudgeBase` (the latest resume, else the registration). */
-function blockRetriesSince(row: TaskRow): number {
-	const since = nudgeBase(row);
-	return blockRetryMarks(row).filter((at) => at >= since).length;
-}
-
-/**
- * The retry prompt the current block is waiting on: the latest `blockretry:<ms>` without its `blockcleared:<ms>` and
- * with no working → blocked move since (the card went up); `undefined` when there is none.
- */
-function pendingBlockRetry(row: TaskRow, history: readonly TaskTransitionRow[]): number | undefined {
-	const marks = blockRetryMarks(row);
-	if (marks.length === 0) return undefined;
-	const latest = Math.max(...marks);
-	if (`blockcleared:${latest}` in row.notices) return undefined;
-	const carded = history.some(
-		(entry) => entry.fromStatus === "working" && entry.toStatus === "blocked" && entry.at >= latest,
-	);
-	return carded ? undefined : latest;
-}
 
 export interface TaskSweepDeps {
 	ledger: TaskLedger;
@@ -262,6 +208,8 @@ export class TaskSweeper {
 	readonly #sweepQuestions = new Map<string, string>();
 	/** Tasks whose last session read failed (in memory): one `task_question_read_failed` per run of failures. */
 	readonly #questionReadFailing = new Set<string>();
+	/** Serializes `check()` calls per `taskId` so concurrent sweep and `tasks check` never double-post. */
+	readonly #checking = new Map<string, Promise<TaskCheckResult>>();
 
 	constructor(deps: TaskSweepDeps) {
 		this.#deps = deps;
@@ -353,9 +301,33 @@ export class TaskSweeper {
 		return true;
 	}
 
-	/** Judges one task and applies the sweep's rules to it. */
+	/** Judges one task and applies the sweep's rules to it (serialized per `taskId`). */
 	async check(row: TaskRow): Promise<TaskCheckResult> {
+		const prev = this.#checking.get(row.taskId) ?? Promise.resolve();
+		const run = prev.catch(() => undefined).then(() => this.#checkSerialized(row));
+		this.#checking.set(row.taskId, run);
+		try {
+			return await run;
+		} finally {
+			if (this.#checking.get(row.taskId) === run) this.#checking.delete(row.taskId);
+		}
+	}
+
+	async #checkSerialized(staleRow: TaskRow): Promise<TaskCheckResult> {
 		const { ledger, log } = this.#deps;
+		const row = ledger.get(staleRow.taskId);
+		if (row === undefined) {
+			return {
+				taskId: staleRow.taskId,
+				status: staleRow.status,
+				read: false,
+				summary: "작업을 찾지 못했습니다",
+				actions: [],
+			};
+		}
+		if (row.status !== staleRow.status && row.status !== "working" && row.status !== "blocked") {
+			return { taskId: row.taskId, status: row.status, read: true, summary: "이미 전환됨", actions: [] };
+		}
 		const now = this.#deps.now();
 		const actions: string[] = [];
 		let evaluation: TaskEvaluation;
@@ -416,7 +388,7 @@ export class TaskSweeper {
 			actions.push("spec-change warning");
 		}
 
-		let status = row.status;
+		let status: TaskRow["status"] = row.status;
 		const retry = pendingBlockRetry(ledger.require(row.taskId), ledger.history(row.taskId));
 		if (!judgement.blocked && retry !== undefined) {
 			// The agent got past the block on its own after the retry prompt: that block ends here, without a card.
@@ -493,7 +465,7 @@ export class TaskSweeper {
 			// at or after it means that attempt died before the transition, so the flow below runs now; with such
 			// a transition it already reported (e.g. re-checked after a resume) and stays silent.
 			const noticeKey = `reached:${judgement.reachKey}`;
-			const noticeAt = row.notices[noticeKey];
+			const noticeAt = ledger.require(row.taskId).notices[noticeKey];
 			const reported =
 				noticeAt !== undefined &&
 				ledger.history(row.taskId).some((item) => item.toStatus === "review" && item.at >= noticeAt);

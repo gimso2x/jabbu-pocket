@@ -393,7 +393,7 @@ export async function resumeTask(
 			timezone: deps.timezone,
 			now: deps.now(),
 		});
-	releaseHold(deps.ledger, row); // a headless task the owner stopped takes the follow-up (herdr rows have no hold)
+	releaseHold(deps.ledger, row); // lift an owner hold on the task before sending the resume
 	let how: string;
 	let link: string | undefined;
 	let switched: string | undefined;
