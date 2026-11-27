@@ -18,6 +18,8 @@ import { restoreCommand } from "../src/cli/restore";
 import { acquireLock } from "../src/daemon/lock";
 import { runBackup } from "../src/ops/backup";
 import { RestoreError, runRestore } from "../src/ops/restore";
+import { openStore } from "../src/store/db";
+import { readSchemaVersion, SCHEMA_VERSION } from "../src/store/schema-version";
 
 let home: string;
 
@@ -30,10 +32,21 @@ afterEach(() => {
 	rmSync(home, { recursive: true, force: true });
 });
 
+/**
+ * A live ledger the daemon can open: today's schema (via `openStore`) plus a `marker` row naming it. The old stub
+ * (three one-column tables) passed the shallow checks but no daemon could ever open it — exactly the hole U2 closes —
+ * so restore fixtures must be real ledgers.
+ */
 function seed(marker: string): void {
-	const db = new Database(join(home, "jabbu.db"), { create: true, strict: true });
-	db.run("PRAGMA journal_mode=WAL");
-	for (const table of ["origins", "inbound", "deliveries"]) db.run(`CREATE TABLE IF NOT EXISTS ${table} (id)`);
+	for (const ext of ["", "-wal", "-shm", "-journal"]) rmSync(join(home, `jabbu.db${ext}`), { force: true });
+	const store = openStore({
+		path: join(home, "jabbu.db"),
+		clock: { now: () => 1_700_000_000_000 },
+		timezone: "Asia/Seoul",
+		redact: (text: string) => text,
+	});
+	store.close();
+	const db = new Database(join(home, "jabbu.db"));
 	db.run("CREATE TABLE IF NOT EXISTS marker (v TEXT)");
 	db.run("DELETE FROM marker");
 	db.query("INSERT INTO marker VALUES (?)").run(marker);
@@ -51,6 +64,35 @@ function markerOf(path: string): string | undefined {
 
 const noDaemon = (): Promise<unknown> => Promise.reject(new Error("ENOENT"));
 
+const OLD_LANE = "ompbot/work/fix-login";
+const NEW_LANE = "jabbu/work/fix-login";
+
+/**
+ * A ledger as schema-8 code left it: today's tables, old-name rows, stamped 8 (same fabrication as
+ * test/rename-migration.test.ts). With `collide` both the old and the new lane origin exist, so the schema-9 rename
+ * hits the `origins.origin_key` primary key — the current code cannot migrate it.
+ */
+function schema8Backup(collide: boolean): string {
+	const path = join(home, "old-backup.db");
+	const store = openStore({
+		path,
+		clock: { now: () => 1_700_000_000_000 },
+		timezone: "Asia/Seoul",
+		redact: (text: string) => text,
+	});
+	try {
+		store.ensureOrigin(OLD_LANE, "/s/old");
+		if (collide) store.ensureOrigin(NEW_LANE, "/s/new");
+	} finally {
+		store.close();
+	}
+	const db = new Database(path);
+	db.run("PRAGMA user_version = 8");
+	db.close();
+	for (const ext of ["-wal", "-shm"]) rmSync(`${path}${ext}`, { force: true });
+	return path;
+}
+
 /** A backup of the "good" ledger, then a live ledger that drifted on. */
 function goodBackupThenDrift(): string {
 	seed("good");
@@ -65,8 +107,10 @@ describe("runRestore", () => {
 		const file = goodBackupThenDrift();
 		const result = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon });
 		expect(result.applied).toBe(true);
-		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
+		// Before any read of the installed copy: a read of a WAL-mode ledger creates an empty -wal beside it, so the
+		// no-sidecar check runs before `markerOf` reads it.
 		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(false);
+		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
 		expect(readdirSync(result.plan.preRestoreDir).sort()).toEqual(["jabbu.db", "jabbu.db-wal"]);
 		expect(markerOf(join(result.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
 		expect(existsSync(join(home, "jabbu.lock"))).toBe(false); // lock released
@@ -216,6 +260,48 @@ describe("runRestore", () => {
 		expect(second.plan.preRestoreDir).not.toBe(first.plan.preRestoreDir);
 		expect(markerOf(join(first.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
 		expect(markerOf(join(second.plan.preRestoreDir, "jabbu.db"))).toBe("second-drift");
+	});
+
+	test("a backup the current code cannot migrate is refused before any file moves (U2)", async () => {
+		seed("drifted");
+		const backup = schema8Backup(true);
+		const error = await runRestore({ homeDir: home, source: backup, yes: true, probeDaemon: noDaemon }).catch((e) => e);
+		expect(error).toBeInstanceOf(RestoreError);
+		expect(error.code).toBe("migration_failed");
+		expect(error.message).toContain("cannot open the backup");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
+		expect(
+			existsSync(join(home, "backups"))
+				? readdirSync(join(home, "backups")).some((n) => n.startsWith("pre-restore"))
+				: false,
+		).toBe(false);
+		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
+	});
+
+	test("an old-schema backup that migrates cleanly restores, already migrated (U2)", async () => {
+		seed("drifted");
+		const backup = schema8Backup(false);
+		const result = await runRestore({ homeDir: home, source: backup, yes: true, probeDaemon: noDaemon });
+		expect(result.applied).toBe(true);
+		const db = new Database(join(home, "jabbu.db"), { readonly: true });
+		try {
+			expect(readSchemaVersion(db)).toBe(SCHEMA_VERSION);
+		} finally {
+			db.close();
+		}
+		const store = openStore({
+			path: join(home, "jabbu.db"),
+			clock: { now: () => 1_700_000_000_000 },
+			timezone: "Asia/Seoul",
+			redact: (text: string) => text,
+		});
+		try {
+			expect(store.getOrigin(NEW_LANE)?.epoch).toBe(1);
+			expect(store.getOrigin(OLD_LANE)).toBeUndefined();
+		} finally {
+			store.close();
+		}
+		expect(markerOf(join(result.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
 	});
 
 	test("restores into a home that has no ledger yet", async () => {
