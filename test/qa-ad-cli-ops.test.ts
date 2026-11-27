@@ -253,35 +253,40 @@ esac
 		const YOUNG = NOW - 5 * DAY_MS;
 		const dbPath = join(home.dir, "jabbu.db");
 		const store = openBotStore(dbPath, { now: () => OLD }, "Asia/Seoul");
-		const totalExpired = 550;
-		const expiredOrigins: string[] = [];
-		for (let i = 0; i < totalExpired; i++) {
-			const key = `discord/ch/300000000000000001/t/${1000 + i}`;
-			expiredOrigins.push(key);
-			store.ensureOrigin(key, sessionDirFor(join(home.dir, "sessions"), key, 1));
-		}
-		const keptOrigin = "discord/ch/300000000000000001/t/9999";
-		store.ensureOrigin(keptOrigin, sessionDirFor(join(home.dir, "sessions"), keptOrigin, 1));
 		store.close();
 
+		const totalExpired = 550;
+		const expiredOrigins: string[] = [];
+		const keptOrigin = "discord/ch/300000000000000001/t/9999";
+		const sessionsRoot = join(home.dir, "sessions");
 		const db = new Database(dbPath, { strict: true });
-		// Update keptOrigin to fresh updated_at so it stays.
-		db.query("UPDATE origins SET updated_at = ? WHERE origin_key = ?").run(YOUNG, keptOrigin);
-		// Every expired origin gets 1 young finished inbound row (total 550 orphans).
+		const insOrigin = db.query("INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 1, ?, ?)");
 		const ins = db.query(
 			"INSERT INTO inbound (platform_message_id, origin_key, epoch, text_ref, thread_ref, state, created_at) VALUES (?, ?, 1, 'hi', ?, 'answered', ?)",
 		);
-		for (let i = 0; i < totalExpired; i++) {
-			ins.run(`m-${i}`, expiredOrigins[i] ?? "", `300000000000000001:${1000 + i}`, YOUNG);
+		db.run("BEGIN");
+		try {
+			for (let i = 0; i < totalExpired; i++) {
+				const key = `discord/ch/300000000000000001/t/${1000 + i}`;
+				expiredOrigins.push(key);
+				insOrigin.run(key, sessionDirFor(sessionsRoot, key, 1), OLD);
+				ins.run(`m-${i}`, key, `300000000000000001:${1000 + i}`, YOUNG);
+			}
+			insOrigin.run(keptOrigin, sessionDirFor(sessionsRoot, keptOrigin, 1), YOUNG);
+			// One young inbound row on an expired origin whose thread has a pending approval card must NOT be counted/deleted.
+			ins.run("m-approval", expiredOrigins[0] ?? "", "300000000000000001:pending-card", YOUNG);
+			db.query(
+				"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, origin_thread_ref) VALUES ('a1', '300000000000000001', '1', 's', 'pending', ?, ?, '300000000000000001:pending-card')",
+			).run(YOUNG, NOW + DAY_MS);
+			// Young finished inbound on keptOrigin must NOT be counted.
+			ins.run("m-kept", keptOrigin, "300000000000000001:9999", YOUNG);
+			db.run("COMMIT");
+		} catch (error) {
+			db.run("ROLLBACK");
+			throw error;
+		} finally {
+			db.close();
 		}
-		// One young inbound row on an expired origin whose thread has a pending approval card must NOT be counted/deleted.
-		ins.run("m-approval", expiredOrigins[0] ?? "", "300000000000000001:pending-card", YOUNG);
-		db.query(
-			"INSERT INTO approvals (approval_id, channel, message_ts, summary, status, created_at, expires_at, origin_thread_ref) VALUES ('a1', '300000000000000001', '1', 's', 'pending', ?, ?, '300000000000000001:pending-card')",
-		).run(YOUNG, NOW + DAY_MS);
-		// Young finished inbound on keptOrigin must NOT be counted.
-		ins.run("m-kept", keptOrigin, "300000000000000001:9999", YOUNG);
-		db.close();
 
 		const dry = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW, dryRun: true });
 		expect(dry.threadOriginsRemoved).toHaveLength(totalExpired);
