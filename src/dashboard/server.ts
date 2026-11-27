@@ -384,9 +384,8 @@ export function startDashboardServer(options: DashboardServerOptions): Server<un
 		if (liveEvents || route.THREAD_LIVE.test(pathname)) {
 			if (options.live === undefined || live === undefined) return jsonReply({ error: "live_disabled" }, 404, head);
 			const origin = (url.searchParams.get("origin") ?? "").trim();
-			if (origin === "") return jsonReply({ error: "invalid_origin" }, 400, head);
+			if (origin === "" || !isLiveOrigin(origin)) return jsonReply({ error: "invalid_origin" }, 400, head);
 			if (liveEvents) {
-				if (!isLiveOrigin(origin)) return jsonReply({ error: "invalid_origin" }, 400, head);
 				if (!live.canAdd(origin)) return jsonReply({ error: "too_many_live_origins" }, 429, head);
 				return head
 					? new Response(null, {
