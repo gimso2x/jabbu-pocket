@@ -1,4 +1,7 @@
 import { Database } from "bun:sqlite";
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openBotStore } from "../core/origin";
 import { newerSchemaMessage, readSchemaVersion, SCHEMA_VERSION } from "../store/schema-version";
 
@@ -27,8 +30,9 @@ const REQUIRED_TABLES = ["origins", "inbound", "deliveries"] as const;
  * Verifies a temp copy of a restore source before any file moves: the newer-schema refusal, `PRAGMA quick_check`,
  * the required tables, and — the check `install()` used to skip — a throwaway open with this checkout's code, schema
  * migration included. A ledger the current code cannot migrate (an old backup whose schema-9 rename collides, a row
- * outside a widened CHECK) is refused here instead of bricking the next daemon start. The copy is throwaway, so
- * migrating it is safe — and the installed ledger then starts already migrated.
+ * outside a widened CHECK) is refused here instead of bricking the next daemon start. The migration check opens a
+ * throwaway copy, never the install copy: migrating the install copy would stamp it at this code's version, and a
+ * rollback restore must hand old code a ledger at the backup's own version (U1).
  */
 export function verifyRestoreCopy(path: string, timezone: string): void {
 	const copy = new Database(path, { readonly: true, strict: true });
@@ -60,12 +64,18 @@ export function verifyRestoreCopy(path: string, timezone: string): void {
 			`not a jabbu ledger: missing table${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
 		);
 	}
+	// Same shape as apply's checkBackupMigrates: a throwaway copy opened with this checkout's code, discarded after.
+	const dir = mkdtempSync(join(tmpdir(), "jabbu-restore-migrate-"));
 	try {
-		openBotStore(path, { now: () => Date.now() }, timezone).close();
+		const scratch = join(dir, "jabbu.db");
+		copyFileSync(path, scratch);
+		openBotStore(scratch, { now: () => Date.now() }, timezone).close();
 	} catch (error) {
 		throw new RestoreError(
 			"migration_failed",
 			`this code cannot open the backup: ${error instanceof Error ? error.message : String(error)}`,
 		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
 	}
 }

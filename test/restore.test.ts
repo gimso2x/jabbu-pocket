@@ -278,14 +278,16 @@ describe("runRestore", () => {
 		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
 	});
 
-	test("an old-schema backup that migrates cleanly restores, already migrated (U2)", async () => {
+	test("an old-schema backup that migrates cleanly restores, keeping the backup's version (U2)", async () => {
 		seed("drifted");
 		const backup = schema8Backup(false);
 		const result = await runRestore({ homeDir: home, source: backup, yes: true, probeDaemon: noDaemon });
 		expect(result.applied).toBe(true);
 		const db = new Database(join(home, "jabbu.db"), { readonly: true });
 		try {
-			expect(readSchemaVersion(db)).toBe(SCHEMA_VERSION);
+			// The install copy is not migrated in place: a rollback restore must hand old code a ledger at the
+			// backup's own version (U1), so the check runs on a throwaway copy and the installed ledger stays at 8.
+			expect(readSchemaVersion(db)).toBe(8);
 		} finally {
 			db.close();
 		}
@@ -296,10 +298,17 @@ describe("runRestore", () => {
 			redact: (text: string) => text,
 		});
 		try {
+			// The next daemon start migrates it: the old lane origin is renamed and the stamp reaches current.
 			expect(store.getOrigin(NEW_LANE)?.epoch).toBe(1);
 			expect(store.getOrigin(OLD_LANE)).toBeUndefined();
 		} finally {
 			store.close();
+		}
+		const reopened = new Database(join(home, "jabbu.db"), { readonly: true });
+		try {
+			expect(readSchemaVersion(reopened)).toBe(SCHEMA_VERSION);
+		} finally {
+			reopened.close();
 		}
 		expect(markerOf(join(result.plan.preRestoreDir, "jabbu.db"))).toBe("drifted");
 	});

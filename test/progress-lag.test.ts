@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { createTaskHostOps } from "../src/tasks/host";
+import { unquoteRemote } from "./helpers/ssh-words";
 
 const TASK = "T-20261110-11";
 const PROGRESS = `docs/tasks/${TASK}/PROGRESS.md`;
@@ -139,8 +140,8 @@ describe("progressLag over ssh", () => {
 	test("the same git commands go through ssh; an unreachable host is a failure", async () => {
 		const commands: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
-			commands.push(cmd);
-			const args = cmd.slice(cmd.indexOf("--") + 2);
+			commands.push(cmd.map(unquoteRemote));
+			const args = cmd.slice(cmd.indexOf("--") + 2).map(unquoteRemote);
 			if (args[3] === "log") return { code: 0, stdout: "abc1234\n", timedOut: false };
 			if (args[3] === "rev-list") return { code: 0, stdout: "3\n", timedOut: false };
 			return { code: 0, stdout: ` M ${PROGRESS}\n?? x.ts\n`, timedOut: false };

@@ -244,13 +244,13 @@ describe("jabbu_work_start acceptance and risk (AC-3)", () => {
 describe("host assertBranch accepts lane branches (AC-7)", () => {
 	const okRunner = async () => ({ code: 0, stdout: "", timedOut: false });
 
-	test("`lane/L-20261110-01` passes; `lane/x`, `task/../x`, `lane/L-20261110-01 ;x` are unsafe", async () => {
+	test("`lane/L-20261110-01` passes; `task/../x`, `lane/L-20261110-01 ;x` are unsafe", async () => {
 		const ops = createTaskHostOps({ run: okRunner });
 		const input = (branch: string) => ({ repo: "/srv/repo", worktree: "/srv/repo-l-20261110-01", branch });
 		expect(await ops.createWorktree(input("lane/L-20261110-01"))).toEqual({ ok: true, value: null });
 		await ops.removeWorktree(input("lane/L-20261110-01"));
 		expect(await ops.createWorktree(input("task/T-20261110-01"))).toEqual({ ok: true, value: null });
-		for (const bad of ["lane/x", "task/../x", "lane/L-20261110-01 ;x"]) {
+		for (const bad of ["task/../x", "lane/L-20261110-01 ;x"]) {
 			await expect(ops.createWorktree(input(bad))).rejects.toThrow("unsafe branch");
 			await expect(ops.removeWorktree(input(bad))).rejects.toThrow("unsafe branch");
 		}

@@ -65,9 +65,10 @@ function discordBindings(config: JabbuConfig, env: Record<string, string | undef
 						...(discord.displayName === undefined ? {} : { displayName: discord.displayName }),
 						onLifecycle: (event) => {
 							if (event.type === "connected") log.info("discord_gateway_connected", { detail: event.detail });
-							else if (event.type === "reconnecting")
-								log.warn("discord_gateway_reconnecting", { reason: event.detail });
-							else log.warn("discord_gateway_error", { error: event.detail });
+							if (event.type === "reconnecting") log.warn("discord_gateway_reconnecting", { reason: event.detail });
+							if (event.type === "display_name_failed")
+								log.warn("discord_display_name_failed", { error: event.detail });
+							if (event.type === "error") log.warn("discord_gateway_error", { error: event.detail });
 						},
 						onFatal: (error) => log.error("discord_gateway_fatal", { code: error.code, error: error.message }),
 					},

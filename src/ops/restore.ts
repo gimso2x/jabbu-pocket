@@ -155,6 +155,8 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void, 
 		fsyncPath(dirname(target));
 	} catch (error) {
 		rmSync(tmp, { force: true });
+		// The read-only check opens a WAL-mode copy, which leaves -wal/-shm beside it even when nothing is written.
+		for (const ext of SIDECARS.slice(1)) rmSync(`${tmp}${ext}`, { force: true });
 		if (placed || moved.length > 0) {
 			// The replaced ledger must be exactly what it was: drop the half-installed copy, move the old files back.
 			rmSync(target, { force: true });
