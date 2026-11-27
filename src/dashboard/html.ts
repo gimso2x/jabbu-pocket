@@ -57,6 +57,7 @@ import {
 } from "./motion";
 import * as ops from "./ops-renderers";
 import * as opsViews from "./ops-views";
+import * as p0 from "./p0-renderers";
 import type { DashboardSnapshot, FlowChainInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -127,7 +128,7 @@ const formatTypicalRange = ${formatTypicalRange.toString()};
 const typicalNote = ${typicalNote.toString()};
 const hostChecksLevel = ${hostChecksLevel.toString()}, repoCountsText = ${repoCountsText.toString()};
 const usageLevel = ${usageLevel.toString()}, resetIn = ${resetIn.toString()}, monitorModelDetail = ${monitorModelDetail.toString()}, contextBar = ${contextBar.toString()}, costCardBody = ${costCardBody.toString()}, renderLimitsPop = ${renderLimitsPop.toString()};
-const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()}, renderFlowCards = ${renderFlowCards.toString()}, renderApprovalCards = ${renderApprovalCards.toString()}, buildTraceRows = ${buildTraceRows.toString()}, renderTraceFilters = ${renderTraceFilters.toString()}, renderTraceInspector = ${renderTraceInspector.toString()}, renderDiffNav = ${renderDiffNav.toString()}, renderSysStrip = ${renderSysStrip.toString()}, renderInboxMachines = ${ops.renderInboxMachines.toString()}, renderTurnBotFilters = ${ops.renderTurnBotFilters.toString()}, renderPeerBotsCard = ${ops.renderPeerBotsCard.toString()}, renderSystemMachines = ${ops.renderSystemMachines.toString()}, renderInboxPulse = ${ops.renderInboxPulse.toString()}, renderHerdrAgentsBlock = ${opsViews.renderHerdrAgentsBlock.toString()}, renderHostChecksCard = ${opsViews.renderHostChecksCard.toString()};
+const renderStatusPop = ${renderStatusPop.toString()}, renderNavExtras = ${renderNavExtras.toString()}, renderViewTools = ${renderViewTools.toString()}, renderFlowCards = ${renderFlowCards.toString()}, renderApprovalCards = ${renderApprovalCards.toString()}, buildTraceRows = ${buildTraceRows.toString()}, renderTraceFilters = ${renderTraceFilters.toString()}, renderTraceInspector = ${renderTraceInspector.toString()}, renderDiffNav = ${renderDiffNav.toString()}, renderSysStrip = ${renderSysStrip.toString()}, renderInboxMachines = ${ops.renderInboxMachines.toString()}, renderTurnBotFilters = ${ops.renderTurnBotFilters.toString()}, renderPeerBotsCard = ${ops.renderPeerBotsCard.toString()}, renderSystemMachines = ${ops.renderSystemMachines.toString()}, fmtContextRatio = ${p0.fmtContextRatio.toString()}, renderHostMetricsBody = ${p0.renderHostMetricsBody.toString()}, renderHostMetricsCard = ${p0.renderHostMetricsCard.toString()}, renderLiveRail = ${p0.renderLiveRail.toString()}, renderQuotaGrid = ${p0.renderQuotaGrid.toString()}, renderQuotaSection = ${p0.renderQuotaSection.toString()}, renderQuotaSysCard = ${p0.renderQuotaSysCard.toString()}, renderActiveCards = ${p0.renderActiveCards.toString()}, renderActiveTurnsSection = ${p0.renderActiveTurnsSection.toString()}, p0 = { fmtContextRatio, renderActiveTurnsSection, renderHostMetricsCard, renderLiveRail, renderQuotaSection, renderQuotaSysCard }, renderInboxPulse = ${ops.renderInboxPulse.toString()}, renderHerdrAgentsBlock = ${opsViews.renderHerdrAgentsBlock.toString()}, renderHostChecksCard = ${opsViews.renderHostChecksCard.toString()};
 const renderDashboardMain = ${renderDashboardMain.toString()};
 const renderTaskFacts = ${renderTaskFacts.toString()}, renderFlowChain = ${renderFlowChain.toString()}, discordThreadHref = ${discordThreadHref.toString()};
 const renderTaskDetail = ${renderTaskDetail.toString()}, renderDetailHead = ${renderDetailHead.toString()}, renderItemDetail = ${renderItemDetail.toString()};
@@ -135,8 +136,7 @@ const renderMonitorDetail = ${renderMonitorDetail.toString()}, renderDiffDetail 
 const renderPlan = ${renderPlan.toString()}, renderConversation = ${renderConversation.toString()}, renderLiveTurn = ${renderLiveTurn.toString()};
 const rollDiff = ${rollDiff.toString()}, rollEffects = ${rollEffects.toString()}, rollLabel = ${rollLabel.toString()};
 const freshCards = ${freshCards.toString()}, pushStack = ${pushStack.toString()}, expireStack = ${expireStack.toString()}, stackHtml = ${stackHtml.toString()}, pillMotion = ${pillMotion.toString()}, freshSteps = ${freshSteps.toString()};
-const renderMarkdown = ${renderMarkdown.toString()};
-const renderTrace = ${renderTrace.toString()};`,
+const renderMarkdown = ${renderMarkdown.toString()}, renderTrace = ${renderTrace.toString()};`,
 	true,
 )}
 const flowDoing = ${flowDoing.toString()};

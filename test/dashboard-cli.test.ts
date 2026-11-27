@@ -27,6 +27,7 @@ const SNAPSHOT_KEYS = [
 	"jabbuCli",
 	"discordGuild",
 	"costLedger", // the dashboard CLI only: `usageLimits` also turns the 7일 비용 card on
+	"hostMetrics", // the dashboard CLI only: `usageLimits` also turns the 호스트 리소스 card on
 ];
 
 let home: TestHome;

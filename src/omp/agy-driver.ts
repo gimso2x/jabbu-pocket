@@ -56,9 +56,7 @@ import { buildChildEnv } from "./env";
 import { isRecord } from "./type-guards";
 
 export type { AgyOmpDriverOptions };
-
 // Antigravity CLI ACP child (`agy acp`) boundary per origin: initialize/load|new, prompt/update -> OmpFinal, rotate on usage_update.
-
 export const AGY_PROVIDER = "agy";
 /** `thought_level` values of agy 1.5.16; a model may offer fewer, or none. */
 export const AGY_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
@@ -327,6 +325,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async state(): Promise<OmpState> {
 		const model = this.#option("model")?.currentValue ?? this.#userModel ?? this.#account?.model ?? this.#defaultModel;
 		const thinking = this.#option("thought_level")?.currentValue;
+		const c = this.#context;
 		return {
 			sessionId: this.#sessionId ?? "",
 			idle: this.#turn === undefined,
@@ -335,6 +334,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			messageCount: this.#entries.length,
 			...(model === undefined ? {} : { model: `${AGY_PROVIDER}/${model}` }),
 			...(thinking === undefined ? {} : { thinking }),
+			...(c && c.size > 0 ? { context: { tokens: c.used, window: c.size, percent: (c.used / c.size) * 100 } } : {}),
 		};
 	}
 
