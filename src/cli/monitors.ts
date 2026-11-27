@@ -28,10 +28,7 @@ export const MONITORS_USAGE = `  monitors add --json <spec>     create a monitor
   monitors apply --dir <d> [--prune] [--dry-run]   add or update monitors from <d>/*.json by name (equal ones untouched); --prune removes monitors without a file; any invalid file changes nothing (exit 2)
 `;
 
-interface Schedule {
-	effectiveTimezone: string;
-	nextFireAt: string | null;
-}
+type Schedule = { effectiveTimezone: string; nextFireAt: string | null };
 
 function scheduleOf(row: MonitorRow, timezone: string): Schedule {
 	const next = nextFireOf(row);
@@ -108,7 +105,8 @@ function portableCommand(sub: "export" | "apply", args: string[], homeDir: strin
 		if (sub === "export") {
 			const result = exportPortableMonitors(dir, homeDir, ctx, { withFiles: values["with-files"] === true });
 			for (const warning of result.warnings) process.stderr.write(`monitors export: warning: ${warning}\n`);
-			process.stdout.write(`exported=${result.written} removed=${result.removed}\n`);
+			const failed = result.failed > 0 ? ` failed=${result.failed}` : "";
+			process.stdout.write(`exported=${result.written} removed=${result.removed}${failed}\n`);
 			return 0;
 		}
 		const result = applyPortableMonitors(dir, homeDir, ctx, {
