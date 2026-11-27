@@ -1245,7 +1245,7 @@ export class OriginMailbox {
 		if (channel !== undefined && row.peerUserId === null && this.#deps.recallEnabled?.() === true) {
 			const recall = buildRecallBlock({
 				text,
-				candidates: store.listRecallCandidates(channel, row.threadRef, RECALL_CANDIDATE_LIMIT),
+				candidates: () => store.listRecallCandidates(channel, row.threadRef, RECALL_CANDIDATE_LIMIT),
 				freshSession: fresh,
 				channel,
 				timezone: this.#deps.timezone,
