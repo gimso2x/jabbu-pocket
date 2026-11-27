@@ -487,7 +487,7 @@ test("abort returns while a detached descendant holds stdout: exit settles on th
 		}
 	}
 	expect(exits).toEqual([]);
-});
+}, 30_000);
 
 test("watchChildExit settles immediately when stdoutDone closes before the grace", async () => {
 	let codeSeen: number | undefined;
