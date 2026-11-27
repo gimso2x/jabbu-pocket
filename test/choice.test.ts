@@ -1043,6 +1043,27 @@ describe("omp 19.1 form dialogs on choice cards", () => {
 		await h.close();
 	});
 
+	test("a click on 아니오 for a required lone checkbox is refused with a ⚠️ line instead of cancelling the form", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f8",
+			html: `<form><label><input type="checkbox" name="tests" value="yes" required> Run tests</label><label>Service name <input name="svc" required></label></form>`,
+		});
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["1. 예", "1. 아니오"]);
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		const warned = await edited(h, shown.ts, "⚠️ Run tests: 필수 항목입니다");
+		expect(warned.msg.text).toContain("*1. Run tests (필수)*");
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		await edited(h, shown.ts, "→ 예");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "web")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f8")).toEqual(reply("f8", { data: { tests: "yes", svc: "web" } }));
+		await h.close();
+	});
+
 	test("a pattern violation is refused and asked again; `-` keeps the field's default", async () => {
 		const h = harness();
 		h.send({
