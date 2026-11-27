@@ -4,7 +4,7 @@ import { errorFields } from "../channel/text";
 import { TOP_LEVEL_TS, threadRefOf, wrapQuoted } from "../core/normalize";
 import type { InboundRecord, MailboxClock } from "../core/types";
 import type { Logger } from "../log";
-import type { FreezeState } from "../ops/freeze";
+import { type FreezeState, readUnfrozenAt } from "../ops/freeze";
 import type { Store } from "../store/db";
 import { countFiresBetween, firesBetween } from "./cron";
 import { type ClaimResult, type MonitorEventRow, type MonitorRow, monitorOrigin, NO_REPORT, SILENT } from "./ledger";
@@ -214,13 +214,7 @@ export class MonitorScheduler {
 	#tick(): TickSummary {
 		const { store, clock } = this.#deps;
 		const now = clock.now();
-		const summary: TickSummary = {
-			claimed: 0,
-			skippedOverlap: 0,
-			skippedCatchUp: 0,
-			skippedFrozen: 0,
-			dispatched: 0,
-		};
+		const summary: TickSummary = { claimed: 0, skippedOverlap: 0, skippedCatchUp: 0, skippedFrozen: 0, dispatched: 0 };
 		store.monitors.reconcileDeliveries();
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them: `frozen` when the switch is on, else nothing holds.
@@ -310,7 +304,13 @@ export class MonitorScheduler {
 			}
 			return;
 		}
-		if (now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id)) {
+		// A freeze lifted while the daemon was down leaves no in-memory hold record; the lift stamp is the durable
+		// evidence. A slot that came due before the lift effectively came due at the lift, so the catch-up age runs
+		// from there — but only for a day after the lift, after which the fire is stale like any other.
+		const stale = now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id);
+		const unfrozenAt = stale ? readUnfrozenAt(this.#deps.homeDir) : undefined;
+		const heldByFreeze = unfrozenAt !== undefined && slotAt <= unfrozenAt && now - unfrozenAt <= CATCHUP_MAX_AGE_MS;
+		if (stale && !heldByFreeze) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -417,10 +417,7 @@ export class MonitorScheduler {
 				if (skip !== undefined) {
 					// Held back for good: an event kept queued would fire as a burst the moment the hold is lifted.
 					if (store.monitors.skipEvent(event.eventId, skip)) {
-						log.info("monitor_frozen_skip", {
-							monitor: monitor.id,
-							event: event.eventId,
-						});
+						log.info("monitor_frozen_skip", { monitor: monitor.id, event: event.eventId });
 						settledVerbatim = true;
 					}
 					continue;
