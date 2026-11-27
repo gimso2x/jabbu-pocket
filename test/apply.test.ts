@@ -2554,6 +2554,32 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 			expect(restartCommands(world)).toHaveLength(2);
 		});
 
+		test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+			"AC-6: the revert command a failed apply prints works for a checkout at %j and runs nothing else",
+			async (name) => {
+				// The fixture's checkout moves to a path that needs quoting; the apply and its receipt see only that path.
+				const plain = repo;
+				repo = join(root, name);
+				mkdirSync(join(repo, "src"), { recursive: true });
+				writeFileSync(join(repo, "src", "main.ts"), "");
+				writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+				writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+				markDepsInstalled();
+				const r = initRepo();
+				const { deps } = repoDeps(failingWorld());
+				const { exitCode, receipt } = await runApply({ ...base, codeRollback: "off" }, deps);
+				expect(exitCode).toBe(1);
+				expect(sh("git rev-parse HEAD")).toBe(r.bad);
+				expect(receipt.revertCommand).toBeDefined();
+				sh(receipt.revertCommand as string, root);
+				expect(sh("git show HEAD:src/main.ts")).toBe("good");
+				expect(sh("git rev-parse HEAD^")).toBe(r.bad);
+				expect(readFileSync(join(repo, "scratch.txt"), "utf8")).toBe("untracked\n");
+				expect(existsSync(join(root, "pwned"))).toBe(false);
+				repo = plain;
+			},
+		);
+
 		test("AC-7: --allow-detached applies a hand-picked detached commit, also on the peers, keeping head.last-good and hold", async () => {
 			const r = initRepo();
 			sh(`git checkout -q --detach ${r.good}`);
