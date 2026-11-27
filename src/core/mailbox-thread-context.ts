@@ -28,9 +28,8 @@ export function threadContextBlock(store: Store, originKey: string, current: Inb
 	if (threadRef === undefined) return null;
 	const lines = threadHeadLines(store, threadRef, originKey, current);
 	if (lines.length === 0) return null;
-	return [THREAD_CONTEXT_HEADER, `스레드 ${threadRef} — 이 세션 밖(채널 세션 등)에서 주고받은 앞부분:`, ...lines].join(
-		"\n",
-	);
+	const head = [THREAD_CONTEXT_HEADER, `스레드 ${threadRef} — 이 세션 밖(채널 세션 등)에서 주고받은 앞부분:`];
+	return [...head, ...lines].join("\n");
 }
 
 /** Header of the place and purpose block a turn gets for a channel or thread with a known place or a `!용도`. */
@@ -54,7 +53,15 @@ export const OWN_ANSWER_LINE = "- 이 세션이 올린 답";
 export function rotationContextBlock(store: Store, originKey: string, current: InboundRow): string | null {
 	const threadRef = threadRefOfOrigin(originKey);
 	const lines = threadRef === undefined ? [] : threadHeadLines(store, threadRef, originKey, current);
-	for (const exchange of store.listOriginExchanges(originKey, current.epoch, MAX_ROTATION_EXCHANGES)) {
+	// A resumed session's own Q/A were recorded under the epoch its file belongs to (`e<N>`), not the current one:
+	// include both epochs, oldest first overall, so a rotation shortly after `/resume-jabbu` still re-feeds them.
+	const resumed = /\/e(\d+)\/[^/]+$/.exec(store.getOrigin(originKey)?.sessionFile ?? "")?.[1];
+	const epochs = [...new Set([current.epoch, ...(resumed === undefined ? [] : [Number(resumed)])])];
+	const exchanges = epochs
+		.flatMap((epoch) => store.listOriginExchanges(originKey, epoch, MAX_ROTATION_EXCHANGES))
+		.sort((a, b) => a.answeredAt - b.answeredAt)
+		.slice(-MAX_ROTATION_EXCHANGES);
+	for (const exchange of exchanges) {
 		lines.push(`- 받은 질문(${new Date(exchange.askedAt).toISOString()}): ${previewLine(exchange.question)}`);
 		lines.push(`${OWN_ANSWER_LINE}(${new Date(exchange.answeredAt).toISOString()}): ${previewLine(exchange.answer)}`);
 	}
@@ -66,14 +73,12 @@ export function rotationContextBlock(store: Store, originKey: string, current: I
 function threadHeadLines(store: Store, threadRef: string, originKey: string, current: InboundRow): string[] {
 	const lines: string[] = [];
 	const root = store.getThreadRootInbound(threadRef, current.platformMessageId);
-	if (root !== undefined) {
+	if (root !== undefined)
 		lines.push(
 			`- 스레드 시작 메시지(${new Date(root.createdAt).toISOString()}): ${previewLine(root.textRef, MAX_THREAD_ROOT_CHARS)}`,
 		);
-	}
-	for (const delivery of store.listThreadForeignDeliveries(threadRef, originKey, MAX_THREAD_ANSWERS)) {
+	for (const delivery of store.listThreadForeignDeliveries(threadRef, originKey, MAX_THREAD_ANSWERS))
 		lines.push(`${THREAD_ANSWER_LINE}(${new Date(delivery.createdAt).toISOString()}): ${previewLine(delivery.body)}`);
-	}
 	return lines;
 }
 
@@ -133,22 +138,17 @@ export function peerThreadContextBlock(
 ): string | null {
 	const root = messages[0];
 	if (root === undefined || root.ts === currentTs) return null;
-	let lastSelf = -1;
-	messages.forEach((m, i) => {
-		if (m.user === selfUserId && tsBefore(m.ts, currentTs)) lastSelf = i;
-	});
+	const lastSelf = messages.findLastIndex((m) => m.user === selfUserId && tsBefore(m.ts, currentTs));
 	const picked = [root, ...messages.slice(Math.max(lastSelf + 1, 1))].filter(
 		(m, i) => i === 0 || (m.user !== selfUserId && tsBefore(m.ts, currentTs)),
 	);
 	const render = (m: ThreadMessage): string => {
 		const who = m.user === selfUserId ? "이 봇" : (m.user ?? m.botId ?? "알 수 없음").replace(/[^A-Za-z0-9_]/g, "");
 		const ms = m.at ?? Number(m.ts) * 1000;
-		const when = Number.isFinite(ms) ? new Date(ms).toISOString() : m.ts;
-		return `[${who} ${when}]\n${truncateUtf8(redact(m.text), PEER_CONTEXT_MESSAGE_CHARS)}`;
+		return `[${who} ${Number.isFinite(ms) ? new Date(ms).toISOString() : m.ts}]\n${truncateUtf8(redact(m.text), PEER_CONTEXT_MESSAGE_CHARS)}`;
 	};
-	let entries = picked.map(render);
-	if (entries.length > PEER_CONTEXT_MAX_MESSAGES) entries = entries.slice(-PEER_CONTEXT_MAX_MESSAGES);
-	while (entries.length > 1 && byteLength(entries.join("\n")) > PEER_CONTEXT_MAX_BYTES) entries = entries.slice(1);
+	const entries = picked.map(render).slice(-PEER_CONTEXT_MAX_MESSAGES);
+	while (entries.length > 1 && byteLength(entries.join("\n")) > PEER_CONTEXT_MAX_BYTES) entries.shift();
 	const body = wrapQuoted(entries, fenceId, "스레드 맥락 글");
 	if (body === "") return null;
 	return [THREAD_CONTEXT_HEADER, `스레드 ${threadRef} — 시작 글과 이 봇의 마지막 글 이후(오래된 순):`, body].join("\n");
@@ -157,11 +157,10 @@ export function peerThreadContextBlock(
 /** Context line of an owner reply's thread whose root is this bot's own post; starts with `THREAD_ANSWER_LINE` so it is scanned. */
 export function ownerThreadRootBlock(root: ThreadMessage, threadRef: string): string {
 	const ms = root.at ?? Number(root.ts) * 1000;
-	const when = Number.isFinite(ms) ? new Date(ms).toISOString() : root.ts;
 	const preview = truncateUtf8(redact(root.text), MAX_THREAD_ROOT_CHARS).replace(/\s+/g, " ").trim();
 	return [
 		THREAD_CONTEXT_HEADER,
 		`스레드 ${threadRef} — 이 스레드를 연 것은 이 봇의 글이다:`,
-		`${THREAD_ANSWER_LINE}(시작 글, ${when}): ${preview}`,
+		`${THREAD_ANSWER_LINE}(시작 글, ${Number.isFinite(ms) ? new Date(ms).toISOString() : root.ts}): ${preview}`,
 	].join("\n");
 }
