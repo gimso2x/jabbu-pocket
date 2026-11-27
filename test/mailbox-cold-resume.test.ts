@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { coldResumeTokens, ROTATION_BLOCK_MAX_CHARS } from "../src/core/mailbox-cold-resume";
 import { ROTATION_CONTEXT_HEADER } from "../src/core/mailbox-thread-context";
 import { laneOriginKey, taskOriginKey } from "../src/lanes/status";
 import { monitorOrigin } from "../src/monitors/ledger";
+import { recordSpawnPrompt } from "../src/ops/cache-miss-cause";
 import { ColdResumeHarness, MIN, MODEL, ORIGIN, usageEvent } from "./helpers/cold-resume-harness";
 
 let h: ColdResumeHarness;
@@ -209,5 +210,67 @@ describe("cold-resume rotation", () => {
 			expect(epochOf()).toBe(1);
 			expect(h.logs("cold_resume_baseline_failed")).toHaveLength(0);
 		});
+	});
+});
+
+describe("AC-9: child_restart miss lines name which prompt changed", () => {
+	const digestLine = (data: string): string =>
+		`${JSON.stringify({ type: "custom", customType: "system-prompt-digest", data, id: "d" })}\n`;
+
+	/** A restarted daemon: a session whose baseline is 330k and 10 minutes old; the next call misses 302k. */
+	async function restartedMiss(opts: { first: string; second: string; digest: string | undefined }): Promise<string[]> {
+		h = new ColdResumeHarness({ tokens: 0 });
+		h.seedSession(ORIGIN, h.clock.now() - 10 * MIN, { cacheRead: 300_000, cacheWrite: 30_000 });
+		const file = writeSessionFile(ORIGIN, h.clock.now() - 10 * MIN, 330_000);
+		appendFileSync(file, digestLine("aaa"));
+		recordSpawnPrompt(h.sessionDir(ORIGIN, 1), opts.first);
+		h.spawnPrompt = opts.second;
+		h.onSpawn = () => {
+			if (opts.digest !== undefined) appendFileSync(file, digestLine(opts.digest));
+		};
+		h.events = [usageEvent(28_000, 302_000)];
+		await h.turn("재시작 뒤 첫 턴");
+		return h.logs("cache_miss").filter((line) => line.includes("reason=child_restart"));
+	}
+
+	test("the same spawn prompt and the same digest: both false", async () => {
+		const lines = await restartedMiss({ first: "v1", second: "v1", digest: "aaa" });
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("jabbu_prompt_changed=false");
+		expect(lines[0]).toContain("omp_digest_changed=false");
+	});
+
+	test("a different spawn prompt and a different digest: both true", async () => {
+		const lines = await restartedMiss({ first: "v1", second: "v2", digest: "bbb" });
+		expect(lines[0]).toContain("jabbu_prompt_changed=true");
+		expect(lines[0]).toContain("omp_digest_changed=true");
+	});
+
+	test("no digest written after the spawn: omp_digest_changed=unknown", async () => {
+		const lines = await restartedMiss({ first: "v1", second: "v1", digest: undefined });
+		expect(lines[0]).toContain("omp_digest_changed=unknown");
+	});
+
+	test("other miss reasons carry neither field", async () => {
+		h = new ColdResumeHarness({ tokens: 0 });
+		h.events = [usageEvent(300_000, 30_000)];
+		await h.turn("하나");
+		h.events = [
+			{
+				...usageEvent(28_000, 302_000),
+				message: {
+					...(usageEvent(0, 0) as { message: object }).message,
+					model: "other-model",
+					provider: "anthropic",
+					usage: { input: 3, output: 5, cacheRead: 28_000, cacheWrite: 302_000, cost: { cacheWrite: 1 } },
+				},
+			} as never,
+		];
+		await h.turn("둘");
+		const lines = h.logs("cache_miss").filter((line) => !line.includes("reason=child_restart"));
+		for (const line of lines) {
+			expect(line).not.toContain("jabbu_prompt_changed");
+			expect(line).not.toContain("omp_digest_changed");
+		}
 	});
 });
