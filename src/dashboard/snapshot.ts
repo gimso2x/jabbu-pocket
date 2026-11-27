@@ -127,13 +127,7 @@ export interface DaemonInfo {
 
 export { taskDurationSamples } from "./peer-work";
 export type { PeerTurnError, ThreadInfo, TurnInfo, TurnKind, TurnWaitReason } from "./turn-board";
-export {
-	FLOW_WINDOW_MS,
-	type FlowChainInfo,
-	type FlowStepInfo,
-	type LaneInfo,
-	type TaskInfo,
-} from "./work-types";
+export type { FlowChainInfo, LaneInfo, TaskInfo } from "./work-types";
 
 export interface HerdrAgentInfo {
 	name: string;

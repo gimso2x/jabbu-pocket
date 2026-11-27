@@ -4,7 +4,8 @@ import type { TaskStage } from "../flow/task-flow";
 import { redact } from "../redact";
 import type { TypicalDuration } from "../store/turn-duration";
 import type { TaskRisk } from "../tasks/docs";
-import type { TaskRow, TaskStatus } from "../tasks/ledger";
+import type { TaskStatus } from "../tasks/ledger";
+import type { TaskRuntimeField } from "./task-work-client";
 import type { TaskTurnFields } from "./turn";
 
 export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
@@ -35,7 +36,7 @@ export type HerdrState = { ok: true; status: HerdrAgentStatus } | { ok: false; e
 /** Threads in the flow view: a TASK registered in this window, or any open TASK. */
 export const FLOW_WINDOW_MS = 7 * 86_400_000;
 
-export interface TaskInfo extends TaskTurnFields {
+export interface TaskInfo extends TaskTurnFields, TaskRuntimeField {
 	taskId: string;
 	install?: string;
 	rawTaskId?: string;
@@ -44,7 +45,6 @@ export interface TaskInfo extends TaskTurnFields {
 	status: TaskStatus;
 	host: string;
 	agent: string;
-	runtime: TaskRow["runtime"];
 	branch: string;
 	open: boolean;
 	updatedAt: string;
