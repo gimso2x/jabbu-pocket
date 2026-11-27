@@ -2,6 +2,7 @@
 // and the final marks a finished turn leaves.
 import type { RecentTool, TurnProgress } from "../core/mailbox";
 import { typicalNote } from "../store/turn-duration";
+import { type FenceMark, fenceCloses, fenceOpen, fenceSafeCut, findLinkSpans } from "./fence";
 
 export const CHUNK_LIMIT = 3900;
 export const REDELIVERED_PREFIX = "(중복 가능: 재전송)";
@@ -52,31 +53,6 @@ function splitAt(text: string, limit: number, keepWhole: (cut: number) => number
 }
 
 /**
- * Moves a cut off a code fence mark: a cut inside a line opening with ``` goes to that line's start (the language tag
- * stays on the fence), a cut inside a run of backticks to the run's start, and a cut inside the language tag right
- * after a mid-line ``` run to that run's start.
- */
-function fenceSafeCut(text: string, cut: number): number {
-	if (cut <= 0 || cut >= text.length) return cut;
-	const lineStart = text.lastIndexOf("\n", cut - 1) + 1;
-	const newline = text.indexOf("\n", lineStart);
-	const lineEnd = newline === -1 ? text.length : newline;
-	if (cut < lineEnd && /^[ \t]*```/.test(text.slice(lineStart, lineEnd))) return lineStart;
-	const runStart = (end: number): number => {
-		let start = end;
-		while (start > 0 && text[start - 1] === "`") start -= 1;
-		return start;
-	};
-	if (text[cut - 1] === "`" && text[cut] === "`") return runStart(cut - 1);
-	if (/\s/.test(text[cut] ?? " ")) return cut;
-	let tag = cut;
-	while (tag > lineStart && !/[\s`]/.test(text[tag - 1] ?? " ")) tag -= 1;
-	if (text[tag - 1] !== "`") return cut;
-	const start = runStart(tag);
-	return tag - start >= 3 ? start : cut;
-}
-
-/**
  * Splits into messages of at most `limit` characters, preferring paragraph/line boundaries and keeping code fences
  * balanced; a fence mark and a line opening a fence are never cut in two. A cut inside one of the `keepWhole` spans
  * (each at most the limit) moves to the line break before it, or past it when the span opens the message. Text within
@@ -93,27 +69,34 @@ export function chunkText(
 ): string[] {
 	// Text that fits is one message: the fence reserve below is for cuts, so it must not split a 1,993–2,000 char text.
 	if (text.length <= limit) return [text];
+	const maxRun = Math.max(16, Math.floor(limit / 4));
+	const emitFor = (len: number): number => (len <= maxRun ? len : 3);
 	let longest = 3;
-	for (const line of text.split("\n")) longest = Math.max(longest, fenceRun(line, limit) ?? 3);
+	for (const line of text.split("\n")) {
+		const open = fenceOpen(line);
+		if (open !== undefined) longest = Math.max(longest, emitFor(open.len));
+	}
 	const budget = limit - FENCE_RESERVE - 2 * (longest - 3);
 	const chunks: string[] = [];
-	// The backtick count of the fence open at a chunk's end: 0 when none. A fence opened at a line's head closes only on
-	// a line of at least as many backticks alone; any other ``` (mid-line, or a run too long to track) toggles a
-	// three-backtick fence as before.
-	let [open, lineHead] = [0, false];
-	const scan = (chunk: string, from: { open: number; lineHead: boolean }): { open: number; lineHead: boolean } => {
-		let state = { ...from };
+	// Line-head fences track their full `closeLen` so only `>= closeLen` of the same char closes them, while chunk
+	// boundaries emit `emitLen` (`<= maxRun`, else 3). Mid-line ``` toggles a 3-backtick state (`lineHead: false`).
+	type FenceState = { char: "`" | "~"; closeLen: number; emitLen: number; lineHead: boolean };
+	let state: FenceState | undefined;
+	const scan = (chunk: string, from: FenceState | undefined): FenceState | undefined => {
+		let cur = from === undefined ? undefined : { ...from };
 		for (const line of chunk.split("\n")) {
-			if (state.lineHead) {
-				const close = fenceCloseRun(line);
-				if (close !== undefined && close >= state.open) state = { open: 0, lineHead: false };
+			if (cur?.lineHead) {
+				if (fenceCloses(line, { char: cur.char, len: cur.closeLen })) cur = undefined;
 				continue;
 			}
-			const run = state.open === 0 ? fenceRun(line, limit) : undefined;
-			if (run !== undefined) state = { open: run, lineHead: true };
-			else if ((line.match(/```/g) ?? []).length % 2 === 1) state.open = state.open > 0 ? 0 : 3;
+			const opened = cur === undefined ? fenceOpen(line) : undefined;
+			if (opened !== undefined) {
+				cur = { char: opened.char, closeLen: opened.len, emitLen: emitFor(opened.len), lineHead: true };
+			} else if ((line.match(/```/g) ?? []).length % 2 === 1) {
+				cur = cur === undefined ? { char: "`", closeLen: 3, emitLen: 3, lineHead: false } : undefined;
+			}
 		}
-		return state;
+		return cur;
 	};
 	let rest = text;
 	while (rest.length > 0) {
@@ -126,7 +109,7 @@ export function chunkText(
 				if (head === "") head = String.fromCodePoint(rest.codePointAt(0) ?? 0);
 				tail = rest.slice(head.length);
 				out = head;
-				[open, lineHead] = [0, false];
+				state = undefined;
 				break;
 			}
 			[head, tail] = splitAt(rest, room, (cut) => {
@@ -135,24 +118,26 @@ export function chunkText(
 				const before = span[0] - base - (rest[span[0] - base - 1] === "\n" ? 1 : 0);
 				return before > 0 ? before : span[1] - base;
 			});
-			const next = scan(head, { open, lineHead: open > 0 });
-			out = open > 0 ? `${"`".repeat(open)}\n${head}` : head;
-			if (next.open > 0) out = `${out}\n${"`".repeat(next.open)}`;
+			const next = scan(head, state === undefined ? undefined : { ...state, lineHead: true });
+			out = state !== undefined ? `${state.char.repeat(state.emitLen)}\n${head}` : head;
+			if (next !== undefined) out = `${out}\n${next.char.repeat(next.emitLen)}`;
 			if (out.length <= limit) {
-				[open, lineHead] = [next.open, next.lineHead];
+				state = next;
 				break;
 			}
 			room -= out.length - limit;
 		}
+		const atLineBreak = head.length === 0 || rest[head.length] === "\n" || rest[head.length - 1] === "\n";
 		chunks.push(out);
 		rest = tail;
 		// A cut just before the fence's own closing line: this chunk already ends with a closer, so that line is dropped
 		// instead of opening an empty block in the next chunk.
-		if (open > 0 && lineHead) {
-			const closer = /^(`{3,})[ \t]*(?:\n+|$)/.exec(rest);
-			if (closer !== null && (closer[1]?.length ?? 0) >= open) {
+		if (state?.lineHead && atLineBreak) {
+			const closer = /^ {0,3}(`{3,}|~{3,})[ \t]*(?:(?:\r?\n)+|$)/.exec(rest);
+			const run = closer?.[1];
+			if (closer !== null && run !== undefined && run[0] === state.char && run.length >= state.closeLen) {
 				rest = rest.slice(closer[0].length);
-				[open, lineHead] = [0, false];
+				state = undefined;
 			}
 		}
 	}
@@ -172,15 +157,6 @@ export const fenceOpenRun = (line: string): number | undefined => /^ {0,3}(`{3,}
  * `undefined` when the line closes none. A fence closes only on a line at least as long as its opening run.
  */
 export const fenceCloseRun = (line: string): number | undefined => /^ {0,3}(`+)[ \t]*\r?$/.exec(line)?.[1]?.length;
-
-/**
- * `fenceOpenRun` capped to a chunk budget: up to `max(16, limit / 4)` backticks, the longest mark a chunk can close
- * and reopen with and still fit; a longer run is treated as plain ```.
- */
-function fenceRun(line: string, limit: number): number | undefined {
-	const run = fenceOpenRun(line);
-	return run !== undefined && run <= Math.max(16, Math.floor(limit / 4)) ? run : undefined;
-}
 
 /**
  * How a thread's ⏳ status message and 👀 reaction end: normal close, failure, a cancelled wait, or an answer the
@@ -341,17 +317,21 @@ export function delimiterAligns(line: string): ColumnAlign[] | undefined {
 	);
 }
 
+const INDENTED_CODE = /^(?: {4}|\t)/;
 const BLOCK_START = /^(?: {4}|\t| {0,3}(?:>|#{1,6}(?:[ \t]|$)|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)))/;
 
 /**
  * When a GFM table starts at line `i`, the index of the first line after it: a row of 2+ cells, a delimiter row of the
  * same count (hyphens, at least `minDashes` per cell, optional colons) and the rows after it holding an unescaped pipe.
- * A quote, heading or list line ends the table even when it holds a pipe, as in GFM.
+ * Indented code lines (4 spaces or tab) never open a table; a quote, heading or list line after rows ends the table.
  */
 export function tableEndAt(lines: readonly string[], i: number, minDashes = 1): number | undefined {
-	const header = splitRowCells(lines[i] ?? "");
-	const delimiter = i + 1 < lines.length ? splitRowCells(lines[i + 1] ?? "") : undefined;
-	if (delimiter === undefined || header.length < 2 || header.length !== delimiter.length) return undefined;
+	const headerLine = lines[i] ?? "";
+	const delimLine = lines[i + 1];
+	if (delimLine === undefined || INDENTED_CODE.test(headerLine) || INDENTED_CODE.test(delimLine)) return undefined;
+	const header = splitRowCells(headerLine);
+	const delimiter = splitRowCells(delimLine);
+	if (header.length < 2 || header.length !== delimiter.length) return undefined;
 	const rule = new RegExp(`^\\s*:?-{${minDashes},}:?\\s*$`);
 	if (!delimiter.every((cell) => rule.test(cell))) return undefined;
 	let j = i + 2;
@@ -359,28 +339,36 @@ export function tableEndAt(lines: readonly string[], i: number, minDashes = 1): 
 	return j;
 }
 
-/** A markdown link (or image), Discord timestamp, spoiler or autolink: a chunk cut must not fall inside one. */
-const INLINE_SPAN =
-	/!?\[[^\]\n]{1,512}\]\((?:[^()\n]|\([^()\n]{0,512}\)){0,1024}\)|<t:\d{1,20}(?::[dDfFtTR])?>|\|\|[^|]{1,4096}\|\||<(?:https?|mailto):[^>\s]{1,512}>/g;
+/** A Discord timestamp, spoiler or autolink (markdown links are scanned by `findLinkSpans`). */
+const INLINE_SPAN = /<t:\d{1,20}(?::[dDfFtTR])?>|\|\|[^|]{1,4096}\|\||<(?:https?|mailto):[^>\s]{1,512}>/g;
 
 /** `[start, end)` spans of markdown links, timestamps, spoilers and autolinks outside code fences. */
 export function inlineSpans(text: string): Array<readonly [number, number]> {
 	const spans: Array<readonly [number, number]> = [];
-	let [fence, offset, from] = [0, 0, 0];
+	let fence: FenceMark | undefined;
+	let [offset, from] = [0, 0];
 	const flush = (to: number): void => {
-		for (const m of text.slice(from, to).matchAll(INLINE_SPAN)) {
+		if (to <= from) return;
+		const segment = text.slice(from, to);
+		const found: Array<readonly [number, number]> = [...findLinkSpans(segment, from)];
+		for (const m of segment.matchAll(INLINE_SPAN)) {
 			const start = from + (m.index ?? 0);
-			spans.push([start, start + m[0].length]);
+			found.push([start, start + m[0].length]);
 		}
+		found.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+		spans.push(...found);
 	};
 	for (const line of text.split("\n")) {
-		if (fence === 0) {
-			fence = fenceOpenRun(line) ?? 0;
-			if (fence > 0) flush(offset);
-		} else if ((fenceCloseRun(line) ?? 0) >= fence) [fence, from] = [0, offset + line.length + 1];
+		if (fence === undefined) {
+			fence = fenceOpen(line);
+			if (fence !== undefined) flush(offset);
+		} else if (fenceCloses(line, fence)) {
+			fence = undefined;
+			from = offset + line.length + 1;
+		}
 		offset += line.length + 1;
 	}
-	if (fence === 0) flush(text.length);
+	if (fence === undefined) flush(text.length);
 	return spans;
 }
 
@@ -394,17 +382,16 @@ export function tableSpans(text: string): Array<readonly [number, number]> {
 		offset += line.length + 1;
 	}
 	const spans: Array<readonly [number, number]> = [];
-	// Fences follow the line-head rule of `chunkText`: one opens on a line of 3+ backticks with an info string free of
-	// backticks and closes on a line of at least as many backticks alone; a ``` inside prose opens nothing.
-	let fence = 0;
+	// Fences follow the line-head rule of `fenceOpen`/`fenceCloses` (backtick or tilde); prose ``` opens nothing.
+	let fence: FenceMark | undefined;
 	let i = 0;
 	while (i < lines.length) {
-		const end = fence > 0 ? undefined : tableEndAt(lines, i);
+		const end = fence !== undefined ? undefined : tableEndAt(lines, i);
 		if (end !== undefined) spans.push([starts[i] ?? 0, (starts[end - 1] ?? 0) + (lines[end - 1] ?? "").length]);
 		else {
 			const line = lines[i] ?? "";
-			if (fence === 0) fence = fenceOpenRun(line) ?? 0;
-			else if ((fenceCloseRun(line) ?? 0) >= fence) fence = 0;
+			if (fence === undefined) fence = fenceOpen(line);
+			else if (fenceCloses(line, fence)) fence = undefined;
 			i++;
 		}
 		if (end !== undefined) i = end;

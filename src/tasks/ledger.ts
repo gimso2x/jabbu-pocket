@@ -99,6 +99,8 @@ export interface TaskGate {
 }
 
 export interface NewTask {
+	/** First number of the day (`idStart`); the next id is still above the day's existing maximum. */
+	idStart?: number;
 	title: string;
 	risk: TaskRisk;
 	originKey: string;
@@ -275,10 +277,7 @@ function latestMark(row: TaskRow, kind: "pause" | "unpause"): number {
 	return Math.max(0, ...marks);
 }
 
-/**
- * When the current owner pause began (its `pause:<ms>` mark), `undefined` for a task that is not paused. The key of
- * everything told once per pause.
- */
+/** Start of the current owner pause (`pause:<ms>` mark), undefined if not paused: key of once-per-pause notices. */
 export function taskPausedAt(row: TaskRow): number | undefined {
 	const paused = latestMark(row, "pause");
 	return paused > latestMark(row, "unpause") ? paused : undefined;
@@ -315,7 +314,7 @@ export class TaskLedger {
 			const { last } = this.#db
 				.query("SELECT MAX(CAST(substr(task_id, ?) AS INTEGER)) AS last FROM tasks WHERE task_id LIKE ?")
 				.get(prefix.length + 1, `${prefix}%`) as { last: number | null };
-			const taskId = formatTaskId(day, (last ?? 0) + 1);
+			const taskId = formatTaskId(day, Math.max(last ?? 0, (input.idStart ?? 1) - 1) + 1);
 			this.#db
 				.query(
 					`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,

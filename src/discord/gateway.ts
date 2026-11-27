@@ -65,8 +65,8 @@ const RATE_LIMITED_WAIT_MS = 60_000;
 /** Client-side close code that keeps the session resumable (1000/1001 would end it). */
 const RESUMABLE_CLOSE = 4900;
 
-/** Close codes after which the session cannot be resumed: 4007 invalid seq, 4009 session timed out. */
-const NEW_SESSION_CLOSE: ReadonlySet<number> = new Set([4007, 4009]);
+/** Close codes after which the session cannot be resumed: 4006 invalid session, 4007 invalid seq, 4009 session timed out. */
+const NEW_SESSION_CLOSE: ReadonlySet<number> = new Set([4006, 4007, 4009]);
 
 interface Frame {
 	op?: number;

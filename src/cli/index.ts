@@ -21,12 +21,13 @@ import { DASHBOARD_USAGE, dashboardCommand } from "./dashboard";
 import { DELIVERIES_USAGE, deliveriesCommand } from "./deliveries";
 import { DRAIN_USAGE, drainCommand } from "./drain";
 import { GATES_USAGE, type GatesCommandDeps, gatesCommand } from "./gates";
-import { loadConfigIfPresent } from "./home-config";
+import { hasHomeDatabase, loadConfigIfPresent } from "./home-config";
 import { INIT_USAGE, initCommand } from "./init";
 import { LANES_USAGE, lanesCommand } from "./lanes";
 import { joinLines, stripExtensionPath } from "./linear-text";
 import { MONITORS_USAGE, monitorsCommand } from "./monitors";
 import { OMP_USAGE, ompCommand } from "./omp";
+import { ONBOARDING_USAGE, onboardingCommand } from "./onboarding";
 import { QUOTA_USAGE, quotaCommand } from "./quota";
 import { RESTORE_USAGE, restoreCommand } from "./restore";
 import { SKILLS_USAGE, skillsCommand } from "./skills";
@@ -61,7 +62,7 @@ ${GATES_USAGE}  inject --origin discord/<dm|ch>/ID --as-owner --text <t> [--quot
                                  while no daemon listens (a restart) it tries again every 2s for up to 3 minutes
   reload                         running daemon re-reads config.json (also SIGHUP): policy fields apply live,
                                  startup-bound fields are listed as restart_required; an invalid file changes nothing
-${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${QUOTA_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
+${ONBOARDING_USAGE}${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${QUOTA_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
 
 /** The fields `renderStatusText` and `--json` readers rely on; a reply without them is not a status report. */
 function isStatusReport(value: unknown): value is StatusReport {
@@ -81,22 +82,19 @@ function isStatusReport(value: unknown): value is StatusReport {
 }
 
 function isStatusResponse(value: unknown): value is { ok: true; status: StatusReport } {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"ok" in value &&
-		value.ok === true &&
-		"status" in value &&
-		isStatusReport(value.status)
-	);
+	if (typeof value !== "object" || value === null) return false;
+	const res = value as { ok?: unknown; status?: unknown };
+	return res.ok === true && isStatusReport(res.status);
 }
 
 function gcCommand(args: string[], homeDir: string): number {
 	const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
+	if (!hasHomeDatabase("gc", homeDir)) return 1;
 	const dryRun = values["dry-run"] === true;
 	const result = gcSessions({
 		homeDir,
-		retentionDays: loadConfigIfPresent(homeDir)?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS,
+		retentionDays:
+			loadConfigIfPresent(homeDir, { checkTokens: false })?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS,
 		now: Date.now(),
 		dryRun,
 	});
@@ -106,7 +104,7 @@ function gcCommand(args: string[], homeDir: string): number {
 	for (const key of result.monitorOriginsRemoved) process.stdout.write(`gc monitor_${verb} origin=${key}\n`);
 	for (const path of result.laneArtifactsRemoved) process.stdout.write(`gc lane_artifacts_${verb} path=${path}\n`);
 	process.stdout.write(
-		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} lane_artifacts_skipped=${result.laneArtifactsSkipped.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts} web_messages=${result.ledgerRemoved.webMessages}\n`,
+		`gc_done ${verb}=${result.removed.length} retained=${result.retained.length} threads=${result.threadOriginsRemoved.length} monitors=${result.monitorOriginsRemoved.length} lane_artifacts=${result.laneArtifactsRemoved.length} lane_artifacts_skipped=${result.laneArtifactsSkipped.length} sessions_skipped=${result.sessionsSkipped.length} inbound=${result.ledgerRemoved.inbound} inbound_orphans=${result.ledgerRemoved.inboundOrphans} deliveries=${result.ledgerRemoved.deliveries} monitor_events=${result.ledgerRemoved.monitorEvents} monitor_slots=${result.ledgerRemoved.monitorSlots} inbound_conflicts=${result.ledgerRemoved.inboundConflicts} web_messages=${result.ledgerRemoved.webMessages}\n`,
 	);
 	return 0;
 }
@@ -226,9 +224,8 @@ async function offsiteRun(config: JabbuConfig, homeDir: string, json: boolean): 
 		process.stdout.write(`${JSON.stringify({ ok: true, ...result })}\n`);
 		return 0;
 	}
-	for (const file of result.files) {
+	for (const file of result.files)
 		process.stdout.write(`offsite ${file.status} file=${file.name} sha256=${file.sha256}\n`);
-	}
 	for (const name of result.removed) process.stdout.write(`offsite pruned file=${name}\n`);
 	process.stdout.write(
 		`offsite_done files=${result.files.length} removed=${result.removed.length} stamp=${result.stamp}\n`,
@@ -257,7 +254,7 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 		flagBytes = parsed;
 	}
 	// The operator lever for homes whose sessions outgrew the 512MB default: config sets it, the flag overrides.
-	const config = loadConfigIfPresent(homeDir);
+	const config = loadConfigIfPresent(homeDir, { checkTokens: false });
 	const maxBundleBytes = flagBytes ?? config?.maxBundleBytes;
 	let result: BackupResult;
 	try {
@@ -371,8 +368,8 @@ function unfreezeCommand(args: string[], homeDir: string): number {
 		clearFreeze(homeDir);
 	} catch (error) {
 		// Whatever blocks the removal or the unfrozen-at stamp: FROZEN stays, the owner learns the path and errno.
-		const { code, path } = error as NodeJS.ErrnoException;
-		process.stderr.write(`unfreeze: ${path ?? freezePath(homeDir)}: ${code ?? String(error)}\n`);
+		const { code, path, dest } = error as NodeJS.ErrnoException & { dest?: string };
+		process.stderr.write(`unfreeze: ${dest ?? path ?? freezePath(homeDir)}: ${code ?? String(error)}\n`);
 		return 1;
 	}
 	process.stdout.write(was ? "unfrozen\n" : "not frozen\n");
@@ -514,6 +511,8 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return gatesCommand(rest, homeDir, hostLoadDeps(env));
 			case "inject":
 				return await injectCommand(rest, homeDir);
+			case "onboarding":
+				return onboardingCommand(rest, homeDir);
 			case "drain":
 				return await drainCommand(rest, homeDir);
 			case "deliveries":

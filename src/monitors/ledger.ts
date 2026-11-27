@@ -559,7 +559,7 @@ export class MonitorLedger {
 				"UPDATE monitors SET last_check_error = NULL, last_check_error_at = NULL, check_error_streak = 0 WHERE id = ?",
 			)
 			.run(id);
-		resolveIncidents(this.#db, "monitor_incidents", id);
+		resolveIncidents(this.#db, "monitor_incidents", id, this.#clock.now());
 	}
 
 	private requireMonitor(id: string): MonitorRow {
@@ -765,7 +765,7 @@ export class MonitorLedger {
 
 	/** A successful run (delivered or deliberately silent) resolves the monitor's open incidents. */
 	resolveMonitorIncidents(monitorId: string): void {
-		resolveIncidents(this.#db, "monitor_incidents", monitorId);
+		resolveIncidents(this.#db, "monitor_incidents", monitorId, this.#clock.now());
 	}
 
 	/** Records a slot that is deliberately not run (catch-up bounds). Returns false when it was already claimed. */

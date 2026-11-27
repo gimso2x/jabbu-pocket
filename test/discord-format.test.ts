@@ -336,7 +336,7 @@ describe("quadratic input (qa-z #30, #33, #34)", () => {
 	);
 
 	test("an unclosed token still converts when it is closed", () => {
-		expect(mrkdwnToDiscord("<!here> <!subteam^S1|@dev> <#9|x>")).toBe("here subteam <#9>");
+		expect(mrkdwnToDiscord("<!here> <!subteam^S1|@dev> <#9|x>")).toBe("here @dev <#9>");
 	});
 
 	test.each(["[", "**a ", "__a ", "`a", "[a]("])(

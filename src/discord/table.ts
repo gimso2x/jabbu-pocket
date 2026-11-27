@@ -1,5 +1,6 @@
 // Converts GFM Markdown tables for Discord mobile into stacked Markdown records instead of wide monospace blocks.
-import { fenceCloseRun, fenceOpenRun, splitRowCells, tableEndAt } from "../channel/text";
+import { type FenceMark, fenceCloses, fenceOpen } from "../channel/fence";
+import { splitRowCells, tableEndAt } from "../channel/text";
 import { clampBacktickRuns } from "./code-spans";
 
 /** Bounded inline-span regex (matches `format.ts`/legacy table cell stripper in linear time on hostile input). */
@@ -8,7 +9,7 @@ const HEADER_INLINE =
 
 /** Strips inline code, links, and bold markers from a header cell before wrapping it in `**header**`. */
 export function stripTableHeaderMarkdown(header: string): string {
-	return header
+	const stripped = header
 		.replace(
 			HEADER_INLINE,
 			(match, _ticks, code?: string, linkLabel?: string, boldStar?: string, boldUnder?: string) => {
@@ -19,6 +20,7 @@ export function stripTableHeaderMarkdown(header: string): string {
 		)
 		.replace(/[\r\n]+/g, " ")
 		.trim();
+	return clampBacktickRuns(stripped, 3);
 }
 
 /** Normalizes newlines and breaks up 3+ backtick runs inside stacked cells while keeping inline Discord markdown. */
@@ -65,16 +67,16 @@ export function renderStackedTables(text: string): { text: string; spans: Array<
 	const out: string[] = [];
 	const spans: Array<[number, number]> = [];
 	let offset = 0;
-	let fenceRun = 0;
+	let fence: FenceMark | undefined;
 	const push = (line: string): void => {
 		out.push(line);
 		offset += line.length + 1;
 	};
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? "";
-		if (fenceRun === 0) fenceRun = fenceOpenRun(line) ?? 0;
-		else if ((fenceCloseRun(line) ?? 0) >= fenceRun) fenceRun = 0;
-		const end = fenceRun > 0 ? undefined : tableEndAt(lines, i, 3);
+		if (fence === undefined) fence = fenceOpen(line);
+		else if (fenceCloses(line, fence)) fence = undefined;
+		const end = fence !== undefined ? undefined : tableEndAt(lines, i, 3);
 		if (end === undefined) {
 			push(line);
 			continue;
