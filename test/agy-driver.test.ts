@@ -386,7 +386,8 @@ test("abort sends session/cancel: the turn ends aborted, the child lives on and 
 		opRef,
 		status: "aborted",
 		text: "",
-		error: "cancelled",
+		error: "cancelled (steer 1건 미전달)",
+		droppedSteers: 1,
 		usage: { calls: 1, input: 100, cacheRead: 40, output: 7, rotated: false },
 	});
 	expect(await driver.state()).toMatchObject({ idle: true, queuedMessageCount: 0 });
@@ -712,6 +713,7 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	const half = nextFinal(driver);
 	await driver.prompt("@half");
 	expect((await half).usage).toMatchObject({ contextTokens: 500, rotated: false });
+	expect(await driver.state()).toMatchObject({ context: { tokens: 500, window: 1000, percent: 50 } });
 	expect(existsSync(join(harness.sessionDir, "agy-conversation.json"))).toBe(true);
 
 	const full = nextFinal(driver);
@@ -723,6 +725,7 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	const next = nextFinal(driver);
 	await driver.prompt("fresh");
 	expect(await next).toMatchObject({ status: "completed", text: "REPLY1:fresh" });
+	expect(await driver.state()).toMatchObject({ context: { tokens: 100, window: 1000, percent: 10 } });
 	const second = (await driver.state()).sessionId;
 	expect(second).not.toBe(first);
 	expect(spawns(harness)).toHaveLength(2);

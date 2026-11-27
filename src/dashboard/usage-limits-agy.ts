@@ -3,7 +3,9 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchEnv, type ProcessRunner } from "../dispatch/omp";
 import { redact } from "../redact";
+import type { PeerInstall } from "./peers";
 import { cleanError } from "./section-cache";
+import type { Section } from "./snapshot";
 
 const AGY_ACCOUNT_TIMEOUT_MS = 30_000;
 const STDOUT_CAP = 1_000_000;
@@ -21,10 +23,16 @@ export interface UsageRow {
 }
 
 /** One Antigravity account's quota snapshot under `~/.agy-accounts` (`active`: currently selected slot). */
-export type UsageAccount = { name: string; active?: boolean } & (
+export type UsageAccount = { name: string; active?: boolean; blockedUntil?: number } & (
 	| { ok: true; rows: UsageRow[] }
 	| { ok: false; error: string }
 );
+
+/** Runtime quota-switch overlay read from `<home>/config.json` -> `agyAccounts.statePath`. */
+export interface AgyBlockedOverlay {
+	current?: string;
+	blocked: Record<string, number>;
+}
 
 export function clampPct(pct: number): number {
 	return Math.min(100, Math.max(0, pct));
@@ -207,4 +215,93 @@ export async function collectAgyAccounts(
 		),
 	);
 	return { ...(resolvedActive === undefined ? {} : { account: resolvedActive }), accounts };
+}
+
+function expandOverlayPath(raw: string): string | undefined {
+	if (raw.includes("secrets")) return undefined;
+	const resolved = raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+	return resolved.startsWith("/") && !resolved.includes("secrets") ? resolved : undefined;
+}
+
+/** Reads `agyAccounts.statePath` (`{ current, blocked }`) across primary and peer homes; rejects `secrets` paths. */
+export function readAgyBlockedOverlay(
+	homeDir: string,
+	peers: readonly Pick<PeerInstall, "home">[],
+	now: number,
+): AgyBlockedOverlay {
+	const overlay: AgyBlockedOverlay = { blocked: {} };
+	for (const dir of [homeDir, ...peers.map((p) => p.home)]) {
+		let stateRaw: unknown;
+		try {
+			const cfg = JSON.parse(readFileSync(join(dir, "config.json"), "utf8")) as unknown;
+			if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) continue;
+			stateRaw = (cfg as { agyAccounts?: { statePath?: unknown } }).agyAccounts?.statePath;
+		} catch {
+			continue;
+		}
+		if (typeof stateRaw !== "string" || stateRaw.trim() === "") continue;
+		const statePath = expandOverlayPath(stateRaw.trim());
+		if (statePath === undefined || !existsSync(statePath)) continue;
+		try {
+			const state = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
+			if (typeof state !== "object" || state === null || Array.isArray(state)) continue;
+			const { current, blocked } = state as { current?: unknown; blocked?: unknown };
+			if (overlay.current === undefined && typeof current === "string" && current.trim() !== "") {
+				overlay.current = redact(current.trim()).slice(0, ACCOUNT_CHARS);
+			}
+			if (typeof blocked === "object" && blocked !== null && !Array.isArray(blocked)) {
+				for (const [acct, until] of Object.entries(blocked)) {
+					if (typeof until === "number" && Number.isFinite(until) && until > now) {
+						overlay.blocked[acct] = Math.max(overlay.blocked[acct] ?? 0, until);
+					}
+				}
+			}
+		} catch {
+			// ignore unreadable or malformed quota-state file
+		}
+	}
+	return overlay;
+}
+
+/** Shallow-copies `section` to attach active `blockedUntil` timestamps and live `current` slot without mutating cache. */
+export function applyAgyBlockedOverlay<
+	T extends { sources: Array<{ name: string; account?: string; accounts?: UsageAccount[] }> },
+>(section: Section<T>, overlay: AgyBlockedOverlay, now: number): Section<T> {
+	if (!section.ok) return section;
+	if (overlay.current === undefined && Object.keys(overlay.blocked).length === 0) return section;
+	let changed = false;
+	const sources = section.sources.map((source) => {
+		if (source.name !== "Antigravity" || source.accounts === undefined) return source;
+		const hasCurrent = overlay.current !== undefined && source.accounts.some((a) => a.name === overlay.current);
+		const accounts = source.accounts.map((acct): UsageAccount => {
+			const rawUntil = overlay.blocked[acct.name];
+			const until = rawUntil !== undefined && rawUntil > now ? rawUntil : undefined;
+			const active = hasCurrent ? acct.name === overlay.current : acct.active;
+			const { active: _oldActive, blockedUntil: _oldBlk, ...rest } = acct;
+			return {
+				...rest,
+				...(active === true ? { active: true } : {}),
+				...(until === undefined ? {} : { blockedUntil: until }),
+			} as UsageAccount;
+		});
+		changed = true;
+		return {
+			...source,
+			...(hasCurrent && overlay.current !== undefined ? { account: overlay.current } : {}),
+			accounts,
+		};
+	});
+	return changed ? { ...section, sources } : section;
+}
+
+/** Convenience wrapper combining {@link readAgyBlockedOverlay} and {@link applyAgyBlockedOverlay}. */
+export function withAgyBlockedOverlay<
+	T extends { sources: Array<{ name: string; account?: string; accounts?: UsageAccount[] }> },
+>(
+	section: Section<T>,
+	homeDir: string,
+	peers: readonly Pick<PeerInstall, "home">[] | undefined,
+	now: number,
+): Section<T> {
+	return applyAgyBlockedOverlay(section, readAgyBlockedOverlay(homeDir, peers ?? [], now), now);
 }

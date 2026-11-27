@@ -60,6 +60,7 @@ import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
 import { discordThreadHref } from "./detail";
 import { type OverlapView, readEditOverlaps } from "./edit-overlap";
 import { type HostChecksInfo, readHostChecks } from "./host-checks";
+import { type HostMetricsInfo, readHostMetrics } from "./host-metrics";
 import {
 	type PeerAlertInfo,
 	type PeerHealthInfo,
@@ -74,6 +75,7 @@ import { type TaskRuntimeField, withoutTaskThreads } from "./task-work-client";
 import { type TaskTurnFields, taskTurnFields } from "./turn";
 import { buildTurnsSection, type PeerTurnError, rows, type ThreadInfo, type TurnInfo } from "./turn-board";
 import { readUsageLimits, type UsageLimitsInfo } from "./usage-limits";
+import { withAgyBlockedOverlay } from "./usage-limits-agy";
 
 /** A snapshot is reused this long: IPC, herdr, ssh and git are not asked again inside it. */
 export const SNAPSHOT_TTL_MS = 10_000;
@@ -682,6 +684,8 @@ export interface DashboardSnapshot {
 	/** "모델 한도" (also needs config `dashboard.usageLimits`) and "7일 비용" cards: only with `SnapshotDeps.usageLimits`. */
 	usageLimits?: Section<UsageLimitsInfo>;
 	costLedger?: Section<CostLedgerInfo>;
+	/** Local host CPU/memory/browser metrics: only with `SnapshotDeps.usageLimits`. */
+	hostMetrics?: Section<HostMetricsInfo>;
 	/** 겹침 marks ({@link OverlapView}); absent when nothing overlaps and no agy session exists. */
 	overlaps?: OverlapView;
 }
@@ -1468,6 +1472,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 		const hostChecks = opsStatus === undefined ? undefined : readHostChecks(opsStatus.command, deps.run, deps.now);
 		const usageConfig = deps.usageLimits === true ? config?.dashboard?.usageLimits : undefined;
 		const usageLimits = usageConfig && readUsageLimits(usageConfig, deps.run, deps.now);
+		const hostMetrics = deps.usageLimits === true ? readHostMetrics(deps.run, deps.now) : undefined;
 
 		const targets = herdrTargets(config);
 		// Run on first use only: with a live board and no open TASK on a host, that host's `herdr agent list` is not needed.
@@ -1542,22 +1547,19 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			// A failed daemon section leaves drain and freeze unknown: the other wait reasons still apply.
 			const status = await daemon;
 			const jobSection = await jobs;
+			const activeJobs = !jobSection.ok
+				? []
+				: jobSection.items
+						.filter(
+							(j) => j.state === "running" && (j.health === "ok" || j.health === "stale") && j.thread !== undefined,
+						)
+						.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 			const built = buildTurnsSection(handle, {
 				now,
 				iso,
 				draining: status.ok && (status.drain !== undefined || status.heartbeat?.draining === true),
 				frozen: status.ok && status.frozen !== undefined,
-				activeJobs: jobSection.ok
-					? jobSection.items
-							.filter(
-								(job) =>
-									job.state === "running" &&
-									(job.health === "ok" || job.health === "stale") &&
-									job.thread !== undefined,
-							)
-							.slice()
-							.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-					: [],
+				activeJobs,
 				...(deps.peers === undefined ? {} : { peers: deps.peers }),
 				sessionModel: sharedSessionModel,
 			});
@@ -1785,9 +1787,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				db === undefined
 					? []
 					: rows<{ task_id: string; agent: string; host: string | null }>(db, "SELECT task_id, agent, host FROM tasks");
-			if (targets.length === 0) {
+			if (targets.length === 0)
 				return { hosts: [{ host: "local", ok: false as const, error: "herdr is not configured" }] };
-			}
 			const says: HerdrSay[] = [];
 			const hosts = await Promise.all(
 				targets.map(async (target): Promise<HerdrHostInfo> => {
@@ -1801,12 +1802,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 						agents: listing.agents.map((agent) => {
 							const owner = owners.find((task) => task.agent === agent.name && (task.host ?? "local") === target.host);
 							const found = own.find((say) => say.paneId === agent.paneId);
-							const {
-								host: _host,
-								paneId: _pane,
-								status: _status,
-								...said
-							} = found ?? { host: "", paneId: "", status: "" };
+							const { host: _h, paneId: _p, status: _s, ...said } = found ?? { host: "", paneId: "", status: "" };
 							return { ...agent, ...said, ...(owner === undefined ? {} : { taskId: owner.task_id }) };
 						}),
 					};
@@ -1820,7 +1816,7 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			// A daemon still on the old code has not added the dashboard columns yet: read them as NULL.
 			const present = new Set(rows<{ name: string }>(handle, "PRAGMA table_info(approvals)").map((c) => c.name));
 			const optional = ["detail_json", "card_url", "origin_url"]
-				.map((column) => (present.has(column) ? column : `NULL AS ${column}`))
+				.map((c) => (present.has(c) ? c : `NULL AS ${c}`))
 				.join(", ");
 			return {
 				items: rows<{
@@ -1986,6 +1982,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				? undefined
 				: await section(() => ({ items: readPeerHealth(deps.peers ?? [], now) }));
 
+		const resolvedUsage =
+			usageLimits === undefined ? undefined : withAgyBlockedOverlay(await usageLimits, deps.homeDir, deps.peers, now);
 		return {
 			generatedAt: iso(now),
 			timezone,
@@ -2009,8 +2007,9 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			...(peerHealth === undefined ? {} : { peerHealth }),
 			...(hostChecks === undefined ? {} : { hostChecks: await hostChecks }),
 			...(opsStatus?.url === undefined ? {} : { hostChecksUrl: opsStatus.url }),
-			...(usageLimits === undefined ? {} : { usageLimits: await usageLimits }),
+			...(resolvedUsage === undefined ? {} : { usageLimits: resolvedUsage }),
 			...(deps.usageLimits === true ? { costLedger: await readCostLedger(deps.homeDir, deps.now, timezone) } : {}),
+			...(hostMetrics === undefined ? {} : { hostMetrics: await hostMetrics }),
 			...(await editOverlaps),
 		};
 	} finally {

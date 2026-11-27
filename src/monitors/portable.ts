@@ -1,16 +1,5 @@
-import {
-	chmodSync,
-	copyFileSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	realpathSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { secretInodes } from "../ops/backup-tree";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import type { MonitorLedger, MonitorRow } from "./ledger";
 import {
 	assertSafeFilesLayout,
@@ -26,6 +15,7 @@ import {
 	underRoot,
 	WORKSPACE_PLACEHOLDER,
 } from "./portable-files";
+import { copyPortableFiles, type PortableCopyTarget } from "./portable-io";
 import { type MonitorSpec, MonitorSpecError, parseMonitorSpec, type SpecContext } from "./spec";
 
 /**
@@ -135,6 +125,7 @@ function portableSpec(
 
 export interface ExportResult {
 	written: number;
+	failed: number;
 	/** Stale `*.json` files of monitors no longer in the database. */
 	removed: number;
 	warnings: string[];
@@ -161,9 +152,11 @@ export function exportMonitors(
 	}
 	if (options.withFiles) assertSafeFilesLayout(dir);
 	const warnings: string[] = [];
-	const written = new Set<string>();
+	const claimed = new Set<string>();
+	let written = 0;
+	let failed = 0;
 	/** Source path → where it lands, the monitor naming it first and the placeholder root it was found under. */
-	const copies = new Map<string, { target: string; name: string; root: string }>();
+	const copies = new Map<string, PortableCopyTarget>();
 	const roots = placeholderRootsOf(ctx.scriptsRoot, ctx.workspaceDir, true);
 	const filesRoots: Record<string, string> = {
 		[SCRIPTS_PLACEHOLDER]: join(dir, "files", "scripts"),
@@ -184,16 +177,18 @@ export function exportMonitors(
 		const stem = exportStem(row.name);
 		let file = `${stem}.json`;
 		const first = file;
-		for (let n = 2; written.has(file) || !canTakeExport(join(dir, file)); n++) file = `${stem}-${n}.json`;
-		if (file !== first && !written.has(first)) {
+		for (let n = 2; claimed.has(file) || !canTakeExport(join(dir, file)); n++) file = `${stem}-${n}.json`;
+		if (file !== first && !claimed.has(first)) {
 			warnings.push(`${row.name}: ${first} belongs to the owner (not a monitor file), exported as ${file}`);
 		}
-		written.add(file);
+		claimed.add(file);
 		// A file that cannot be written is a warning: the run goes on, so the stale cleanup below still happens.
 		try {
 			clearWriteTarget(join(dir, file));
 			writeFileSync(join(dir, file), `${JSON.stringify(portable, null, 2)}\n`);
+			written++;
 		} catch (error) {
+			failed++;
 			warnings.push(`${row.name}: not written: ${file} (${error instanceof Error ? error.message : String(error)})`);
 		}
 		if (!options.withFiles) continue;
@@ -215,64 +210,20 @@ export function exportMonitors(
 			if (!copies.has(path)) copies.set(path, { target, name: row.name, root: inside.root });
 		}
 	}
-	const secretsPath = join(dirname(ctx.scriptsRoot), "secrets");
-	let secretsDir = secretsPath;
-	try {
-		secretsDir = realpathSync(secretsPath);
-	} catch {
-		// No secrets directory: nothing can resolve into it, and the spelled path still matches.
-	}
-	if (options.withFiles) {
-		// Copies of monitors that are gone (or no longer name the file) must not outlive them in the committed directory.
-		for (const filesRoot of Object.values(filesRoots)) rmSync(filesRoot, { recursive: true, force: true });
-	}
-	const secrets = options.withFiles ? secretInodes(secretsDir) : new Set<string>();
-	for (const [source, { target, name, root }] of copies) {
-		// The path is under its root as spelled; a symlink on the way may still lead out (`<workspace>/p.md -> /etc/…`),
-		// so the copy goes by where it really leads. A dangling link reads as not found.
-		let real: string;
-		let mode: number;
+	if (options.withFiles) copyPortableFiles({ scriptsRoot: ctx.scriptsRoot, filesRoots, copies, warnings });
+	let removed = 0;
+	for (const file of readdirSync(dir)) {
+		if (!file.endsWith(".json") || claimed.has(file) || !isMonitorFile(join(dir, file))) continue;
 		try {
-			real = realpathSync(source);
-			if (isOutside(relative(realpathSync(root), real))) {
-				warnings.push(`${name}: referenced file resolves outside ${root}, not copied: ${source}`);
-				continue;
-			}
-			// A workspace that falls back to the home (no usable config) would otherwise copy the bot's tokens out.
-			if (!isOutside(relative(secretsDir, real))) {
-				warnings.push(`${name}: referenced file is in the secrets directory, not copied: ${source}`);
-				continue;
-			}
-			const stat = statSync(real);
-			if (!stat.isFile()) continue;
-			// A hard link under a root shares the secret's inode: no path check sees it.
-			if (stat.nlink > 1 && secrets.has(`${stat.dev}:${stat.ino}`)) {
-				warnings.push(`${name}: referenced file is a hard link to a secrets/ file, not copied: ${source}`);
-				continue;
-			}
-			mode = stat.mode & 0o7777;
-		} catch {
-			warnings.push(`referenced file not found, not copied: ${source}`);
-			continue;
-		}
-		try {
-			mkdirSync(dirname(target), { recursive: true });
-			clearWriteTarget(target);
-			copyFileSync(real, target);
-			chmodSync(target, mode);
+			rmSync(join(dir, file), { force: true });
+			removed++;
 		} catch (error) {
 			warnings.push(
-				`${name}: referenced file not copied: ${source} (${error instanceof Error ? error.message : String(error)})`,
+				`stale monitor file not removed: ${file} (${error instanceof Error ? error.message : String(error)})`,
 			);
 		}
 	}
-	let removed = 0;
-	for (const file of readdirSync(dir)) {
-		if (!file.endsWith(".json") || written.has(file) || !isMonitorFile(join(dir, file))) continue;
-		rmSync(join(dir, file), { force: true });
-		removed++;
-	}
-	return { written: written.size, removed, warnings };
+	return { written, failed, removed, warnings };
 }
 
 /** Some files of an `apply` directory did not validate; nothing was changed. */
@@ -335,15 +286,21 @@ export function applyMonitors(
 ): ApplyResult {
 	let files: string[];
 	const warnings: string[] = [];
+	const problems: string[] = [];
 	let skipped = 0;
 	try {
 		files = readdirSync(dir)
 			.filter((file) => file.endsWith(".json"))
 			.sort()
 			.filter((file) => {
+				const path = join(dir, file);
+				const lstat = lstatSync(path, { throwIfNoEntry: false });
+				if (lstat?.isSymbolicLink()) {
+					problems.push(`${file}: symlink is not allowed`);
+					return false;
+				}
 				// Reading a FIFO blocks forever and a directory fails the whole apply: only regular files are specs.
-				// A dangling link stays in so its read error is reported.
-				const stat = statSync(join(dir, file), { throwIfNoEntry: false });
+				const stat = statSync(path, { throwIfNoEntry: false });
 				if (stat === undefined || stat.isFile()) return true;
 				warnings.push(`${file}: not a regular file, skipped`);
 				skipped++;
@@ -353,18 +310,25 @@ export function applyMonitors(
 		throw new PortableApplyError([`${dir}: ${error instanceof Error ? error.message : String(error)}`]);
 	}
 	const existing = new Map(ledger.listMonitors().map((row) => [row.name, row]));
-	const problems: string[] = [];
 	const seen = new Map<string, string>();
 	const adds: MonitorSpec[] = [];
 	const updates: Array<{ id: string; spec: MonitorSpec }> = [];
 	let unchanged = 0;
 	for (const file of files) {
 		try {
+			let raw: string;
+			try {
+				raw = readFileSync(join(dir, file), "utf8");
+			} catch (error) {
+				const code =
+					error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+				throw new MonitorSpecError(code ? `unreadable file (${code})` : "unreadable file");
+			}
 			let input: unknown;
 			try {
-				input = JSON.parse(readFileSync(join(dir, file), "utf8"));
-			} catch (error) {
-				throw new MonitorSpecError(`not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+				input = JSON.parse(raw);
+			} catch {
+				throw new MonitorSpecError("not valid JSON");
 			}
 			if (typeof input !== "object" || input === null || Array.isArray(input)) {
 				throw new MonitorSpecError("monitor spec must be an object");

@@ -1,3 +1,4 @@
+import { renderActiveCards } from "./p0-renderers";
 import type { PeerHealthInfo } from "./peer-health";
 import type { DashboardSnapshot } from "./snapshot";
 import { esc } from "./text";
@@ -149,6 +150,8 @@ export function renderInboxPulse(
 	ago: (since: number) => string,
 	at: (iso: string | null | undefined) => string,
 	alertTitle: (scope: string) => string,
+	dur: (ms: number | null | undefined) => string = (ms) =>
+		ms === null || ms === undefined ? "-" : `${Math.max(0, Math.floor(ms / 60_000))}분`,
 ): string {
 	const threads = s.turns.ok ? s.turns.threads : [];
 	const workingThreads = threads.filter((t) => t.column === "working");
@@ -224,30 +227,11 @@ export function renderInboxPulse(
 			? ""
 			: `<section class="pulse-sec" aria-label="확인 필요"><h2 class="col-head"><span>확인 필요</span><span class="count-chip">${attnRows.length}</span></h2><div class="rows">${attnRows.join("")}</div></section>`;
 
-	const workRows = [
-		...workingThreads.map(
-			(t) =>
-				`<a class="row" href="?view=turns&amp;item=${esc(encodeURIComponent(t.originKey))}"><div class="row-main"><div class="badges">${badge(
-					"진행 중",
-					"is-info",
-				)}${t.install ? badge(t.install, "") : ""}${
-					t.model ? badge(t.model.model.slice(t.model.model.lastIndexOf("/") + 1), "") : ""
-				}</div><p class="row-title">${esc(t.title)}</p><p class="row-sub">${esc(
-					t.latest.preview ?? "-",
-				)} · 턴 ${t.turnCount} · ${ago(Date.parse(t.updatedAt))}</p></div></a>`,
-		),
-		...runningJobs.map(
-			(j) =>
-				`<a class="row" href="?view=turns&amp;item=${esc(encodeURIComponent(`job:${j.name}`))}"><div class="row-main"><div class="badges">${badge(
-					"백그라운드",
-					"is-info",
-				)}</div><p class="row-title">${esc(j.title)}</p><p class="row-sub">${esc(j.detail ?? j.name)}</p></div></a>`,
-		),
-	];
-	const workBlock = `<section class="pulse-sec" aria-label="지금 진행 중"><h2 class="col-head"><span>지금 진행 중</span><span class="count-chip">${workRows.length}</span></h2>${
-		workRows.length === 0
+	const active = renderActiveCards(s, ago, dur, badge);
+	const workBlock = `<section class="pulse-sec" aria-label="지금 진행 중"><h2 class="col-head"><span>지금 진행 중</span><span class="count-chip">${active.count}</span></h2>${
+		active.count === 0
 			? '<div class="empty-box"><p class="note">지금 진행 중인 대화·작업이 없어요</p><p class="note-sub">최근 기록은 <a href="?view=turns" data-view="turns">턴</a> · <a href="?view=flow" data-view="flow">흐름</a> · <a href="?view=monitors" data-view="monitors">모니터</a>에서 볼 수 있어요.</p></div>'
-			: `<div class="rows">${workRows.join("")}</div>`
+			: active.html
 	}</section>`;
 
 	const headClosed = closedTasks.slice(0, 5);
