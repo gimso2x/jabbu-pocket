@@ -10,6 +10,7 @@ import { resumeTask } from "../tasks/dispatch";
 import { resolveTaskHost } from "../tasks/host";
 import { clip, type TaskLandDeps, type TaskLandResult, taskLandHold } from "../tasks/land";
 import {
+	dropTempRef,
 	isRemoteMode,
 	landModeOfRow,
 	localRepoOf,
@@ -46,11 +47,18 @@ export class DaemonTaskPrLand {
 	readonly #errors = new Map<string, number>();
 	/** The last read failure told per task: the same reason is not repeated until a read succeeds. */
 	readonly #warned = new Map<string, string>();
+	/** Cut on stop (as PrLandHost's): in-flight reads die with the daemon instead of running to their timeout. */
+	readonly #abort = new AbortController();
 
 	constructor(ctx: DaemonContext, locks: Set<string>, afterDone: (row: TaskRow) => Promise<string[]>) {
 		this.#ctx = ctx;
 		this.#locks = locks;
 		this.#afterDone = afterDone;
+	}
+
+	/** The reads of a poll are cut; the write steps are not aborted — a re-run continues from the saved step. */
+	stop(): void {
+		this.#abort.abort();
 	}
 
 	/** The `TaskLandDeps.pr` of one core landing. */
@@ -98,7 +106,7 @@ export class DaemonTaskPrLand {
 		return prLandDeps({
 			seams,
 			tools,
-			signal: new AbortController().signal,
+			signal: this.#abort.signal,
 			removeWorktree: (input) => resolveTaskHost(null, undefined).removeWorktree(input),
 			beforeCleanup,
 			...(remote === undefined
@@ -178,6 +186,13 @@ export class DaemonTaskPrLand {
 		}
 	}
 
+	/** A remote landing that settles without a merge leaves its fetched temporary ref behind: drop it (best-effort). */
+	async #dropTempRef(row: TaskRow): Promise<void> {
+		if (row.host === null) return;
+		const mode = await landModeOfRow(this.#ctx.options.config, row);
+		if (mode !== undefined && isRemoteMode(mode)) await dropTempRef(this.#remoteEnv(defaultGit), mode, row);
+	}
+
 	/** A landing that stopped before the PR: the record that exists (a landing of an earlier commit) waits for the owner too. */
 	#stopped(row: TaskRow, reason: string): TaskLandResult {
 		const record = this.#store().get(row.taskId)?.land;
@@ -196,6 +211,7 @@ export class DaemonTaskPrLand {
 	): Promise<TaskLandResult> {
 		const tasks = this.#store();
 		const record = { mode: "pr", requestedBy: at.requestedBy } as const;
+		if (outcome.kind !== "pr-open") await this.#dropTempRef(row);
 		switch (outcome.kind) {
 			case "pr-open": {
 				tasks.setLand(row.taskId, {
@@ -377,6 +393,7 @@ export class DaemonTaskPrLand {
 		this.#errors.delete(taskId);
 		const reason = clip(`${count}번 연속 실패: ${text}`);
 		this.#store().setLand(taskId, { ...row.land, state: "blocked", reason });
+		await this.#dropTempRef(row);
 		await postPrLandStop(this.#ctx, row, "blocked", reason);
 	}
 }

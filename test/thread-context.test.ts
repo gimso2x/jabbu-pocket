@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OriginMailbox } from "../src/core/mailbox";
@@ -301,6 +301,53 @@ describe("agy conversation rotation", () => {
 		expect(rotated).toContain(": 첫 질문");
 		expect(rotated).toContain(`: 긴 작업 ${ROTATE}`);
 		expect(rotated).toContain("- 이 세션이 올린 답(");
+		expect(rotated.endsWith("\n\n[현재 요청]\n회전 뒤 질문")).toBe(true);
+	});
+
+	test("a rotation shortly after a resume re-feeds the pre-resume exchanges", async () => {
+		await turn(router.mailbox(CHANNEL), 0, () => router.route(msg(CHANNEL, REF, "C1:111.222", "스레드 시작 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: CHANNEL }).find((d) => d.threadRef === REF));
+
+		const threadMailbox = router.mailbox(THREAD);
+		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.333", "첫 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD }).at(-1));
+		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.444", "두번째 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD }).at(-1));
+
+		// A saved session file in the epoch-1 dir, so `/resume-jabbu` can pick it up.
+		const sessionDir = store.getOrigin(THREAD)?.sessionDir;
+		if (sessionDir === undefined) throw new Error("thread origin missing");
+		mkdirSync(sessionDir, { recursive: true });
+		writeFileSync(
+			join(sessionDir, "2026_11111111.jsonl"),
+			[
+				{ type: "session", version: 3, id: "11111111-aaaa", timestamp: "2026-10-01T00:00:00Z" },
+				{ type: "message", id: "a", message: { role: "user", content: [{ type: "text", text: "첫 질문" }] } },
+			]
+				.map((line) => JSON.stringify(line))
+				.join("\n"),
+		);
+		await router.route(msg(THREAD, REF, "C1:111.777", "/resume-jabbu 1111"));
+		const reply = store
+			.listDeliveries({ originKey: THREAD })
+			.filter((d) => d.threadRef === REF)
+			.map((d) => d.body)
+			.join("\n");
+		expect(reply).toContain("이어갑니다");
+		expect(store.getOrigin(THREAD)?.epoch).toBe(2);
+
+		await turn(threadMailbox, 2, () => router.route(msg(THREAD, REF, "C1:111.555", "이어서 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD }).at(-1));
+		await turn(threadMailbox, 2, () => router.route(msg(THREAD, REF, "C1:111.666", `긴 작업 ${ROTATE}`)));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD }).at(-1));
+
+		await turn(threadMailbox, 2, () => router.route(msg(THREAD, REF, "C1:111.888", "회전 뒤 질문")));
+		const rotated = promptsOf(driverAt(2)).at(-1) ?? "";
+		expect(rotated.startsWith(`prompt:${ROTATION_CONTEXT_HEADER}\n`)).toBe(true);
+		expect(rotated).toContain(": 첫 질문");
+		expect(rotated).toContain(": 두번째 질문");
+		expect(rotated).toContain(": 이어서 질문");
+		expect(rotated).toContain(`: 긴 작업 ${ROTATE}`);
 		expect(rotated.endsWith("\n\n[현재 요청]\n회전 뒤 질문")).toBe(true);
 	});
 });

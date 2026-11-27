@@ -6,6 +6,7 @@ import { ChannelRegistry } from "../channel/registry";
 import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
+import { coldResumeTokens, formatColdResumeNotice } from "../core/mailbox-cold-resume";
 import type { ThreadSource } from "../core/mailbox-thread-context";
 import { TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { OriginRouter, sessionDirFor } from "../core/origin";
@@ -88,6 +89,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
 import { pidAlive } from "./lock";
@@ -381,13 +383,12 @@ export class Daemon {
 			onOwnerTurn: (info) => notifyWebOwnerTurn(this.#ctx, info),
 			...(this.#options.approvalTimeoutMs === undefined ? {} : { timeoutMs: this.#options.approvalTimeoutMs }),
 		});
-		const requeued = store.requeueAmbiguous();
 		log.info("daemon_start", {
 			boot: this.#options.bootId,
 			pid: process.pid,
 			omp_version: this.#options.ompVersion,
 			recovered_inflight: store.recoveredInflight,
-			requeued_ambiguous: requeued,
+			requeued_ambiguous: store.requeueAmbiguous(),
 		});
 		for (const { field, reason } of config.warnings ?? []) log.warn("config_warning", { field, reason });
 		this.#bootBackup();
@@ -501,6 +502,8 @@ export class Daemon {
 			quotaHoldReason: (originKey) => this.#quota.holdReasonForOrigin(originKey),
 			onCacheMiss: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatCacheMissNotice(info)),
 			onColdCache: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatColdCacheNotice(info)),
+			coldResumeRotateTokens: () => coldResumeTokens(this.#options.config),
+			onColdResumeRotated: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatColdResumeNotice(info)),
 			onSessionMismatch: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatSessionMismatchNotice(info)),
 			// A monitor's turn has no thread to warn: the log line is its record.
 			onTurnCostCap: (info) => {
@@ -676,23 +679,20 @@ export class Daemon {
 				}),
 			)
 		).flat();
-		if (started.length > 0 && failed.length === started.length) {
+		if (started.length > 0 && failed.length === started.length)
 			throw new Error(`every chat adapter failed to start: ${failed.join(", ")}`);
-		}
 
 		// A waiting click cannot outlive the process: expire every pending card and say so on them.
 		void this.#broker.expireStale(false).catch((error) => log.warn("approval_expire_failed", { error: String(error) }));
 
 		// Missed messages since the last run: one recovery pass per platform now (each reconnect runs another).
 		for (const adapter of this.#adapters.values()) adapter.recover();
-		// A peer answer posted while the daemon was down comes back with that pass (`onPeerSeen`): the silence sweep
-		// waits for it, or it would alert a call already answered.
+		// A peer answer posted while down comes back with that pass (`onPeerSeen`): the silence sweep waits for it.
 		void (this.#adapters.get("discord")?.recoveryIdle?.() ?? Promise.resolve()).then(() => {
 			this.#peerSilenceArmed = true;
 			log.info("peer_silence_armed");
 		});
 
-		const herdrRun = this.#options.herdrRun;
 		setLocalHerdrBin(config.herdr?.bin);
 		// herdr off: the sweep leaves the herdr rows alone (never read or reminded); say so once. Headless rows need no herdr.
 		const orphaned = config.herdr === undefined ? store.tasks.listActive().filter((r) => r.runtime === "herdr") : [];
@@ -701,7 +701,7 @@ export class Daemon {
 			store,
 			config,
 			herdr: config.herdr,
-			herdrRun,
+			herdrRun: this.#options.herdrRun,
 			requestTaskSweep: (taskId) => this.#requestTaskSweep(taskId),
 			repoMatches: (row, repos) => this.repoMatches(row, repos),
 			autoLand: (row, gate) => this.autoLand(row, gate),
@@ -713,15 +713,13 @@ export class Daemon {
 		this.#checkRunner = sweep.checkRunner;
 		this.#taskSweeper = sweep.taskSweeper;
 		this.#ipc = startIpcServer(this.socketPath, (request) => handleIpc(this.#ctx, this, this.#landing, request));
-		// "Back" is told only once the process can be reached: a start that fails earlier leaves the marker for the next one,
-		// and the notice goes out before a recovered turn's first post.
+		// "Back" is told once the process can be reached (an earlier failed start leaves the marker), before a recovered turn's post.
 		this.#announceMarker("back");
 
 		// Rule (1): rows still pending in the ledger are dispatched again (a frozen bot's mailboxes hold autonomous rows).
 		this.#pending.noteFrozenHeld(store.listInbound({ state: "pending" }));
-		for (const originKey of new Set(store.listInbound({ state: "pending" }).map((row) => row.originKey))) {
+		for (const originKey of new Set(store.listInbound({ state: "pending" }).map((row) => row.originKey)))
 			dispatchPending(this.#ctx, originKey);
-		}
 		// A [TASK] closed `done` while the daemon was down gets its note now.
 		await wikiNotes.backfillTasks();
 		this.#timer = setInterval(() => void this.sweep(), this.#options.sweepMs ?? DEFAULT_SWEEP_MS);
@@ -779,23 +777,29 @@ export class Daemon {
 
 	/** One sweep of the interval chain; never rejects so a failed step only skips the beat and logs `sweep_failed`. */
 	async sweep(): Promise<void> {
+		// The step a failure is attributed to: the outer catch cannot tell pump from the media sweep from the beat.
+		let step = "pump";
+		const run = async (name: string, work: () => void) => {
+			step = name;
+			await work();
+		};
 		try {
-			await this.pump();
-			this.#router?.sweepStalls();
-			this.#startLaneTick();
+			await run("pump", () => this.pump());
+			await run("sweep_stalls", () => this.#router?.sweepStalls());
+			await run("lane_tick", () => this.#startLaneTick());
 			try {
 				// A restart drain fires no monitor: due slots are claimed by the next process's catch-up.
 				if (this.#router?.draining !== true) await this.#monitors?.tick();
 			} catch (error) {
 				this.#log.error("monitor_tick_failed", { error: String(error) });
 			}
-			this.#startIdleSweep();
-			this.#maybeSweepTasks();
-			this.#maybeFlushWikiTurns();
-			this.#pending.sweep();
-			this.#quota.maybePoll();
-			this.#opsPanel.maybeTick();
-			this.#picker.pruneExpired();
+			await run("idle_sweep", () => this.#startIdleSweep());
+			await run("task_sweep", () => this.#maybeSweepTasks());
+			await run("wiki_turns", () => this.#maybeFlushWikiTurns());
+			await run("pending_sweep", () => this.#pending.sweep());
+			await run("quota_poll", () => this.#quota.maybePoll());
+			await run("ops_panel_tick", () => this.#opsPanel.maybeTick());
+			await run("picker_prune", () => this.#picker.pruneExpired());
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
@@ -806,15 +810,16 @@ export class Daemon {
 			} catch (error) {
 				this.#log.warn("peer_silence_sweep_failed", { error: String(error) });
 			}
+			step = "approval_expire";
 			void this.#broker
 				?.expireStale()
 				.catch((error: unknown) => this.#log.warn("approval_expire_failed", { error: String(error) }));
-			this.#sweepMedia();
-			this.#review.maybeReviewSkills();
-			this.#review.maybeProposeCandidates();
-			this.#beat();
+			await run("media_sweep", () => this.#sweepMedia());
+			await run("review_skills", () => this.#review.maybeReviewSkills());
+			await run("review_candidates", () => this.#review.maybeProposeCandidates());
+			await run("beat", () => this.#beat());
 		} catch (error) {
-			this.#log.error("sweep_failed", { error: String(error) });
+			this.#log.error("sweep_failed", { step, error: String(error) });
 		}
 	}
 
@@ -909,13 +914,12 @@ export class Daemon {
 			// The snapshot's own herdr/ssh/git calls always use the real runner: `briefingRun` is the capture seam only.
 			run: realProcessRunner,
 		})();
-		const html = renderBriefingHtml(snapshot, now);
 		const dir = join(config.homeDir, "media", "briefing");
 		mkdirSync(dir, { recursive: true });
 		// `<YYYYMMDD-HHmmss in the bot's zone>-<suffix>`: the suffix is per render, so two briefings in the same second never collide.
 		const out = join(dir, `${briefingFileName(now, this.#options.config.timezone)}-${randomUUID().slice(0, 8)}.png`);
 		const startedAt = Date.now();
-		const size = await renderPng(html, out, {
+		const size = await renderPng(renderBriefingHtml(snapshot, now), out, {
 			chromium: config.briefing?.chromium ?? "chromium",
 			width: BRIEFING_WIDTH,
 			timeoutMs: BRIEFING_TIMEOUT_MS,
@@ -988,7 +992,7 @@ export class Daemon {
 				try {
 					await this.#taskSweeper.sweep(due);
 				} catch (error) {
-					this.#log.error("task_sweep_failed", { error: String(error) });
+					this.#log.error("task_sweep_failed", { tasks: due.size, error: String(error) });
 				}
 			} while (this.#taskSweepAgain && !this.#stopped);
 		} finally {
@@ -1049,9 +1053,8 @@ export class Daemon {
 			return;
 		}
 		this.#announceMarker("cancelled");
-		for (const originKey of new Set(this.store.listInbound({ state: "pending" }).map((row) => row.originKey))) {
+		for (const originKey of new Set(this.store.listInbound({ state: "pending" }).map((row) => row.originKey)))
 			dispatchPending(this.#ctx, originKey);
-		}
 	}
 
 	/**
@@ -1113,17 +1116,15 @@ export class Daemon {
 		else plan.next.warnings = fresh.warnings;
 		for (const { field, reason } of fresh.warnings ?? []) this.#log.warn("config_warning", { field, reason, trigger });
 		this.#options.config = plan.next;
-		// `channels` is a restart key, so `plan.next` still carries the Discord values the daemon started with.
+		// `channels` stays restart-bound apart from Discord's live policy keys, so these still carry the started values.
 		this.#store?.setLogChannel({ discord: plan.next.channels.discord?.logChannelId });
 		this.#store?.setAlertChannel({ discord: plan.next.channels.discord?.alertChannelId });
 		if (plan.changed.includes("peerSilenceAlert")) this.#store?.setPeerCallPolicy(peerCallPolicyOf(plan.next));
 		if (plan.changed.includes("quotaGate")) this.#quota.maybePoll();
 		if (plan.changed.includes("opsPanel")) this.#opsPanel.maybeTick();
 		this.#broker?.setEscalationChannel({ discord: plan.next.channels.discord?.escalationChannelId });
-		// Of the top-level keys only the peer hop cap reaches the adapter (its own policy is under `channels.discord`).
-		this.#adapters
-			.get("discord")
-			?.setChannelPolicy(plan.next.peerHopLimit === undefined ? {} : { peerHopLimit: plan.next.peerHopLimit });
+		// The reload-carried Discord policy: `channels.discord`'s connection keys plus the top-level peer hop cap.
+		this.#adapters.get("discord")?.setChannelPolicy(discordPolicyOf(plan.next));
 		this.#log.info("config_reloaded", {
 			trigger,
 			changed: plan.changed.join(",") || "-",
@@ -1241,8 +1242,7 @@ export class Daemon {
 		if (request.thread !== undefined && !/^\d{17,20}$/.test(request.thread))
 			throw new Error(`inject thread is not a message id: ${request.thread}`);
 		const nonce = randomBytes(6).toString("hex");
-		// The marker is all the owner sees of the injected message, so it carries the text's first line — masked before it
-		// is cut: a secret cut short no longer matches its pattern and would go out half.
+		// The marker carries the text's first line, masked before it is cut (a secret cut short no longer matches its pattern).
 		const firstLine = redact(
 			request.text
 				.split("\n")
@@ -1329,6 +1329,7 @@ export class Daemon {
 	async #shutdown(): Promise<void> {
 		clearInterval(this.#timer);
 		this.#lanes?.stop();
+		this.#landing.stop();
 		await this.#taskGates?.stop();
 		await this.#checkRunner?.stop();
 		this.#heartbeat?.stop();

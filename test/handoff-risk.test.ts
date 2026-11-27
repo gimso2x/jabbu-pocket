@@ -878,4 +878,46 @@ describe("scanHandoffBrief: ANSI-C quoting, quote splicing, escaped slash, and s
 			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
 		}
 	});
+
+	test("an ANSI-C escape with no digits (\\xZZ, \\u12, a bare \\x) is scanned, not thrown on, and the rest of the brief is still judged", () => {
+		for (const brief of ["echo $'\\xZZ'", "echo $'\\u12'", "echo $'\\x'", "echo $'\\U1x'"]) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
+		}
+		// Digitless `\x`/`\u`/`\U` stays literal text: it neither hides nor invents a destructive command around it.
+		for (const brief of [
+			"echo $'\\xZZ' ; rm -rf /",
+			"rm $'\\x' -rf /",
+			"$'\\u0072m' -rf /",
+			"echo $'\\U0010FFFF' ; rm -rf /",
+		]) {
+			const scan = scanHandoffBrief(brief);
+			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
+			expect(scan.findings).toContainEqual(expect.objectContaining({ rule: "rm_rf_absolute" }));
+		}
+		// Valid escapes still decode: a \U above U+10FFFF is dropped, not thrown on, and `r\xZZm` is not `rm`.
+		for (const brief of ["echo $'\\U00110000'", "echo r$'\\xZZ'm -rf /tmp/x"]) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
+		}
+	});
+
+	test("ANSI-C newline inside destructive SQL is whitespace to the database, not a command boundary", () => {
+		for (const brief of [
+			"psql -c $'DROP\\nTABLE users'",
+			"psql -c $'DELETE\\nFROM users;'",
+			"psql -c $'TRUNCATE\\r\\nTABLE users'",
+			"psql -c $'SELECT 1\\nDROP TABLE users'",
+			// `\f`, `\v` and `\cJ` are whitespace to the database too, not vanishing characters.
+			"psql -c $'DROP\\fTABLE users'",
+			"psql -c $'DROP\\vTABLE users'",
+			"psql -c $'DROP\\cJTABLE users'",
+		]) {
+			const scan = scanHandoffBrief(brief);
+			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
+			expect(scan.findings).toContainEqual(expect.objectContaining({ rule: "sql_destructive", severity: "high_risk" }));
+		}
+		// The same decoding still splits commands for every other rule, and harmless SQL stays clear.
+		for (const brief of ["psql -c $'SELECT\\n1'", "echo $'a\\nb'"]) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
+		}
+	});
 });

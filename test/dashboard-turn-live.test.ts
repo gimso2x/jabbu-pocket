@@ -251,7 +251,13 @@ describe("live routes", () => {
 		const once = await fetch(`${base}/api/thread/live?origin=${encodeURIComponent(ORIGIN)}`);
 		expect(once.status).toBe(200);
 		expect(await once.json()).toMatchObject({ live: { seq: 4 } });
-		expect(await (await fetch(`${base}/api/thread/live?origin=other`)).json()).toEqual({ live: null });
+		const otherOrigin = "discord/ch/300000000000000002/t/900000000000000010";
+		expect(await (await fetch(`${base}/api/thread/live?origin=${encodeURIComponent(otherOrigin)}`)).json()).toEqual({
+			live: null,
+		});
+		const malformedOnce = await fetch(`${base}/api/thread/live?origin=other`);
+		expect(malformedOnce.status).toBe(400);
+		expect(await malformedOnce.json()).toEqual({ error: "invalid_origin" });
 		fail = true;
 		const down = await fetch(`${base}/api/thread/live?origin=${encodeURIComponent(ORIGIN)}`);
 		expect(down.status).toBe(503);

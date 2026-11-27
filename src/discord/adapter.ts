@@ -165,7 +165,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #owner: string;
 	readonly #clock: AdapterClock;
 	readonly #log: Logger;
-	readonly #guildIds: ReadonlySet<string> | undefined;
+	#guildIds: ReadonlySet<string> | undefined;
 	#mentionFree: ReadonlySet<string>;
 	readonly #inline: InlineRoots;
 	readonly #logChannel: string | undefined;
@@ -271,11 +271,7 @@ export class DiscordAdapter implements ChannelAdapter {
 						targets: () => recovery.targets(),
 						maxPages: recovery.maxPages,
 						ready: async () => (await this.#ready) !== undefined,
-						locate: async (channelId) => {
-							const info = await this.#port.channelInfo(channelId, false);
-							if (info === undefined) return undefined;
-							return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
-						},
+						locate: (channelId) => this.#port.locate(channelId),
 						preparePage: (msgs) =>
 							mergeBackfillPeerParts(msgs, this.#botUserId, new Set(this.#peerBots.map((p) => p.userId))),
 						ingest: async (event) => {
@@ -383,12 +379,12 @@ export class DiscordAdapter implements ChannelAdapter {
 		return this.#recovery?.waitForIdle() ?? Promise.resolve();
 	}
 
-	/**
-	 * Config reload. Discord's own policy keys live under `channels.discord`, which needs a restart; of the top-level
-	 * keys only `peerHopLimit` is shared by both platforms, so only it is taken here.
-	 */
+	/** Config reload: `peerHopLimit` and Discord's own `channels.discord` policy keys apply to the next inbound. */
 	setChannelPolicy(policy: ChannelPolicy): void {
 		this.#peerHopLimit = policy.peerHopLimit ?? DEFAULT_PEER_HOP_LIMIT;
+		this.#guildIds = policy.guildIds === undefined ? undefined : new Set(policy.guildIds);
+		this.#mentionFree = new Set(policy.mentionFreeChannels ?? []);
+		this.#requireMention = policy.requireMention === true;
 	}
 
 	/** An owner message the daemon puts in, fed through the live path as the owner's own message. */

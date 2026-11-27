@@ -1,6 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { resolve } from "node:path";
 import type { AgyMcpServer } from "../config-agy";
+import { captureTree, type ProcessTree, signalTree } from "../core/terminate-tree";
 import type { Logger } from "../log";
 import { OmpDriverError, type OmpUsage } from "./driver";
 import { MAX_RPC_FRAME_BYTES } from "./rpc-client";
@@ -138,6 +139,8 @@ export class AgyAcpClient {
 	#nextId = 0;
 	#stderrTail = "";
 	#exited = false;
+	/** Read from `/proc` before the first kill, kept for the next ones: the leader may be gone by the SIGKILL. */
+	#tree: ProcessTree | undefined;
 
 	constructor(options: AgyAcpSpawnOptions, handlers: AgyAcpHandlers) {
 		this.#handlers = handlers;
@@ -198,17 +201,10 @@ export class AgyAcpClient {
 		this.#write({ jsonrpc: "2.0", method, params });
 	}
 
-	/** Signals the child's whole process group; a group already gone is fine. */
+	/** Signals the child's whole process tree, a descendant that left the group included; a group already gone is fine. */
 	kill(signal: NodeJS.Signals = "SIGTERM"): void {
-		try {
-			process.kill(-this.pid, signal);
-		} catch {
-			try {
-				this.#proc.kill(signal);
-			} catch {
-				// already gone
-			}
-		}
+		this.#tree ??= captureTree(this.pid);
+		signalTree(this.#tree, signal);
 	}
 
 	/** SIGTERM to the group, SIGKILL after `graceMs`; resolves once the exit was handled. */

@@ -97,9 +97,15 @@ export function parseMemoryPressure(text: string): "normal" | "some" | "full" | 
 	return "normal";
 }
 
+const BROWSER_BIN_RE = /^(?:(?:google-)?chrom(?:e|ium)|headless_shell|chrome-headless|agent-browser|playwright)/i;
+const RUNTIME_WRAPPER_RE = /^(?:node|nodejs|deno|bun|python\d*(?:\.\d+)?)$/i;
+const WRAPPER_AGENT_BROWSER_RE = /(?:^|[\s/])agent-browser(?:\s|$)/i;
+const WRAPPER_PLAYWRIGHT_RE =
+	/(?:^|[\s/])playwright(?:-core)?(?:\/cli\.js|\/driver|\s+(?:run-driver|open|codegen|install|show-report|screenshot|pdf)|$)/i;
+
 /**
  * Classifies browser processes from `ps -eo rss=,comm=,args=` into mutually exclusive buckets
- * (`agentBrowser`, `playwright`, `headless`, `chrome`) excluding crashpad helpers.
+ * (`agentBrowser`, `playwright`, `headless`, `chrome`) excluding crashpad helpers and non-browser tools (e.g. `grep`, tests).
  */
 export function parseBrowserPs(stdout: string): BrowserBreakdown {
 	let total = 0;
@@ -111,12 +117,20 @@ export function parseBrowserPs(stdout: string): BrowserBreakdown {
 	for (const line of stdout.split("\n")) {
 		const m = /^\s*(\d+)\s+(\S+)(?:\s+(.*))?$/.exec(line);
 		if (m?.[1] === undefined || m[2] === undefined) continue;
-		const cmd = `${m[2]} ${m[3] ?? ""}`;
-		if (!/chrome|chromium|playwright|agent-browser|headless_shell/i.test(cmd)) continue;
+		const comm = m[2];
+		const args = m[3] ?? "";
+		const cmd = `${comm} ${args}`;
 		if (/crashpad/i.test(cmd)) continue;
+		const argv0 = (args.trim().split(/\s+/)[0] ?? "").split("/").at(-1) ?? "";
+		const isNativeBrowser = BROWSER_BIN_RE.test(comm) || BROWSER_BIN_RE.test(argv0);
+		const isAutomationWrapper =
+			!isNativeBrowser &&
+			RUNTIME_WRAPPER_RE.test(comm) &&
+			(WRAPPER_AGENT_BROWSER_RE.test(args) || WRAPPER_PLAYWRIGHT_RE.test(args));
+		if (!isNativeBrowser && !isAutomationWrapper) continue;
 		total += 1;
 		rssKb += Number(m[1]);
-		if (/agent-browser/i.test(m[3] ?? "")) agentBrowser += 1;
+		if (WRAPPER_AGENT_BROWSER_RE.test(args) || /^agent-browser/i.test(comm)) agentBrowser += 1;
 		else if (/playwright/i.test(cmd)) playwright += 1;
 		else if (/--headless|headless_shell|headless/i.test(cmd)) headless += 1;
 		else chrome += 1;

@@ -299,9 +299,10 @@ esac
 		const real = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
 		expect(real.threadOriginsRemoved).toHaveLength(totalExpired);
 		expect(real.ledgerRemoved.inboundOrphans).toBe(totalExpired);
-	});
+		// WSL2 in CI took 15.4 s here (>500 chunked origins, real gc twice); locally the same test finishes in ~2 s.
+	}, 60_000);
 
-	test.skipIf(isRoot)(
+	test.skipIf(isRoot /* root ignores permission bits, so the 0o000 dir gives no EACCES (qa-ad #12) */)(
 		"#12: 0o000 EACCES session directories are skipped (never deleted in pass 2) while the rest of gc succeeds",
 		async () => {
 			const home = makeHome("jabbu-qa-ad-gc-skip-");

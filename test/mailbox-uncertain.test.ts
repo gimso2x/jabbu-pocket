@@ -44,7 +44,7 @@ describe("the uncertain notice's preview line", () => {
 	});
 
 	test("the preview is cut to 80 codepoints without breaking a surrogate pair", () => {
-		const preview = previewOf(uncertainNoticeText(parkedRow("가".repeat(78) + "😀😀😀"), "send_interrupted"));
+		const preview = previewOf(uncertainNoticeText(parkedRow(`${"가".repeat(78)}😀😀😀`), "send_interrupted"));
 		expect([...preview].length).toBeLessThanOrEqual(80);
 		for (const char of preview) {
 			const codePoint = char.codePointAt(0) ?? 0;

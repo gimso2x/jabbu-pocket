@@ -274,7 +274,7 @@ export async function writeTaskDocs(
 	}
 	const { recordsRepo } = input;
 	if (recordsRepo === undefined || insideWorktree(row)) {
-		const committed = await ops.commitDocs({ worktree: row.worktree, taskId: row.taskId });
+		const committed = await ops.commitDocs({ worktree: row.worktree, taskId: row.taskId, branch: row.branch });
 		return committed.ok ? { ok: true, plans: [], recorded: false } : committed;
 	}
 	const named = planPathsIn(input.docs.map(([, content]) => content).join("\n"));

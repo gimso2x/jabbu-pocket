@@ -5,12 +5,12 @@ import {
 	type AcceptanceItem,
 	oneLine,
 	type ProgressStep,
-	parseIsoMs,
 	parseOutcome,
 	parseProgress,
 	parseSpec,
 	stripAcPrefix,
 } from "./docs";
+import { parseIsoMs } from "./iso-ms";
 import { checkSignalsOf } from "./signals";
 
 export const COMMIT_HASH = /^[0-9a-f]{7,40}$/;

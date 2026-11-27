@@ -9,9 +9,12 @@ import {
 	remoteShellQuote,
 } from "../dispatch/omp";
 import { redactThenClip } from "../redact";
+import { createBasedWorktree } from "./base-ref";
+import { assertBranchSafe } from "./branch";
 import type { CommitCheck } from "./checker";
 import { TASK_PATH_PATTERN, taskDocsCommitTitle } from "./docs";
 import { isFullTestArgv } from "./full-test";
+import { hiddenOnHost } from "./host-hidden";
 
 export type HostResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -34,8 +37,8 @@ const SSH_FAILURE = 255;
 /** File and git operations of a task on one machine (the bot's own, or a `dispatchHosts` entry over ssh). */
 export interface TaskHostOps {
 	pathExists(path: string): Promise<HostResult<boolean>>;
-	/** `git -C <repo> worktree add -b <branch> <worktree> HEAD`; fails when the branch or path already exists. */
-	createWorktree(input: { repo: string; worktree: string; branch: string }): Promise<HostResult<null>>;
+	/** Forks `branch` into `worktree` from `base` (default `HEAD`; a remote-tracking base is fetched first), `--no-track`; fails when the base, branch or path is unusable. */
+	createWorktree(input: { repo: string; worktree: string; branch: string; base?: string }): Promise<HostResult<null>>;
 	/** Best-effort removal of a worktree and its branch (a failed registration, a landed or discarded lane). */
 	removeWorktree(input: { repo: string; worktree: string; branch: string }): Promise<void>;
 	/** Best-effort removal of a failed start's records directory (a `…/docs/tasks/<id>` path only). */
@@ -61,7 +64,7 @@ export interface TaskHostOps {
 	 */
 	branchDiff(input: { worktree: string; branch: string; baseSha: string }): Promise<HostResult<string>>;
 	/** Commits `docs/tasks/<taskId>` on the worktree's branch as its first commit (`taskDocsCommitTitle`); the value is the hash. */
-	commitDocs(input: { worktree: string; taskId: string }): Promise<HostResult<string>>;
+	commitDocs(input: { worktree: string; taskId: string; branch?: string }): Promise<HostResult<string>>;
 	/** A `doc/plans/<name>.md` a task names: a regular file inside `recordsRepo` when set, else `<worktree>/<path>` on its host. */
 	readPlan(path: string, worktree: string): Promise<HostResult<string | undefined>>;
 	/**
@@ -70,7 +73,7 @@ export interface TaskHostOps {
 	 * reached.
 	 */
 	runCheck(input: { worktree: string; argv: string[]; timeoutMs: number; signal?: AbortSignal }): Promise<CheckRun>;
-	/** The worktree's HEAD commit and whether `git status --porcelain` is empty; throws when git cannot answer. */
+	/** The worktree's HEAD commit and whether it is clean (status empty, no flag-hidden edit); throws when git cannot answer. */
 	headOf(worktree: string): Promise<{ sha: string; clean: boolean }>;
 }
 
@@ -134,11 +137,6 @@ function assertPath(...paths: string[]): void {
 	for (const path of paths) if (!TASK_PATH_PATTERN.test(path)) throw new Error(`unsafe path: ${path}`);
 }
 
-/** A task branch (`task/T-YYYYMMDD-NN`) or a work lane's branch (`lane/L-YYYYMMDD-NN`); nothing else reaches git. */
-function assertBranch(branch: string): void {
-	if (!/^(?:task\/T|lane\/L)-\d{8}-\d{2,}$/.test(branch)) throw new Error(`unsafe branch: ${branch}`);
-}
-
 /** A task row's `baseSha`: a full object name, never an option or a range. */
 function assertSha(sha: string): void {
 	if (!FULL_HASH.test(sha)) throw new Error(`unsafe base sha: ${sha}`);
@@ -194,7 +192,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 	const exec = (argv: string[], timeoutMs: number, stdoutCap?: number) =>
 		sshTarget === undefined
 			? run(["sh", "-c", 'exec "$@" 2>&1', "sh", ...argv], { timeoutMs, env, stdoutCap })
-			: run(sshCommand(sshTarget, [...argv, "2>&1"]), { timeoutMs, stdoutCap });
+			: run(sshCommand(sshTarget, [...argv.map(remoteShellQuote), "2>&1"]), { timeoutMs, stdoutCap });
 	const unreachable = (result: { code: number | null; timedOut: boolean }): boolean =>
 		result.timedOut || result.code === null || (sshTarget !== undefined && result.code === SSH_FAILURE);
 	/** ssh writes its own connection errors to stderr; the remote command's output is on stdout. */
@@ -209,17 +207,14 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 			return { ok: true, value: result.code === 0 };
 		},
 
-		async createWorktree({ repo, worktree, branch }) {
-			assertPath(repo, worktree);
-			assertBranch(branch);
-			const result = await exec(["git", "-C", repo, "worktree", "add", "-b", branch, worktree, "HEAD"], GIT_TIMEOUT_MS);
-			if (result.code === 0 && !result.timedOut) return { ok: true, value: null };
-			return { ok: false, error: `git worktree add failed: ${redactThenClip(result.stdout.trim(), 200)}` };
+		async createWorktree(input) {
+			assertPath(input.repo, input.worktree);
+			return createBasedWorktree((argv) => exec(argv, GIT_TIMEOUT_MS), input);
 		},
 
 		async removeWorktree({ repo, worktree, branch }) {
 			assertPath(repo, worktree);
-			assertBranch(branch);
+			assertBranchSafe(branch);
 			// A read-only dir inside stops `worktree remove` halfway (`.git` gone, tree left): restore u+w first.
 			await exec(["chmod", "-R", "u+w", "--", worktree], GIT_TIMEOUT_MS);
 			await exec(["git", "-C", repo, "worktree", "remove", "--force", worktree], GIT_TIMEOUT_MS);
@@ -253,13 +248,8 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 
 		async readFile(path) {
 			assertPath(path);
-			if (sshTarget === undefined) {
-				try {
-					return { ok: true, value: (await readRegularFile(path))?.toString("utf8") };
-				} catch (error) {
-					return fail(error);
-				}
-			}
+			if (sshTarget === undefined)
+				return readRegularFile(path).then((bytes) => ({ ok: true as const, value: bytes?.toString("utf8") }), fail);
 			const result = await run(sshCommand(sshTarget, ["cat", path]), { timeoutMs: IO_TIMEOUT_MS });
 			if (unreachable(result)) return { ok: false, error: `host unreachable: ${unreachableReason(result)}` };
 			if (result.code !== 0) return { ok: true, value: undefined };
@@ -286,7 +276,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 
 		async commitOnTaskBranch({ worktree, branch, baseSha: base, hash }) {
 			assertPath(worktree);
-			assertBranch(branch);
+			assertBranchSafe(branch);
 			assertSha(base);
 			if (!HEX_HASH.test(hash)) return "missing";
 			const git = async (...args: string[]) => {
@@ -313,7 +303,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 
 		async branchDiff({ worktree, branch, baseSha }) {
 			assertPath(worktree);
-			assertBranch(branch);
+			assertBranchSafe(branch);
 			assertSha(baseSha);
 			const diff = await exec(
 				[
@@ -329,7 +319,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 					"--no-color",
 					"--unified=0",
 					// The worker's own status documents are not judged and only eat into the runner's stdout cap.
-					// `:!` rather than `:(exclude)`: the argv crosses a remote shell unquoted over ssh.
+					// `:!` rather than `:(exclude)`: no magic-pathspec parentheses for a remote shell to see.
 					"--",
 					".",
 					":!docs/tasks",
@@ -343,21 +333,25 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 			return { ok: true, value: diff.stdout };
 		},
 
-		async commitDocs({ worktree, taskId }) {
+		async commitDocs({ worktree, taskId, branch }) {
 			assertPath(worktree);
+			if (branch !== undefined) assertBranchSafe(branch);
 			if (!TASK_ID.test(taskId)) throw new Error(`unsafe task id: ${taskId}`);
 			const dir = `docs/tasks/${taskId}`;
 			const message = taskDocsCommitTitle(taskId);
-			// ssh joins its arguments into one remote shell line: the fixed message is quoted there, passed bare locally.
-			const steps = [
-				["git", "-C", worktree, "add", "--", dir],
-				["git", "-C", worktree, "commit", "-q", "-m", sshTarget === undefined ? message : `'${message}'`, "--", dir],
-			];
-			for (const argv of steps) {
-				const result = await exec(argv, GIT_TIMEOUT_MS);
-				if (result.code !== 0 || result.timedOut) {
-					return { ok: false, error: `git ${argv[3]} failed: ${redactThenClip(result.stdout.trim(), 200)}` };
-				}
+			const add = ["git", "-C", worktree, "add", "--", dir];
+			const commit = (text: string) => ["git", "-C", worktree, "commit", "-q", "-m", text, "--", dir];
+			const added = await exec(add, GIT_TIMEOUT_MS);
+			if (added.code !== 0 || added.timedOut) {
+				return { ok: false, error: `git add failed: ${redactThenClip(added.stdout.trim(), 200)}` };
+			}
+			let committed = await exec(commit(message), GIT_TIMEOUT_MS);
+			// A repository's commit-msg hook may demand a `[<branch>]` head: the second try carries it.
+			if ((committed.code !== 0 || committed.timedOut) && !unreachable(committed) && branch !== undefined) {
+				committed = await exec(commit(`[${branch}] ${message}`), GIT_TIMEOUT_MS);
+			}
+			if (committed.code !== 0 || committed.timedOut) {
+				return { ok: false, error: `git commit failed: ${redactThenClip(committed.stdout.trim(), 200)}` };
 			}
 			const head = await exec(["git", "-C", worktree, "rev-parse", "HEAD"], GIT_TIMEOUT_MS);
 			const hash = head.stdout.trim();
@@ -450,7 +444,8 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 			};
 			const sha = await git("rev-parse", "HEAD");
 			if (!FULL_HASH.test(sha)) throw new Error(`cannot read HEAD of ${worktree}: ${redactThenClip(sha, 80)}`);
-			return { sha, clean: (await git("status", "--porcelain", "--untracked-files=all")) === "" };
+			const status = await git("status", "--porcelain", "--untracked-files=all");
+			return { sha, clean: status === "" && !(await hiddenOnHost(exec, worktree, GIT_TIMEOUT_MS)) };
 		},
 
 		async progressLag({ worktree, taskId, progressFile }) {
@@ -483,7 +478,7 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 				codeCommitsSince = Number.parseInt(count.value.trim(), 10);
 			} else if (progressCommit !== "") {
 				// Every task's documents are left out, not only this one's: a docs-only commit is never a code commit.
-				// `:!` rather than `:(exclude)`: the argv crosses a remote shell unquoted over ssh.
+				// `:!` rather than `:(exclude)`: no magic-pathspec parentheses for a remote shell to see.
 				const count = await git("rev-list", "--count", `${progressCommit}..HEAD`, "--", ".", ":!docs/tasks");
 				if (!count.ok) return count;
 				codeCommitsSince = Number.parseInt(count.value.trim(), 10);
