@@ -23,6 +23,8 @@ export interface FakePr {
 	state: "OPEN" | "MERGED" | "CLOSED";
 	/** The branch tip when the PR was last read while the branch existed (a merge deletes the branch). */
 	headSha: string;
+	/** The head repository owner's login as `pr list` reports it; defaults to the served slug's owner. */
+	owner?: string;
 	mergeCommit?: string;
 }
 
@@ -147,7 +149,17 @@ export class FakeGh {
 	#list(argv: string[]): ProcResult {
 		const head = this.#flag(argv, "--head");
 		const open = this.prs.filter((pr) => pr.head === head && pr.state === "OPEN");
-		return ok(JSON.stringify(open.map((pr) => ({ number: pr.number, url: pr.url }))));
+		return ok(
+			JSON.stringify(
+				open.map((pr) => ({
+					number: pr.number,
+					url: pr.url,
+					// A foreign owner's head lives in their fork, not in the bare repository: its oid is the planted one.
+					headRefOid: pr.owner === undefined ? (this.#tip(pr.head) ?? pr.headSha) : pr.headSha,
+					headRepositoryOwner: { login: pr.owner ?? this.#options.slug.split("/")[0] },
+				})),
+			),
+		);
 	}
 
 	#create(argv: string[], call: FakeCall): ProcResult {
