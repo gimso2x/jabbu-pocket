@@ -300,9 +300,7 @@ export class DiscordAdapter implements ChannelAdapter {
 
 	/** `<@&role>` tokens of the managed roles of the bot with this user id. */
 	#roleTokensOf(userId: string): string[] {
-		const tokens: string[] = [];
-		for (const [roleId, botId] of this.#botRoles) if (botId === userId) tokens.push(`<@&${roleId}>`);
-		return tokens;
+		return [...this.#botRoles].filter(([, botId]) => botId === userId).map(([roleId]) => `<@&${roleId}>`);
 	}
 
 	/**
@@ -471,10 +469,8 @@ export class DiscordAdapter implements ChannelAdapter {
 			return;
 		}
 		this.#seenInteractions.add(interaction.id);
-		if (this.#seenInteractions.size > SEEN_INTERACTIONS_MAX) {
-			const oldest = this.#seenInteractions.values().next().value;
-			if (oldest !== undefined) this.#seenInteractions.delete(oldest);
-		}
+		if (this.#seenInteractions.size > SEEN_INTERACTIONS_MAX)
+			this.#seenInteractions.delete(this.#seenInteractions.values().next().value as string);
 		const userId = (interaction.member?.user ?? interaction.user)?.id ?? "";
 		const actionContext = {
 			customId: interaction.data?.custom_id,
@@ -523,8 +519,13 @@ export class DiscordAdapter implements ChannelAdapter {
 		}
 	}
 
-	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). */
+	/** Sends an ephemeral follow-up via webhook without overwriting `@original` (the card message itself). Past the token's near-expiry — 14 of its 15 minutes from the interaction id's own snowflake — the confirmation goes as a normal reply under the card instead, so a slow action's confirmation is not silently lost. */
 	async #followupEphemeral(interaction: DiscordInteraction, text: string, logEvent: string): Promise<void> {
+		const message = interaction.message;
+		if (message !== undefined && this.#clock.now() - snowflakeTime(interaction.id) >= 14 * 60_000) {
+			await this.#postText(message.channel_id, message.id, redact(text), "action_reply_fallback_failed");
+			return;
+		}
 		try {
 			await this.#call("post", () =>
 				this.#transport.followupInteraction({
@@ -1195,8 +1196,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				...(topLevel && replyTo !== undefined ? { replyTs: replyTo } : {}),
 			},
 		});
-		let parts: DiscordPart[];
-		let destination: Destination | undefined;
+		let parts: DiscordPart[], destination: Destination | undefined;
 		try {
 			// Mention tokens in the port's syntax, then thread-link tokens.
 			const links = /\{\{thread-link:([0-9]+):([0-9]+)\}\}/g;
