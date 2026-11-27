@@ -89,8 +89,8 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 	if (field.kind === "text") {
 		if (field.value !== "") lines.push(`(기본값: ${cutCodePointSafe(field.value.replace(/\s+/g, " "), 60)})`);
 		const numeric = field.type === "number" || field.type === "range";
-		const bounded = numeric && (field.min !== undefined || field.max !== undefined);
-		const range = bounded ? ` (${field.min ?? ""}~${field.max ?? ""})` : "";
+		const range =
+			numeric && (field.min !== undefined || field.max !== undefined) ? ` (${field.min ?? ""}~${field.max ?? ""})` : "";
 		lines.push(`${numeric ? "숫자를" : "답장으로"} 적어 주세요${range}${skip}`);
 	} else if (isToggle(field)) {
 		const recommend = field.options[0]?.checked === true ? " (추천: 예)" : "";
@@ -102,9 +102,7 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 		}
 		const how = isArrayChoice(field)
 			? "번호를 쉼표로 답장해 주세요(예: 1,3), 없음은 0"
-			: buttoned
-				? "버튼을 누르거나 번호로 답장해 주세요"
-				: "번호로 답장해 주세요";
+			: `${buttoned ? "버튼을 누르거나 " : ""}번호로 답장해 주세요`;
 		lines.push(`${how}${field.other ? " · 목록에 없는 글은 기타로 받습니다" : ""}${skip}`);
 	}
 	if (warning !== undefined) lines.push(`⚠️ ${field.title}: ${warning}`);
@@ -146,7 +144,9 @@ function readChoice(field: ChoiceField, text: string): FormAnswer | string {
 		return field.other && !/^\d+$/.test(text) ? { checked: [], other: text } : index;
 	}
 	if (text === "0") return { checked: [] };
-	const parts = text.split(/[,\s]+/).filter((part) => part !== "");
+	const comma = text.split(/\s*,\s*/).filter((part) => part !== "");
+	let parts = text.split(/\s+/).filter((part) => part !== "");
+	if (comma.some((part) => typeof pick(part) === "number")) parts = comma;
 	const picked = parts.map(pick);
 	const bad = picked.find((index): index is string => typeof index === "string");
 	if (bad === undefined) return { checked: [...new Set(picked as number[])] };
