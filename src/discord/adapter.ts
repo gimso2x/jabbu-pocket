@@ -65,6 +65,7 @@ import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTi
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
 import { InlineRoots } from "./inline-root";
+import { ackInteraction } from "./interaction-ack";
 import { type DiscordPart, renderDiscordMessages } from "./messages";
 import { mergeBackfillPeerParts, notePeerSeen, PEER_PART_WAIT_MS, PeerParts } from "./peer-posts";
 import {
@@ -484,7 +485,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		};
 		try {
 			const respond = (response: { type: number; data?: Record<string, unknown> }) =>
-				this.#transport.respondInteraction({ interactionId: interaction.id, token: interaction.token, response });
+				ackInteraction(this.#transport, this.#clock, this.#log, interaction, response);
 			if (!isOwner(userId, this.#owner)) {
 				this.#log.warn("action_denied", { user: userId });
 				await respond({ type: CHANNEL_MESSAGE, data: { content: DENIED_TEXT, flags: EPHEMERAL } });
@@ -492,12 +493,9 @@ export class DiscordAdapter implements ChannelAdapter {
 			}
 			const customId = interaction.data?.custom_id;
 			const message = interaction.message;
-			try {
-				await respond({ type: DEFERRED_UPDATE_MESSAGE });
-			} catch (err) {
-				// The click is the owner's either way; only Discord's "interaction failed" hint shows.
-				this.#log.warn("interaction_ack_failed", { id: interaction.id, error: errorText(err) });
-			}
+			// Discord refused the ACK, so the owner saw this click fail: running the action would execute it blind,
+			// and the owner's re-click would run it a second time. An ambiguous failure may have landed, so it runs.
+			if ((await respond({ type: DEFERRED_UPDATE_MESSAGE })) === "failed-definitive") return;
 			if (customId === undefined || message === undefined) return;
 			try {
 				this.#port.rememberMessage(message.id, message.channel_id);
