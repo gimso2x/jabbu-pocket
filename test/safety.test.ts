@@ -974,13 +974,15 @@ describe("host tools", () => {
 		});
 	});
 
-	test("checkUploadable protects npm, kube, docker and gcloud credentials; other files in the home pass", () => {
+	test("checkUploadable protects npm, kube, docker, gcloud, agy-accounts and gemini credentials; other files in the home pass", () => {
 		const deps = { homeDir, workspaceDir, userHome };
 		const files = [
 			join(userHome, ".npmrc"),
 			join(userHome, ".kube", "config"),
 			join(userHome, ".docker", "config.json"),
 			join(userHome, ".config", "gcloud", "credentials.db"),
+			join(userHome, ".agy-accounts", "alpha.token"),
+			join(userHome, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
 		];
 		for (const file of files) {
 			mkdirSync(dirname(file), { recursive: true });
