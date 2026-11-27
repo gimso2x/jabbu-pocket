@@ -242,7 +242,11 @@ describe("jabbu_work_start acceptance and risk (AC-3)", () => {
 });
 
 describe("host assertBranch accepts lane branches (AC-7)", () => {
-	const okRunner = async () => ({ code: 0, stdout: "", timedOut: false });
+	const okRunner = async (cmd: string[]) => ({
+		code: 0,
+		stdout: cmd.includes("rev-parse") ? `${"a".repeat(40)}\n` : "",
+		timedOut: false,
+	});
 
 	test("`lane/L-20261110-01` passes; `task/../x`, `lane/L-20261110-01 ;x` are unsafe", async () => {
 		const ops = createTaskHostOps({ run: okRunner });

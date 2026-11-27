@@ -89,12 +89,9 @@ describe("qa-x #11: restore picks up a -wal that appears before the lock", () =>
 	test("the -wal born while the daemon probe runs moves aside with the db", async () => {
 		const h = home("qa-x-restore-");
 		const dbPath = join(h.dir, "jabbu.db");
-		const seed = () => {
-			const db = new Database(dbPath, { create: true, strict: true });
-			for (const table of ["origins", "inbound", "deliveries"]) db.run(`CREATE TABLE IF NOT EXISTS ${table} (id)`);
-			db.close();
-		};
-		seed();
+		// A real ledger: the old three one-column-table stub passed the shallow checks but no daemon could open
+		// it, and restore now refuses such a backup (U2).
+		openBotStore(dbPath, { now: () => Date.now() }, "Asia/Seoul").close();
 		const backup = join(h.dir, "backup.db");
 		writeFileSync(backup, readFileSync(dbPath));
 		const result = await runRestore({

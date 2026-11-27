@@ -69,8 +69,7 @@ export interface ColdCacheInfo {
 	threadRef: string; // thread of the new turn
 	prefixTokens: number;
 	idleMs: number; // time since the baseline call
-	/** Dollars to rewrite the prefix at the last known cache write price; absent when the price is unknown. */
-	estimatedCost?: number;
+	estimatedCost?: number; // dollars to rewrite the prefix at the last known cache write price; absent when unknown
 }
 
 /**
@@ -213,6 +212,10 @@ export interface MailboxDeps {
 	onCacheMiss?: (info: CacheMissInfo) => void;
 	/** A new conversation turn starts on a cold cache (`isColdCache`); once per baseline, never for a monitor. */
 	onColdCache?: (info: ColdCacheInfo) => void;
+	/** Tokens from which resuming a cold-cache conversation starts a new epoch, read per turn (0 or absent: never). */
+	coldResumeRotateTokens?: () => number;
+	/** A conversation turn started a new session at resume (cold cache, `shouldRotateOnColdResume`); once per rotation. */
+	onColdResumeRotated?: (info: ColdCacheInfo) => void;
 	/** True while a restart drain runs: messages are recorded `pending` only — no new turn, no steer, no command. */
 	isDraining?: () => boolean;
 	/** True while held (paused lane): pending rows wait until resumed (`!` commands still run). */
@@ -401,12 +404,10 @@ export function todoProgress(result: unknown): TurnProgress["todo"] | undefined 
 
 export interface SessionMismatchInfo {
 	originKey: string;
-	/** Thread of the message whose turn (or command) opened the session. */
-	threadRef: string;
+	threadRef: string; // thread of the message whose turn (or command) opened the session
 	/** The file to resume: `/resume-jabbu`'s pin, else the newest session of the epoch dir before the child started. */
 	expected: string;
-	/** The file the child reported as open. */
-	actual: string;
+	actual: string; // the file the child reported as open
 }
 
 /** Outcome of `openOriginSession`: `mismatch` only when both files are known and resolve to different paths. */
@@ -416,8 +417,7 @@ export type SessionOpenCheck =
 
 export interface ActiveTurn {
 	opRef: string;
-	/** Replies go to the thread of the message that started the turn. */
-	threadRef: string;
+	threadRef: string; // replies go to the thread of the message that started the turn
 	/** Set when a peer bot's message started the turn: its failure notice goes back to that bot. */
 	peer: TurnPeer | undefined;
 	startedAt: number;

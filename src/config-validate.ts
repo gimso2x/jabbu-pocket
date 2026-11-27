@@ -2,6 +2,7 @@
 // messages carry the offending path and field names only, never file contents or values.
 import { isAbsolute } from "node:path";
 import { LANE_MODEL_TIERS } from "./model-tiers";
+import { baseProblem } from "./tasks/base-ref";
 import { TASK_PATH_PATTERN } from "./tasks/docs";
 
 export type ConfigErrorCode =
@@ -229,11 +230,13 @@ export interface BranchRule {
 	pattern: string;
 	/** A conforming name, shown when a branch is refused. */
 	example: string;
+	/** Ref a new [TASK] worktree in these repositories forks from unless `taskSpec.base` names one (default `HEAD`). */
+	base?: string;
 }
 
 /** The keys of a `dispatchHosts` entry; a typo (`workdir`) must not silently fall back to the default. */
 const DISPATCH_HOST_KEYS = new Set(["ssh", "workDir", "herdrBin", "ompArgs", "recordsDir", "branchRules"]);
-const BRANCH_RULE_KEYS = new Set(["repoPrefix", "exclude", "pattern", "example"]);
+const BRANCH_RULE_KEYS = new Set(["repoPrefix", "exclude", "pattern", "example", "base"]);
 /** A `dispatchHosts.<h>.ssh` target: not an ssh option (no leading `-`), no whitespace or control character (NUL throws in spawn). */
 const DISPATCH_SSH = /^[^\s-][^\s\p{Cc}]*$/u;
 /** A `dispatchHosts.<h>.workDir` / `herdrBin`: non-empty (an empty word would reach the remote command) and no control character (NUL throws in spawn). */
@@ -264,6 +267,8 @@ function checkBranchRules(configPath: string, value: unknown, field: string): vo
 			invalid(configPath, `${at}.pattern`);
 		}
 		if (typeof rule.example !== "string" || !/^[^\p{Cc}]+$/u.test(rule.example)) invalid(configPath, `${at}.example`);
+		if (rule.base !== undefined && (typeof rule.base !== "string" || baseProblem(rule.base) !== undefined))
+			invalid(configPath, `${at}.base`);
 	});
 }
 
