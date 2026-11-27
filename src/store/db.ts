@@ -185,6 +185,7 @@ export interface StoreOptions {
 		onDeliveryState?: (change: { deliveryId: number; from: DeliveryState | "new"; to: DeliveryState }) => void;
 		onInboundConflict?: (info: InboundConflict) => void; // a message id came again with other content (the first row stays); must not throw
 		onOwnerNoticeUnroutable?: (info: { originKey: string; opRef: string }) => void; // an owner notice had no destination and was not recorded; must not throw
+		onExpiredDropped?: (dropped: readonly DeliveryRow[]) => void; // expired rows trimmed from the handoff; must not throw
 	};
 }
 
@@ -699,8 +700,7 @@ export class Store {
 
 	/** pending -> dispatched. Records the op_ref and the omp leafId cursor taken just before dispatch. */
 	markDispatched(platformMessageId: string, input: { opRef: string; entryCursor: string | null }): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "dispatched");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "dispatched");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'dispatched', dispatched_at = ?, op_ref = ?, entry_cursor = ? WHERE platform_message_id = ?",
@@ -726,8 +726,7 @@ export class Store {
 
 	/** pending|sending -> uncertain: the input may already have reached the omp child, so nothing replays it until the owner decides. */
 	markUncertain(platformMessageId: string, reason: UncertainReason): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "uncertain");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "uncertain");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'uncertain', uncertain_reason = ?, uncertain_at = ? WHERE platform_message_id = ?",
@@ -755,8 +754,7 @@ export class Store {
 
 	/** pending|dispatched|uncertain -> discarded. With `opRef` the row is re-linked to that op (see `newEpoch`). */
 	discard(platformMessageId: string, opRef?: string): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "discarded");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "discarded");
 		this.db
 			.query("UPDATE inbound SET state = 'discarded', op_ref = COALESCE(?, op_ref) WHERE platform_message_id = ?")
 			.run(opRef ?? null, platformMessageId);
@@ -1065,10 +1063,9 @@ export class Store {
 	}): DeliveryRow | undefined {
 		if (input.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) return this.recordMonitorFailure(input);
 		return this.db.transaction(() => {
-			const steered = this.steeredThreads(input);
 			this.closeDispatched(input.originKey, input.opRef, "failed_notified");
 			const row = isTaskOrigin(input.originKey) ? undefined : this.insertDelivery(input, 0, input.notice);
-			this.notifySteeredThreads(input, steered, input.notice);
+			this.notifySteeredThreads(input, this.steeredThreads(input), input.notice);
 			return row;
 		})();
 	}
@@ -1213,12 +1210,11 @@ export class Store {
 
 	private recordMonitorAnswer(input: { originKey: string; opRef: string; parts: readonly string[] }): DeliveryRow[] {
 		return this.db.transaction(() => {
-			const eventIds = this.monitorEventsOfOp(input.originKey, input.opRef);
 			this.closeDispatched(input.originKey, input.opRef, "answered");
 			this.hooks.afterInboundAnswered?.();
 			const text = input.parts.join("\n");
 			const delivered: DeliveryRow[] = [];
-			for (const [part, eventId] of eventIds.entries()) {
+			for (const [part, eventId] of this.monitorEventsOfOp(input.originKey, input.opRef).entries()) {
 				if (text.trim() === EMPTY_ANSWER) {
 					this.failMonitorEvent(eventId, "[turn failed] empty_answer");
 					continue;
@@ -1257,10 +1253,9 @@ export class Store {
 			if (settled === undefined) return false;
 			this.monitors.resolveMonitorIncidents(settled.event.monitorId);
 			if (!settled.report) return true;
-			const originKey = monitorOrigin(settled.event.monitorId);
 			const monitor = this.monitors.getMonitor(settled.event.monitorId);
 			this.postMonitorReport(
-				{ originKey, opRef },
+				{ originKey: monitorOrigin(settled.event.monitorId), opRef },
 				0,
 				eventId,
 				settled.monitorName,
@@ -1641,21 +1636,40 @@ export class Store {
 				.map((row) => this.applyEvent(row, "expire_check", now))
 				.filter((row) => row.state === "expired"),
 		)();
-		// Rows of a platform no adapter takes would wait forever: only the newest are kept.
+		// Rows of a platform no adapter takes would wait forever: only the newest are kept; the trimmed ones are reported.
 		this.expiredUnfinished.push(...expired);
-		this.expiredUnfinished.splice(0, Math.max(0, this.expiredUnfinished.length - EXPIRED_HANDOFF_MAX));
+		const dropped = this.expiredUnfinished.splice(0, Math.max(0, this.expiredUnfinished.length - EXPIRED_HANDOFF_MAX));
+		if (dropped.length > 0) {
+			try {
+				this.hooks.onExpiredDropped?.(dropped);
+			} catch {
+				// observers only; the trim already happened
+			}
+		}
 		return expired.length;
 	}
 
 	/** The rows `sweepExpired` expired whose thread ref posts to `platform` (all without one), each handed over once. */
 	takeExpired(platform?: ChatPlatform): DeliveryRow[] {
-		const taken: DeliveryRow[] = [];
-		const kept: DeliveryRow[] = [];
-		for (const row of this.expiredUnfinished) {
-			(platform === undefined || platformOfThreadRef(row.threadRef) === platform ? taken : kept).push(row);
-		}
-		this.expiredUnfinished = kept;
+		const taken = this.expiredUnfinished.filter(
+			(row) => platform === undefined || platformOfThreadRef(row.threadRef) === platform,
+		);
+		this.expiredUnfinished = this.expiredUnfinished.filter((row) => !taken.includes(row));
 		return taken;
+	}
+
+	/** Expires pending deliveries of removed platforms at boot: no adapter will ever take them. */
+	closeRemovedPlatformDeliveries(prefixes: readonly string[]): DeliveryRow[] {
+		return this.db.transaction(() =>
+			this.selectDeliveries(
+				`state = 'pending' AND (${prefixes.map(() => "origin_key LIKE ?").join(" OR ")})`,
+				prefixes.map((prefix) => `${prefix}%`),
+			).map((row) => {
+				applyDeliveryFacts(this.db, row.deliveryId, { ...row, state: "expired" }, "platform removed");
+				this.emitDeliveryState(row.deliveryId, row.state, "expired");
+				return this.requireDelivery(row.deliveryId);
+			}),
+		)();
 	}
 
 	/**
@@ -2000,8 +2014,7 @@ export class Store {
 
 	/** Lanes that still occupy a slot of the concurrency cap (everything but `closed`). */
 	countOpenLanes(): number {
-		const row = this.db.query("SELECT COUNT(*) AS n FROM lanes WHERE status != 'closed'").get() as { n: number };
-		return row.n;
+		return (this.db.query("SELECT COUNT(*) AS n FROM lanes WHERE status != 'closed'").get() as { n: number }).n;
 	}
 
 	/** Changes the status (validated against the lane state machine) and appends a history entry in one write. */
@@ -2082,9 +2095,8 @@ export class Store {
 
 	/** Reservations in any of `states`, oldest first. */
 	listLaneReservations(states: readonly ReservationState[]): LaneReservation[] {
-		const marks = states.map(() => "?").join(",");
 		const rows = this.db
-			.query(`SELECT * FROM lane_reservations WHERE state IN (${marks}) ORDER BY id`)
+			.query(`SELECT * FROM lane_reservations WHERE state IN (${states.map(() => "?").join(",")}) ORDER BY id`)
 			.all(...states) as LaneReservationSql[];
 		return rows.map(toLaneReservation);
 	}
