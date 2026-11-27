@@ -423,12 +423,12 @@ export class ApprovalBroker {
 
 	/** Best-effort link to one message; a failed lookup is logged and reads as no link. */
 	async #permalink(channel: string, ts: string): Promise<string | undefined> {
-		try {
-			return await this.#port(channel).permalink(this.#ref(channel, ts));
-		} catch (error) {
-			this.#options.log.warn("approval_permalink_failed", { channel, error: String(error) });
-			return undefined;
-		}
+		return this.#port(channel)
+			.permalink(this.#ref(channel, ts))
+			.catch((error) => {
+				this.#options.log.warn("approval_permalink_failed", { channel, error: String(error) });
+				return undefined;
+			});
 	}
 
 	/**
@@ -467,10 +467,9 @@ export class ApprovalBroker {
 			: undefined;
 		// `header` stays the notification/fallback text; the card itself shows the sections as fields, not as lines.
 		const header = renderCard(shown, sections, escalationLine);
-		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) => {
-			const value = sections[key];
-			return value === undefined ? [] : [{ label, value }];
-		});
+		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) =>
+			sections[key] === undefined ? [] : [{ label, value: sections[key] }],
+		);
 		const cardShape = {
 			title: cardTitle(sections),
 			body:
@@ -828,10 +827,8 @@ export class ApprovalBroker {
 		if (held === undefined) return undefined;
 		this.#heldInput.delete(originKey);
 		if (held.opRef !== opRef || this.#clock.now() - held.at > HELD_INPUT_TTL_MS) {
-			this.#options.log.info("dialog_pending_text_dropped", {
-				origin: originKey,
-				reason: held.opRef !== opRef ? "other_turn" : "expired",
-			});
+			const reason = held.opRef !== opRef ? "other_turn" : "expired";
+			this.#options.log.info("dialog_pending_text_dropped", { origin: originKey, reason });
 			return undefined;
 		}
 		return held.text;
@@ -858,9 +855,8 @@ export class ApprovalBroker {
 
 	/** Drops a held text that will not be used (the next dialog is no `input`, or the turn ended). */
 	dropInput(originKey: string, reason: string): void {
-		if (this.#heldInput.delete(originKey)) {
+		if (this.#heldInput.delete(originKey))
 			this.#options.log.info("dialog_pending_text_dropped", { origin: originKey, reason });
-		}
 	}
 
 	/**
@@ -925,8 +921,10 @@ export class ApprovalBroker {
 
 	/**
 	 * The owner's reply in the thread of an approval card (`approvalId` = `<card channel>:<card ts>`). A still-pending
-	 * card is settled as `replied` (the waiting tool call returns the text); a settled one hands the reply back as a
-	 * `route` to the asking conversation. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
+	 * card with a live waiter is settled as `replied` (the waiting tool call returns the text); a settled one — or a
+	 * pending one whose asking turn is gone (no live waiter: the turn died with a restart and the boot sweep has not
+	 * expired the row yet) — hands the reply back as a `route` to the asking conversation, so the ledger never records
+	 * an answer nobody waited on. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
 	 * An `injected` message (`jabbu-pocket inject`, which anyone with the socket can send) never answers a card: in the thread
 	 * of a real choice card or of any approval row (pending or settled) it is `injected_rejected`, the card untouched.
 	 */
@@ -960,11 +958,15 @@ export class ApprovalBroker {
 		// A backfill replay of the reply that settled the card: consumed already.
 		if (row.replyTs === reply.ts) return { kind: "duplicate" };
 		const pending = this.#pending.get(reply.approvalId);
-		if (row.status === "pending" && pending?.isSettled() !== true) {
+		// No live waiter means no turn is left to answer: the asking turn died with a restart and the boot sweep has
+		// not expired the row yet. Settling here would record `replied` for a request that never runs, and the sweep
+		// only touches `pending` rows, so the card would keep live-looking buttons forever. Route instead; the sweep
+		// expires the row and rewrites the card.
+		if (row.status === "pending" && pending !== undefined && !pending.isSettled()) {
 			if (store.replyApproval(reply.approvalId, reply.ts, reply.text, this.#clock.now())) {
 				recordAnswer(this.#answers, reply.approvalId, reply.ts, "replied");
 				log.info("approval_reply", { id: reply.approvalId, ts: reply.ts });
-				pending?.settle({ replied: reply.text });
+				pending.settle({ replied: reply.text });
 				return { kind: "settled" };
 			}
 		}
@@ -1086,12 +1088,9 @@ export class ApprovalBroker {
 		const value = parsed.decision === "approve" ? "approved" : "denied";
 		if (answerSeen(this.#answers, parsed, action.answerId, value)) return true;
 		const pending = this.#pending.get(cardId);
-		if (!pending) {
-			log.info("approval_click_ignored", { user: action.userId, reason: "no_pending_request" });
-			return false;
-		}
-		if (pending.isSettled()) {
-			log.info("approval_click_ignored", { user: action.userId, reason: "already_decided" });
+		if (pending === undefined || pending.isSettled()) {
+			const reason = pending === undefined ? "no_pending_request" : "already_decided";
+			log.info("approval_click_ignored", { user: action.userId, reason });
 			return false;
 		}
 		const outcome: ApprovalOutcome = parsed.decision === "approve" ? "approved" : "denied";
