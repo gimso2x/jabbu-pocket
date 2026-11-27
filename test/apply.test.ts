@@ -545,6 +545,85 @@ describe("runApply execution", () => {
 		expect(readReceipt(receipt).head).toBe(moved);
 	});
 
+	test("a merge landing during drain whose new code cannot migrate the backup: refuses the restart, cancels the drain, no rollback", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {
+				throw new Error("migration fails: boom");
+			},
+		});
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+		]);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"HEAD moved after preflight to ccccccc but the new code cannot open the ledger snapshot: migration fails: boom; not restarted (drain cancelled)",
+		);
+		expect(restartCommands(world)).toHaveLength(0);
+		expect(world.drainCancels).toBe(1);
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"before"}');
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a merge landing during drain whose new code can migrate the backup: proceeds as pinned", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {},
+		});
+		expect(exitCode).toBe(0);
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"restart requested (HEAD moved after preflight: aaaaaaa→ccccccc)",
+		);
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a restart that fails twice (apply and rollback) skips the code rollback target without waiting for ready", async () => {
+		const world = makeWorld();
+		world.restartRc = 1;
+		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+			["rollback", false],
+		]);
+		const rollback = receipt.steps.find((s) => s.name === "rollback")?.detail ?? "";
+		expect(rollback).toContain("systemctl restart rc=1: boom");
+		expect(rollback).toContain("code rollback skipped: head.last-good 없음");
+		expect(rollback).not.toContain("not ready within");
+		expect(restartCommands(world)).toHaveLength(2);
+		expect(world.drainCancels).toBe(1);
+	});
+
 	test("an old daemon still answering is not ready: waits, then rolls back config with one more restart", async () => {
 		const world = makeWorld();
 		world.restartMakesFreshDaemon = false; // restart returns 0 but no new process ever takes the lock
