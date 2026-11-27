@@ -135,6 +135,7 @@ const ROOT_KEYS = new Set([
 	"offsite",
 	"idleTimeoutMinutes",
 	"idleKeepResident",
+	"idStart",
 	"skillReviewTurns",
 	"ownerSilenceFallbackMinutes",
 	"peerHopLimit",
@@ -235,6 +236,7 @@ export interface JabbuConfig {
 	idleTimeoutMinutes?: number;
 	/** Keeps idle conversation children resident until 50% context, binary change, or pressure (default true). */
 	idleKeepResident?: boolean;
+	idStart?: number; // first daily [TASK]/lane number: bots sharing a records repo or repo split the day (default 1)
 	/** Owner DM turns between background skill reviews; 0 disables. Default 10 (each review costs tokens). */
 	skillReviewTurns?: number;
 	/** Minutes a reversible owner question waits before recommendation goes ahead; 0 disables. Default 30. */
@@ -748,6 +750,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 
 	const sessionRetentionDays = optionalInt(configPath, root, "sessionRetentionDays", 1, 100_000);
 	const maxBundleBytes = optionalInt(configPath, root, "maxBundleBytes", 1);
+	const idStart = optionalInt(configPath, root, "idStart", 1, 9_000);
 	const idleTimeoutMinutes = optionalInt(configPath, root, "idleTimeoutMinutes", 0);
 	const idleKeepResident = root.idleKeepResident;
 	if (idleKeepResident !== undefined && typeof idleKeepResident !== "boolean") invalid(configPath, "idleKeepResident");
@@ -1144,13 +1147,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (ompProfile !== undefined) config.ompProfile = ompProfile;
 	if (ompConfigOverlay !== undefined) config.ompConfigOverlay = ompConfigOverlay;
 	if (sessionRetentionDays !== undefined) config.sessionRetentionDays = sessionRetentionDays;
-	if (maxBundleBytes !== undefined) config.maxBundleBytes = maxBundleBytes;
 	if (offsite !== undefined) config.offsite = offsite;
-	if (idleTimeoutMinutes !== undefined) config.idleTimeoutMinutes = idleTimeoutMinutes;
-	if (idleKeepResident !== undefined) config.idleKeepResident = idleKeepResident;
-	if (skillReviewTurns !== undefined) config.skillReviewTurns = skillReviewTurns;
+	const plain = { maxBundleBytes, idleTimeoutMinutes, idleKeepResident, idStart, skillReviewTurns, hostSessionCeiling };
+	for (const [key, value] of Object.entries(plain)) if (value !== undefined) Object.assign(config, { [key]: value });
 	if (ownerSilenceFallbackMinutes !== undefined) config.ownerSilenceFallbackMinutes = ownerSilenceFallbackMinutes;
-	if (hostSessionCeiling !== undefined) config.hostSessionCeiling = hostSessionCeiling;
 	if (peerHopLimit !== undefined) config.peerHopLimit = peerHopLimit as { turns: number; windowMinutes: number };
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;
 	if (costCap !== undefined) config.costCap = costCap;

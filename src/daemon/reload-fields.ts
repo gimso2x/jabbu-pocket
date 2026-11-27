@@ -9,6 +9,8 @@ export const LIVE_FIELDS = [
 	"ownerSilenceFallbackMinutes",
 	"dispatchHosts",
 	"recordsRepo",
+	// Each new [TASK] and lane start reads it through a getter (`idStart`), never a captured copy.
+	"idStart",
 	"workerOmpArgs",
 	// Each new [TASK] and each agy resume reads it (`DispatchToolDeps.workerAgy`).
 	"workerAgy",

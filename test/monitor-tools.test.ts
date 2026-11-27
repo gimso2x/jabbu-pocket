@@ -270,9 +270,10 @@ describe("who gets the tools", () => {
 			const base = ["jabbu_dispatch", "discord_send_file", "jabbu_request_approval"];
 			// A server channel or thread can open a lane; the owner DM cannot without channels.discord.laneChannelId. Every Discord conversation also gets the lane board.
 			const boardNames = ["jabbu_board_post", "jabbu_board_read"];
-			expect(names(discordDm)).toEqual([...base, ...monitorNames, ...boardNames]);
+			// Every chat conversation of an omp bot also gets the first-run onboarding tool.
+			expect(names(discordDm)).toEqual([...base, ...monitorNames, ...boardNames, "jabbu_onboarding"]);
 			for (const origin of [discordThread, CHANNEL_ORIGIN]) {
-				expect(names(origin)).toEqual([...base, "jabbu_work_start", ...boardNames]);
+				expect(names(origin)).toEqual([...base, "jabbu_work_start", ...boardNames, "jabbu_onboarding"]);
 			}
 		} finally {
 			await daemon.stop();

@@ -30,6 +30,20 @@ function ledgerAt(now: { ms: number }): TaskLedger {
 }
 
 describe("TaskLedger", () => {
+	test("AC-1/AC-2: idStart sets the day's first number; an existing larger maximum wins; none keeps -01", () => {
+		const now = { ms: Date.parse("2026-10-26T01:00:00Z") };
+		const ledger = ledgerAt(now);
+		expect([101, 101].map((idStart) => ledger.register({ ...base, idStart }).taskId)).toEqual([
+			"T-20261026-101",
+			"T-20261026-102",
+		]);
+		expect(ledger.register({ ...base, idStart: 50 }).taskId).toBe("T-20261026-103");
+		expect(ledger.register({ ...base, idStart: 5 }).taskId).toBe("T-20261026-104");
+		now.ms = Date.parse("2026-10-26T15:00:00Z");
+		expect(ledger.register(base).taskId).toBe("T-20261027-01");
+		expect(ledger.register({ ...base, idStart: undefined }).taskId).toBe("T-20261027-02");
+	});
+
 	test("ids count per KST day and derive worktree, branch and agent", () => {
 		const now = { ms: Date.parse("2026-10-26T01:00:00Z") };
 		const ledger = ledgerAt(now);

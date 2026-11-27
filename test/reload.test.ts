@@ -371,6 +371,58 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 	expect(models).toEqual(["a/one", "b/two"]);
 });
 
+test("AC-4 (T-20261127-06): a reloaded idStart numbers the next [TASK] through the running daemon's dispatch tool", async () => {
+	const transport = new WaitingDiscordTransport();
+	const clock = { now: () => Date.now() };
+	const sessions = new FakeSessionStore();
+	const live = { herdr: {} };
+	patchConfig({ ...live, idStart: 1 });
+	daemon = new Daemon({
+		...daemonTestOptions(),
+		config: { ...home.config, ...live, idStart: 1, hostSessionCeiling: 0 }, // 0: the host's own omp sessions never refuse
+		channels: [discordBinding(transport)],
+		clock,
+		log: createLogger({ sink: () => undefined, clock, redact }),
+		ompVersion: "omp-test 0",
+		bootId: "boot-reload-idstart",
+		sweepMs: 3_600_000,
+		gateSweepMs: 0,
+		taskSweepMs: 0,
+		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+	});
+	await daemon.start();
+	const running = daemon;
+	await transport.emitMessage(ownerMessage("600000000000000001", "[TASK] 등록해줘"));
+	await transport.waitForPosts((text) => text.includes("ECHO [TASK] 등록해줘"));
+	// Fixture: the ledger records the worker model the real tool path hands it. The repo is a plain directory, so the
+	// start stops at `git worktree add` (before any herdr call) and the registration is undone.
+	const ledger = running.store.tasks;
+	const register = ledger.register.bind(ledger);
+	const starts: Array<number | undefined> = [];
+	ledger.register = (input) => {
+		starts.push(input.idStart);
+		return register(input);
+	};
+	// The tool is taken once, before the reload: only a per-call read of the config can see the new start.
+	const tool = running.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
+	if (tool === undefined) throw new Error("dispatch tool missing");
+	const repo = mkdtempSync(join(tmpdir(), "jabbu-reload-idstart-"));
+	try {
+		const register1 = () =>
+			tool.execute(
+				{ task: "구현", taskSpec: { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo } },
+				{ signal: new AbortController().signal },
+			);
+		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		patchConfig({ ...live, idStart: 101 });
+		expect(running.reloadConfig("ipc")).toMatchObject({ ok: true, changed: ["idStart"] });
+		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+	expect(starts).toEqual([1, 101]);
+});
+
 test("qa-z #29: a reload logs the new file's config warnings and carries them", async () => {
 	const lines: string[] = [];
 	const clock = { now: () => Date.now() };
