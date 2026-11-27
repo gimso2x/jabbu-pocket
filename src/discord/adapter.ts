@@ -502,8 +502,8 @@ export class DiscordAdapter implements ChannelAdapter {
 				const info = interaction.guild_id === undefined ? undefined : await this.#port.channelInfo(message.channel_id);
 				const channel = info?.parentId !== undefined && info.type !== 0 ? info.parentId : message.channel_id;
 				await this.#core.onAction({
-					actionId: interaction.data?.custom_id,
-					value: this.#port.buttonValue(message.id, interaction.data?.custom_id),
+					actionId: customId,
+					value: this.#port.buttonValue(message.id, customId),
 					...(Array.isArray(interaction.data?.values) ? { values: interaction.data.values } : {}),
 					userId,
 					channel,
@@ -898,8 +898,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			files,
 			saveOne: (file, dir) => {
 				const where = { channel: event.channel_id, id: event.id };
-				const image = (file.content_type ?? "").startsWith("image/");
-				const cap = image ? MAX_INBOUND_IMAGE_BYTES : MAX_INBOUND_DOC_BYTES;
+				const cap = (file.content_type ?? "").startsWith("image/") ? MAX_INBOUND_IMAGE_BYTES : MAX_INBOUND_DOC_BYTES;
 				if (file.size > cap) {
 					this.#log.warn("attachment_too_large", { ...where, size: file.size, max: cap });
 					return `[첨부 실패: ${oneLine(file.filename, 120)} — too_large (${file.size} > ${cap} bytes)]`;

@@ -244,15 +244,8 @@ export class MonitorScheduler {
 
 	/** Claims one slot and counts it in the summary. */
 	#claim(monitor: MonitorRow, slotAt: number, summary: TickSummary, skip: string | undefined): void {
-		this.#count(
-			this.#deps.store.monitors.claimSlot({
-				monitorId: monitor.id,
-				slotAt,
-				...(skip === undefined ? {} : { forceSkipReason: skip }),
-			}),
-			summary,
-			skip,
-		);
+		const slot = { monitorId: monitor.id, slotAt, ...(skip === undefined ? {} : { forceSkipReason: skip }) };
+		this.#count(this.#deps.store.monitors.claimSlot(slot), summary, skip);
 	}
 
 	#claimCron(
@@ -294,10 +287,9 @@ export class MonitorScheduler {
 		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOldCount + overLimit.length;
 		if (unroutable) summary.skippedCatchUp += skipped + run.length;
-		else if (skipped > 0) {
-			summary.skippedCatchUp += skipped;
+		else if (skipped > 0) summary.skippedCatchUp += skipped;
+		if (!unroutable && skipped > 0)
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: skipped, replayed: run.length });
-		}
 		if (unroutable && run.length > 0 && !this.#unroutableSkippedWarned.has(monitor.id)) {
 			this.#unroutableSkippedWarned.add(monitor.id);
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: run.length, replayed: 0, reason: "unroutable" });
@@ -324,8 +316,7 @@ export class MonitorScheduler {
 		// from there — but only for a day after the lift, after which the fire is stale like any other.
 		const stale = now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id);
 		const unfrozenAt = stale ? readUnfrozenAt(this.#deps.homeDir) : undefined;
-		const heldByFreeze = unfrozenAt !== undefined && slotAt <= unfrozenAt && now - unfrozenAt <= CATCHUP_MAX_AGE_MS;
-		if (stale && !heldByFreeze) {
+		if (stale && (unfrozenAt === undefined || slotAt > unfrozenAt || now - unfrozenAt > CATCHUP_MAX_AGE_MS)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -451,10 +442,9 @@ export class MonitorScheduler {
 					continue;
 				}
 				if (monitor.deliver === "verbatim") {
-					if (this.#deliverVerbatim(monitor, event)) {
-						dispatched += 1;
-						settledVerbatim = true;
-					}
+					const delivered = this.#deliverVerbatim(monitor, event);
+					if (delivered) dispatched += 1;
+					if (delivered) settledVerbatim = true;
 					continue;
 				}
 				const inboundId = `monitor:${monitor.id}:${event.eventId}:${event.attempts + 1}`;

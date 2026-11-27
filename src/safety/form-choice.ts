@@ -71,9 +71,8 @@ function formButtons(model: FormModel): FormButton[] {
 
 /** What an answer reads as on the card. */
 function answerLabel(field: FormField, answer: FormAnswer): string {
-	if ("text" in answer) {
+	if ("text" in answer)
 		return answer.text.trim() === "" ? "(빈 답)" : cutCodePointSafe(answer.text.replace(/\s+/g, " "), 60);
-	}
 	if (field.kind !== "choice") return "(빈 답)";
 	if (isToggle(field)) return answer.checked.length > 0 ? "예" : "아니오";
 	const labels = answer.checked.map((option) => labelOf(field, option));
@@ -96,9 +95,8 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 		lines.push(`${buttoned ? "버튼을 누르거나 " : ""}예/아니오로 답해 주세요${recommend}${skip}`);
 	} else {
 		const live = liveOptions(field);
-		for (const [n, option] of live.entries()) {
+		for (const [n, option] of live.entries())
 			lines.push(`${n + 1}. ${labelOf(field, option)}${field.options[option]?.checked ? " (추천)" : ""}`);
-		}
 		const how = isArrayChoice(field)
 			? "번호를 쉼표로 답장해 주세요(예: 1,3), 없음은 0"
 			: `${buttoned ? "버튼을 누르거나 " : ""}번호로 답장해 주세요`;
