@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearContextLoad, withContextLoad } from "../src/dashboard/context-load";
@@ -253,6 +253,44 @@ describe("AGY blocked overlay and quota grid", () => {
 			current: "ssukcode",
 			blocked: { sgkim: NOW + 2 * HOUR },
 		});
+
+		// Reject symlinks, protected dirs (~/.ssh), and prototype-key entries like toString/constructor.
+		const symlinkTarget = join(tempDir, "symlink-target.json");
+		const symlinkPath = join(tempDir, "state-link.json");
+		writeFileSync(symlinkTarget, JSON.stringify({ current: "linked", blocked: { evil: NOW + HOUR } }));
+		symlinkSync(symlinkTarget, symlinkPath);
+		const peerSymlink = join(tempDir, "peer-symlink");
+		mkdirSync(peerSymlink, { recursive: true });
+		writeFileSync(join(peerSymlink, "config.json"), JSON.stringify({ agyAccounts: { statePath: symlinkPath } }));
+
+		const protoFile = join(tempDir, "proto-state.json");
+		writeFileSync(
+			protoFile,
+			`{"current":"ok","blocked":{"toString":${NOW + HOUR},"constructor":${NOW + HOUR},"__proto__":${NOW + HOUR},"safe":${NOW + HOUR}}}`,
+		);
+		const peerProto = join(tempDir, "peer-proto");
+		mkdirSync(peerProto, { recursive: true });
+		writeFileSync(join(peerProto, "config.json"), JSON.stringify({ agyAccounts: { statePath: protoFile } }));
+
+		const prevHome = process.env.HOME;
+		process.env.HOME = tempDir;
+		try {
+			const sshDir = join(tempDir, ".ssh");
+			mkdirSync(sshDir, { recursive: true });
+			const sshFile = join(sshDir, "state.json");
+			writeFileSync(sshFile, JSON.stringify({ current: "ssh-leak", blocked: { ssh: NOW + HOUR } }));
+			const peerSsh = join(tempDir, "peer-ssh");
+			mkdirSync(peerSsh, { recursive: true });
+			writeFileSync(join(peerSsh, "config.json"), JSON.stringify({ agyAccounts: { statePath: sshFile } }));
+
+			const hardened = readAgyBlockedOverlay(own, [{ home: peerSymlink }, { home: peerSsh }, { home: peerProto }], NOW);
+			expect(hardened.current).toBe("ok");
+			expect(hardened.blocked).toEqual({ toString: NOW + HOUR, safe: NOW + HOUR });
+			expect(Number.isNaN(hardened.blocked.toString)).toBe(false);
+		} finally {
+			if (prevHome === undefined) delete process.env.HOME;
+			else process.env.HOME = prevHome;
+		}
 	});
 
 	test("applyAgyBlockedOverlay does not mutate cached section and renders 차단 in popover + quota grid", () => {
