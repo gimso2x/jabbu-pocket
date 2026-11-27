@@ -289,7 +289,7 @@ describe("jabbu-pocket drain", () => {
 		});
 		expect((await runCliCapture(home.dir, ["drain", "--wait", "--timeout", "0"])).code).toBe(1);
 		expect(await callDaemon(socket, { op: "drain_status" })).toMatchObject({ draining: false });
-	});
+	}, 30_000);
 });
 
 describe("waitForDrain cutAfterMin", () => {

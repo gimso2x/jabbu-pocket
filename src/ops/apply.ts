@@ -25,6 +25,7 @@ export class BackupUnusableError extends Error {
 
 import { APPLY_LOCK_FILE, type ApplyLockInfo, errorCode, releaseApplyLock } from "./apply-lock";
 import { acquireApplyLock, type LockWaitResult } from "./apply-lock-wait";
+import { type RollbackDbResult, restoreLedgerForRollback } from "./apply-rollback-db";
 import { type EnsureDepsResult, ensureDeps } from "./deps";
 import type { Gate } from "./gates";
 import type { Runner, RunOptions, RunResult } from "./run-types";
@@ -134,6 +135,11 @@ export interface ApplyDeps {
 	 * Absent: no re-validation (tests that stub deps).
 	 */
 	revalidateBackup?: (backupFile: string) => Promise<void>;
+	/**
+	 * Restores the pre-apply snapshot (`runRestore` path) while no daemon runs; the code rollback calls it when
+	 * the ledger is newer than the rolled-back code's schema. Absent: the rollback names the restore command.
+	 */
+	restoreBackup?: (backupFile: string) => Promise<RollbackDbResult>;
 	gates: () => Gate[];
 	doctor: () => Promise<{ code: number; lines: string[] }>;
 	/**
@@ -296,21 +302,18 @@ export function receiptPathFor(homeDir: string, stamp: string): string {
 }
 
 /** PATH directories a systemd user unit lacks; `~/.local/bin` and `~/.bun/bin` come first. */
-function applyPathDirs(env: Record<string, string | undefined>): string[] {
-	const home = env.HOME ?? homedir();
-	return [join(home, ".local", "bin"), join(home, ".bun", "bin")];
-}
-
 export function applyPathEnv(env: Record<string, string | undefined>): string {
-	return [...applyPathDirs(env), ...(env.PATH ? env.PATH.split(delimiter) : [])].join(delimiter);
+	const home = env.HOME ?? homedir();
+	return [join(home, ".local", "bin"), join(home, ".bun", "bin"), ...(env.PATH ? env.PATH.split(delimiter) : [])].join(
+		delimiter,
+	);
 }
 
 /** First executable `bun` along the prepended PATH. */
 export function findBun(pathEnv: string, isExecutable: (path: string) => boolean): string | undefined {
 	for (const dir of pathEnv.split(delimiter)) {
-		if (dir === "") continue;
 		const candidate = join(dir, "bun");
-		if (isExecutable(candidate)) return candidate;
+		if (dir !== "" && isExecutable(candidate)) return candidate;
 	}
 	return undefined;
 }
@@ -349,12 +352,8 @@ export function recordLastGoodConfig(
 	const configPath = join(homeDir, "config.json");
 	const target = `${configPath}${LAST_GOOD_SUFFIX}`;
 	try {
-		if (content !== undefined) {
-			writeAtomic0600(target, content);
-			return true;
-		}
-		if (!existsSync(configPath)) return false;
-		writeAtomic0600(target, readFileSync(configPath));
+		if (content === undefined && !existsSync(configPath)) return false;
+		writeAtomic0600(target, content ?? readFileSync(configPath));
 		return true;
 	} catch (error) {
 		warn(msg(error));
@@ -722,12 +721,11 @@ async function applyUnderLock(
 				.filter((s) => !s.ok)
 				.map((s) => `${s.name}: ${s.detail}`)
 				.join("; ");
-			const reverted =
-				codeRevert !== undefined
-					? ` 코드 롤백함: main에 revert 커밋 ${codeRevert.slice(0, 7)}, 원인 수정 뒤 다시 머지.`
-					: codeDetached !== undefined
-						? ` 코드 롤백함: ${codeDetached.slice(0, 7)}로 detached checkout(main 그대로), 고친 커밋을 받은 뒤 git checkout main && apply.`
-						: "";
+			let reverted = "";
+			if (codeRevert !== undefined)
+				reverted = ` 코드 롤백함: main에 revert 커밋 ${codeRevert.slice(0, 7)}, 원인 수정 뒤 다시 머지.`;
+			else if (codeDetached !== undefined)
+				reverted = ` 코드 롤백함: ${codeDetached.slice(0, 7)}로 detached checkout(main 그대로), 고친 커밋을 받은 뒤 git checkout main && apply.`;
 			// `--report-plain` (`!restart`): no model turn — the daemon posts the line itself (`notify`), so the report
 			// still arrives when the model is what is down.
 			const request =
@@ -1170,12 +1168,15 @@ async function applyUnderLock(
 			details.push(`${AUTOLAND_HOLD_FILE} write failed: ${msg(error)}`);
 		}
 		const installed = await installDeps();
-		if (!installed.ok) {
+		if (!installed.ok)
 			return failed(
 				`${installed.detail}\nnot restarted; by hand: cd ${repoDir} && bun install --frozen-lockfile && systemctl --user restart ${unit}`,
 			);
-		}
 		details.push(installed.detail);
+		// A migrated ledger would make the rolled-back code exit on `newer_schema`: restore the snapshot first.
+		const restoredDb = await restoreLedgerForRollback(deps, { homeDir, repoDir, unit }, receipt.backupFile);
+		if (!restoredDb.ok) return failed(restoredDb.detail);
+		if (restoredDb.detail !== "") details.push(restoredDb.detail);
 		const r = await restartAndWait();
 		if (!r.ok) return failed(r.detail);
 		const w = await waitReady(r.restartAt);

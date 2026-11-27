@@ -435,6 +435,26 @@ describe("broker: mirror card in the asking thread", () => {
 		// mirror_ref is written only on a pending row.
 		expect(store.setApprovalMirrorRef(`${ESC}:${ROW_2}`, `${REQ}:900000000000000199`)).toBe(false);
 	});
+
+	test("AC-6: a reply in the boot window — a pending row with no live waiter — routes instead of settling", async () => {
+		const b = broker();
+		const { result, canonicalTs } = await askInThread(b);
+		const key = `${ESC}:${canonicalTs}`;
+		expect(store.getApproval(key)?.status).toBe("pending");
+		// Restart: a fresh broker over the same store has no live waiter for the row.
+		const rebooted = broker();
+		expect(rebooted.handleCardReply({ approvalId: key, ts: "9.9", text: "그 브랜치만" })).toEqual({
+			kind: "route",
+			originKey: origin.originKey,
+		});
+		// The reply settled nothing, so the ledger still says pending and the boot sweep can expire the row.
+		expect(store.getApproval(key)?.status).toBe("pending");
+		expect(await rebooted.expireStale(false)).toBe(1);
+		expect(store.getApproval(key)?.status).toBe("expired");
+		// The asking turn died with the restart; the reply never resolves it — the timeout does.
+		timers.fireAll();
+		expect(await result).toBe("timeout");
+	});
 });
 
 describe("daemon: 다시 요청 on a timed-out approval card", () => {

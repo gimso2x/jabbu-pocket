@@ -291,6 +291,8 @@ describe("sweep heartbeat", () => {
 		daemon.store.close(); // every ledger step outside the per-step guards now throws
 		await expect(daemon.sweep()).resolves.toBeUndefined();
 		expect(lines.filter((line) => line.includes("level=error") && line.includes("event=sweep_failed"))).toHaveLength(1);
+		// The failure names its step: with the ledger closed the first unguarded ledger touch is the pending sweep.
+		expect(lines.find((line) => line.includes("event=sweep_failed"))).toContain("step=pending_sweep");
 		// A failed sweep is not a finished one: the stamp keeps aging, so a sweep that keeps failing opens sweep_stalled.
 		expect(readSweepHeartbeat(home.dir)).toEqual(before);
 	});

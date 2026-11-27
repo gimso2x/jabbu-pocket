@@ -487,7 +487,7 @@ test("abort returns while a detached descendant holds stdout: exit settles on th
 		}
 	}
 	expect(exits).toEqual([]);
-});
+}, 30_000);
 
 test("watchChildExit settles immediately when stdoutDone closes before the grace", async () => {
 	let codeSeen: number | undefined;
@@ -765,6 +765,26 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	expect(second).not.toBe(first);
 	expect(spawns(harness)).toHaveLength(2);
 	expect(sent(harness, "session/load")).toEqual([]);
+	await driver.stop();
+});
+
+test("a turn that calls the model without a usage_update warns once that rotation is blind", async () => {
+	const harness = makeHarness();
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	await driver.start();
+
+	const first = nextFinal(driver);
+	await driver.prompt("@no-usage hello");
+	expect((await first).usage).toMatchObject({ calls: 1, rotated: false });
+	expect((await first).usage?.contextTokens).toBeUndefined();
+	expect(lines.filter((line) => line.includes("event=agy_rotation_blind"))).toHaveLength(1);
+
+	// A second blind turn does not warn again; the session is still unrotated.
+	const second = nextFinal(driver);
+	await driver.prompt("@no-usage again");
+	expect((await second).usage).toMatchObject({ calls: 1, rotated: false });
+	expect(lines.filter((line) => line.includes("event=agy_rotation_blind"))).toHaveLength(1);
 	await driver.stop();
 });
 

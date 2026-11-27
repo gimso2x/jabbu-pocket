@@ -30,6 +30,7 @@ import {
 	spawnRunner,
 } from "../ops/apply";
 import { STAMP_PATTERN } from "../ops/apply-lock";
+import { restoreBackupFile } from "../ops/apply-rollback-db";
 import { backupStamp, runBackup } from "../ops/backup";
 import { collectGates, gateOptionsFromConfig } from "../ops/gates";
 import { DrainSignalGuard, socketDrainCall, waitForDrain } from "./drain";
@@ -105,19 +106,20 @@ export async function applyCommand(
 	if (
 		values["cut-after"] !== undefined &&
 		(!/^\d+(\.\d+)?$/.test(values["cut-after"]) || !Number.isFinite(cutAfterMin))
-	)
+	) {
 		return usageError("--cut-after must be a non-negative number of minutes");
-	let mergedAt: Date | undefined;
-	if (values["merged-at"] !== undefined) {
-		mergedAt = new Date(values["merged-at"]);
-		if (Number.isNaN(mergedAt.getTime())) return usageError("--merged-at must be an ISO timestamp");
 	}
-	const reportOrigin = values["report-origin"];
-	const reportThread = values["report-thread"];
-	if (reportOrigin !== undefined && !isReportOrigin(reportOrigin))
+	const mergedAt = values["merged-at"] === undefined ? undefined : new Date(values["merged-at"]);
+	if (mergedAt !== undefined && Number.isNaN(mergedAt.getTime()))
+		return usageError("--merged-at must be an ISO timestamp");
+	const reportOrigin = values["report-origin"],
+		reportThread = values["report-thread"];
+	if (reportOrigin !== undefined && !isReportOrigin(reportOrigin)) {
 		return usageError("--report-origin must be discord/ch/<channel id> or discord/dm/<dm id>");
-	if (reportThread !== undefined && (reportOrigin === undefined || !reportThreadPattern().test(reportThread)))
+	}
+	if (reportThread !== undefined && (reportOrigin === undefined || !reportThreadPattern().test(reportThread))) {
 		return usageError("--report-thread needs --report-origin and a Discord message id");
+	}
 	if (values["report-plain"] === true && reportOrigin === undefined)
 		return usageError("--report-plain needs --report-origin");
 	if (values.stamp !== undefined && !STAMP_PATTERN.test(values.stamp))
@@ -267,7 +269,15 @@ export function homeDeps(homeDir: string, unit: string, pathEnv: string, guard?:
 			const cause = checked.stderr.trim().split("\n").at(0) ?? "";
 			throw new BackupUnusableError(backupFile, `the new code cannot open the ledger snapshot: ${cause}`);
 		},
-		gates: () => collectGates({ homeDir, now: Date.now(), ...gateOptionsFromConfig(config) }),
+		// The code rollback restores the snapshot when the ledger is newer than the rolled-back code's schema.
+		restoreBackup: (backupFile) =>
+			restoreBackupFile(homeDir, () => callDaemon(socketPath, { op: "status" }, 5_000), backupFile),
+		gates: () =>
+			collectGates({
+				homeDir,
+				now: Date.now(),
+				...gateOptionsFromConfig(config),
+			}),
 		doctor: async () => {
 			const lines: string[] = [];
 			const code = await runDoctor(homeDir, (line) => lines.push(line), REPO_DIR);
