@@ -81,7 +81,7 @@ export interface LaneManagerDeps {
 	integrity?: (input: IntegrityInput) => IntegrityRefusal[];
 	/** Worktree creation and `[check: …]` runs on this machine (test seam; default `createTaskHostOps()`). */
 	hostOps?: TaskHostOps;
-	/** The approval card of an external PR publish (`ApprovalBroker.ask`, lane thread as `origin`). Absent: `PR 게시` is refused. */
+	/** The approval card of an external PR publish and of a forced lane start past a capacity/quota refusal (`ApprovalBroker.ask`, lane thread as `origin`). Absent: `PR 게시` is refused and a forced start is refused. */
 	requestApproval?(request: {
 		channel: string;
 		summary: string;
