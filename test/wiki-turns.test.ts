@@ -83,6 +83,26 @@ describe("conversation turn notes", () => {
 		expect(wiki.outbox()).toEqual([]);
 	});
 
+	test("AC-3: one repo's failing write does not drop the remaining repos' rows", async () => {
+		const repoA = makeRepo(repos);
+		const repoB = makeRepo(repos);
+		const repoC = makeRepo(repos);
+		const rows = [commitTurn(repoA, "feat: A"), commitTurn(repoB, "feat: B"), commitTurn(repoC, "feat: C")];
+		const original = store.addWikiTurn.bind(store);
+		const add = spyOn(store, "addWikiTurn");
+		try {
+			add.mockImplementation((input) => {
+				if (input.repo === repoB) throw new Error("database is locked");
+				return original(input);
+			});
+			await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op1", threadRef: THREAD_REF, rows });
+		} finally {
+			add.mockRestore();
+		}
+		expect(store.listUnsentWikiTurns().map((row) => row.repo)).toEqual([repoA, repoC]);
+		expect(wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes(repoB))).toBe(true);
+	});
+
 	test("AC-3: a DM turn is its own note at the next flush, even on the same day", async () => {
 		const repo = makeRepo(repos);
 		const one = commitTurn(repo, "fix: 하나");
