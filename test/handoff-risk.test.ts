@@ -843,3 +843,39 @@ describe("qa-r: handoff risk regressions of the qa-q fixes", () => {
 		clear(["delete from users where id = 1"]);
 	});
 });
+
+describe("scanHandoffBrief: ANSI-C quoting, quote splicing, escaped slash, and subshell wrappers", () => {
+	test("catches ANSI-C quoting, quote splicing, escaped path separators, and subshell/c-wrapper borders", () => {
+		const cases: ReadonlyArray<readonly [string, string]> = [
+			["git reset $'--hard'", "git_reset_hard"],
+			["$'\\x72\\x6d' -rf /", "rm_rf_absolute"],
+			["git $'\\x72\\x65\\x73\\x65\\x74' $'\\055\\055hard'", "git_reset_hard"],
+			["cat ~/.jabbu/$'secrets'/token", "secret_path"],
+			["bash -c $'git reset --hard\\n하지 마'", "git_reset_hard"],
+			['r""m -rf /', "rm_rf_absolute"],
+			["r''m -rf /", "rm_rf_absolute"],
+			["g''it reset --h\"\"ard", "git_reset_hard"],
+			['cat ~/.jabbu/s""ecrets/token', "secret_path"],
+			["cat ~/.jabbu\\/secrets/token", "secret_path"],
+			["rm -rf \\/etc", "rm_rf_absolute"],
+			["echo $(git checkout .)", "git_discard_worktree"],
+			['bash -c "git checkout ."', "git_discard_worktree"],
+			["sh -c 'git restore .'", "git_discard_worktree"],
+			['bash -c "rm -rf \\"/\\""', "rm_rf_absolute"],
+		];
+		for (const [brief, rule] of cases) {
+			const scan = scanHandoffBrief(brief);
+			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
+			expect(scan.findings).toContainEqual(expect.objectContaining({ rule, severity: "high_risk" }));
+		}
+	});
+
+	test("preserves English contractions in forbidding clauses and keeps benign commands clear", () => {
+		for (const brief of ["don't run git reset --hard", '"don\'t" run git reset --hard']) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "advisory" });
+		}
+		for (const brief of ["git push origin feature", "rm -rf node_modules"]) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
+		}
+	});
+});

@@ -180,6 +180,7 @@ export class DaemonQuotaGate {
 				for (const hold of opened) {
 					this.#ctx.log.warn("quota_gate_opened", {
 						provider: hold.provider,
+						mode: afterCfg.mode ?? "hold",
 						causes: hold.causes.map((cause) => `${cause.label}:${Math.round(cause.usedPct)}%`),
 					});
 				}
@@ -267,8 +268,10 @@ export class DaemonQuotaGate {
 		this.#ensureLoaded();
 		const now = this.#ctx.clock.now();
 		const lifts = this.#currentLifts(now);
-		const hold = this.#gate.checkModel(model, now, lifts);
-		if (hold !== undefined) return formatHoldRefusal(hold, config.timezone);
+		if (config.quotaGate.mode !== "warn") {
+			const hold = this.#gate.checkModel(model, now, lifts);
+			if (hold !== undefined) return formatHoldRefusal(hold, config.timezone);
+		}
 		const runtimeHold = this.#recovery.holdForProvider(providerOfModel(model), now, lifts);
 		return runtimeHold === undefined ? undefined : this.#recovery.formatOriginHold(runtimeHold, config.timezone);
 	}
@@ -359,7 +362,7 @@ export class DaemonQuotaGate {
 
 	#saveSnapshot(homeDir: string, now: number): void {
 		try {
-			writeQuotaGateSnapshot(homeDir, this.#gate.snapshot(now));
+			writeQuotaGateSnapshot(homeDir, this.#gate.snapshot(now, this.#ctx.options.config.quotaGate?.mode));
 		} catch (error) {
 			this.#ctx.log.warn("quota_gate_snapshot_failed", { error: String(error) });
 		}

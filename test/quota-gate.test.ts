@@ -318,12 +318,18 @@ describe("config validation and live reload", () => {
 		expect(LIVE_FIELDS).toContain("quotaGate");
 		expect(loadConfig(home.dir).quotaGate).toBeUndefined();
 
-		writeHomeConfig({ quotaGate: { holdPct: 90, pollMinutes: 3, providers: ["Anthropic", "zai", "anthropic"] } });
+		writeHomeConfig({
+			quotaGate: { holdPct: 90, pollMinutes: 3, providers: ["Anthropic", "zai", "anthropic"], mode: "warn" },
+		});
 		expect(loadConfig(home.dir).quotaGate).toEqual({
 			holdPct: 90,
 			pollMinutes: 3,
 			providers: ["anthropic", "zai"],
+			mode: "warn",
 		});
+
+		writeHomeConfig({ quotaGate: { mode: "hold" } });
+		expect(loadConfig(home.dir).quotaGate).toEqual({ mode: "hold" });
 
 		for (const [field, bad] of [
 			["quotaGate", 95],
@@ -334,6 +340,7 @@ describe("config validation and live reload", () => {
 			["quotaGate.pollMinutes", { pollMinutes: 61 }],
 			["quotaGate.providers", { providers: [] }],
 			["quotaGate.providers", { providers: ["-bad"] }],
+			["quotaGate.mode", { mode: "invalid" }],
 		] as const) {
 			writeHomeConfig({ quotaGate: bad });
 			let caught: unknown;
@@ -721,5 +728,57 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 
 		const badMinutes = await runCliCapture(tmp, ["quota", "lift", "anthropic", "--minutes", "0"]);
 		expect(badMinutes.code).toBe(2);
+	});
+
+	test("quotaGate mode=warn records snapshot and logs without blocking starts, and switches live to hold", async () => {
+		const now = BASE_NOW;
+		const logs: string[] = [];
+		let currentConfig: JabbuConfig = { ...home.config, quotaGate: { holdPct: 95, pollMinutes: 5, mode: "warn" } };
+		const ctx = {
+			get options() {
+				return { config: currentConfig };
+			},
+			clock: { now: () => now },
+			log: createLogger({ sink: (line) => logs.push(line), clock: { now: () => now }, redact }),
+		} as unknown as DaemonContext;
+
+		const runner: ProcessRunner = async () => ({
+			code: 0,
+			timedOut: false,
+			stdout: JSON.stringify(
+				usagePayload([
+					{
+						provider: "anthropic",
+						limits: [
+							{
+								label: "Claude 5h",
+								amount: { unit: "percent", usedFraction: 0.98 },
+								window: { id: "5h", label: "5h", resetsAt: now + 3_600_000 },
+							},
+						],
+					},
+				]),
+			),
+		});
+
+		const daemonQuota = new DaemonQuotaGate(ctx, runner);
+		await daemonQuota.pollNow();
+
+		expect(daemonQuota.refusalFor("anthropic/claude-opus-5-5")).toBeUndefined();
+		expect(logs.some((line) => line.includes("quota_gate_opened") && line.includes("mode=warn"))).toBe(true);
+		const snap = readQuotaGateSnapshot(home.dir, now);
+		expect(snap.mode).toBe("warn");
+		expect(snap.held.map((entry) => entry.provider)).toEqual(["anthropic"]);
+
+		const statusJson = await runCliCapture(home.dir, ["quota", "status", "--json"]);
+		expect(statusJson.code).toBe(0);
+		expect((JSON.parse(statusJson.stdout) as { mode?: string }).mode).toBe("warn");
+
+		const statusPlain = await runCliCapture(home.dir, ["quota", "status"]);
+		expect(statusPlain.code).toBe(0);
+		expect(statusPlain.stdout).toContain("mode=warn");
+
+		currentConfig = { ...home.config, quotaGate: { holdPct: 95, pollMinutes: 5, mode: "hold" } };
+		expect(daemonQuota.refusalFor("anthropic/claude-opus-5-5")).toContain("프로바이더 쿼터 보류(anthropic:");
 	});
 });

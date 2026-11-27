@@ -6,6 +6,7 @@
 
 import { posix } from "node:path";
 import { INVISIBLE } from "./injection";
+import { type Edit, edited, inLine, replaced, type Spelling, shellSpelling } from "./shell-spelling";
 
 export type HandoffVerdict = "clear" | "advisory" | "high_risk";
 export interface HandoffFinding {
@@ -126,7 +127,7 @@ const HIGH_RISK_PATTERNS: readonly PatternRule[] = [
 	{
 		rule: "git_discard_worktree",
 		pattern: new RegExp(
-			`\\bgit\\s+(?:(?:checkout|switch)\\b${SEGMENT}\\s(?:-[a-z]*f[a-z]*|${longOption("force", 1)}|${longOption("discard-changes", 2)})(?![\\w-])|(?:checkout\\b|restore\\b(?:(?=${SEGMENT}\\s(?:--worktree|-[a-z]*w[a-z]*)(?![\\w-]))|(?!${RESTORE_STAGED})))${SEGMENT}\\s(?:\\.\\/?|:\\/\\.?|\\.\\/\\*|:\\/\\*|\\*|'\\*'|"\\*")(?=\\s|$|[;&|\`]))`,
+			`\\bgit\\s+(?:(?:checkout|switch)\\b${SEGMENT}\\s(?:-[a-z]*f[a-z]*|${longOption("force", 1)}|${longOption("discard-changes", 2)})(?![\\w-])|(?:checkout\\b|restore\\b(?:(?=${SEGMENT}\\s(?:--worktree|-[a-z]*w[a-z]*)(?![\\w-]))|(?!${RESTORE_STAGED})))${SEGMENT}\\s(?:\\.\\/?|:\\/\\.?|\\.\\/\\*|:\\/\\*|\\*|'\\*'|"\\*")(?=\\s|$|[;&|\`)'"]))`,
 			"i",
 		),
 		verb: /\bgit\s+(checkout|switch|restore)\b/i,
@@ -349,10 +350,10 @@ function removesAbsoluteTree(line: string): Hit[] {
 			else if (/^-[a-z]+$/i.test(word)) {
 				if (/[rR]/.test(word)) recursive = true;
 				if (/f/i.test(word)) force = true;
-			} else if (/^["']?(?:\/|~|\$HOME\b|\$\{HOME(?!\w)[^}]*\})/.test(word)) absolute = true;
+			} else if (/^(?:\\?["'])?(?:\/|~|\$HOME\b|\$\{HOME(?!\w)[^}]*\})/.test(word)) absolute = true;
 			else continue;
 			// A clause mark glued to the target (`~/work,`) is a boundary, not part of the command.
-			end = segmentAt + found.index + word.replace(/[;,，、.。!?]+$/, "").length;
+			end = segmentAt + found.index + word.replace(/[;,，、.。!?)'"]+$/, "").length;
 		}
 		if (recursive && force && absolute) hits.push({ rule: "rm_rf_absolute", start: match.index, end });
 	}
@@ -935,71 +936,6 @@ function definesRule(line: string, hit: Hit): boolean {
 		if (hit.start > open && hit.start < open + span[0].length - 1) return true;
 	}
 	return false;
-}
-
-/**
- * One spelling of a line: its text and, per character of it, the index in the line as written that character comes
- * from, so a hit found in a spelling is judged and excerpted where it stands in the line.
- */
-interface Spelling {
-	text: string;
-	/** Absent for the line as written, where every character comes from its own index. */
-	origin?: number[];
-}
-
-/** A replacement of `[start, end)` of a spelling's text by `insert`. */
-interface Edit {
-	start: number;
-	end: number;
-	insert: string;
-}
-
-/** Where the character at `index` of a spelling stands in the line as written; past the end, just after the last. */
-function inLine({ text, origin }: Spelling, index: number): number {
-	if (origin === undefined) return index;
-	return index < text.length ? (origin[index] as number) : (origin.at(-1) ?? -1) + 1;
-}
-
-/** `spelling` with `edits` (sorted, not overlapping) applied; an inserted character comes from where its edit starts. */
-function edited(spelling: Spelling, edits: readonly Edit[]): Spelling {
-	if (edits.length === 0) return spelling;
-	let text = "";
-	const origin: number[] = [];
-	let pos = 0;
-	const copy = (to: number): void => {
-		text += spelling.text.slice(pos, to);
-		for (let index = pos; index < to; index++) origin.push(inLine(spelling, index));
-	};
-	for (const { start, end, insert } of edits) {
-		copy(start);
-		text += insert;
-		const from = inLine(spelling, start);
-		for (let k = 0; k < insert.length; k++) origin.push(from);
-		pos = end;
-	}
-	copy(spelling.text.length);
-	return { text, origin };
-}
-
-/** `spelling` with every match of the global `pattern` replaced by `insert`. */
-function replaced(spelling: Spelling, pattern: RegExp, insert = ""): Spelling {
-	if (spelling.text.search(pattern) < 0) return spelling;
-	const edits: Edit[] = [];
-	for (const m of spelling.text.matchAll(pattern)) edits.push({ start: m.index, end: m.index + m[0].length, insert });
-	return edited(spelling, edits);
-}
-
-/**
- * The line as the shell reads its words: a quoted word without blanks loses its quotes (`'--hard'` → `--hard`) and a
- * backslash before a word character or `-` goes (`\\--hard`, `--h\\ard`). A quote right after a letter stays, so
- * `don't` keeps its forbidding marker.
- */
-function shellSpelling(spelling: Spelling): Spelling {
-	const quotes = Array.from(spelling.text.matchAll(/(?<!\w)(['"])([^'"\s`]*)\1/g), (m) => [
-		{ start: m.index, end: m.index + 1, insert: "" },
-		{ start: m.index + m[0].length - 1, end: m.index + m[0].length, insert: "" },
-	]).flat();
-	return replaced(edited(spelling, quotes), /\\(?=[\w-])/g);
 }
 
 /**
