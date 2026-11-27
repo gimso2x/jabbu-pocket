@@ -30,6 +30,8 @@ export const LIVE_FIELDS = [
 	// Every note write reads it, so an added or removed block turns the notes on or off.
 	"wikiNotes",
 	"costCap",
+	// Each new conversation turn reads it through a getter (`coldResumeRotateTokens`), never a captured copy.
+	"coldResumeRotateTokens",
 	"quotaGate",
 	"opsPanel",
 	// The lane manager reads `lanes.models` at every lane start.

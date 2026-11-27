@@ -6,6 +6,7 @@ import { ChannelRegistry } from "../channel/registry";
 import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
+import { coldResumeTokens, formatColdResumeNotice } from "../core/mailbox-cold-resume";
 import type { ThreadSource } from "../core/mailbox-thread-context";
 import { TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { OriginRouter, sessionDirFor } from "../core/origin";
@@ -501,6 +502,8 @@ export class Daemon {
 			quotaHoldReason: (originKey) => this.#quota.holdReasonForOrigin(originKey),
 			onCacheMiss: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatCacheMissNotice(info)),
 			onColdCache: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatColdCacheNotice(info)),
+			coldResumeRotateTokens: () => coldResumeTokens(this.#options.config),
+			onColdResumeRotated: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatColdResumeNotice(info)),
 			onSessionMismatch: (info) => postThreadNotices(this.#ctx, [info.threadRef], formatSessionMismatchNotice(info)),
 			// A monitor's turn has no thread to warn: the log line is its record.
 			onTurnCostCap: (info) => {
@@ -685,8 +688,7 @@ export class Daemon {
 
 		// Missed messages since the last run: one recovery pass per platform now (each reconnect runs another).
 		for (const adapter of this.#adapters.values()) adapter.recover();
-		// A peer answer posted while the daemon was down comes back with that pass (`onPeerSeen`): the silence sweep
-		// waits for it, or it would alert a call already answered.
+		// A peer answer posted while down comes back with that pass (`onPeerSeen`): the silence sweep waits for it.
 		void (this.#adapters.get("discord")?.recoveryIdle?.() ?? Promise.resolve()).then(() => {
 			this.#peerSilenceArmed = true;
 			log.info("peer_silence_armed");
@@ -713,8 +715,7 @@ export class Daemon {
 		this.#checkRunner = sweep.checkRunner;
 		this.#taskSweeper = sweep.taskSweeper;
 		this.#ipc = startIpcServer(this.socketPath, (request) => handleIpc(this.#ctx, this, this.#landing, request));
-		// "Back" is told only once the process can be reached: a start that fails earlier leaves the marker for the next one,
-		// and the notice goes out before a recovered turn's first post.
+		// "Back" is told once the process can be reached (an earlier failed start leaves the marker), before a recovered turn's post.
 		this.#announceMarker("back");
 
 		// Rule (1): rows still pending in the ledger are dispatched again (a frozen bot's mailboxes hold autonomous rows).
@@ -1241,8 +1242,7 @@ export class Daemon {
 		if (request.thread !== undefined && !/^\d{17,20}$/.test(request.thread))
 			throw new Error(`inject thread is not a message id: ${request.thread}`);
 		const nonce = randomBytes(6).toString("hex");
-		// The marker is all the owner sees of the injected message, so it carries the text's first line — masked before it
-		// is cut: a secret cut short no longer matches its pattern and would go out half.
+		// The marker carries the text's first line, masked before it is cut (a secret cut short no longer matches its pattern).
 		const firstLine = redact(
 			request.text
 				.split("\n")
