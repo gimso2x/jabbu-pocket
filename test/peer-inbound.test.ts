@@ -543,6 +543,7 @@ describe("daemon: peer bot input", () => {
 				"jabbu_monitor_remove",
 				"jabbu_board_post",
 				"jabbu_board_read",
+				"jabbu_onboarding",
 			]);
 			const laneRestricted = restricted(lane.originKey, laneTools);
 			expect(laneRestricted).toEqual([
@@ -564,6 +565,7 @@ describe("daemon: peer bot input", () => {
 				jabbu_claim_done: { repo, commit: "HEAD", summary: "done" },
 				jabbu_board_post: { text: "피어 뒤 글" },
 				jabbu_board_read: {},
+				jabbu_onboarding: { op: "view" },
 			};
 			for (const [defs, names] of [
 				[dmTools, dmRestricted],
@@ -574,7 +576,7 @@ describe("daemon: peer bot input", () => {
 					await expect(result).rejects.toThrow(PEER_TOOL_DENIED);
 				}
 			}
-			expect(logs.count(/event=host_tool_denied_peer /)).toBe(10);
+			expect(logs.count(/event=host_tool_denied_peer /)).toBe(11);
 			for (const name of new Set([...dmRestricted, ...laneRestricted])) {
 				const times = dmRestricted.includes(name) && laneRestricted.includes(name) ? 2 : 1;
 				expect(logs.count(new RegExp(`event=host_tool_denied_peer .*tool=${name}( |$)`))).toBe(times);
