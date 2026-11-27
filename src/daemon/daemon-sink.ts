@@ -30,7 +30,6 @@ import { parseApprovalRetryActionId } from "../safety/approval";
 import { AMBIGUOUS_NOTICE_OP_PREFIX, INTERIM_INFIX, LOG_COPY_SUFFIX, PEER_SILENCE_OP_PREFIX } from "../store/db";
 import type { DeliveryRow, InboundRow } from "../store/db-rows";
 import type { TaskRow } from "../tasks/ledger";
-import { parseTaskMergeActionId, parseTaskRecommendActionId } from "../tasks/notify";
 import type { CrashPoint } from "./crash";
 import {
 	DRAIN_DEFERRED_COMMAND_TEXT,
@@ -262,10 +261,8 @@ export class DaemonInbound {
 				const retry = parseApprovalRetryActionId(actionId);
 				if (retry !== undefined)
 					return deps.landing.handleApprovalRetry(`${retry.channel}:${retry.ts}`, channel, messageTs);
-				const taskId = parseTaskMergeActionId(actionId);
-				if (taskId !== undefined) return deps.landing.handleTaskMerge(taskId, channel, messageTs);
-				const recommended = parseTaskRecommendActionId(actionId);
-				if (recommended !== undefined) return deps.landing.handleTaskRecommend(recommended, value, channel, messageTs);
+				const taskAction = deps.landing.handleTaskAction(actionId, value, channel, messageTs);
+				if (taskAction !== undefined) return taskAction;
 				const reservationAction = parseReservationActionId(actionId);
 				if (reservationAction !== undefined)
 					return this.#handleReservationButton(reservationAction, channel, messageTs);

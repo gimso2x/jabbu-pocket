@@ -1,33 +1,24 @@
 import { parseThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import { confidentBand } from "../lanes/land";
 import { readAutoLandHold } from "../ops/apply";
+import {
+	parseTaskCancelAction,
+	parseTaskMergeActionId,
+	parseTaskRecommendActionId,
+	type TaskCard,
+} from "../tasks/card-buttons";
 import { evaluateTask, memoryTaskChecks } from "../tasks/evaluate";
 import type { TaskGateHooks } from "../tasks/gate";
 import { landTask, type TaskLandOutcome, type TaskLandResult, taskLandHold } from "../tasks/land";
 import { hostOpsOf, landModeOfRow } from "../tasks/land-remote";
 import type { TaskRow } from "../tasks/ledger";
-import {
-	buildBlockedSettledCard,
-	buildMergeSettledCard,
-	cardMessage,
-	postToThread,
-	RECOMMEND_VALUE_MAX,
-	setStatusReaction,
-	type TaskCard,
-	taskLandNote,
-} from "../tasks/notify";
+import { buildMergeSettledCard, cardMessage, postToThread, setStatusReaction, taskLandNote } from "../tasks/notify";
 import type { PrLandRetry } from "../tasks/pr-land-retry";
 import { recordWithConfig } from "../tasks/records";
-import {
-	AUTO_LAND_MARKER,
-	AUTO_LAND_TEXT,
-	MERGE_REJECTED_NOTE,
-	RECOMMEND_REJECTED_NOTE,
-	TASK_LANDING_NOTE,
-} from "./daemon-constants";
+import { AUTO_LAND_MARKER, AUTO_LAND_TEXT, MERGE_REJECTED_NOTE, TASK_LANDING_NOTE } from "./daemon-constants";
 import { approvalOf, autoLandPolicy, type DaemonContext } from "./daemon-context";
+import { handleTaskCancelAction, handleTaskRecommendAction, type TaskCardButtonHost } from "./daemon-task-cancel";
 import {
-	answerInThread,
 	ingestOwnerText,
 	LAND_DRAINING_NOTE,
 	type LandEntryHost,
@@ -41,8 +32,10 @@ import { createPrLandRetry } from "./daemon-task-retry";
 /** The landing of reached [TASK]s (auto-merge, `머지` button) and the card buttons that put an owner answer in a thread; owns the landing lock and the one-click-per-card keys. */
 export class DaemonTaskLanding {
 	readonly #ctx: DaemonContext;
-	/** Task cards (`<channel>:<ts>`) whose button (`머지`, `추천대로`) was clicked in this process: a second click does nothing. Never cleared. */
+	/** Task cards (`<channel>:<ts>`) whose button (`머지`, `추천대로`, `취소 확정`) was settled in this process: a second click does nothing. Never cleared. */
 	readonly #mergeClicks = new Set<string>();
+	/** Task cards (`<channel>:<ts>`) currently handling a transient `취소` / `유지` click (`finally`-cleared). */
+	readonly #pendingCardClicks = new Set<string>();
 	/** Approvals (`<channel>:<ts>`) whose `다시 요청` was clicked in this process, on either card. Never cleared. */
 	readonly #retryClicks = new Set<string>();
 	/** Tasks being landed (auto-merge, `머지` button and PR poll share it): held through `landTask` and, after a handoff, until the "머지해" turn ended. A call meanwhile is `in_flight`. */
@@ -292,39 +285,21 @@ export class DaemonTaskLanding {
 			.finally(() => this.#taskLanding.delete(taskId));
 	}
 
-	/** A `추천대로` click on a blocked task's card: the same as answering "추천대로" in the thread, the button's `value` (the recommendation) quoted. Only a blocked task takes it; one click per card per process. Every outcome redraws the card. */
-	async handleTaskRecommend(
-		taskId: string,
+	/** Routes a `[TASK]` card button click (`머지`, `추천대로`, `취소`/`취소 확정`/`유지`); `undefined` for any other action id. */
+	handleTaskAction(
+		actionId: string,
 		value: string | undefined,
 		channel: string | undefined,
 		messageTs: string | undefined,
-	): Promise<void> {
-		const recommend = (value ?? "").replace(/\s+/g, " ").trim().slice(0, RECOMMEND_VALUE_MAX);
-		const short = recommend.length > 120 ? `${recommend.slice(0, 119)}…` : recommend;
-		if (this.#clickKey("recommend", taskId, channel, messageTs) === undefined) return;
-		const redraw = this.#redrawer("recommend", taskId, channel, messageTs);
-		const log = this.#ctx.log;
-		const row = this.#ctx.store?.tasks.get(taskId);
-		if (row === undefined || row.status !== "blocked") {
-			log.info("task_recommend_ignored", { task: taskId, reason: row === undefined ? "not_found" : row.status });
-			await redraw(
-				row === undefined
-					? { text: `이미 처리됐거나 막힌 상태가 아님 (TASK 없음: ${taskId})`, buttons: [] }
-					: buildBlockedSettledCard(row, `이미 처리됐거나 막힌 상태가 아님 (${row.status})`),
-			);
-			return;
-		}
-		const thread = parseThreadRef(row.threadRef);
-		if (thread === undefined || thread.threadTs === TOP_LEVEL_TS) {
-			log.warn("task_recommend_inject_rejected", { task: taskId, reason: "bad_thread", thread: row.threadRef });
-			await redraw(buildBlockedSettledCard(row, RECOMMEND_REJECTED_NOTE));
-			return;
-		}
-		const requested = `▶ 추천대로 진행 요청됨 · ${this.#ctx.clockFormat.format(this.#ctx.clock.now())}${short === "" ? "" : ` — 추천: ${short}`}`;
-		await redraw(buildBlockedSettledCard(row, requested));
-		const ownerText = recommend === "" ? "추천대로" : `추천대로 (추천: ${recommend})`;
-		const answered = await answerInThread(this.#ctx, "recommend", taskId, thread, ownerText, "🔘 추천대로 (버튼)");
-		if (!answered.accepted) await redraw(buildBlockedSettledCard(row, RECOMMEND_REJECTED_NOTE));
+	): Promise<void> | undefined {
+		const taskId = parseTaskMergeActionId(actionId);
+		if (taskId !== undefined) return this.handleTaskMerge(taskId, channel, messageTs);
+		const recommended = parseTaskRecommendActionId(actionId);
+		if (recommended !== undefined)
+			return handleTaskRecommendAction(this.#buttonHost(), recommended, value, channel, messageTs);
+		const cancel = parseTaskCancelAction(actionId);
+		if (cancel !== undefined) return handleTaskCancelAction(this.#buttonHost(), cancel, value, channel, messageTs);
+		return undefined;
 	}
 
 	/** The key of a task card's button click (`<channel>:<ts>`), or undefined for a second click of this process (keyed before the first await). */
@@ -335,12 +310,23 @@ export class DaemonTaskLanding {
 		messageTs: string | undefined,
 	): string | undefined {
 		const key = `${channel ?? "-"}:${messageTs ?? taskId}`;
-		if (this.#mergeClicks.has(key)) {
+		if (this.#mergeClicks.has(key) || this.#pendingCardClicks.has(key)) {
 			this.#ctx.log.info(`task_${kind}_ignored`, { task: taskId, reason: "duplicate" });
 			return undefined;
 		}
 		this.#mergeClicks.add(key);
 		return key;
+	}
+
+	#buttonHost(): TaskCardButtonHost {
+		return {
+			ctx: this.#ctx,
+			settledCards: this.#mergeClicks,
+			pendingCards: this.#pendingCardClicks,
+			taskLanding: this.#taskLanding,
+			redraw: (kind, taskId, channel, messageTs, card) => this.#redrawer(kind, taskId, channel, messageTs)(card),
+			closeTaskAgent: (row) => this.closeTaskAgent(row),
+		};
 	}
 
 	/** Redraws the clicked card (nothing without a card); a failed edit is logged. */

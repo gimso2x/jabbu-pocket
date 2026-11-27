@@ -312,7 +312,7 @@ describe("TaskSweeper", () => {
 		expect(textOf(posts(r)[0]).split("\n")[0]).toStartWith("🔍 Outcome 도달");
 	});
 
-	test("Outcome card post: header 🔍 머지 대기 · <title>, criteria and branch fields, one primary 머지 button with the task id", async () => {
+	test("Outcome card post: header 🔍 머지 대기 · <title>, criteria and branch fields, primary 머지 and danger 취소 buttons with the task id", async () => {
 		const r = rig({ boardLink: async () => "https://board.test/c/1" });
 		r.next.value = { ok: true, judgement: reachedJudgement() };
 		await r.sweeper.sweep();
@@ -327,12 +327,15 @@ describe("TaskSweeper", () => {
 		expect(post?.components).toEqual([
 			{
 				type: 1,
-				components: [{ type: 2, style: 1, label: "머지", custom_id: "jabbu:task:merge:T-20261026-01" }],
+				components: [
+					{ type: 2, style: 1, label: "머지", custom_id: "jabbu:task:merge:T-20261026-01" },
+					{ type: 2, style: 4, label: "취소", custom_id: "jabbu:task:cancel:T-20261026-01" },
+				],
 			},
 		]);
 		// The button's note is the card's last line, as a Discord subtext.
 		expect(embed?.description?.split("\n").at(-1)).toBe(
-			"-# 머지 = close → ff merge → push → 정리 · 재시작은 포함 안 됨 · 작업 보드: https://board.test/c/1",
+			"-# 머지 = close → ff merge → push → 정리 · 재시작은 포함 안 됨 · 취소 = 작업 중단(워크트리·브랜치 보존) · 작업 보드: https://board.test/c/1",
 		);
 		expect(embed?.description).toContain("로그 파일이 10MB를 넘으면 회전합니다.");
 		expect(embed?.description).toContain("<@100000000000000001>");

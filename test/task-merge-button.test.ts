@@ -301,7 +301,7 @@ describe("blocked card: 추천대로 button", () => {
 		host: null,
 		branch: "task/T-20261109-07",
 	} as unknown as TaskRow;
-	test("a recommendation gives one primary 추천대로 button carrying it; none without one", () => {
+	test("a recommendation gives primary 추천대로 and danger 취소 buttons; without recommendation only 취소 appears", () => {
 		const card = buildBlockedCard(row, judged("A안: /var/lib xoxb-TEST-0"), OWNER, "https://board/x");
 		expect(card.buttons).toEqual([
 			{
@@ -310,15 +310,28 @@ describe("blocked card: 추천대로 button", () => {
 				value: "A안: /var/lib [REDACTED]",
 				style: "primary",
 			},
+			{
+				actionId: "jabbu:task:cancel:T-20261109-07",
+				label: "취소",
+				value: "blocked:A안: /var/lib [REDACTED]",
+				style: "danger",
+			},
 		]);
 		expect(card.note).toBe(
-			"추천대로 = 위 추천 그대로 진행 · 다른 결정은 이 스레드에 답장 · 작업 보드: https://board/x",
+			"추천대로 = 위 추천 그대로 진행 · 다른 결정은 이 스레드에 답장 · 취소 = 작업 중단(워크트리·브랜치 보존) · 작업 보드: https://board/x",
 		);
 		expect(parseTaskRecommendActionId("jabbu:task:recommend:T-20261109-07")).toBe("T-20261109-07");
 		expect(parseTaskRecommendActionId("jabbu:task:merge:T-20261109-07")).toBeUndefined();
 		const without = buildBlockedCard(row, judged(""), OWNER);
-		expect(without.buttons).toBeUndefined();
-		expect(without.note).toBeUndefined();
+		expect(without.buttons).toEqual([
+			{
+				actionId: "jabbu:task:cancel:T-20261109-07",
+				label: "취소",
+				value: "blocked:",
+				style: "danger",
+			},
+		]);
+		expect(without.note).toBe("취소 = 작업 중단(워크트리·브랜치 보존)");
 	});
 
 	test("a block that already had its retry prompt says so at the end of the reason line", () => {
