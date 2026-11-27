@@ -4,6 +4,7 @@ import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
 import {
 	OmpDriverError,
+	type OmpEntry,
 	type OmpEvent,
 	type OmpExitInfo,
 	type OmpFinal,
@@ -16,6 +17,7 @@ import {
 	CACHE_MISS_NOTIFY_MS,
 	CACHE_MISS_NOTIFY_TOKENS,
 	type CacheBaseline,
+	type CacheCall,
 	CacheMonitor,
 	cacheCallOf,
 	isColdCache,
@@ -98,7 +100,7 @@ import { parseChatOrigin } from "./origin-key";
 import { buildRecallBlock } from "./recall";
 import { epochDirIsFresh } from "./sessions";
 import { stuckCancelReason, stuckSteerText } from "./stuck";
-import { tryCloseToolFreeFromFile } from "./tool-free-recovery";
+import { readLastAssistantEntry, tryCloseToolFreeFromFile } from "./tool-free-recovery";
 import {
 	composeTurnPrompt,
 	EVENT_PERSIST_MS,
@@ -133,6 +135,13 @@ export type {
 	TurnSettledInfo,
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
+
+/** `cacheCallOf` for a session entry, or `undefined` when it carries no usable call. */
+function seedCallOf(entry: OmpEntry | undefined): CacheCall | undefined {
+	const stamp = entry?.timestamp;
+	const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
+	return Number.isNaN(at) ? undefined : cacheCallOf(entry?.message, at);
+}
 
 /** Serial actor per origin: processes inbound messages, driver finals, and exits on one promise chain. */
 export class OriginMailbox {
@@ -655,13 +664,14 @@ export class OriginMailbox {
 	}
 
 	/** Seeds an empty cache baseline from the session's last assistant entry (a new mailbox after a daemon restart). */
-	async #seedCache(driver: OmpSessionDriver): Promise<void> {
+	async #seedCache(driver: OmpSessionDriver, sessionFile?: string): Promise<void> {
 		if (this.#cache.baseline !== undefined) return;
 		try {
-			const last = (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
-			const stamp = last?.timestamp;
-			const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
-			const call = Number.isNaN(at) ? undefined : cacheCallOf(last?.message, at);
+			// The session file's tail holds the same last assistant entry the full history would give, without the transfer.
+			const tail = sessionFile === undefined ? undefined : readLastAssistantEntry(sessionFile);
+			const last =
+				tail ?? (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
+			const call = seedCallOf(last);
 			if (call !== undefined) this.#cache.seed(call);
 		} catch (error) {
 			this.#deps.log.warn("cache_seed_failed", { origin: this.#deps.originKey, error: String(error) });
@@ -1396,7 +1406,7 @@ export class OriginMailbox {
 			defaultModel: this.#deps.defaultModel,
 			log,
 		});
-		await this.#seedCache(driver);
+		await this.#seedCache(driver, expected);
 		this.#cache.markChildRestart();
 		this.#unsubscribe = [
 			driver.onFinal((final) => {
