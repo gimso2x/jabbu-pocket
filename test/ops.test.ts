@@ -2277,7 +2277,7 @@ describe.each([
 		home.remove();
 	});
 
-	test("its pending and dispatched rows are discarded at start with inbound_discarded reason=platform_removed, and no turn runs", async () => {
+	test("its pending and dispatched rows and pending deliveries are discarded at start with reason=platform_removed, and no turn runs", async () => {
 		const seed = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		seed.ensureOrigin(dm, join(home.dir, "sessions", "removed-dm"));
 		seed.ensureOrigin(thread, join(home.dir, "sessions", "removed-thread"));
@@ -2289,6 +2289,14 @@ describe.each([
 			threadRef: "C1:10.1",
 		});
 		seed.markDispatched("C1:10.1", { opRef: "op-removed-1", entryCursor: null });
+		const deliveries = seed.recordAnswer({
+			originKey: dm,
+			opRef: "op-removed-delivery",
+			threadRef: "D1:1.0",
+			parts: ["보낼 답"],
+		});
+		expect(deliveries).toHaveLength(1);
+		const deliveryId = deliveries[0]?.deliveryId ?? 0;
 		seed.close();
 
 		const lines: string[] = [];
@@ -2323,6 +2331,11 @@ describe.each([
 		for (const line of discarded) expect(line).toContain("reason=platform_removed");
 		expect(discarded.some((line) => line.endsWith(`origin=${dm}`))).toBe(true);
 		expect(discarded.some((line) => line.endsWith(`origin=${thread}`))).toBe(true);
+		expect(daemon.store.getDelivery(deliveryId)?.state).toBe("expired");
+		const deliveryDiscarded = lines.filter((line) => line.includes("event=delivery_discarded"));
+		expect(deliveryDiscarded).toHaveLength(1);
+		expect(deliveryDiscarded[0]).toContain("reason=platform_removed");
+		expect(deliveryDiscarded[0]).toContain(`origin=${dm}`);
 		await daemon.sweep();
 		expect(prompts).toEqual([]);
 		expect(lines.some((line) => line.includes("event=turn_start"))).toBe(false);
