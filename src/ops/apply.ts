@@ -626,6 +626,11 @@ export async function runApply(options: ApplyOptions, deps: ApplyDeps): Promise<
 	}
 }
 
+/** A path for a command the owner pastes into a shell: plain paths stay as they are, anything else is single-quoted. */
+function shellPathArg(path: string): string {
+	return /^[\w/.,:@+=-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
 /**
  * Applies a merged change to the running daemon in one auditable pass: precheck → backup (db + config copy) →
  * drain → restart → wait for a fresh daemon and its chat transports → record gates/doctor → roll back config and restart once on failure.
@@ -1106,7 +1111,7 @@ async function applyUnderLock(
 	if (ensured.noted) {
 		const detail = ensured.ok
 			? ensured.detail
-			: `${ensured.detail}\nnot restarted; by hand: cd ${repoDir} && bun install --frozen-lockfile && bun src/main.ts apply; ${await cancelDrain()}`;
+			: `${ensured.detail}\nnot restarted; by hand: cd ${shellPathArg(repoDir)} && bun install --frozen-lockfile && bun src/main.ts apply; ${await cancelDrain()}`;
 		steps.push({ name: "deps", ok: ensured.ok, detail, ms: deps.now() - depsT0 });
 		deps.log(`apply step=deps ok=${ensured.ok} detail=${detail}`);
 	} else deps.log(`apply deps ${ensured.detail}`);
@@ -1170,7 +1175,7 @@ async function applyUnderLock(
 		const installed = await installDeps();
 		if (!installed.ok)
 			return failed(
-				`${installed.detail}\nnot restarted; by hand: cd ${repoDir} && bun install --frozen-lockfile && systemctl --user restart ${unit}`,
+				`${installed.detail}\nnot restarted; by hand: cd ${shellPathArg(repoDir)} && bun install --frozen-lockfile && systemctl --user restart ${unit}`,
 			);
 		details.push(installed.detail);
 		// A migrated ledger would make the rolled-back code exit on `newer_schema`: restore the snapshot first.
