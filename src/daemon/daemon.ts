@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
-import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
+import { cutCodePointSafe, errorFields, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import { coldResumeTokens, formatColdResumeNotice } from "../core/mailbox-cold-resume";
@@ -745,7 +745,7 @@ export class Daemon {
 		event: "adapter_start_failed" | "adapter_detached",
 		error: unknown,
 	): Promise<void> {
-		this.#log.error(event, { platform: adapter.platform, error: String(error) });
+		this.#log.error(event, { platform: adapter.platform, ...errorFields(error) });
 		if (this.#adapters.get(adapter.platform) === adapter) this.#adapters.delete(adapter.platform);
 		await adapter
 			.stop()
@@ -764,7 +764,7 @@ export class Daemon {
 					await adapter.pumpDeliveries();
 					await adapter.tick();
 				} catch (error) {
-					this.#log.error("pump_failed", { platform: adapter.platform, error: String(error) });
+					this.#log.error("pump_failed", { platform: adapter.platform, ...errorFields(error) });
 				}
 			}
 		});
@@ -791,7 +791,7 @@ export class Daemon {
 				// A restart drain fires no monitor: due slots are claimed by the next process's catch-up.
 				if (this.#router?.draining !== true) await this.#monitors?.tick();
 			} catch (error) {
-				this.#log.error("monitor_tick_failed", { error: String(error) });
+				this.#log.error("monitor_tick_failed", { ...errorFields(error) });
 			}
 			await run("idle_sweep", () => this.#startIdleSweep());
 			await run("task_sweep", () => this.#maybeSweepTasks());
@@ -803,7 +803,7 @@ export class Daemon {
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
-				this.#log.error("gate_sweep_failed", { error: String(error) });
+				this.#log.error("gate_sweep_failed", { ...errorFields(error) });
 			}
 			try {
 				this.#sweepPeerSilence();
@@ -819,7 +819,7 @@ export class Daemon {
 			await run("review_candidates", () => this.#review.maybeProposeCandidates());
 			await run("beat", () => this.#beat());
 		} catch (error) {
-			this.#log.error("sweep_failed", { step, error: String(error) });
+			this.#log.error("sweep_failed", { step, ...errorFields(error) });
 		}
 	}
 
@@ -828,7 +828,7 @@ export class Daemon {
 		if (this.#bgSweeps.has(kind) || this.#stopped) return;
 		this.#bgSweeps.add(kind);
 		void work()
-			.catch((error: unknown) => this.#log.error(errEvent, { error: String(error) }))
+			.catch((error: unknown) => this.#log.error(errEvent, { ...errorFields(error) }))
 			.finally(() => this.#bgSweeps.delete(kind));
 	}
 
@@ -992,7 +992,7 @@ export class Daemon {
 				try {
 					await this.#taskSweeper.sweep(due);
 				} catch (error) {
-					this.#log.error("task_sweep_failed", { tasks: due.size, error: String(error) });
+					this.#log.error("task_sweep_failed", { tasks: due.size, ...errorFields(error) });
 				}
 			} while (this.#taskSweepAgain && !this.#stopped);
 		} finally {

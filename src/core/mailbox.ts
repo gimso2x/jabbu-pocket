@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { errorFields } from "../channel/text";
 import { isTaskOrigin } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
@@ -692,9 +693,8 @@ export class OriginMailbox {
 		if (!flushes.includes(event.type)) return;
 		const pending = turn.pendingAnswer;
 		turn.pendingAnswer = undefined;
-		if (pending !== undefined && this.#recordInterim(turn, pending)) {
+		if (pending !== undefined && this.#recordInterim(turn, pending))
 			turn.lastInterimDeliveredAt = this.#deps.clock.now();
-		}
 		if (event.type !== "message_end") return;
 		const interim = interimOf(event.message);
 		if (interim?.kind === "answer") turn.pendingAnswer = interim.text;
@@ -784,7 +784,7 @@ export class OriginMailbox {
 	/** Events from the driver have nobody to reject to: errors are logged, never dropped silently. */
 	#background(event: string, task: () => Promise<void>): void {
 		this.#serial(task).catch((error: unknown) => {
-			this.#deps.log.error(event, { origin: this.#deps.originKey, error: String(error) });
+			this.#deps.log.error(event, { origin: this.#deps.originKey, ...errorFields(error) });
 		});
 	}
 
@@ -805,11 +805,8 @@ export class OriginMailbox {
 			return;
 		}
 		const command = parseCommand(record.text);
-		if (command?.kind === "restart") {
-			// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
-			await this.#runCommand(row, command);
-			return;
-		}
+		// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
+		if (command?.kind === "restart") return this.#runCommand(row, command);
 		if (this.#deps.isDraining?.()) {
 			log.info("drain_deferred", { origin: originKey, id: record.platformMessageId });
 			return;
@@ -1043,8 +1040,8 @@ export class OriginMailbox {
 		}
 		const rawReason = failureSign(failure);
 		const code = failure instanceof OmpDriverError ? failure.code : "dispatch_error";
-		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, error: String(failure) });
-		this.#logTurnFailed(rawReason);
+		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, ...errorFields(failure) });
+		this.#logTurnFailed(rawReason, undefined, failure);
 		const opRef = `failed:${row.platformMessageId}`;
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		const peer = turnPeerOf(row);
@@ -1189,7 +1186,7 @@ export class OriginMailbox {
 		try {
 			await onLaunchRefused?.(reason);
 		} catch (error) {
-			log.error("launch_refused_failed", { origin: originKey, error: String(error) });
+			log.error("launch_refused_failed", { origin: originKey, ...errorFields(error) });
 		}
 		return true;
 	}
@@ -1629,12 +1626,13 @@ export class OriginMailbox {
 		await this.#drain();
 	}
 
-	#logTurnFailed(rawReason: string, classifyReason = rawReason): void {
+	#logTurnFailed(rawReason: string, classifyReason = rawReason, error?: unknown): void {
 		const { kind } = classifyFailure(classifyReason);
 		this.#deps.log.error("turn_failed", {
 			origin: this.#deps.originKey,
 			kind,
 			reason: redact(rawReason).slice(0, 300),
+			...(error === undefined ? {} : errorFields(error)),
 		});
 	}
 
@@ -1686,7 +1684,7 @@ export class OriginMailbox {
 			text = await commandReply(this.#host, command, opRef, threadRef);
 		} catch (error) {
 			const reason = error instanceof OmpDriverError ? error.message : String(error);
-			log.error("command_failed", { origin: originKey, command: command.kind, error: reason });
+			log.error("command_failed", { origin: originKey, command: command.kind, ...errorFields(error) });
 			const notice = NO_MODEL_SIGN.test(reason) ? NO_MODEL_NOTICE : failedNotice(`${command.kind}: ${reason}`);
 			store.recordTurnFailure({ originKey, opRef, threadRef, notice });
 			return;

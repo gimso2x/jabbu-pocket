@@ -4,7 +4,7 @@
 import type { Logger } from "../log";
 import { failureNoticeBody } from "./failure-notice";
 import type { RetryAfterGate } from "./retry";
-import { errorText, type FinalOutcome } from "./text";
+import { errorFields, errorText, type FinalOutcome } from "./text";
 import type { AdapterClock, DeliveryItem, DeliveryRetry, DeliverySource } from "./types";
 
 export type DeliverySendResult =
@@ -207,7 +207,7 @@ export class DeliveryPump {
 		try {
 			expired = await source.takeExpired();
 		} catch (err) {
-			log.error("delivery_take_expired_failed", { error: errorText(err) });
+			log.error("delivery_take_expired_failed", { ...errorFields(err) });
 			return;
 		}
 		for (const delivery of expired) {
@@ -244,7 +244,7 @@ export class DeliveryPump {
 			await write();
 			return true;
 		} catch (err) {
-			this.#options.log.error("delivery_ledger_failed", { id: delivery.deliveryId, call, error: errorText(err) });
+			this.#options.log.error("delivery_ledger_failed", { id: delivery.deliveryId, call, ...errorFields(err) });
 			return false;
 		}
 	}

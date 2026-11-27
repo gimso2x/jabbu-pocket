@@ -1,5 +1,6 @@
 import type { ChannelAdapter } from "../channel/adapter";
 import type { ChannelRegistry } from "../channel/registry";
+import { errorFields } from "../channel/text";
 import { LANE_REVIEW_TIMEOUT_MS } from "../config";
 import { parseThreadRef, platformOfThreadRef, TOP_LEVEL_TS } from "../core/normalize";
 import type { OriginRouter } from "../core/origin";
@@ -77,12 +78,11 @@ export function ownerTarget(
 	ctx: DaemonContext,
 	notice: string,
 ): { adapter: ChannelAdapter; channel: string } | undefined {
-	const store = ctx.store;
-	if (store === undefined) return undefined;
+	if (ctx.store === undefined) return undefined;
 	const alertChannel = ctx.options.config.channels.discord?.alertChannelId;
 	const discord = alertChannel === undefined ? undefined : ctx.adapters.get("discord");
 	if (alertChannel !== undefined && discord !== undefined) return { adapter: discord, channel: alertChannel };
-	const home = store.ownerHome();
+	const home = ctx.store.ownerHome();
 	if (home === undefined) {
 		ctx.log.warn("owner_notice_unroutable", { notice });
 		return undefined;
@@ -110,7 +110,7 @@ export function dispatchPending(ctx: DaemonContext, originKey: string): void {
 	router
 		.mailbox(originKey)
 		.resumePending()
-		.catch((error: unknown) => ctx.log.error("dispatch_pending_failed", { origin: originKey, error: String(error) }));
+		.catch((error: unknown) => ctx.log.error("dispatch_pending_failed", { origin: originKey, ...errorFields(error) }));
 }
 
 /** `taskAutoLand` as the [TASK] sweep and the lanes apply it (`maxRisk` defaults to L2); `undefined` = off. */
