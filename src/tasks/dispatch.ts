@@ -481,17 +481,14 @@ async function resumeOnOtherWorker(
 		const closed = await runtime.close(row);
 		if (!closed.ok) return `재개 실패: 이전 워커를 닫지 못했습니다: ${closed.error}`;
 	}
+	const { tier, tierReason, workerModel: model, tierConfidence } = row;
+	const before = { tier, tierReason, model, tierConfidence };
 	const worker = { tier: switchTo.tier, tierReason: switchTo.tierReason, tierConfidence: null };
 	deps.ledger.setWorker(row.taskId, { ...worker, model: switchTo.model });
 	const next: TaskRow = { ...row, ...worker, workerModel: switchTo.model };
 	const started = await startAgent(deps, next, input.promptFor(brief));
 	if (!started.ok) {
-		deps.ledger.setWorker(row.taskId, {
-			tier: row.tier,
-			tierReason: row.tierReason,
-			model: row.workerModel,
-			tierConfidence: row.tierConfidence,
-		});
+		deps.ledger.setWorker(row.taskId, before);
 		deps.log.warn("task_resume_model_switch_failed", { task: row.taskId, from, to, error: started.error });
 		return `재개 실패: ${started.error} (${row.taskId} 워커는 원래 ${from}로 되돌렸습니다. 이전 워커는 이미 닫혔으니 다시 재개하면 원래 설정으로 뜹니다)`;
 	}
