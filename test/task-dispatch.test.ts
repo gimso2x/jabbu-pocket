@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import type { WorkerAgyConfig } from "../src/config";
+import type { BranchRule, WorkerAgyConfig } from "../src/config";
 import { DiscordChannel } from "../src/discord/channel";
 import type { HerdrBoardConfig } from "../src/dispatch/board";
 import type { ProcessRunner } from "../src/dispatch/omp";
@@ -160,6 +160,8 @@ function harness(
 		workerOmpArgs?: string[];
 		/** Config `dispatchHosts.wsl.ompArgs`. */
 		wslOmpArgs?: string[];
+		/** Config `dispatchHosts.wsl.branchRules`. */
+		wslBranchRules?: BranchRule[];
 		/** The inbound ledger has no [TASK] root text, so context.md takes `task`. */
 		noRoot?: boolean;
 		/** Config `lanes.models` as the daemon holds it: `current` may be swapped between calls (a reload). */
@@ -231,6 +233,7 @@ function harness(
 				ssh: "wsl-ssh",
 				workDir: "/r",
 				...(options.wslOmpArgs === undefined ? {} : { ompArgs: options.wslOmpArgs }),
+				...(options.wslBranchRules === undefined ? {} : { branchRules: options.wslBranchRules }),
 			},
 		}),
 		...(options.workerOmpArgs === undefined ? {} : { workerOmpArgs: options.workerOmpArgs }),
@@ -1691,5 +1694,62 @@ describe("headless [TASK] runtime (no herdr): registration", () => {
 		expect(read).toStartWith("▸ t-20261026-01 최근 출력:\n");
 		expect(read).toContain("▸ T-20261026-01 AC 0/2");
 		expect(h.herdr).toEqual([]);
+	});
+});
+
+describe("taskSpec.branch and dispatchHosts.<h>.branchRules", () => {
+	const RULE: BranchRule = {
+		repoPrefix: "/r/",
+		exclude: ["/r/personal"],
+		pattern: "^feature/\\d{6}-[^\\s/]+$",
+		example: "feature/YYYYMM-기능명",
+	};
+	const RISKY = "git push --force origin main";
+	const HANGUL = "feature/202611-배너교체";
+	const rows = (h: Harness) => (h.db.query("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
+
+	test("AC-1: a ruled repository without a branch is refused before the approval card, leaving nothing behind", async () => {
+		const h = harness({ wslBranchRules: [RULE], approval: "approved" });
+		await expect(call(h, { host: "wsl", taskSpec: GOOD_SPEC, task: RISKY })).rejects.toThrow("feature/YYYYMM-기능명");
+		expect(h.approvals).toEqual([]);
+		expect(rows(h)).toBe(0);
+		expect(h.host.calls).toEqual([]);
+		expect([...h.host.files.keys()]).toEqual([]);
+		expect(h.herdr).toEqual([]);
+	});
+
+	test("AC-2: a non-matching branch is refused, a matching one names the row and the worktree branch", async () => {
+		const h = harness({ wslBranchRules: [RULE], approval: "approved" });
+		await expect(call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: "task/x" }, task: RISKY })).rejects.toThrow(
+			"feature/YYYYMM-기능명",
+		);
+		expect(h.approvals).toEqual([]);
+		expect(rows(h)).toBe(0);
+		expect(h.host.calls).toEqual([]);
+
+		expect(await call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: HANGUL }, task: "go" })).toContain(
+			"등록·시작했습니다",
+		);
+		expect(h.ledger.require("T-20261026-01").branch).toBe(HANGUL);
+		expect(h.host.calls[0]).toBe(`create /r/repo-t-20261026-01 ${HANGUL}`);
+	});
+
+	test("AC-3: an unruled repository takes the default, or the given name", async () => {
+		const h = harness({ wslBranchRules: [{ ...RULE, repoPrefix: "/company/" }] });
+		await call(h, { host: "wsl", taskSpec: GOOD_SPEC, task: "go" });
+		expect(h.ledger.require("T-20261026-01").branch).toBe("task/T-20261026-01");
+		await call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, repo: "/r/other", branch: "my/work" }, task: "go" });
+		expect(h.ledger.require("T-20261026-02").branch).toBe("my/work");
+		const excluded = harness({ wslBranchRules: [RULE] });
+		await call(excluded, { host: "wsl", taskSpec: { ...GOOD_SPEC, repo: "/r/personal" }, task: "go" });
+		expect(excluded.ledger.require("T-20261026-01").branch).toBe("task/T-20261026-01");
+	});
+
+	test("an unsafe branch is refused on a local repository too, and resume takes no branch", async () => {
+		const h = harness();
+		await expect(call(h, { taskSpec: { ...GOOD_SPEC, branch: "a;b" }, task: "go" })).rejects.toThrow("taskSpec.branch");
+		expect(rows(h)).toBe(0);
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		await expect(call(h, { taskSpec: { id: "T-20261026-01", branch: "x" } })).rejects.toThrow();
 	});
 });

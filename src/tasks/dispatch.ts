@@ -39,6 +39,7 @@ import {
 } from "./records";
 import { restatedHash } from "./resume-check";
 import { releaseHold, runtimeFor, type TaskMailboxPort, type TaskRuntime, type TaskStartResult } from "./runtime";
+import { threadLink } from "./thread-link";
 import { agyModelOf, agySecretsDirs, agyWorkerArgs, type WorkerTier, withWorkerModel, workerLine } from "./worker-tier";
 
 type HostEntry = DispatchHostConfig;
@@ -195,20 +196,6 @@ async function cardLink(deps: TaskDispatchDeps, row: TaskRow, paneId: string): P
 		: await deps.boardLink(row.host, paneId);
 }
 
-/** Permalink of the task thread root; the bare thread ref when the platform cannot resolve it. */
-async function threadLink(channels: ChannelRegistry, log: TaskChatLog, threadRef: string): Promise<string> {
-	const target = parseThreadRef(threadRef);
-	if (target === undefined) return threadRef;
-	try {
-		const port = channels.portFor(target.channel);
-		const root = { platform: port.platform, conversationId: target.channel, messageId: target.threadTs };
-		return (await port.permalink(root)) ?? threadRef;
-	} catch (error) {
-		log.warn("task_permalink_failed", { thread: threadRef, error: String(error) });
-		return threadRef;
-	}
-}
-
 /** New task: ID → worktree → four docs → agent → card and ⏳; rolls back on pre-agent failure. */
 export async function startTask(
 	deps: TaskDispatchDeps,
@@ -261,6 +248,7 @@ export async function startTask(
 		threadRef,
 		host,
 		repo: spec.repo,
+		...(spec.branch === undefined ? {} : { branch: spec.branch }),
 		// Local tasks (agy ones too: the agy print driver) run headless on the daemon's Mailbox; remote ones on herdr.
 		runtime: host === null && deps.headless !== undefined ? "headless" : "herdr",
 		acceptance: acceptanceItems(spec.acceptance),

@@ -23,6 +23,7 @@ import {
 	type ConfigWarning,
 	checkLaneLandRemotes,
 	checkLaneModels,
+	type DispatchHostConfig,
 	dispatchHostsOf,
 	gateTimeoutMs,
 	invalid,
@@ -41,7 +42,7 @@ import type { LaneReviewConfident } from "./tasks/auto-land-policy";
 import { TASK_RISKS, type TaskRisk } from "./tasks/docs";
 import { hostTimezone, isTimezone } from "./time";
 
-export { ConfigError } from "./config-validate";
+export { type BranchRule, ConfigError, type DispatchHostConfig } from "./config-validate";
 export { WEB_OWNER_USER_ID, type WebChannelConfig };
 /** Which child process powers a conversation: omp's RPC child (default) or the Antigravity CLI (`agy`). */
 export type AgentKind = "omp" | "agy";
@@ -175,15 +176,6 @@ const DEFAULT_CODE_ROLLBACK: CodeRollbackMode = "detach";
 /** The code rollback mode of a home's config (`DEFAULT_CODE_ROLLBACK` without config or setting). */
 export function codeRollbackMode(config: Pick<JabbuConfig, "apply"> | undefined): CodeRollbackMode {
 	return config?.apply?.codeRollback ?? DEFAULT_CODE_ROLLBACK;
-}
-
-/** One `dispatchHosts` entry: ssh target, remote work directory, remote herdr binary, worker omp extra arguments. */
-export interface DispatchHostConfig {
-	ssh: string;
-	workDir?: string;
-	herdrBin?: string;
-	ompArgs?: string[];
-	recordsDir?: string;
 }
 
 export type { AgyAccountsConfig, WorkerAgyConfig };
