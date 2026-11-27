@@ -231,6 +231,10 @@ describe("loadConfig", () => {
 		["recallEnabled", baseConfig({ recallEnabled: "false" })],
 		["recallEnabled", baseConfig({ recallEnabled: 0 })],
 		["idleKeepResident", baseConfig({ idleKeepResident: "false" })],
+		["idStart", baseConfig({ idStart: 0 })],
+		["idStart", baseConfig({ idStart: 9001 })],
+		["idStart", baseConfig({ idStart: 1.5 })],
+		["idStart", baseConfig({ idStart: "101" })],
 		["peerHopLimit", baseConfig({ peerHopLimit: 3 })],
 		["peerHopLimit.turns", baseConfig({ peerHopLimit: { turns: 0, windowMinutes: 30 } })],
 		["peerHopLimit.windowMinutes", baseConfig({ peerHopLimit: { turns: 3, windowMinutes: 1.5 } })],
@@ -282,6 +286,12 @@ describe("loadConfig", () => {
 		expect(loadConfig(home).idleKeepResident).toBeUndefined();
 		writeConfig(baseConfig({ idleKeepResident: false }));
 		expect(loadConfig(home).idleKeepResident).toBe(false);
+	});
+
+	test("AC-5: idStart is optional and accepts 1..9000", () => {
+		expect(loadConfig(home).idStart).toBeUndefined();
+		writeConfig(baseConfig({ idStart: 101 }));
+		expect(loadConfig(home).idStart).toBe(101);
 	});
 
 	test("peerHopLimit is optional and read as written", () => {

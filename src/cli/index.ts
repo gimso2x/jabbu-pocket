@@ -27,6 +27,7 @@ import { LANES_USAGE, lanesCommand } from "./lanes";
 import { joinLines, stripExtensionPath } from "./linear-text";
 import { MONITORS_USAGE, monitorsCommand } from "./monitors";
 import { OMP_USAGE, ompCommand } from "./omp";
+import { ONBOARDING_USAGE, onboardingCommand } from "./onboarding";
 import { QUOTA_USAGE, quotaCommand } from "./quota";
 import { RESTORE_USAGE, restoreCommand } from "./restore";
 import { SKILLS_USAGE, skillsCommand } from "./skills";
@@ -61,7 +62,7 @@ ${GATES_USAGE}  inject --origin discord/<dm|ch>/ID --as-owner --text <t> [--quot
                                  while no daemon listens (a restart) it tries again every 2s for up to 3 minutes
   reload                         running daemon re-reads config.json (also SIGHUP): policy fields apply live,
                                  startup-bound fields are listed as restart_required; an invalid file changes nothing
-${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${QUOTA_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
+${ONBOARDING_USAGE}${DRAIN_USAGE}${DELIVERIES_USAGE}${APPLY_USAGE}${OMP_USAGE}${QUOTA_USAGE}${RESTORE_USAGE}${MONITORS_USAGE}${TASKS_USAGE}${LANES_USAGE}${SKILLS_USAGE}${DASHBOARD_USAGE}${TRACE_INPUTS_USAGE}`;
 
 /** The fields `renderStatusText` and `--json` readers rely on; a reply without them is not a status report. */
 function isStatusReport(value: unknown): value is StatusReport {
@@ -510,6 +511,8 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return gatesCommand(rest, homeDir, hostLoadDeps(env));
 			case "inject":
 				return await injectCommand(rest, homeDir);
+			case "onboarding":
+				return onboardingCommand(rest, homeDir);
 			case "drain":
 				return await drainCommand(rest, homeDir);
 			case "deliveries":

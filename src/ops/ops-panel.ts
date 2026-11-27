@@ -15,6 +15,13 @@ import {
 	type LoadMetricKey,
 	type LoadMetricSample,
 } from "./load-hysteresis";
+import {
+	extraFingerprint,
+	extraPanelFields,
+	type OpsExtraInput,
+	PANEL_BODY_MAX,
+	PANEL_FIELD_MAX,
+} from "./ops-panel-fields";
 import type { QuotaGateSnapshot, QuotaLiftEntry } from "./quota-gate";
 
 export const OPS_ACTION_REFRESH = "ops:refresh";
@@ -29,7 +36,7 @@ export interface OpsLanesSummary {
 	pendingLand: number;
 }
 
-export interface OpsPanelRenderInput {
+export interface OpsPanelRenderInput extends OpsExtraInput {
 	now: number;
 	timezone: string;
 	status: StatusReport;
@@ -168,7 +175,8 @@ export function renderOpsPanel(input: OpsPanelRenderInput): { message: OutboundM
 					quota.snapshot.held.length > 0 ||
 					status.frozen !== undefined ||
 					status.drain !== undefined ||
-					muted
+					muted ||
+					(input.monitors?.failing.length ?? 0) > 0
 				? "warn"
 				: "ok";
 	const titlePrefix = tone === "danger" ? "🔴" : tone === "warn" ? "🟡" : "🟢";
@@ -183,7 +191,7 @@ export function renderOpsPanel(input: OpsPanelRenderInput): { message: OutboundM
 	if (muted && input.mutedUntil !== undefined) {
 		statusNotes.push(`🔕 부하 경보 음소거 (~${formatHhMm(input.mutedUntil, timezone)})`);
 	}
-	const body = statusNotes.length === 0 ? "정상 가동 중" : statusNotes.join(" · ");
+	const body = cutCodePointSafe(statusNotes.length === 0 ? "정상 가동 중" : statusNotes.join(" · "), PANEL_BODY_MAX);
 
 	const activeTurns = status.origins.filter((o) => o.busy).length;
 	const hostSess = status.hostSessions
@@ -213,18 +221,21 @@ export function renderOpsPanel(input: OpsPanelRenderInput): { message: OutboundM
 		},
 	];
 
+	const fields: Array<{ label: string; value: string }> = [
+		{ label: "호스트 부하", value: loadField },
+		{ label: "세션 · 작업", value: sessionsField },
+		{ label: "건강 게이트", value: gatesField },
+		{ label: "쿼터 게이트", value: quotaField },
+	];
+	fields.push(...extraPanelFields(input, now, timezone));
+	fields.push({ label: "갱신 시각", value: `${formatWallTime(now, timezone)} (${timezone})` });
+
 	const message: OutboundMessage = {
 		text: "",
 		title,
 		body,
 		tone,
-		fields: [
-			{ label: "호스트 부하", value: loadField },
-			{ label: "세션 · 작업", value: sessionsField },
-			{ label: "건강 게이트", value: gatesField },
-			{ label: "쿼터 게이트", value: quotaField },
-			{ label: "갱신 시각", value: `${formatWallTime(now, timezone)} (${timezone})` },
-		],
+		fields: fields.map((f) => ({ label: f.label, value: cutCodePointSafe(f.value, PANEL_FIELD_MAX) })),
 		buttons,
 	};
 
@@ -236,6 +247,7 @@ export function renderOpsPanel(input: OpsPanelRenderInput): { message: OutboundM
 		gatesField,
 		quotaField,
 		buttons: buttons.map((b) => ({ actionId: b.actionId, label: b.label })),
+		...extraFingerprint(input),
 	});
 	return { message, fingerprint };
 }

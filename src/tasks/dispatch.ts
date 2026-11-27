@@ -54,6 +54,8 @@ export interface TaskDispatchDeps {
 	now(): number;
 	/** The bot's zone (`config.timezone`): document times and the worker prompt's offset. */
 	timezone: string;
+	/** Config `idStart` as of now (a getter: a reload applies to the next [TASK]). */
+	idStart?: () => number | undefined;
 	workspaceDir: string;
 	dispatchHosts?: Record<string, HostEntry>;
 	/** Config `recordsRepo`: the task records go there (a remote task's to its host's `recordsDir`), never on the branch. */
@@ -252,6 +254,7 @@ export async function startTask(
 	const recordsRoot = recordsRootFor(deps.recordsRepo, host, hostEntryOf(deps, host));
 	const row = deps.ledger.register({
 		...(recordsRoot ? { recordsRoot } : {}),
+		idStart: deps.idStart?.(),
 		title: spec.title,
 		risk: spec.risk,
 		originKey: deps.originKey,
@@ -348,10 +351,7 @@ export async function startTask(
 	].join("\n");
 }
 
-/**
- * Resume: a live agent gets the PROGRESS-based prompt, a missing one is started again in the same worktree. The
- * pre-resume check goes into the prompt and the result but never refuses the resume.
- */
+/** Resume: a live agent gets the PROGRESS prompt, a missing one restarts in its worktree; the check never refuses it. */
 export async function resumeTask(
 	deps: TaskDispatchDeps,
 	input: {
@@ -444,9 +444,9 @@ export async function resumeTask(
 
 /**
  * Resume on another worker model: the old agent's last screen and PROGRESS.md become a handoff brief, the old agent
- * is closed, the row takes the new worker and a new agent starts with the resume prompt carrying the brief. A start
- * that fails puts the row's worker back and says so (the old agent is already closed, so nothing runs until the next
- * resume). Returns the reply text of a refusal/failure, or what the caller needs to finish the resume.
+ * is closed, the row takes the new worker and a new agent starts with the resume prompt carrying the brief. A failed
+ * start puts the row's worker back and says so (nothing runs until the next resume). Returns the reply text of a
+ * refusal/failure, or what the caller needs to finish the resume.
  */
 async function resumeOnOtherWorker(
 	deps: TaskDispatchDeps,

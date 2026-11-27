@@ -19,6 +19,7 @@ import { buildLaneTools, buildWorkStartTool } from "../src/lanes/tools";
 import { buildLanePrompt, buildLaneTodos, isReopenCommand, parseLaneTrigger } from "../src/lanes/trigger";
 import { laneTriggerRefusal, spacedPathRefusal } from "../src/lanes/trigger-format";
 import { type VerifyResult, verifyClaim } from "../src/lanes/verify";
+import { nextLaneId } from "../src/lanes/worktree";
 import { createLogger } from "../src/log";
 import type { LaneModelTiers } from "../src/model-tiers";
 import { AgyOmpDriver } from "../src/omp/agy-driver";
@@ -99,6 +100,7 @@ function harness(
 		/** The manager's channel registry; default: the harness transport's Discord channel. */
 		channels?: ChannelRegistry;
 		laneModels?: LaneModelTiers;
+		idStart?: () => number | undefined;
 	} = {},
 ): Harness {
 	let now = START;
@@ -162,6 +164,7 @@ function harness(
 		...(options.frozen === undefined ? {} : { frozen: options.frozen }),
 		...(options.verify === undefined ? {} : { verify: options.verify as never }),
 		...(options.laneModels === undefined ? {} : { laneModels: () => options.laneModels }),
+		...(options.idStart === undefined ? {} : { idStart: options.idStart }),
 	});
 	return {
 		manager,
@@ -462,6 +465,24 @@ describe("lane start and registry", () => {
 		expect(prompt.startsWith("prompt:작업: Demo task\n")).toBe(true);
 		expect(prompt).toContain("Demo task");
 		expect(prompt).toContain("write the thing");
+		h.close();
+	});
+
+	test("AC-3: nextLaneId counts from start (default 01) and skips taken ids", () => {
+		expect(nextLaneId("20261127", () => false, 101)).toBe("L-20261127-101");
+		expect(nextLaneId("20261127", () => false)).toBe("L-20261127-01");
+		expect(nextLaneId("20261127", (id) => id.endsWith("-101"), 101)).toBe("L-20261127-102");
+	});
+
+	test("AC-4: lane ids start at the live idStart getter's value at each start", async () => {
+		let idStart: number | undefined;
+		const h = harness({ idStart: () => idStart });
+		const first = await h.manager.start({ title: "Default one", cwd: cwdOf(), channel: CHANNEL });
+		idStart = 101; // a reload swapped the config under the same deps
+		const second = await h.manager.start({ title: "Second one", cwd: cwdOf(), channel: CHANNEL });
+		const third = await h.manager.start({ title: "Third one", cwd: cwdOf(), channel: CHANNEL });
+		expect([first, second, third].map((lane) => lane.meta.laneId?.slice(-3))).toEqual(["-01", "101", "102"]);
+		await h.settle();
 		h.close();
 	});
 

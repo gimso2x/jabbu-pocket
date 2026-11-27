@@ -10,6 +10,7 @@ import { overlapLine, PR_MERGE_STEPS, prOpenLines, topLine } from "./card-parts"
 import { REVIEW_BLOCK } from "./land";
 import { evidenceLabel } from "./progress-evidence";
 import { formatConfidence } from "./review";
+import { uncertainLine } from "./send-fence";
 import { INCONCLUSIVE_APPROVED, INTEGRITY_APPROVED, type LaneRow, OWNER_ACCEPTED } from "./status";
 
 /**
@@ -94,7 +95,7 @@ export type LaneCardView =
 		| { kind: "rework"; reason: string; typical?: TypicalDuration | undefined }
 		/** An older card whose content moved to a newer one: title and a pointer, no button. */
 		| { kind: "superseded" }
-	) & { cost?: { usd: number; calls: number } };
+	) & { cost?: { usd: number; calls: number }; uncertain?: number };
 
 const clip = (text: string, max: number): string => (text.length > max ? `${cutCodePointSafe(text, max - 1)}…` : text);
 
@@ -263,13 +264,12 @@ export function buildLaneOutcomeCard(
 	];
 	const mention = (ownerUserId: string | undefined): string =>
 		ownerUserId === undefined ? "" : ` ${mentionToken(ownerUserId)}`;
-	const card = (title: string, lines: string[], extra: Pick<TaskCard, "buttons" | "note"> = {}): TaskCard => ({
-		text: [title, ...lines].join("\n"),
-		title,
-		body: lines.join("\n"),
-		fields,
-		...extra,
-	});
+	// A pointer to a newer card carries no state: every other card of a lane with parked rows heads with their count.
+	const parked = view.kind === "superseded" || !view.uncertain ? undefined : uncertainLine(view.uncertain);
+	const card = (title: string, lines: string[], extra: Pick<TaskCard, "buttons" | "note"> = {}): TaskCard => {
+		const body = parked === undefined ? lines : [parked, ...lines];
+		return { text: [title, ...body].join("\n"), title, body: body.join("\n"), fields, ...extra };
+	};
 
 	const blockingItems = leftovers.filter((item) => item.blocking);
 	const blockingLines =
