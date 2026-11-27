@@ -20,6 +20,12 @@ const REMOTE_NAME = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const BRANCH_CHARS = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 /** What git says of a worktree or branch that is gone already: for this call that is the wanted state. */
 const ALREADY_GONE = /is not a working tree|not found|No such file or directory|does not exist/i;
+/** A shell that could not even start git (`git: command not found`, exit 127) says nothing about the worktree or branch. */
+const GIT_MISSING = /command not found|not recognized as an internal or external command/i;
+/** `ls-files` on a worktree directory that is gone: only git's `cannot change to` means that, not any "No such file". */
+const WORKTREE_DIR_GONE = /cannot change to .*No such file or directory|is not a working tree/i;
+const alreadyGone = (lines: string[], gone: RegExp = ALREADY_GONE): boolean =>
+	!lines.some((line) => GIT_MISSING.test(line)) && lines.some((line) => gone.test(line));
 
 interface RemoteResult {
 	code: number | null;
@@ -125,7 +131,7 @@ export async function removeRemoteWorktree(
 		return `원격 정리 거절: 위험한 경로·브랜치 이름(${repo} ${worktree} ${branch})`;
 	const ignored = await remote(run, sshTarget, ["git", "-C", worktree, ...IGNORED_LIST_ARGS]);
 	if (ignored.down) return unreachable(ignored);
-	if (ignored.code !== 0 && !ignored.lines.some((line) => ALREADY_GONE.test(line)))
+	if (ignored.code !== 0 && !alreadyGone(ignored.lines, WORKTREE_DIR_GONE))
 		return `${failureOf(ignored, "git ls-files")} — worktree를 지우지 않았습니다`;
 	const kept = ignored.code === 0 ? keptIgnoredOf(ignored.lines.join("\n")) : [];
 	if (kept.length > 0) return keptReason(kept, worktree);
@@ -137,7 +143,7 @@ export async function removeRemoteWorktree(
 	for (const [what, argv] of steps) {
 		const result = await remote(run, sshTarget, argv);
 		if (result.down) return first ?? unreachable(result);
-		if (result.code === 0 || result.lines.some((line) => ALREADY_GONE.test(line))) continue;
+		if (result.code === 0 || alreadyGone(result.lines)) continue;
 		first ??= failureOf(result, what);
 	}
 	return first;
