@@ -287,3 +287,94 @@ describe("OriginMailbox first progress", () => {
 		}
 	});
 });
+
+describe("turn_completed log", () => {
+	const CHAT = "discord/dm/200000000000000014";
+	let dir: string;
+	let store: Store;
+	let raw: Database;
+	let logLines: string[];
+	let waiters: { match: (line: string) => boolean; resolve: () => void }[];
+	let driver: FakeOmpDriver | undefined;
+	let counter = 0;
+
+	function mailboxOf(originKey: string): OriginMailbox {
+		const sessions = new FakeSessionStore();
+		return new OriginMailbox({
+			timezone: "Asia/Seoul",
+			originKey,
+			store,
+			clock,
+			log: createLogger({
+				sink: (line) => {
+					logLines.push(line);
+					for (const waiter of [...waiters]) {
+						if (waiter.match(line)) {
+							waiters.splice(waiters.indexOf(waiter), 1);
+							waiter.resolve();
+						}
+					}
+				},
+				clock,
+				redact,
+			}),
+			statusProvider: () => "status: ok",
+			sessionDirFor: (key, epoch) => sessionDirFor(join(dir, "sessions"), key, epoch),
+			driverFactory: (_origin, sessionDir) => {
+				driver = new FakeOmpDriver({ holdTurns: true, respond: () => "답변완료", sessionDir, store: sessions });
+				return driver;
+			},
+		});
+	}
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "jabbu-turn-completed-"));
+		store = openBotStore(join(dir, "jabbu.db"), clock, "Asia/Seoul");
+		raw = new Database(join(dir, "jabbu.db"));
+		logLines = [];
+		waiters = [];
+		driver = undefined;
+	});
+
+	afterEach(() => {
+		raw.close();
+		store.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("a completed turn logs turn_completed with ms since dispatch and the answer chars", async () => {
+		const mailbox = mailboxOf(CHAT);
+		const started = clock.t;
+		try {
+			const id = `done${++counter}`;
+			await mailbox.enqueue({
+				platformMessageId: id,
+				originKey: CHAT,
+				ownerVerified: true,
+				text: "일해",
+				threadRef: id,
+			});
+			expect(logLines.some((line) => line.includes("event=turn_start"))).toBe(true);
+			// The held turn cannot finish before this: the 1500 ms the clock advances here is exactly the latency
+			// the completion line must report.
+			clock.t = started + 1500;
+			driver?.release();
+			// `whenTurnEnds` resolves at the top of `#onFinal`, before the completion line is written — wait for
+			// the line itself (already there = no wait).
+			if (!logLines.some((line) => line.includes("event=turn_completed"))) {
+				const seen = Promise.withResolvers<void>();
+				waiters.push({ match: (line) => line.includes("event=turn_completed"), resolve: seen.resolve });
+				await seen.promise;
+			}
+			const completed = logLines.find((line) => line.includes("event=turn_completed"));
+			expect(completed).toBeDefined();
+			expect(completed).toContain(`origin=${CHAT}`);
+			expect(completed).toContain("opRef=fake_req_");
+			expect(completed).toContain("ms=1500");
+			expect(completed).toContain("chars=4");
+		} finally {
+			clock.t = started;
+			await mailbox.close();
+		}
+	});
+});
