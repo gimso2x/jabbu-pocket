@@ -467,10 +467,9 @@ export class ApprovalBroker {
 			: undefined;
 		// `header` stays the notification/fallback text; the card itself shows the sections as fields, not as lines.
 		const header = renderCard(shown, sections, escalationLine);
-		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) => {
-			const value = sections[key];
-			return value === undefined ? [] : [{ label, value }];
-		});
+		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) =>
+			sections[key] === undefined ? [] : [{ label, value: sections[key] }],
+		);
 		const cardShape = {
 			title: cardTitle(sections),
 			body:
@@ -535,6 +534,9 @@ export class ApprovalBroker {
 			cards: () => (mirror === undefined ? [card] : [card, mirror]),
 		});
 		let result: ApprovalResult = "denied";
+		// A card whose buttons never attached was never decidable: the ledger records it expired and the card
+		// shows the timeout line, never an owner denial (the tool call itself still returns `denied`).
+		let buttonsAttached = false;
 		try {
 			// The action ids carry the message's own ts, which exists only after the post.
 			await port.edit(card, {
@@ -543,6 +545,7 @@ export class ApprovalBroker {
 				buttons: approvalButtons(channel, card.messageId),
 				buttonsNote: deadlineNote(now + timeoutMs, timeoutMs, this.#deadline),
 			});
+			buttonsAttached = true;
 			log.info("approval_requested", { channel, ts: card.messageId });
 			this.#options.onOwnerTurn?.(ownerTurnInfo("approval", channel, card.messageId, shown, origin?.originKey));
 			if (escalated) {
@@ -578,10 +581,11 @@ export class ApprovalBroker {
 		// The ledger row is the authority: a racing click or sweeper already flipped it, and this no-ops then.
 		// A reply already settled its own ledger row (`handleCardReply`); only click/timeout/abort outcomes land here.
 		if (typeof result === "string") {
+			const ownerDenied = result === "denied" && !aborted && buttonsAttached;
 			try {
 				store.decideApproval(
 					key,
-					result === "approved" ? "approved" : result === "denied" && !aborted ? "denied" : "expired",
+					result === "approved" ? "approved" : ownerDenied ? "denied" : "expired",
 					this.#clock.now(),
 				);
 			} catch (error) {
@@ -594,7 +598,7 @@ export class ApprovalBroker {
 			: aborted
 				? ABORTED_TEXT
 				: typeof result === "string"
-					? FINAL_TEXT[result]
+					? FINAL_TEXT[buttonsAttached ? result : "timeout"]
 					: `💬 답장으로 처리됨: ${replyLine(result.replied)}`;
 		// The buttons give way to the result line; title and fields stay so the card still says what was decided.
 		const resultLine = `${outcomeText} · ${this.#deadline.format(this.#clock.now())}`;
@@ -1012,16 +1016,11 @@ export class ApprovalBroker {
 	async redrawCards(approvalId: string, note: string, clicked?: { channel: string; ts: string }): Promise<void> {
 		const { store, log } = this.#options;
 		const row = store.getApproval(approvalId);
-		const message =
-			row === undefined
-				? { text: `🔐 승인 요청\n${note}`, buttons: [] }
-				: {
-						text: `🔐 승인 요청\n${row.summary}\n${note}`,
-						title: "🔐 승인 요청",
-						body: row.summary,
-						buttons: [],
-						buttonsNote: note,
-					};
+		const message = {
+			text: `🔐 승인 요청\n${row === undefined ? note : `${row.summary}\n${note}`}`,
+			...(row === undefined ? {} : { title: "🔐 승인 요청", body: row.summary, buttonsNote: note }),
+			buttons: [],
+		};
 		const refs = new Set([approvalId, ...(row === undefined || row.mirrorRef === null ? [] : [row.mirrorRef])]);
 		if (clicked !== undefined) refs.add(`${clicked.channel}:${clicked.ts}`);
 		for (const ref of refs) {
