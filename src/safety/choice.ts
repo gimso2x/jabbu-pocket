@@ -1,15 +1,9 @@
 import { cutCodePointSafe } from "../channel/text";
-import type { OmpAskQuestion, OmpDialogRequest, OmpDialogResponse } from "../omp/driver";
+import type { OmpDialogRequest, OmpDialogResponse } from "../omp/driver";
 import type { ApprovalBroker, ApprovalOrigin } from "./approval";
-import {
-	CANCELLED_LINE,
-	deadlineOf,
-	endUnanswered,
-	MAX_CARD_BUTTONS,
-	MAX_CHOICE_BUTTONS,
-	optionOf,
-} from "./choice-common";
-import { ASK_FALLBACK, ASK_TIMEOUT_LINE, type ChoiceEvent } from "./choice-types";
+import { type AskAnswer, answerLine, applyAskEvent, askButtons, askText, numbered } from "./choice-ask";
+import { CANCELLED_LINE, deadlineOf, endUnanswered, MAX_CHOICE_BUTTONS, optionOf } from "./choice-common";
+import { ASK_FALLBACK, ASK_TIMEOUT_LINE } from "./choice-types";
 import { answerForm } from "./form-choice";
 
 const REPLY_HINT = "버튼을 누르거나 이 스레드에 답장해 주세요";
@@ -22,11 +16,6 @@ const OTHER_ROW = "Other (type your own)";
 /** Splits a select row `label — description`: the button shows the label, the card text lists the whole row. */
 const DESCRIPTION_SEP = " — ";
 const YES = /^(예|네|응|ㅇㅇ|ㅇ|좋아|yes|y|ok|확인)$/i;
-
-/** `1. label` lines of a numbered option list; the recommended one is marked. */
-function numbered(labels: readonly string[], recommended?: number): string {
-	return labels.map((label, index) => `${index + 1}. ${label}${index === recommended ? " (추천)" : ""}`).join("\n");
-}
 
 /** A multi-select row's marker: its checkbox state, or "▶" for an action row (Done, Other) past `markableCount`. */
 function checkMarkOf(request: Extract<OmpDialogRequest, { method: "select" }>, index: number): string {
@@ -41,6 +30,7 @@ async function answerSelect(
 	signal: AbortSignal,
 ): Promise<OmpDialogResponse> {
 	const { options } = request;
+	if (options.length === 0) return { cancelled: true };
 	const asButtons = options.length <= MAX_CHOICE_BUTTONS;
 	// omp's select rows carry no description field; a row written with DESCRIPTION_SEP brings its own.
 	const heads = options.map((option) => {
@@ -160,78 +150,6 @@ async function answerText(
 	}
 }
 
-interface AskAnswer {
-	selectedOptions: string[];
-	customInput?: string;
-}
-
-/**
- * Buttons of an `ask` card, with the question each one answers: drawn once per card, so a click's index means the
- * same button for the card's whole life. Single-select questions with at most `MAX_CHOICE_BUTTONS` options get
- * buttons while the card stays within `MAX_CARD_BUTTONS`; the rest are answered by number.
- */
-function askButtons(questions: readonly OmpAskQuestion[]): Array<{ label: string; question: number; option: number }> {
-	const many = questions.length > 1;
-	const buttons: Array<{ label: string; question: number; option: number }> = [];
-	questions.forEach((question, q) => {
-		if (question.multi === true || question.options.length > MAX_CHOICE_BUTTONS) return;
-		if (buttons.length + question.options.length > MAX_CARD_BUTTONS) return;
-		question.options.forEach((option, o) => {
-			buttons.push({ label: many ? `${q + 1}. ${option.label}` : option.label, question: q, option: o });
-		});
-	});
-	return buttons;
-}
-
-function answerLine(answer: AskAnswer): string {
-	return (
-		[...answer.selectedOptions, ...(answer.customInput === undefined ? [] : [answer.customInput])].join(", ") ||
-		"(빈 답)"
-	);
-}
-
-/** The `ask` card body: one block per question, answered ones show their answer. `buttoned`: questions with buttons. */
-function askText(
-	questions: readonly OmpAskQuestion[],
-	answers: ReadonlyArray<AskAnswer | undefined>,
-	buttoned: ReadonlySet<number>,
-): string {
-	const blocks = questions.map((question, q) => {
-		const head = `*${q + 1}. ${question.header === undefined ? "" : `[${question.header}] `}${question.question}*`;
-		const answer = answers[q];
-		if (answer !== undefined) return `${head}\n→ ${answerLine(answer)}`;
-		const labels = question.options.map((option) =>
-			option.description === undefined ? option.label : `${option.label} — ${option.description}`,
-		);
-		const how =
-			question.multi === true
-				? "번호를 쉼표로 답장해 주세요(예: 1,3)"
-				: buttoned.has(q)
-					? "버튼을 누르거나 번호로 답장해 주세요"
-					: "번호로 답장해 주세요";
-		return `${head}\n${numbered(labels, question.recommended)}\n${how}`;
-	});
-	return `❓ 질문 ${questions.length}개 — 답하지 않은 첫 질문부터 답장이 채워집니다\n${blocks.join("\n\n")}`;
-}
-
-/** A text answer to one `ask` question: option numbers/labels, else free text (`customInput`). */
-function textAnswer(question: OmpAskQuestion, text: string): AskAnswer {
-	const labels = question.options.map((option) => option.label);
-	const trimmed = text.trim();
-	if (question.multi === true) {
-		const parts = trimmed.split(/[,\s]+/).filter((part) => part !== "");
-		const picked = parts.map((part) => optionOf(labels, part));
-		if (parts.length > 0 && picked.every((index) => index !== undefined)) {
-			return { selectedOptions: [...new Set(picked.map((index) => labels[index as number] as string))] };
-		}
-		return { selectedOptions: [], customInput: trimmed };
-	}
-	const index = optionOf(labels, trimmed);
-	return index === undefined
-		? { selectedOptions: [], customInput: trimmed }
-		: { selectedOptions: [labels[index] as string] };
-}
-
 async function answerAsk(
 	broker: ApprovalBroker,
 	origin: ApprovalOrigin,
@@ -297,26 +215,6 @@ async function answerAsk(
 		}
 		await card.update(askText(questions, answers, buttoned), labels);
 	}
-}
-
-/** A click answers its question (if still open); a reply answers the first unanswered question. */
-function applyAskEvent(
-	questions: readonly OmpAskQuestion[],
-	answers: Array<AskAnswer | undefined>,
-	buttons: ReadonlyArray<{ question: number; option: number }>,
-	event: ChoiceEvent,
-): void {
-	if (event.kind === "choice") {
-		const button = buttons[event.index];
-		const label = button === undefined ? undefined : questions[button.question]?.options[button.option]?.label;
-		if (button !== undefined && label !== undefined && answers[button.question] === undefined) {
-			answers[button.question] = { selectedOptions: [label] };
-		}
-		return;
-	}
-	const first = answers.indexOf(undefined);
-	const question = questions[first];
-	if (question !== undefined) answers[first] = textAnswer(question, event.text);
 }
 
 /**

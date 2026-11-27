@@ -516,9 +516,9 @@ export class MonitorLedger {
 				now,
 				id,
 			);
-		// A disabled monitor's open incidents and check error streak are over: re-enabled, the same failure alerts again.
+		// Open incidents and check error streak end when a monitor is disabled or its trigger changes.
+		if (!spec.enabled || triggerChanged) this.#closeIncidents(id);
 		if (!spec.enabled) {
-			this.#closeIncidents(id);
 			// Fires already queued for an owner-disabled monitor must not run later (one-shot disables go through setEnabled).
 			const queued = this.#db
 				.query("SELECT event_id FROM monitor_events WHERE monitor_id = ? AND stage IN ('admitted','failed')")
@@ -653,9 +653,9 @@ export class MonitorLedger {
 		/** A fired check that must not wake the agent (`wake_gate` from the script itself, or `no_change`). */
 		suppressReason?: string | undefined;
 	}): ClaimResult | undefined {
-		// The edit that changed the trigger already reset the check state; the stale run's outcome is not the new spec's.
-		if (JSON.stringify(this.getMonitor(input.monitorId)?.trigger) !== JSON.stringify(input.ranTrigger))
-			return undefined;
+		// Stale runs from an edited trigger or disabled monitor must not mutate state or resurrect check_error_streak.
+		const current = this.getMonitor(input.monitorId);
+		if (!current?.enabled || JSON.stringify(current.trigger) !== JSON.stringify(input.ranTrigger)) return undefined;
 		if (input.outcome === "error") {
 			this.recordCheckError(input.monitorId, input.error ?? "script check failed");
 			return undefined;
@@ -727,7 +727,7 @@ export class MonitorLedger {
 			const text = this.#redact(error);
 			const row = this.#db
 				.query(
-					"UPDATE monitors SET last_check_error = ?, last_check_error_at = ?, check_error_streak = check_error_streak + 1 WHERE id = ? RETURNING name, check_error_streak",
+					"UPDATE monitors SET last_check_error = ?, last_check_error_at = ?, check_error_streak = check_error_streak + 1 WHERE id = ? AND enabled = 1 RETURNING name, check_error_streak",
 				)
 				.get(text, now, monitorId) as { name: string; check_error_streak: number } | null;
 			if (row === null) return 0;

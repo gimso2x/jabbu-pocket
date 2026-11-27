@@ -5,6 +5,7 @@ const QUOTA_EXHAUSTED = /\bRESOURCE_EXHAUSTED\b|\bcode 429\b/;
 const NOTICE_HEAD = "API error (attempt ";
 const NOTICE_ATTEMPT = /^\d*$|^\d+\)(?::.*)?$/;
 const QUOTE_OPEN = /^<<<quoted-([^>\n]*)>>>$/;
+const INDENTED_CODE = /^(?: {4}|\t)/;
 const FINAL_QUOTA_LINE =
 	/^⚠\uFE0F?[^\S\n]+(Individual quota reached\. Please upgrade your subscription to increase your limits\. Resets in \d+(?:\.\d+)?[hms](?:\s*\d+(?:\.\d+)?[hms])*\.?)$/;
 
@@ -52,13 +53,15 @@ export function isQuotaErrorText(text: string): boolean {
 }
 
 /**
- * Quota detail when the final non-empty line outside code fences and `<<<quoted-…>>>` blocks is agy's
- * standalone `⚠ Individual quota reached… Resets in …` notice, else undefined.
+ * Quota detail when the final non-empty line outside code fences (including 4-space/tab indented blocks) and
+ * `<<<quoted-…>>>` blocks is agy's standalone `⚠ Individual quota reached… Resets in …` notice, else undefined.
+ * With `standaloneOnly`, returns undefined if any earlier prose/code/quote content preceded that line.
  */
-export function finalLineQuotaNotice(text: string): string | undefined {
+export function finalLineQuotaNotice(text: string, options?: { standaloneOnly?: boolean }): string | undefined {
 	let fence: { char: "`" | "~"; len: number } | undefined;
 	let quoteEnd: string | undefined;
 	let lastNonEmpty: string | undefined;
+	let hasOtherContent = false;
 	for (const line of text.split("\n")) {
 		const raw = line.replace(/\r$/, "");
 		const trimmed = raw.trim();
@@ -73,18 +76,29 @@ export function finalLineQuotaNotice(text: string): string | undefined {
 		const open = parseFenceOpen(raw);
 		if (open !== undefined) {
 			fence = open;
+			hasOtherContent = true;
 			lastNonEmpty = undefined;
 			continue;
 		}
 		const quote = QUOTE_OPEN.exec(trimmed);
 		if (quote !== null) {
 			quoteEnd = `<<<end-quoted-${quote[1]}>>>`;
+			hasOtherContent = true;
 			lastNonEmpty = undefined;
 			continue;
 		}
-		if (trimmed !== "") lastNonEmpty = trimmed;
+		if (INDENTED_CODE.test(raw)) {
+			hasOtherContent = true;
+			lastNonEmpty = undefined;
+			continue;
+		}
+		if (trimmed !== "") {
+			if (lastNonEmpty !== undefined) hasOtherContent = true;
+			lastNonEmpty = trimmed;
+		}
 	}
 	if (fence !== undefined || quoteEnd !== undefined || lastNonEmpty === undefined) return undefined;
+	if (options?.standaloneOnly === true && hasOtherContent) return undefined;
 	return FINAL_QUOTA_LINE.exec(lastNonEmpty)?.[1];
 }
 

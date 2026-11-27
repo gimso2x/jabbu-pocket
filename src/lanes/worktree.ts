@@ -4,11 +4,12 @@ import {
 	type AcceptanceItem,
 	acceptanceItems,
 	oneLine,
+	redactCriterion,
 	TASK_PATH_PATTERN,
 	TASK_RISKS,
 	type TaskRisk,
 } from "../tasks/docs";
-import { assertCheckPlacement, parseChecks, SignalSyntaxError } from "../tasks/signals";
+import { TaskSpecError } from "../tasks/spec-error";
 import { defaultGit, type GitRunner } from "./verify";
 
 /**
@@ -33,25 +34,22 @@ export function parseLaneRisk(raw: unknown): LaneCheck<TaskRisk> {
 	return { ok: false, problem: "risk는 L0~L4 중 하나여야 합니다" };
 }
 
-/** Acceptance criteria as `AC-n` items; a malformed trailing `[check: …]` is refused now, not at the claim. */
+/** Acceptance criteria as `AC-n` items; malformed `[check: …]` or secrets inside it are refused, prose is masked. */
 export function parseLaneAcceptance(raw: unknown): LaneCheck<AcceptanceItem[]> {
 	if (raw === undefined) return { ok: true, value: [] };
 	if (!Array.isArray(raw) || raw.some((item) => typeof item !== "string" || oneLine(item) === "")) {
 		return { ok: false, problem: "acceptance는 비어 있지 않은 문자열 배열이어야 합니다" };
 	}
-	const texts = raw as string[];
-	for (const [index, text] of texts.entries()) {
+	const masked: string[] = [];
+	for (const [index, text] of (raw as string[]).entries()) {
 		try {
-			// The stored text is the one-line form; that is the one the claim will run.
-			const stored = oneLine(text);
-			assertCheckPlacement(stored);
-			parseChecks(stored);
+			masked.push(redactCriterion(text, index));
 		} catch (error) {
-			if (!(error instanceof SignalSyntaxError)) throw error;
-			return { ok: false, problem: `acceptance[${index}]의 check 형식 오류: ${error.message}` };
+			if (!(error instanceof TaskSpecError)) throw error;
+			return { ok: false, problem: error.message.replace(/^taskSpec/, "acceptance") };
 		}
 	}
-	return { ok: true, value: acceptanceItems(texts) };
+	return { ok: true, value: acceptanceItems(masked) };
 }
 
 export interface LaneRepo {
@@ -99,7 +97,7 @@ export async function resolveLaneRepo(cwd: string, git: GitRunner = defaultGit):
 			};
 		}
 	}
-	if (!TASK_PATH_PATTERN.test(repo) || repo.includes("..")) {
+	if (!TASK_PATH_PATTERN.test(repo) || repo.split("/").includes("..")) {
 		return {
 			ok: false,
 			problem: `저장소 경로에 영숫자·_ . / - 밖의 문자가 있어 레인 worktree를 만들 수 없습니다: ${repo}`,

@@ -157,7 +157,7 @@ const HIGH_RISK_PATTERNS: readonly PatternRule[] = [
 	{
 		rule: "service_control",
 		pattern:
-			/\bsystemctl(?:\s+-{1,2}[\w=-]+)*\s+(?:restart|stop|start|disable|kill|reboot|poweroff|halt|suspend)\b|\b(?:docker|podman)\s+(?:(?:container|compose)\s+)?(?:rm|stop|kill|restart)\b|\bpm2\s+(?:restart|stop|delete)\b/i,
+			/\bsystemctl(?:\s+(?:--(?:[\w=][\w=-]*)?|-[\w=][\w=-]*))*\s+(?:restart|stop|start|disable|kill|reboot|poweroff|halt|suspend)\b|\b(?:docker|podman)\s+(?:(?:container|compose)\s+)?(?:rm|stop|kill|restart)\b|\bpm2\s+(?:restart|stop|delete)\b/i,
 	},
 	{
 		rule: "disk_destructive",
@@ -605,7 +605,7 @@ const COMMAND_WITH_FILE_ARGS =
 	"cat|ls|rm|cp|mv|less|more|head|tail|tar|zip|rsync|scp|grep|rg|find|chmod|chown|source|bat|xxd|od|strings|sed|awk|vi|vim|nano|stat|du|wc|file|ln|install|shred|base64|jq";
 /** A `secrets` path word as a command's argument, `secrets/…`, or `./secrets`: what makes a bare `secrets` an order. */
 const HOME_RELATIVE_SECRETS = new RegExp(
-	`(?<![\\w.$/-])secrets\\/|(?<![\\w.$/-])(?:\\.|\\$PWD|\\$\\{PWD\\})\\/secrets(?![\\w.-])|${COMMAND_START}${COMMAND_WRAPPERS}(?:${COMMAND_WITH_FILE_ARGS})\\b[^;&|\`\\n]*?(?<![\\w.$/-])secrets(?=[\\s;&|\`'"]|$)`,
+	`(?<![\\w.$/-])secrets\\/|(?<![\\w.$/-])(?:\\.|\\$PWD|\\$\\{PWD\\})\\/(?:\\.?\\/)*secrets(?![\\w.-])|${COMMAND_START}${COMMAND_WRAPPERS}(?:${COMMAND_WITH_FILE_ARGS})\\b[^;&|\`\\n]*?(?<![\\w.$/-])secrets(?=[\\s;&|\`'"]|$)`,
 	"gi",
 );
 /** Whether a hit lies within a top-level `cd`'s own words: going into `secrets` reads nothing, what runs there does. */
@@ -1120,14 +1120,65 @@ function scanSpelling(
 
 /** A line ending in a backslash (trailing blanks allowed) is continued on the next one, as in a shell script. */
 const CONTINUED = /\\[ \t\r]*$/;
+const MAX_QUOTED_LINES = 16;
+const MAX_QUOTED_CHARS = 4096;
+
+/** Line ranges `[first, last]` (`last > first`) where an unescaped `'` / `"` crosses lines outside non-shell fences. */
+function quotedLineRuns(lines: readonly string[]): Array<[number, number]> {
+	const runs: Array<[number, number]> = [];
+	let fence: { marker: string; shell: boolean } | undefined;
+	let quote: "'" | '"' | null = null;
+	let first = -1;
+	let chars = 0;
+	for (let row = 0; row < lines.length; row++) {
+		const line = lines[row] ?? "";
+		const fenced = FENCE.exec(line);
+		if (fence === undefined && fenced !== null) {
+			fence = { marker: (fenced[1] ?? "").charAt(0), shell: SHELL_FENCE.test(fenced[2] ?? "") };
+			quote = null;
+			continue;
+		}
+		if (fence !== undefined && fenced !== null && fenced[1]?.charAt(0) === fence.marker && fenced[2] === "") {
+			fence = undefined;
+			quote = null;
+			continue;
+		}
+		if (fence !== undefined && !fence.shell) continue;
+		if (quote !== null) {
+			chars += 1 + line.length;
+			if (row - first + 1 > MAX_QUOTED_LINES || chars > MAX_QUOTED_CHARS) quote = null;
+		}
+		for (let i = 0; i < line.length; i++) {
+			const ch = line.charAt(i);
+			if (quote !== "'" && ch === "\\") {
+				i++;
+				continue;
+			}
+			if (quote !== null) {
+				if (ch === quote) {
+					if (row > first) runs.push([first, row]);
+					quote = null;
+				}
+				continue;
+			}
+			if (ch === '"' || (ch === "'" && !/\w'\w/.test(line.slice(Math.max(0, i - 1), i + 2)))) {
+				quote = ch;
+				first = row;
+				chars = line.length;
+			}
+		}
+		if (quote !== null && chars > MAX_QUOTED_CHARS) quote = null;
+	}
+	return runs;
+}
 
 const SEVERITY_RANK = { advisory: 0, high_risk: 1 } as const;
 
 /**
  * Scans the first `HANDOFF_SCAN_BYTES` of a brief, line by line, for the high-risk patterns above; a hit whose own
- * clause forbids the command (`commandContext`) is downgraded to advisory. Trailing backslashes join lines, scanned
- * both joined and apart and reported at the first, so a split command is still seen; a joined line finding no more
- * severity than one of its own lines already did is not reported twice. Past the cap: unverified, so high_risk.
+ * clause forbids the command (`commandContext`) is downgraded to advisory. Trailing backslashes and multi-line quotes
+ * join lines, scanned joined and reported at the first, without duplicating rules already found on those own lines.
+ * Past the cap: unverified, so high_risk.
  */
 export function scanHandoffBrief(brief: string, options: { protectedBranches?: readonly string[] } = {}): HandoffScan {
 	const branches = options.protectedBranches ?? DEFAULT_PROTECTED_BRANCHES;
@@ -1160,6 +1211,17 @@ export function scanHandoffBrief(brief: string, options: { protectedBranches?: r
 			}
 		}
 		first = last + 1;
+	}
+	for (const [first, last] of quotedLineRuns(lines)) {
+		const joined = lines.slice(first, last + 1).join(" ");
+		for (const f of scanLine(joined, first + 1, branches, inBotHome[first] ?? null)) {
+			const seen = (g: HandoffFinding) =>
+				g.line > first &&
+				g.line <= last + 1 &&
+				g.rule === f.rule &&
+				SEVERITY_RANK[g.severity] >= SEVERITY_RANK[f.severity];
+			if (!findings.some(seen)) findings.push(f);
+		}
 	}
 	const verdict: HandoffVerdict =
 		truncated || findings.some((f) => f.severity === "high_risk")
