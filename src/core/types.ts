@@ -35,10 +35,9 @@ export type CommandKind =
 	| "restart";
 
 /**
- * Slash command name of each kind (`-jabbu` suffix: several bots share the workspace). `distill` and `btw` are typed
- * as `!distill` / `!btw` only: their slash names are not in the Discord command set. `stop` is typed as `!stop` only
- * too, so it works without re-applying the manifests. `restart` is typed as `!restart` only as well: the daemon
- * restarts without a model turn.
+ * Canonical `/<kind>-jabbu` text form of each command kind. Discord no longer registers or receives slash commands —
+ * owners type `!<kind>` as plain text (plus `COMMAND_ALIAS`), while `parseCommand` still recognizes `/<kind>-jabbu`
+ * for internal/compat callers and tests.
  */
 export const COMMAND_TEXT: Record<CommandKind, string> = {
 	new: "/new-jabbu",
