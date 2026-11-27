@@ -150,10 +150,9 @@ export async function runDaemon(
 		process.stderr.write(`jabbu-pocket daemon: refusing to start: ${error.message}\n`);
 		return 1;
 	}
-	const lockPath = join(config.homeDir, "jabbu.lock");
 	let lock: Lock;
 	try {
-		lock = acquireLock(lockPath);
+		lock = acquireLock(join(config.homeDir, "jabbu.lock"));
 	} catch (error) {
 		if (!(error instanceof LockHeldError)) throw error;
 		process.stderr.write(`${error.message}\n`);

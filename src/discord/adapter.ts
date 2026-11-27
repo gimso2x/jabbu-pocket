@@ -924,8 +924,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	): Promise<void> {
 		let name: string | undefined;
 		if (!known) {
-			const line = progressLine(text.split("\n")[0] ?? "");
-			name = (line === "" ? "jabbu" : line).slice(0, THREAD_NAME_MAX);
+			name = (progressLine(text.split("\n")[0] ?? "") || "jabbu").slice(0, THREAD_NAME_MAX);
 			try {
 				await this.#transport.startThread({ channelId: conversationId, messageId: event.id, name });
 			} catch (err) {

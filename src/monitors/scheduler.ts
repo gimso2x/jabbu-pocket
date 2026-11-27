@@ -97,8 +97,7 @@ export function buildProcedureBlocks(
 				`${head}\n${text}${cut ? `\n…[잘림: 파일 ${size}바이트 중 ${read}바이트만 포함, 합계 ${MAX_PROCEDURE_BYTES / 1024}KiB 제한]` : ""}`,
 			);
 		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			blocks.push(`${head} 읽기 실패: ${reason}`);
+			blocks.push(`${head} 읽기 실패: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	return blocks.join("\n\n");

@@ -593,8 +593,7 @@ export class DaemonInbound {
 				reservation: action.id,
 			},
 		);
-		const state = store.getLaneReservation(action.id)?.state;
-		const standing = state === "waiting" || state === "ready";
+		const standing = ["waiting", "ready"].includes(store.getLaneReservation(action.id)?.state ?? "");
 		const port = channel === undefined ? undefined : this.#ctx.channels.forConversation(channel)?.port;
 		if (!standing && port !== undefined && channel !== undefined && messageTs !== undefined) {
 			await port

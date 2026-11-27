@@ -89,11 +89,10 @@ export async function modelCommand(host: MailboxHost, arg: string, threadRef: st
 		const listed = models
 			.slice(0, MAX_LISTED)
 			.map((model, i) => `${i + 1}. ${model}${model === state.model ? " ◀" : ""}`);
-		const more = models.length > MAX_LISTED ? [`… 외 ${models.length - MAX_LISTED}개 (이름 일부로 지정)`] : [];
 		return [
 			`현재 모델: ${state.model ?? "(알 수 없음)"}`,
 			...listed,
-			...more,
+			...(models.length > MAX_LISTED ? [`… 외 ${models.length - MAX_LISTED}개 (이름 일부로 지정)`] : []),
 			`바꾸기: \`${COMMAND_TEXT.model} <번호|provider/id|이름 일부>\``,
 		].join("\n");
 	}
