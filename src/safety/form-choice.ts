@@ -63,9 +63,8 @@ function formButtons(model: FormModel): FormButton[] {
 			return;
 		}
 		if (field.multi || live.length > MAX_CHOICE_BUTTONS || buttons.length + live.length > MAX_CARD_BUTTONS) return;
-		for (const option of live) {
+		for (const option of live)
 			buttons.push({ label: `${prefix}${labelOf(field, option)}`, field: index, answer: { checked: [option] } });
-		}
 	});
 	return buttons;
 }
@@ -89,8 +88,8 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 	if (field.kind === "text") {
 		if (field.value !== "") lines.push(`(기본값: ${cutCodePointSafe(field.value.replace(/\s+/g, " "), 60)})`);
 		const numeric = field.type === "number" || field.type === "range";
-		const bounded = numeric && (field.min !== undefined || field.max !== undefined);
-		const range = bounded ? ` (${field.min ?? ""}~${field.max ?? ""})` : "";
+		const range =
+			numeric && (field.min !== undefined || field.max !== undefined) ? ` (${field.min ?? ""}~${field.max ?? ""})` : "";
 		lines.push(`${numeric ? "숫자를" : "답장으로"} 적어 주세요${range}${skip}`);
 	} else if (isToggle(field)) {
 		const recommend = field.options[0]?.checked === true ? " (추천: 예)" : "";
@@ -102,9 +101,7 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 		}
 		const how = isArrayChoice(field)
 			? "번호를 쉼표로 답장해 주세요(예: 1,3), 없음은 0"
-			: buttoned
-				? "버튼을 누르거나 번호로 답장해 주세요"
-				: "번호로 답장해 주세요";
+			: `${buttoned ? "버튼을 누르거나 " : ""}번호로 답장해 주세요`;
 		lines.push(`${how}${field.other ? " · 목록에 없는 글은 기타로 받습니다" : ""}${skip}`);
 	}
 	if (warning !== undefined) lines.push(`⚠️ ${field.title}: ${warning}`);
@@ -165,6 +162,11 @@ function readAnswer(field: FormField, raw: string): { answer: FormAnswer } | { p
 	return problem === undefined ? { answer } : { problem };
 }
 
+function buttonAnswer(field: FormField, answer: FormAnswer): { answer: FormAnswer } | { problem: string } {
+	const problem = fieldProblem(field, fieldValue(field, answer));
+	return problem === undefined ? { answer } : { problem };
+}
+
 /** First field omp would refuse with its answer (else its default), as `title: reason`. */
 function firstProblem(model: FormModel, answers: ReadonlyArray<FormAnswer | undefined>): string | undefined {
 	for (const [index, field] of model.fields.entries()) {
@@ -200,8 +202,7 @@ export async function answerForm(
 	const recommended = buttons.flatMap((button, index) => {
 		const field = form.fields[button.field] as ChoiceField;
 		const chosen = "checked" in button.answer ? button.answer.checked : [];
-		const preselected = chosen.length > 0 && chosen.every((option) => field.options[option]?.checked === true);
-		return preselected ? [index] : [];
+		return chosen.length > 0 && chosen.every((option) => field.options[option]?.checked === true) ? [index] : [];
 	});
 	const text = () => formText(form, answers, buttoned, warnings);
 	const summary = () =>
@@ -239,17 +240,16 @@ export async function answerForm(
 		const index = result.kind === "choice" ? (buttons[result.index]?.field ?? -1) : answers.indexOf(undefined);
 		const field = form.fields[index];
 		if (field === undefined || answers[index] !== undefined) continue; // a stale click answers nothing
-		if (result.kind === "choice") {
-			answers[index] = (buttons[result.index] as FormButton).answer;
-		} else {
-			const read = readAnswer(field, result.text);
-			if ("problem" in read) {
-				warnings.set(index, read.problem);
-				await card.update(text(), labels);
-				continue;
-			}
-			answers[index] = read.answer;
+		const read =
+			result.kind === "choice"
+				? buttonAnswer(field, (buttons[result.index] as FormButton).answer)
+				: readAnswer(field, result.text);
+		if ("problem" in read) {
+			warnings.set(index, read.problem);
+			await card.update(text(), labels);
+			continue;
 		}
+		answers[index] = read.answer;
 		touched = true;
 		warnings.delete(index);
 		if (answers.every((answer) => answer !== undefined)) {
