@@ -119,6 +119,7 @@ export async function readBotUsageSummary(
 		summarizeSessionFiles(allSessionFiles(sessionsRoot)),
 		usageLimitsBlock({
 			executable: config.ompExecutable,
+			...(config.timezone === undefined ? {} : { timezone: config.timezone }),
 			...(config.ompProfile === undefined ? {} : { profile: config.ompProfile }),
 			...(config.ompConfigOverlay === undefined ? {} : { overlayConfig: config.ompConfigOverlay }),
 			env: buildChildEnv({}, withOmpProfile(process.env, config.ompProfile)),

@@ -53,6 +53,12 @@ export class FakeDiscordTransport implements DiscordTransport {
 	readonly history: Map<string, DiscordMessageEvent[]> = new Map();
 	/** CDN files `downloadAttachment` serves, by URL (anything else is a 404). */
 	readonly downloads: Map<string, Uint8Array> = new Map();
+	/**
+	 * Statuses served before the canned body, per URL, first-in-first-out: a queued 503 lets a test watch the
+	 * retry loop (one 503 then 200 succeeds, three 503s spend the budget). Without a queued status the canned
+	 * body is a 200 and anything else a 404, as before.
+	 */
+	readonly downloadStatuses: Map<string, number[]> = new Map();
 	/** Every HTTP request the downloads made, with its headers (no credentials may appear). */
 	readonly downloadRequests: Array<{ url: string; headers: Record<string, string> }> = [];
 	handlers: DiscordHandlers | undefined;
@@ -179,9 +185,12 @@ export class FakeDiscordTransport implements DiscordTransport {
 			const url = String(input);
 			this.downloadRequests.push({ url, headers: Object.fromEntries(new Headers(init?.headers)) });
 			const body = this.downloads.get(url);
+			const queued = this.downloadStatuses.get(url)?.shift();
+			if (queued !== undefined) return new Response(body ?? "not found", { status: queued });
 			return body === undefined ? new Response("not found", { status: 404 }) : new Response(body, { status: 200 });
 		}) as typeof fetch;
-		const result = await downloadDiscordAttachment({ ...args, fetchImpl, retries: 0 });
+		// No `retries` override: the fake downloads with the real default (2), like the socket transport does.
+		const result = await downloadDiscordAttachment({ ...args, fetchImpl });
 		if (!result.ok) throw new DiscordCallError("definitive", `attachment_download_failed:${result.error}`);
 	}
 

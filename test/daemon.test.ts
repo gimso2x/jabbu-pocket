@@ -154,7 +154,7 @@ describe("startup recovery wiring", () => {
 		expect(transport.posts((text) => text.includes(INTERRUPTED_NOTICE))).toHaveLength(1);
 	});
 
-	test("rule (3): inflight and failed_ambiguous deliveries are sent again with the redelivery header", async () => {
+	test("rule (3): an inflight delivery is sent again with the redelivery header; a held one stays held (round 14 F2)", async () => {
 		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		for (const [n, op] of [
@@ -174,11 +174,18 @@ describe("startup recovery wiring", () => {
 		seed.close(); // the inflight one stays inflight, as if the process died after claiming it
 
 		const transport = new WaitingDiscordTransport();
-		await newDaemon(transport).start();
-		await transport.waitForPosts((text) => text.startsWith(REDELIVERED_PREFIX), 2);
+		const daemon = newDaemon(transport);
+		await daemon.start();
+		// Only the inflight row is recovered and re-sent: a held row is sticky (transitions.ts, architecture.md I4)
+		// and only the owner's ack/resend moves it, so a restart must not silently requeue it.
+		await transport.waitForPosts((text) => text.startsWith(REDELIVERED_PREFIX), 1);
 		const bodies = transport.posts((text) => text.startsWith(REDELIVERED_PREFIX)).map((call) => call.content ?? "");
 		expect(bodies.some((text) => text.includes("body-inflight-op"))).toBe(true);
-		expect(bodies.some((text) => text.includes("body-ambiguous-op"))).toBe(true);
+		expect(bodies.some((text) => text.includes("body-ambiguous-op"))).toBe(false);
+		expect(daemon.store.getDelivery(ambiguous.deliveryId)).toMatchObject({
+			state: "failed_ambiguous",
+			redelivered: false,
+		});
 	});
 });
 

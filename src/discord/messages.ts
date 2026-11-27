@@ -3,7 +3,7 @@
 import { cardRuns, validateCard } from "../channel/card";
 import { errorText, REDELIVERED_PREFIX } from "../channel/text";
 import { cardToEmbed, type DiscordEmbed } from "./card";
-import { chunkPlain, renderDiscordParts } from "./format";
+import { chunkPlain, DISCORD_PART_LIMIT, renderDiscordParts } from "./parts";
 import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
 /** One Discord message of an answer: text, a card's embed (whose content is only the redelivered/footer lines) or a copy block (content = its text). */
@@ -28,7 +28,10 @@ export function renderDiscordMessages(body: string, redelivered: boolean, footer
 	const issues: string[] = [];
 	const prefix = redelivered ? `${REDELIVERED_PREFIX}\n` : "";
 	const suffix = footer === undefined ? "" : `\n_${footer}_`;
-	const limit = MESSAGE_CONTENT_LIMIT - prefix.length - suffix.length;
+	// Text runs chunk at the same fixed budget as `renderDiscordParts`: a resume must re-render the same pieces
+	// the first send did, whatever this render's mark and footer are (round 14 F1). Cards are messages of their own
+	// and still cap at the platform limit.
+	const limit = DISCORD_PART_LIMIT;
 	const runs = cardRuns<{ embed: DiscordEmbed }>(
 		body,
 		issues,

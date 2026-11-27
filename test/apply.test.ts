@@ -7,6 +7,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -1101,6 +1102,34 @@ describe("revertCommandFor", () => {
 		expect(() => sh(revertCommandFor(r, prev))).toThrow();
 		expect(sh("git rev-parse HEAD")).toBe(head);
 	});
+
+	test("a checkout path with a space, a quote or a shell character still restores the previous tree and runs nothing else", () => {
+		expect(revertCommandFor("/home/u/jabbu-pocket", "abc123")).toStartWith("git -C /home/u/jabbu-pocket diff --cached");
+		for (const name of ["my repo", "it's repo", "a$b", "semi;touch pwned"]) {
+			const r = join(root, `rev ${name}`);
+			mkdirSync(r);
+			const run = (cmd: string, cwd: string) => {
+				const out = Bun.spawnSync(["sh", "-c", cmd], {
+					cwd,
+					env: {
+						...process.env,
+						GIT_AUTHOR_NAME: "t",
+						GIT_AUTHOR_EMAIL: "t@t",
+						GIT_COMMITTER_NAME: "t",
+						GIT_COMMITTER_EMAIL: "t@t",
+					},
+				});
+				if (out.exitCode !== 0) throw new Error(`${cmd}: ${out.stderr.toString()}`);
+				return out.stdout.toString().trim();
+			};
+			run("git init -q -b main && echo a > a && git add a && git commit -qm base", r);
+			const prev = run("git rev-parse HEAD", r);
+			run("echo b > b && git add b && git commit -qm two", r);
+			run(revertCommandFor(r, prev), root);
+			expect({ name, tree: run("git ls-tree -r --name-only HEAD", r) }).toEqual({ name, tree: "a" });
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+		}
+	});
 });
 
 describe("runApply report", () => {
@@ -2127,6 +2156,30 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(existsSync(join(home, "autoland.hold"))).toBe(true);
 	});
 
+	test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+		"AC-4: the manual command of a failed install after a code rollback cds into a checkout at %j and runs nothing else",
+		async (name) => {
+			const plain = repo;
+			repo = join(root, name);
+			mkdirSync(join(repo, "src"), { recursive: true });
+			writeFileSync(join(repo, "src", "main.ts"), "");
+			writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+			writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+			markDepsInstalled();
+			initRepo({ lockChanges: true });
+			const { deps } = repoDeps(failingWorld(), { installRc: 1 });
+			const { receipt } = await runApply(base, deps);
+			const detail = codeStep(receipt)?.detail ?? "";
+			// Only the `cd` part is run: the rest of the line is the fixed install and restart text.
+			const cd = /by hand: (cd [\s\S]*?) && bun install/.exec(detail)?.[1] ?? "";
+			const out = Bun.spawnSync(["sh", "-c", `${cd} && pwd -P`], { cwd: root });
+			expect(out.stderr.toString()).toBe("");
+			expect(out.stdout.toString().trim()).toBe(realpathSync(repo));
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+			repo = plain;
+		},
+	);
+
 	test("AC-4: rolled-back code that does not come up either: no second code rollback, failed, no peers", async () => {
 		const r = initRepo();
 		const world = failingWorld(99);
@@ -2526,6 +2579,32 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 			expect(restartCommands(world)).toHaveLength(2);
 		});
 
+		test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+			"AC-6: the revert command a failed apply prints works for a checkout at %j and runs nothing else",
+			async (name) => {
+				// The fixture's checkout moves to a path that needs quoting; the apply and its receipt see only that path.
+				const plain = repo;
+				repo = join(root, name);
+				mkdirSync(join(repo, "src"), { recursive: true });
+				writeFileSync(join(repo, "src", "main.ts"), "");
+				writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+				writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+				markDepsInstalled();
+				const r = initRepo();
+				const { deps } = repoDeps(failingWorld());
+				const { exitCode, receipt } = await runApply({ ...base, codeRollback: "off" }, deps);
+				expect(exitCode).toBe(1);
+				expect(sh("git rev-parse HEAD")).toBe(r.bad);
+				expect(receipt.revertCommand).toBeDefined();
+				sh(receipt.revertCommand as string, root);
+				expect(sh("git show HEAD:src/main.ts")).toBe("good");
+				expect(sh("git rev-parse HEAD^")).toBe(r.bad);
+				expect(readFileSync(join(repo, "scratch.txt"), "utf8")).toBe("untracked\n");
+				expect(existsSync(join(root, "pwned"))).toBe(false);
+				repo = plain;
+			},
+		);
+
 		test("AC-7: --allow-detached applies a hand-picked detached commit, also on the peers, keeping head.last-good and hold", async () => {
 			const r = initRepo();
 			sh(`git checkout -q --detach ${r.good}`);
@@ -2732,6 +2811,31 @@ describe("ensureDeps install marker (apply-deps-install)", () => {
 		expect(world.installs).toHaveLength(1);
 		expect(marker()).toBe(`${depsHash(repo)}\n`);
 	});
+
+	test.each(["spaced repo", "it's a repo", "a$b `c`", "semi;touch pwned", "new\nline", "tab\tname"])(
+		"the manual command of a failed forward install cds into a checkout at %j and runs nothing else",
+		async (name) => {
+			const plain = repo;
+			repo = join(root, name);
+			mkdirSync(join(repo, "src"), { recursive: true });
+			writeFileSync(join(repo, "src", "main.ts"), "");
+			writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
+			writeFileSync(join(repo, "bun.lock"), "lock-1\n");
+			markDepsInstalled();
+			writeFileSync(join(repo, "bun.lock"), "lock-2\n");
+			const world = makeWorld();
+			world.installRc = 1;
+			const { receipt } = await runApply(base, makeDeps(world));
+			const detail = readReceipt(receipt).steps.at(-1)?.detail ?? "";
+			// Only the `cd` part is run: the rest of the line is the fixed install and restart text.
+			const cd = /by hand: (cd [\s\S]*?) && bun install/.exec(detail)?.[1] ?? "";
+			const out = Bun.spawnSync(["sh", "-c", `${cd} && pwd -P`], { cwd: root });
+			expect(out.stderr.toString()).toBe("");
+			expect(out.stdout.toString().trim()).toBe(realpathSync(repo));
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+			repo = plain;
+		},
+	);
 
 	test("AC-2: a failed forward install cancels the drain, restarts nothing and fails with the manual command", async () => {
 		writeFileSync(join(repo, "bun.lock"), "lock-2\n");

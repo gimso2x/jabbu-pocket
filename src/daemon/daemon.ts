@@ -327,6 +327,7 @@ export class Daemon {
 	}
 
 	async start(): Promise<void> {
+		if (this.#stopped) throw new Error("daemon stopped before start");
 		const config = this.#options.config;
 		// The text this boot runs on: recorded as last-good at ready only if nobody edited the file meanwhile.
 		const bootConfigText =
@@ -388,7 +389,6 @@ export class Daemon {
 			pid: process.pid,
 			omp_version: this.#options.ompVersion,
 			recovered_inflight: store.recoveredInflight,
-			requeued_ambiguous: store.requeueAmbiguous(),
 		});
 		for (const { field, reason } of config.warnings ?? []) log.warn("config_warning", { field, reason });
 		this.#bootBackup();
@@ -650,12 +650,11 @@ export class Daemon {
 			picker: this.#picker,
 			statusText: (originKey) => this.#statusText(originKey),
 		});
-		const deliveriesOf = deliverySources(store, config, crash);
 		for (const binding of this.#options.channels) {
 			const platform = binding.port.platform;
 			const adapter = binding.createAdapter({
 				core,
-				deliveries: deliveriesOf(platform),
+				deliveries: deliverySources(store, config, crash)(platform),
 				clock: this.#clock,
 				log,
 				config,

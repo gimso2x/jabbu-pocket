@@ -10,7 +10,7 @@ import type { CoreSink, DeliverySource } from "../src/channel/types";
 import { DiscordAdapter } from "../src/discord/adapter";
 import { snowflakeAt } from "../src/discord/backfill";
 import { DiscordChannel } from "../src/discord/channel";
-import { DiscordCallError, type DiscordInteraction } from "../src/discord/transport";
+import { DiscordCallError, type DiscordInteraction, DiscordRateLimitedError } from "../src/discord/transport";
 import { lanePauseActionId } from "../src/lanes/card";
 import { createLogger } from "../src/log";
 import { redact } from "../src/redact";
@@ -308,6 +308,57 @@ describe("follow-up token expiry", () => {
 		expect(
 			replies("버튼을 처리하지 못했습니다 — 다시 눌러 주세요").map((r) => [r.channelId, r.messageReference]),
 		).toEqual([[THREAD, { messageId: card }]]);
+	});
+});
+
+describe("ACK retries", () => {
+	test("a rate-limited ACK retries after retry_after and the action still runs once", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordRateLimitedError(1)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses().map((c) => c.response)).toEqual([{ type: 6 }, { type: 6 }]);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("a rate-limited ACK with retry_after past the window skips the action", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordRateLimitedError(60_000)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(1);
+		expect(actions).toHaveLength(0);
+		expect(logs.some((line) => line.includes("interaction_ack_failed"))).toBe(true);
+	});
+
+	test("an ambiguous ACK failure retries once at once and the action runs", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordCallError("ambiguous", "discord_http_500", 500)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(2);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("an ambiguous ACK failure that still fails runs the action (it may have landed)", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [
+			new DiscordCallError("ambiguous", "discord_http_500", 500),
+			new DiscordCallError("ambiguous", "discord_http_500", 500),
+		];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(2);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("a definitive ACK failure skips the action", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordCallError("definitive", "discord_http_404:10062", 404, 10062)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(1);
+		expect(actions).toHaveLength(0);
 	});
 });
 

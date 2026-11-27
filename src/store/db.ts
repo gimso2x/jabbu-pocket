@@ -1812,19 +1812,6 @@ export class Store {
 		})();
 	}
 
-	/**
-	 * Startup recovery only: a `failed_ambiguous` delivery younger than the freshness window goes back to `pending`
-	 * with redelivered=1, so the owner gets it again with the "중복 가능" header. Returns how many were requeued.
-	 */
-	requeueAmbiguous(): number {
-		const now = this.clock.now();
-		return this.db
-			.query(
-				"UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'failed_ambiguous' AND ? - created_at < ?",
-			)
-			.run(now, now, FRESHNESS_MS).changes;
-	}
-
 	// ---- owner resolution of held deliveries (`jabbu-pocket deliveries`) ----
 
 	/** The held rows waiting for the owner, oldest id first. */
