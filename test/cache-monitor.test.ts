@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { childRestartCause, recordSpawnPrompt, spawnSnapshot } from "../src/ops/cache-miss-cause";
 import {
 	type CacheBaseline,
 	type CacheCall,
@@ -8,6 +12,7 @@ import {
 	formatCacheMissNotice,
 	formatColdCacheNotice,
 	isColdCache,
+	shouldRotateOnColdResume,
 } from "../src/ops/cache-monitor";
 
 const MIN = 60_000;
@@ -180,5 +185,54 @@ describe("notices", () => {
 		expect(isColdCache(baseline({ prefix: 150_000 }), T0 + 120 * MIN)).toBe(false);
 		expect(isColdCache(baseline({ prefix: 250_000 }), T0 + 30 * MIN)).toBe(false);
 		expect(isColdCache(baseline({ prefix: 250_000, provider: "zai" }), T0 + 600 * MIN)).toBe(false);
+	});
+});
+
+describe("shouldRotateOnColdResume", () => {
+	test("rotates only past the token threshold and the provider's cache TTL, and never for an unknown-TTL provider", () => {
+		expect(shouldRotateOnColdResume(baseline({ prefix: 101_000 }), T0 + 61 * MIN, 100_000)).toBe(true);
+		expect(shouldRotateOnColdResume(baseline({ prefix: 99_000 }), T0 + 61 * MIN, 100_000)).toBe(false);
+		expect(shouldRotateOnColdResume(baseline({ prefix: 101_000 }), T0 + 59 * MIN, 100_000)).toBe(false);
+		expect(shouldRotateOnColdResume(baseline({ prefix: 101_000, provider: "zai" }), T0 + 600 * MIN, 100_000)).toBe(
+			false,
+		);
+	});
+});
+
+describe("childRestartCause", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+	const digestLine = (data: string): string =>
+		`${JSON.stringify({ type: "custom", customType: "system-prompt-digest", data, id: "x" })}\n`;
+	function session(): { dir: string; file: string } {
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-cause-"));
+		dirs.push(dir);
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, "s.jsonl");
+		writeFileSync(file, digestLine("aaa"));
+		return { dir, file };
+	}
+
+	test("jabbu_prompt_changed compares this spawn's prompt hash with the previous spawn's, across a restart", () => {
+		const { dir, file } = session();
+		recordSpawnPrompt(dir, "prompt one");
+		expect(childRestartCause(spawnSnapshot(dir, file)).jabbu_prompt_changed).toBe("unknown");
+		recordSpawnPrompt(dir, "prompt one");
+		expect(childRestartCause(spawnSnapshot(dir, file)).jabbu_prompt_changed).toBe("false");
+		recordSpawnPrompt(dir, "prompt two");
+		expect(childRestartCause(spawnSnapshot(dir, file)).jabbu_prompt_changed).toBe("true");
+	});
+
+	test("omp_digest_changed compares the digest omp wrote after the spawn with the last one before it", () => {
+		const { dir, file } = session();
+		const snapshot = spawnSnapshot(dir, file);
+		expect(childRestartCause(snapshot).omp_digest_changed).toBe("unknown");
+		appendFileSync(file, digestLine("aaa"));
+		expect(childRestartCause(snapshot).omp_digest_changed).toBe("false");
+		appendFileSync(file, digestLine("bbb"));
+		expect(childRestartCause(snapshot).omp_digest_changed).toBe("true");
+		expect(childRestartCause(spawnSnapshot(dir, undefined)).omp_digest_changed).toBe("unknown");
 	});
 });
