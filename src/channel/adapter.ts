@@ -1,5 +1,4 @@
-// What the daemon asks of one chat platform's adapter, and how a platform plugs into the daemon (`ChannelBinding`).
-// The daemon knows platforms only through these two interfaces and the `ChannelPort`.
+// What the daemon asks of one chat platform's adapter, and how a platform plugs into the daemon (`ChannelBinding`); the daemon knows platforms only through these interfaces and the `ChannelPort`.
 import type { JabbuConfig } from "../config";
 import type { TurnProgress } from "../core/mailbox";
 import type { ThreadSource } from "../core/mailbox-thread-context";
@@ -9,8 +8,9 @@ import type { Store } from "../store/db";
 import type { ChannelPort } from "./port";
 import type { AdapterClock, CoreSink, DeliverySource, IngestOutcome } from "./types";
 
-/** The live-reloadable inbound policy of an adapter (config reload). */
+/** The live-reloadable inbound policy of an adapter (config reload); an absent `guildIds` means every server. */
 export interface ChannelPolicy {
+	guildIds?: readonly string[] | undefined;
 	mentionFreeChannels?: readonly string[];
 	logChannel?: string;
 	peerBots?: ReadonlyArray<{ userId: string; name: string }>;

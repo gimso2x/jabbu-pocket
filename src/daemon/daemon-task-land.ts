@@ -53,6 +53,11 @@ export class DaemonTaskLanding {
 		);
 	}
 
+	/** Cuts the PR landing's in-flight reads (the daemon is stopping). */
+	stop(): void {
+		this.#prLand.stop();
+	}
+
 	/** One sweep poll of a review task's open PR (skipped while the task is being landed). */
 	pollPrLand(row: TaskRow): Promise<void> {
 		return this.#prLand.poll(row);

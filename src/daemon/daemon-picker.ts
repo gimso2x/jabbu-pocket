@@ -81,6 +81,7 @@ export class DaemonCommandPicker {
 			currentLabel: built.currentLabel,
 			options: built.options,
 			page: built.page,
+			...(info.busy ? { busy: true } : {}),
 		};
 		const messageRef = await route.port.post(route.target, renderPickerMessage(view));
 		this.#storeSession({
@@ -111,7 +112,6 @@ export class DaemonCommandPicker {
 			const picked = session.options[idx];
 			if (picked === undefined) return;
 			session.selectedValue = picked.value;
-			session.busy = false;
 			await this.#editSession(session, renderPickerMessage(session), input.replyEphemeral);
 			return;
 		}

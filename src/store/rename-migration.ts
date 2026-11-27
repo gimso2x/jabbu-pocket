@@ -9,7 +9,8 @@ import { readSchemaVersion } from "./schema-version";
  * whose source commit reads as missing — which `gateChangedOf` takes as "gate source unchanged" (fail-open).
  * Absolute paths (`session_dir`, `worktree`, `repo`, `docs_dir`, `cwd`) and session files are a host move, not this.
  */
-const RENAMED_AT = 9;
+/** The schema version this rename landed in; `SCHEMA_VERSION` must cover it (see `test/schema-version.test.ts`). */
+export const RENAMED_AT = 9;
 const OLD_LANE_ORIGIN = "ompbot/work/";
 const NEW_LANE_ORIGIN = "jabbu/work/";
 const WIKI_SOURCE_PREFIXES: ReadonlyArray<readonly [string, string]> = [

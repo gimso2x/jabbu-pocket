@@ -17,11 +17,11 @@ const PEM_PRIVATE_KEY_SHAPE =
 	"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:(?!-----BEGIN )[\\s\\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----";
 
 /**
- * Cloud and forge keys: AWS access key id (`AKIA` + 16), Google API key (`AIza` + 35), GitLab personal token
- * (`glpat-`), each at an alphanumeric edge so a longer word holding the prefix survives.
+ * Cloud and forge keys: AWS key id, Google API key, GitLab `glpat-`, npm `npm_` (GitHub's 2021 token format) and Stripe
+ * `sk_`/`rk_` + `live_`/`test_`, each at an alphanumeric edge so a longer word holding the prefix survives.
  */
 const CLOUD_KEY_SHAPES =
-	"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])|(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}";
+	"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])|(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}|(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{30,}|(?<![A-Za-z0-9_])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}";
 
 /** Incoming webhook URLs, whose path is the credential: Slack (`hooks.slack.com/...`) and Discord (`/api/webhooks/<id>/<token>`). */
 const WEBHOOK_URL_SHAPES =

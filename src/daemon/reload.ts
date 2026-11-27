@@ -1,20 +1,16 @@
 import type { JabbuConfig } from "../config";
+import { applyLiveChannelsReload } from "./discord-policy";
 import { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS } from "./reload-fields";
 
 export { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS };
 
 /**
- * Config reload without a restart: `jabbu-pocket reload` or SIGHUP re-reads config.json. Policy
- * fields apply live, fields bound to startup resources are reported as needing a restart and left untouched, and
- * fields only the CLI reads (gc, backup) take effect on its next run anyway. A config that fails validation changes
- * nothing.
+ * Config reload without a restart: `jabbu-pocket reload` or SIGHUP re-reads config.json. Policy fields apply live
+ * (`channels.discord`'s connection keys too); restart-bound ones are only reported, and an invalid file changes nothing.
  */
 
-/**
- * Compile-time guard: a new config field must land in one of the three lists, or `reload` never reports it.
- * `schemaVersion`, `homeDir` and `configPath` come from where the file was loaded, and `warnings` from which key
- * names it uses, not from a setting in it.
- */
+/** Compile-time guard: a new config field must land in one of the three lists, or `reload` never reports it;
+ * `schemaVersion`, `homeDir`, `configPath` and `warnings` are not settings in the file. */
 type UnclassifiedField = Exclude<
 	keyof JabbuConfig,
 	| (typeof LIVE_FIELDS)[number]
@@ -51,10 +47,12 @@ export function planReload(current: JabbuConfig, fresh: JabbuConfig): ReloadPlan
 		if (fresh[field] === undefined) delete next[field];
 		else (next as unknown as Record<string, unknown>)[field] = fresh[field];
 	}
+	const restartRequired = RESTART_FIELDS.filter((field) => differs(current[field], fresh[field]));
+	changed.push(...applyLiveChannelsReload(next, current, fresh, restartRequired));
 	return {
 		next,
 		changed,
-		restartRequired: RESTART_FIELDS.filter((field) => differs(current[field], fresh[field])),
+		restartRequired,
 		cli: CLI_FIELDS.filter((field) => differs(current[field], fresh[field])),
 	};
 }

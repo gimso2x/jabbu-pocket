@@ -2,10 +2,10 @@
  * The four task documents (context / spec / PROGRESS / outcome): renderers for the files the bot writes and parsers
  * for the files the agent edits. Renderer and parser live together so the format has one definition.
  */
-
 import { LANE_MODEL_TIERS, type LaneModelTier } from "../model-tiers";
 import { redact } from "../redact";
 import { localIso } from "../time";
+import { type BaseInfo, baseFrontmatter, baseLine, parseBranchBase } from "./base-ref";
 import { assertCheckPlacement, checkSignalsOf, parseChecks, type Signal, SignalSyntaxError } from "./signals";
 import { TaskSpecError } from "./spec-error";
 
@@ -40,6 +40,9 @@ export interface NewTaskSpec {
 	tierReason?: string;
 	/** The judge's confidence in `tier`, 0..1 (new registrations only). */
 	tierConfidence?: number;
+	/** The worker's branch name (a repository's `branchRules` demand it); absent = `task/<TASKID>`. */
+	branch?: string;
+	base?: string;
 }
 
 export type TaskSpecInput =
@@ -164,6 +167,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 			...(tier === undefined ? {} : { tier: tier as LaneModelTier }),
 			...(tierReason === undefined || oneLine(tierReason) === "" ? {} : { tierReason: redact(oneLine(tierReason)) }),
 			...(tierConfidence === undefined ? {} : { tierConfidence }),
+			...parseBranchBase(record),
 		},
 	};
 }
@@ -205,7 +209,7 @@ export function criterionLine(text: string): string {
  * One acceptance criterion at registration: a malformed `[check: …]` is refused here; the prose before the block is
  * masked; the block is never changed (the sweep re-runs it as written), so one `redact` would change is refused.
  */
-function redactCriterion(text: string, index: number): string {
+export function redactCriterion(text: string, index: number): string {
 	let signals: Signal[];
 	try {
 		assertCheckPlacement(text);
@@ -247,12 +251,6 @@ export const taskDocsCommitTitle = (taskId: string): string => `docs(task): ${ta
 export const docsDirUnder = (root: string, taskId: string): string => `${root}/docs/tasks/${taskId}`;
 export const docsDirOf = (row: { docsDir: string }): string => row.docsDir;
 
-/** Epoch ms of an ISO timestamp, `undefined` when it does not parse. */
-export function parseIsoMs(text: string): number | undefined {
-	const ms = Date.parse(text);
-	return Number.isNaN(ms) ? undefined : ms;
-}
-
 // ---- renderers ----
 
 export interface TaskDocsMeta {
@@ -262,6 +260,7 @@ export interface TaskDocsMeta {
 	repo: string;
 	worktree: string;
 	branch: string;
+	base?: BaseInfo;
 	agent: string;
 	threadLink: string;
 	registeredAt: number;
@@ -286,7 +285,7 @@ export function renderContext(meta: TaskDocsMeta, spec: NewTaskSpec, original: s
 		spec.assumptions ?? "(없음)",
 		"## 메타",
 		`- 요청 위치: ${meta.threadLink} · 등록: ${localIso(meta.registeredAt, meta.timezone)} · 위험등급: ${spec.risk}`,
-		`- 레포: ${meta.hostLabel}:${meta.repo} · 워크트리: ${meta.worktree} (branch ${meta.branch}) · 에이전트: ${meta.agent}`,
+		`- 레포: ${meta.hostLabel}:${meta.repo} · 워크트리: ${meta.worktree} (branch ${meta.branch}) · 에이전트: ${meta.agent}${meta.base === undefined ? "" : ` · ${baseLine(meta.base)}`}`,
 		"",
 	].join("\n");
 }
@@ -301,6 +300,7 @@ export function renderSpec(meta: TaskDocsMeta, spec: NewTaskSpec, acceptance: re
 		`title: ${spec.title}`,
 		`risk: ${spec.risk}`,
 		`repo: ${meta.hostLabel}:${meta.repo}`,
+		...baseFrontmatter(meta.base),
 		"---",
 		"# 목표",
 		spec.goal,

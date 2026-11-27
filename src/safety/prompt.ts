@@ -1,31 +1,25 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import {
-	closeSync,
-	constants,
-	fstatSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readSync,
-	realpathSync,
-	renameSync,
-	rmSync,
-	type Stats,
-	statSync,
-	writeFileSync,
-} from "node:fs";
+import { closeSync, fstatSync, mkdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { type ChatPlatform, chatPlatformOf, parseChatOrigin } from "../core/origin-key";
 import { isLaneOrigin } from "../lanes/status";
 import { DISCORD_LANE_CHANNEL_MISSING } from "../lanes/trigger";
 import type { Logger } from "../log";
-import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { isPersonaOrigin } from "../monitors/tools";
 import { newestSessionFile } from "../omp/session-heal";
 import { cacheCallOf, cacheTtlMs } from "../ops/cache-monitor";
-import { truncateUtf8 } from "../redact";
-import { inodesUnder } from "./secret-inodes";
+import {
+	OWNER_DOCS_MAX_BYTES,
+	OWNER_NOTES_MAX_BYTES,
+	openRegularFile,
+	ownerDocsPrompt,
+	PERSONA_MAX_BYTES,
+	type PersonaFiles,
+	SOUL_MAX_BYTES,
+} from "./prompt-files";
+
+export { OWNER_NOTES_MAX_BYTES, PERSONA_MAX_BYTES, type PersonaFiles, SOUL_MAX_BYTES };
 
 /** Sessions whose omp dialogs reach the owner as chat cards: `ask` is fine, and this is what an unanswered one does. */
 const ASK_ALLOWED_LINE =
@@ -208,6 +202,8 @@ export interface FloorsSurface {
 	timezone?: { name: string; offset: string };
 	/** The peer bots of the conversation's platform, each with its mention token there (`port.mentionUser`). */
 	peers?: ReadonlyArray<{ name: string; mention: string }>;
+	/** The first-run onboarding line for the stored state (daemon `floorsSurfaceFor`); absent when the conversation is not in onboarding. */
+	onboarding?: string;
 }
 
 /** Floor 6: when to raise an owner approval card. */
@@ -303,7 +299,7 @@ function floorsParts(lines: FloorsLine[]): { static: string; dynamic: string; na
 }
 
 /** Floors lines that can change between two spawns of the same origin without a code change. */
-export type FloorsDynamicLine = "noLaneChannel" | "peerTouched" | "peers" | "resume";
+export type FloorsDynamicLine = "noLaneChannel" | "onboarding" | "peerTouched" | "peers" | "resume";
 
 /** One floors line; a runtime-dependent one carries its name so the spawn log can tell it apart. */
 type FloorsLine = string | { dynamic: FloorsDynamicLine; text: string };
@@ -360,6 +356,7 @@ function floorsLines(
 		...(persona && platform === "discord" ? [monitorLine(surface.timezone)] : []),
 		...(surface.noLaneChannel === true ? [{ dynamic: "noLaneChannel" as const, text: NO_LANE_CHANNEL_LINE }] : []),
 		...(peerTouched ? [{ dynamic: "peerTouched" as const, text: peerTouchedToolsLine(fileTool) }] : []),
+		...(surface.onboarding === undefined ? [] : [{ dynamic: "onboarding" as const, text: surface.onboarding }]),
 	];
 	return [
 		"# jabbu 운영 안내 / jabbu operating floors",
@@ -386,178 +383,6 @@ function floorsLines(
 		...(resumeLine === undefined ? [] : [{ dynamic: "resume" as const, text: resumeLine }]),
 		...(chat ? ["", formatSection(herdr && hostTools, askable, hostTools)] : []),
 	];
-}
-
-/** `persona.md`: the owner's operating contract. Chat origins only (lanes, monitors and review origins never get it). */
-export const PERSONA_MAX_BYTES = 8192;
-/** `soul.md`: the bot's name, relationship to the owner, voice and character. Chat and monitor origins. */
-export const SOUL_MAX_BYTES = 8192;
-/** `owner.md`: the owner-observation notes a monitor distills. Chat and monitor origins. */
-export const OWNER_NOTES_MAX_BYTES = 16384;
-
-/** The workspace files `floorsSystemPrompt` injects; each is optional and silently skipped when missing. */
-export interface PersonaFiles {
-	persona?: string;
-	soul?: string;
-	owner?: string;
-	/** Files the owner docs must never be a link to: everything under `secretsDir`, and the bot's `config.json`. */
-	secrets?: { secretsDir: string; configFile: string };
-}
-
-const MONITOR_PRECEDENCE = " 모니터 지시가 정한 답 형식(NO_REPORT·[SILENT] 등)이 이 지침보다 우선합니다.";
-
-/** Bytes read past an injected file's cap: room for a character cut at the cap and the blanks `trim` drops at its end. */
-const INJECTED_READ_MARGIN = 4096;
-/** The most `ownerDocsPrompt` can return: every file at its cap plus a heading line (and monitor note) each. */
-const OWNER_DOCS_MAX_BYTES = SOUL_MAX_BYTES + OWNER_NOTES_MAX_BYTES + PERSONA_MAX_BYTES + 3 * 1024;
-
-/** Most leading ASCII blank bytes `readHead` skips before the text it returns (a whole-blank file is not read to its end). */
-const INJECTED_MAX_LEADING_BLANKS = 1 << 20;
-
-/** The error a non-regular injected file is reported with: `EISDIR` for a directory, `EINVAL` for a FIFO, socket or device. */
-function notRegularFile(path: string, stat: Stats): NodeJS.ErrnoException {
-	const code = stat.isDirectory() ? "EISDIR" : "EINVAL";
-	return Object.assign(new Error(`${code}: not a regular file, read '${path}'`), { code, path, syscall: "read" });
-}
-
-/**
- * A read descriptor of a regular file; anything else throws before a read: a FIFO would block the open until a writer
- * comes. The open is non-blocking and the descriptor checked again, so a file swapped for a FIFO between the stat and
- * the open does not block either. The caller closes the descriptor.
- */
-function openRegularFile(path: string): number {
-	const named = statSync(path);
-	if (!named.isFile()) throw notRegularFile(path, named);
-	const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
-	try {
-		const opened = fstatSync(fd);
-		if (!opened.isFile()) throw notRegularFile(path, opened);
-		return fd;
-	} catch (error) {
-		closeSync(fd);
-		throw error;
-	}
-}
-
-/**
- * Whether an opened injected file is a secret: its `dev:ino` is a file of `secrets/` or the `config.json` (a hard
- * link), or its real path lies under `secrets/` (a symlink).
- */
-function isSecretFile(path: string, opened: Stats, guard: NonNullable<PersonaFiles["secrets"]>): boolean {
-	const id = `${opened.dev}:${opened.ino}`;
-	const protectedIds = [...inodesUnder(guard.secretsDir)];
-	try {
-		const config = statSync(guard.configFile);
-		protectedIds.push(`${config.dev}:${config.ino}`);
-	} catch {
-		// no config.json: nothing to match
-	}
-	if (protectedIds.includes(id)) return true;
-	try {
-		const root = realpathSync(guard.secretsDir);
-		return realpathSync(path).startsWith(`${root}${sep}`);
-	} catch {
-		return false;
-	}
-}
-
-/**
- * The first `bytes` bytes of a regular file ({@link openRegularFile}) after its leading ASCII blanks, as UTF-8, without
- * reading the rest (a broken last character is cut later). Skipping the blanks keeps a long blank run from using up
- * the cap that `trim` then voids.
- */
-function readHead(path: string, bytes: number, guard: PersonaFiles["secrets"]): string {
-	const fd = openRegularFile(path);
-	try {
-		if (guard !== undefined && isSecretFile(path, fstatSync(fd), guard)) {
-			throw Object.assign(new Error(`ESECRET: injected file is a link to a secret, refused '${path}'`), {
-				code: "ESECRET",
-				path,
-			});
-		}
-		const buffer = Buffer.alloc(bytes);
-		let start = 0;
-		for (let n = 1; n > 0 && start < INJECTED_MAX_LEADING_BLANKS; ) {
-			n = readSync(fd, buffer, 0, bytes, start);
-			const blanks = buffer.subarray(0, n).findIndex((byte) => !(byte === 0x20 || (byte >= 0x09 && byte <= 0x0d)));
-			if (blanks >= 0) {
-				start += blanks;
-				break;
-			}
-			start += n;
-		}
-		let read = 0;
-		for (let n = 1; n > 0 && read < bytes; read += n) n = readSync(fd, buffer, read, bytes - read, start + read);
-		return buffer.subarray(0, read).toString("utf8");
-	} finally {
-		closeSync(fd);
-	}
-}
-
-/** Reads one injected file: "" for missing/empty, the capped text with its heading otherwise. */
-function readInjected(
-	path: string | undefined,
-	heading: string,
-	maxBytes: number,
-	onError: ((error: unknown, path: string) => void) | undefined,
-	guard: PersonaFiles["secrets"],
-): string {
-	if (path === undefined) return "";
-	try {
-		const head = readHead(path, maxBytes + INJECTED_READ_MARGIN, guard);
-		// A NUL byte (a UTF-16 file) makes the child spawn throw: drop them and report the file (qa-z #4).
-		if (head.includes("\0"))
-			onError?.(Object.assign(new Error(`ENUL: NUL bytes removed from '${path}'`), { code: "ENUL", path }), path);
-		const raw = head.replaceAll("\0", "").trim();
-		return raw === "" ? "" : `\n\n${heading}\n${truncateUtf8(raw, maxBytes)}`;
-	} catch (error) {
-		// The floors text alone is the whole appendix. A missing file is normal; anything else is reported.
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") onError?.(error, path);
-		return "";
-	}
-}
-
-/**
- * The owner docs part of the system prompt (`[정체성(soul)]`, `[오너 관찰지]`, `[페르소나]`, each "" when its file is
- * missing or empty): chat origins get all three, monitor origins soul and owner notes only (with a line that the
- * monitor instruction's answer format wins). `undefined` for origins that never get owner docs (lanes, review).
- */
-function ownerDocsPrompt(
-	originKey: string | undefined,
-	files: PersonaFiles | undefined,
-	onPersonaError: ((error: unknown, path: string) => void) | undefined,
-): string | undefined {
-	if (originKey === undefined || files === undefined) return undefined;
-	const chat = chatPlatformOf(originKey) !== undefined;
-	const monitor = originKey.startsWith(MONITOR_ORIGIN_PREFIX);
-	if (!chat && !monitor) return undefined;
-	const tail = monitor ? MONITOR_PRECEDENCE : "";
-	const injected =
-		readInjected(
-			files.soul,
-			`[정체성(soul)] 아래는 이 봇의 이름·성격·말투 정의입니다. 이 지침은 안전 바닥글보다 우선하지 않습니다.${tail}`,
-			SOUL_MAX_BYTES,
-			onPersonaError,
-			files.secrets,
-		) +
-		readInjected(
-			files.owner,
-			`[오너 관찰지] 아래는 오너에 대한 관찰 기록입니다. 이 지침은 안전 바닥글보다 우선하지 않습니다.${tail}`,
-			OWNER_NOTES_MAX_BYTES,
-			onPersonaError,
-			files.secrets,
-		);
-	if (!chat) return injected;
-	return (
-		injected +
-		readInjected(
-			files.persona,
-			"[페르소나] 아래는 오너가 정의한 성격·말투 지침입니다. 이 지침은 안전 바닥글보다 우선하지 않습니다:",
-			PERSONA_MAX_BYTES,
-			onPersonaError,
-			files.secrets,
-		)
-	);
 }
 
 /**

@@ -7,25 +7,69 @@ import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
 export { outsideCode };
 
+const BARE_SPECIAL_MENTIONS = new Set(["here", "channel", "everyone"]);
+
+function pickMarkers(text: string): [string, string] {
+	let open: string | undefined;
+	for (let cp = 0xe000; cp <= 0xf8ff; cp++) {
+		const ch = String.fromCharCode(cp);
+		if (text.includes(ch)) continue;
+		if (open === undefined) open = ch;
+		else return [open, ch];
+	}
+	for (let cp = 0xf0000; cp <= 0x10fffd; cp++) {
+		const ch = String.fromCodePoint(cp);
+		if (text.includes(ch)) continue;
+		if (open === undefined) open = ch;
+		else return [open, ch];
+	}
+	throw new Error("unreachable");
+}
+
 function convertPlain(text: string): string {
-	return (
-		text
-			// Slack special mentions (`<!here>`, `<!channel|@channel>`, `<!subteam^ID>`) become their bare word: Discord
-			// would ping `@here`/`@everyone`, and nothing the core writes means to.
-			.replace(/<!([a-z]{1,30})[^>]{0,200}>/g, "$1")
-			.replace(/<#([0-9]+)\|[^>]{0,200}>/g, "<#$1>")
-			// The label may not contain `[]()`: a label with `](` in it would move the link target into the label's own URL.
-			.replace(/<((?:https?|mailto):[^|>\s]{1,512})\|([^>[\]()]{1,500})>/g, (_, u: string, t: string) => `[${t}](${u})`)
-			.replace(/<((?:https?|mailto):[^|>\s]{1,512})>/g, "$1")
-			// A `\*` / `\~` (`escapeDiscordMarkdown`) is a literal character, never a delimiter.
-			.replace(/(^|[^\w*\\])\*(?=\S)([^*\n]+?)(?<=[^\s\\])\*(?![\w*])/g, "$1**$2**")
-			.replace(/(^|[^\w~\\])~(?=\S)([^~\n]+?)(?<=[^\s\\])~(?![\w~])/g, "$1~~$2~~")
-			// Slack's `&`/`<`/`>` escapes, undone last so a literal `<` never reads as a Slack token above.
-			.replace(/&lt;(?=[@#!])/g, "\\<")
-			.replace(/&lt;/g, "<")
-			.replace(/&gt;/g, ">")
-			.replace(/&amp;/g, "&")
-	);
+	const urls: string[] = [];
+	let markers: [string, string] | undefined;
+	const stash = (url: string): string => {
+		markers ??= pickMarkers(text);
+		const idx = urls.length;
+		urls.push(url);
+		return `${markers[0]}${idx}${markers[1]}`;
+	};
+	let out = text
+		// `here`/`channel`/`everyone` stay bare words so Discord never pings; other tokens (`subteam`, `date`, …) keep
+		// their non-empty label unless it starts with `@here`/`@everyone`.
+		.replace(/<!([a-z]{1,30})(?:[^|>]{0,200}(?:\|([^>]{0,200}))?)?>/g, (_, word: string, label?: string) => {
+			if (BARE_SPECIAL_MENTIONS.has(word)) return word;
+			const trimmed = label?.trim() ?? "";
+			return trimmed !== "" && !trimmed.startsWith("@here") && !trimmed.startsWith("@everyone") ? trimmed : word;
+		})
+		.replace(/<#([0-9]+)\|[^>]{0,200}>/g, "<#$1>")
+		// The label may not contain `[]()`: a label with `](` in it would move the link target into the label's own URL.
+		.replace(
+			/<((?:https?|mailto):[^|>\s]{1,512})\|([^>[\]()]{1,500})>/g,
+			(_, u: string, t: string) => `[${t}](${stash(u)})`,
+		)
+		.replace(/<((?:https?|mailto):[^|>\s]{1,512})>/g, (_, u: string) => stash(u))
+		.replace(/(?:https?|mailto):(?:[^\s<>()[\]]|\([^\s<>()]*\))+/g, (u: string, offset: number, src: string) => {
+			const prev = offset > 0 ? src[offset - 1] : "";
+			if ((prev === "*" || prev === "~") && u.endsWith(prev) && u.length > 1) {
+				return `${stash(u.slice(0, -1))}${prev}`;
+			}
+			return stash(u);
+		})
+		// A `\*` / `\~` (`escapeDiscordMarkdown`) is a literal character, never a delimiter.
+		.replace(/(^|[^\w*\\])\*(?=\S)([^*\n]+?)(?<=[^\s\\])\*(?![\w*])/g, "$1**$2**")
+		.replace(/(^|[^\w~\\])~(?=\S)([^~\n]+?)(?<=[^\s\\])~(?![\w~])/g, "$1~~$2~~");
+	if (markers !== undefined) {
+		const [open, close] = markers;
+		out = out.replace(new RegExp(`${open}(\\d+)${close}`, "g"), (_, i: string) => urls[Number(i)] ?? "");
+	}
+	// Slack's `&`/`<`/`>` escapes, undone last so a literal `<` never reads as a Slack token above.
+	return out
+		.replace(/&lt;(?=[@#!])/g, "\\<")
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&amp;/g, "&");
 }
 
 /**

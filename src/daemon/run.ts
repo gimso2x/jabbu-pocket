@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, writeSync } from "node:fs";
+import { lstatSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
 import { type JabbuConfig, readDiscordToken } from "../config";
@@ -13,6 +13,7 @@ import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
+import { readRegularText, writeAtomic0600 } from "../ops/stamp";
 import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
@@ -64,9 +65,10 @@ function discordBindings(config: JabbuConfig, env: Record<string, string | undef
 						...(discord.displayName === undefined ? {} : { displayName: discord.displayName }),
 						onLifecycle: (event) => {
 							if (event.type === "connected") log.info("discord_gateway_connected", { detail: event.detail });
-							else if (event.type === "reconnecting")
-								log.warn("discord_gateway_reconnecting", { reason: event.detail });
-							else log.warn("discord_gateway_error", { error: event.detail });
+							if (event.type === "reconnecting") log.warn("discord_gateway_reconnecting", { reason: event.detail });
+							if (event.type === "display_name_failed")
+								log.warn("discord_display_name_failed", { error: event.detail });
+							if (event.type === "error") log.warn("discord_gateway_error", { error: event.detail });
 						},
 						onFatal: (error) => log.error("discord_gateway_fatal", { code: error.code, error: error.message }),
 					},
@@ -86,19 +88,21 @@ export function channelBindings(
 }
 
 /** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */
-async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
+export async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
 	const version = await readVersion([config.ompExecutable, "--version"]);
 	const recorded = join(config.homeDir, "omp-version");
 	let previous: string | undefined;
 	try {
-		previous = readFileSync(recorded, "utf8").trim();
+		if (lstatSync(recorded, { throwIfNoEntry: false })?.isFile() === true) previous = readRegularText(recorded).trim();
 	} catch {
-		previous = undefined;
+		/* unreadable or non-regular */
 	}
-	if (previous !== undefined && previous !== version) {
-		log.warn("omp_version_changed", { from: previous, to: version });
+	if (previous !== undefined && previous !== version) log.warn("omp_version_changed", { from: previous, to: version });
+	try {
+		writeAtomic0600(recorded, `${version}\n`);
+	} catch (error) {
+		log.warn("omp_version_write_failed", { path: recorded, error: String(error) });
 	}
-	writeFileSync(recorded, `${version}\n`, { mode: 0o600 });
 	return version;
 }
 
@@ -141,22 +145,18 @@ export async function runDaemon(
 	try {
 		({ sink: logFile, path: logPath } = openLogSink(config.homeDir));
 	} catch (error) {
-		if (error instanceof LogDirError) {
-			process.stderr.write(`jabbu-pocket daemon: refusing to start: ${error.message}\n`);
-			return 1;
-		}
-		throw error;
+		if (!(error instanceof LogDirError)) throw error;
+		process.stderr.write(`jabbu-pocket daemon: refusing to start: ${error.message}\n`);
+		return 1;
 	}
 	const lockPath = join(config.homeDir, "jabbu.lock");
 	let lock: Lock;
 	try {
 		lock = acquireLock(lockPath);
 	} catch (error) {
-		if (error instanceof LockHeldError) {
-			process.stderr.write(`${error.message}\n`);
-			return 1;
-		}
-		throw error;
+		if (!(error instanceof LockHeldError)) throw error;
+		process.stderr.write(`${error.message}\n`);
+		return 1;
 	}
 
 	const clock = { now: () => Date.now() };

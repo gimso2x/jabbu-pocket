@@ -625,6 +625,26 @@ describe("peer bots", () => {
 		]);
 	});
 
+	test("setChannelPolicy takes guildIds·mentionFreeChannels·requireMention for the next inbound", async () => {
+		const made = await adapter({ guildIds: [OTHER_GUILD] });
+		await transport.emitMessage(message("멘션 없이"));
+		expect(inbound).toHaveLength(0); // the started guildIds drop it before addressing
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [CH], requireMention: true });
+		const root = message("멘션프리");
+		await transport.emitMessage(root);
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리"]); // the guild is taken and the channel mention-free
+		// Both keys back to their strict values: the root and the known thread it opened are no longer addressed.
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [], requireMention: true });
+		await transport.emitMessage(message("멘션 없이 둘"));
+		await transport.emitMessage(message("스레드 안 멘션 없이", { channel_id: root.id }));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리"]);
+		expect(logs.filter((line) => line.includes("reason=not_addressed"))).toHaveLength(2);
+		// requireMention off: the same known thread takes an unmentioned reply again.
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [], requireMention: false });
+		await transport.emitMessage(message("스레드 안 둘", { channel_id: root.id }));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리", "스레드 안 둘"]);
+	});
+
 	test("peer_hop_cap: the first drop alone posts PEER_HOP_NOTICE, as a reply to the root, without a bot mention", async () => {
 		let notice = true;
 		await peerAdapter(() => {
@@ -1628,5 +1648,33 @@ describe("inline reply channels (channels.discord.inlineReplyChannels)", () => {
 		await transport.emitMessage(message(`<@${BOT}> 스레드에서`, { channel_id: root.id }));
 		expect(inbound.at(-1)?.originKey).toBe(`discord/ch/${CH}/t/${root.id}`);
 		expect(lookups(root.id)).toHaveLength(0);
+	});
+
+	test("recovery reads a thread opened from a marked body root as a server thread, not a DM", async () => {
+		const root = message(`<@${BOT}> 질문`);
+		const cursors = new Map<string, string>([[`dc:${root.id}`, "1"]]);
+		const made = await adapter({
+			...inlineOptions(),
+			recovery: {
+				cursors: {
+					getCursor: (key) => cursors.get(key),
+					setCursor: (key, value) => void cursors.set(key, value),
+					deleteCursor: (key) => void cursors.delete(key),
+				},
+				targets: () => [{ channelId: root.id, dm: false }],
+			},
+		});
+		// After a restart the root is marked again (cached with no server) before its thread, which shares its id.
+		await transport.emitMessage(root);
+		transport.setChannel({ id: root.id, type: 11, parentId: CH, guildId: GUILD });
+		const missed = message(`<@${BOT}> 스레드에서 놓친 말`, { channel_id: root.id, guild_id: undefined });
+		transport.history.set(root.id, [missed]);
+		made.recover();
+		await made.recoveryIdle();
+		expect(inbound.at(-1)).toMatchObject({
+			platformMessageId: `${CH}:${missed.id}`,
+			originKey: `discord/ch/${CH}/t/${root.id}`,
+		});
+		expect(inbound.some((m) => m.originKey.startsWith("discord/dm/"))).toBe(false);
 	});
 });

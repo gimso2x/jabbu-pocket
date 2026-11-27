@@ -31,9 +31,10 @@ function prune(dir: string, cutoff: number, skip: string): number {
 	let removed = 0;
 	for (const entry of entries) {
 		const child = join(dir, entry.name);
+		if (child === skip) continue;
 		try {
 			if (entry.isDirectory()) {
-				removed += child === skip ? 0 : pruneDirectory(child, cutoff, skip);
+				removed += pruneDirectory(child, cutoff, skip);
 			} else if ((entry.isFile() || entry.isSymbolicLink()) && lstatSync(child).mtimeMs < cutoff) {
 				unlinkSync(child);
 				removed += 1;

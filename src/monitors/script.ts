@@ -1,6 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { createHash, type Hash } from "node:crypto";
+import { createHash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import { killTree } from "../core/terminate-tree";
+import { LastLineTracker, trimmedHash } from "./script-stream";
 import { resolveScript, SCRIPT_TIMEOUT_MS } from "./spec";
+
+export { trimmedHash } from "./script-stream";
 
 /** The payload handed to the agent is cut to this many chars (the script is not killed for it). */
 export const MAX_SCRIPT_OUTPUT_CHARS = 8000;
@@ -52,7 +57,7 @@ function notRun(error: string): ScriptResult {
 /**
  * Runs a watch script once. The command is re-checked against the scripts root on every run (a symlink swapped
  * after `add` must not escape), it gets a minimal environment (`PATH`, `LANG`, `HOME`, `JABBU_HOME` = `homeDir`,
- * `JABBU_MONITOR_ID`), and the whole process group is killed on timeout or when `signal` aborts.
+ * `JABBU_MONITOR_ID`), and the whole process tree is killed on timeout or when `signal` aborts.
  */
 export async function runScript(
 	command: readonly string[],
@@ -91,22 +96,27 @@ export async function runScript(
 		// spawn throws synchronously for what it cannot take (a NUL byte in an argument): a run that did not happen.
 		return notRun(error instanceof Error ? error.message : String(error));
 	}
-	// stdout: the head (payload) up to the collect bound, then a rolling tail (last line); the hash takes every chunk.
+	// stdout: head (up to 4 MiB for payload), LastLineTracker (whole stream's actual last non-empty line), and raw-byte hash.
 	let head = "";
-	let tail: string | undefined;
-	/** The rolling tail dropped its oldest chars, so its first line is a fragment whatever the head ended with. */
-	let tailCut = false;
+	let headOverflow = false;
 	const hash = trimmedHash();
-	child.stdout?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk: string) => {
-		hash.update(chunk);
+	const stdoutDecoder = new StringDecoder("utf8");
+	const lastLine = new LastLineTracker(SCRIPT_TAIL_CHARS);
+	const pushStdoutText = (text: string): void => {
+		if (text === "") return;
+		lastLine.update(text);
+		if (headOverflow) return;
 		const room = MAX_SCRIPT_COLLECT_CHARS - head.length;
-		if (room > 0) head += chunk.slice(0, room);
-		if (chunk.length > room) {
-			const joined = `${tail ?? ""}${chunk.slice(Math.max(room, 0))}`;
-			if (joined.length > SCRIPT_TAIL_CHARS) tailCut = true;
-			tail = joined.slice(-SCRIPT_TAIL_CHARS);
+		if (text.length <= room) {
+			head += text;
+		} else {
+			if (room > 0) head += text.slice(0, room);
+			headOverflow = true;
 		}
+	};
+	child.stdout?.on("data", (chunk: Buffer) => {
+		hash.update(chunk);
+		pushStdoutText(stdoutDecoder.write(chunk));
 	});
 	// Only the last `MAX_SCRIPT_STDERR_TAIL_CHARS` chars reach the log: a rolling tail is enough.
 	let stderr = "";
@@ -130,11 +140,7 @@ export async function runScript(
 		child.once("close", () => clearTimeout(drain));
 	});
 	const killGroup = () => {
-		try {
-			if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
-		} catch {
-			child.kill("SIGKILL");
-		}
+		if (child.pid !== undefined) killTree(child.pid, "SIGKILL");
 	};
 	let timedOut = false;
 	const timer = setTimeout(() => {
@@ -156,63 +162,23 @@ export async function runScript(
 	if (spawnError !== undefined) {
 		return notRun(spawnError);
 	}
-	// Hash and wake gate come from the whole output; only the payload handed to the agent is cut. Past the collect
-	// bound the text is the head plus the tail's whole lines (its first line is cut off at the tail's start), unless
-	// the head ended exactly at a line end and the tail is the untouched rest: then every tail line is whole.
-	const headEndsLine = head.endsWith("\n");
-	const tailWhole = headEndsLine && !tailCut;
-	const newline = tail?.indexOf("\n") ?? -1;
-	const lastLines = tail === undefined ? "" : tailWhole ? tail : newline === -1 ? undefined : tail.slice(newline + 1);
-	const full =
-		tail === undefined ? head.trim() : `${head.trimStart()}${headEndsLine ? "" : "\n"}${(lastLines ?? tail).trimEnd()}`;
+	pushStdoutText(stdoutDecoder.end());
+	const last = lastLine.finish();
+	const headTrimmed = head.trim();
+	const stdout = !headOverflow
+		? capPayload(headTrimmed)
+		: headTrimmed === ""
+			? capPayload(last.line)
+			: capPayload(`${headTrimmed.slice(0, MAX_SCRIPT_OUTPUT_CHARS)}${TRUNCATION_MARK}${last.line}`);
 	return {
 		fired: !timedOut && !aborted && code === 0,
 		exitCode: code,
 		timedOut,
 		...(aborted ? { aborted } : {}),
-		stdout: capPayload(full),
+		stdout,
 		stderr: tailOf(stderr.trim()),
 		outputHash: hash.digest(),
-		// A tail without a newline is the middle of one line longer than the tail: not the gate line.
-		wakeOff: lastLines !== undefined && isWakeGateOff(full),
-	};
-}
-
-/**
- * sha256 of the stream's `trim()`med text, fed chunk by chunk: leading whitespace is skipped, trailing whitespace is
- * not part of the digest (JS `trim` and `\s` strip the same characters). Trailing whitespace goes into a forked copy of
- * the hash state instead of a pending string, so a huge whitespace run costs no memory; text that follows it adopts
- * the fork, text that never comes leaves `sha` as it was.
- */
-export function trimmedHash(): { update(chunk: string): void; digest(): string } {
-	let sha = createHash("sha256");
-	let started = false;
-	/** `sha` plus the whitespace seen since the last non-whitespace character; undefined when there is none. */
-	let ahead: Hash | undefined;
-	return {
-		update(chunk) {
-			const text = started ? chunk : chunk.replace(/^\s+/, "");
-			if (text === "") return;
-			started = true;
-			// Only the new chunk is scanned backwards (a whitespace run is never rescanned: that was quadratic).
-			let end = text.length;
-			while (end > 0 && /\s/.test(text[end - 1] as string)) end -= 1;
-			if (end === 0) {
-				ahead ??= sha.copy();
-				ahead.update(text);
-				return;
-			}
-			if (ahead !== undefined) {
-				sha = ahead;
-				ahead = undefined;
-			}
-			sha.update(text.slice(0, end));
-			if (end < text.length) {
-				ahead = sha.copy();
-				ahead.update(text.slice(end));
-			}
-		},
-		digest: () => sha.digest("hex"),
+		wakeOff: !last.overflow && isWakeGateOff(last.line),
 	};
 }
 

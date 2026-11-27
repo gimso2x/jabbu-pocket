@@ -108,12 +108,8 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 	const retryDelayMs = args.retryDelayMs ?? 0;
 	const { hostAllowed } = args;
 
-	let url: URL;
-	try {
-		url = new URL(args.url);
-	} catch {
-		return { ok: false, error: "invalid_url" };
-	}
+	if (!URL.canParse(args.url)) return { ok: false, error: "invalid_url" };
+	const url = new URL(args.url);
 	if (url.protocol !== "https:" || !hostAllowed(url)) return { ok: false, error: "host_not_allowed" };
 
 	const destDir = dirname(args.destPath);
@@ -138,6 +134,7 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 				const location = response.headers.get("location");
 				if (response.status >= 300 && response.status < 400 && location) {
 					await response.body?.cancel();
+					if (!URL.canParse(location, current.href)) return await cleanup("invalid_redirect_url");
 					current = new URL(location, current);
 					continue;
 				}

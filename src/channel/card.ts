@@ -3,7 +3,8 @@ import { CardSpecError, standardComponentDefinitions, toCard } from "@json-rende
 import type { CardChild, CardElement } from "chat";
 import { isRecord } from "../omp/type-guards";
 import { graphIssues, reservedIds } from "./card-graph";
-import { type ColumnAlign, displayWidth, fenceCloseRun, fenceOpenRun } from "./text";
+import { type FenceMark, fenceCloses, fenceOpen } from "./fence";
+import { type ColumnAlign, displayWidth } from "./text";
 
 export type { CardElement } from "chat";
 
@@ -32,29 +33,27 @@ export type CardSegment =
 	| { kind: "card"; json: string; raw: string }
 	| { kind: "copy"; text: string; raw: string };
 
-const CLOSING_FENCE = /^```\s*$/;
-
 /** Cuts `body` at ` ```card ` and ` ```copy ` fences (joining segments with "\n" preserves `body` byte for byte). */
 export function splitCards(body: string): CardSegment[] {
 	const lines = body.split("\n");
 	const segments: CardSegment[] = [];
 	let text: string[] = [];
-	/** Backtick run of the open fence (0 = none): only a run at least as long closes it, so ```` may quote ```. */
-	let fenceRun = 0;
+	/** Open fence mark (undefined = none): only same char of at least `len` closes it. */
+	let fence: FenceMark | undefined;
 	let cards = 0;
 	let noClose = false;
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i] ?? "";
-		if (fenceRun > 0) {
+		if (fence !== undefined) {
 			text.push(line);
-			if ((fenceCloseRun(line) ?? 0) >= fenceRun) fenceRun = 0;
+			if (fenceCloses(line, fence)) fence = undefined;
 			continue;
 		}
 		const opens = /^```(card|copy)\s*$/.exec(line)?.[1];
 		if (!noClose && opens !== undefined && (opens === "copy" || cards < MAX_CARDS)) {
 			let close = -1;
 			for (let j = i + 1; j < lines.length; j++) {
-				if (CLOSING_FENCE.test(lines[j] ?? "")) {
+				if (/^```\s*$/.test(lines[j] ?? "")) {
 					close = j;
 					break;
 				}
@@ -76,7 +75,7 @@ export function splitCards(body: string): CardSegment[] {
 				continue;
 			}
 		}
-		fenceRun = fenceOpenRun(line) ?? 0;
+		fence = fenceOpen(line);
 		text.push(line);
 	}
 	if (text.length > 0) segments.push({ kind: "text", text: text.join("\n") });

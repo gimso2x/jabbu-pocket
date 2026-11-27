@@ -59,7 +59,7 @@ export function parseDialogRequest(frame: Record<string, unknown>): OmpDialogReq
 	const withTimeout = timeout === undefined ? {} : { timeout };
 	switch (frame.method) {
 		case "select":
-			if (typeof title !== "string" || !Array.isArray(frame.options)) return undefined;
+			if (typeof title !== "string" || !Array.isArray(frame.options) || frame.options.length === 0) return undefined;
 			if (!frame.options.every((option) => typeof option === "string")) return undefined;
 			return {
 				method: "select",

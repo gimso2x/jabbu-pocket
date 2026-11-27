@@ -86,7 +86,79 @@ export function countIncident(
 	})();
 }
 
-/** Marks the key's open incidents resolved, so the same condition re-alerts when it comes back. */
-export function resolveIncidents(db: Database, table: IncidentTable, key: string): void {
-	db.query(`UPDATE ${table} SET status = 'resolved' WHERE ${KEY_COLUMN[table]} = ? AND status = 'alerted'`).run(key);
+/**
+ * Marks the key's open incidents resolved, so the same condition re-alerts when it comes back. `last_at` moves to
+ * `now`, so a resolution lists at its own time in the recent-incident view.
+ */
+export function resolveIncidents(db: Database, table: IncidentTable, key: string, now: number): void {
+	db.query(
+		`UPDATE ${table} SET status = 'resolved', last_at = ? WHERE ${KEY_COLUMN[table]} = ? AND status = 'alerted'`,
+	).run(now, key);
+}
+
+/** One incident row as the `#ops` panel reads it: the key (alert scope or monitor id) plus its counters. */
+interface IncidentRow {
+	key: string;
+	status: "alerted" | "resolved";
+	count: number;
+	lastAt: number;
+}
+
+/** The newest `limit` rows of `table` by `last_at` (the panel's recent list), or only the open ones. */
+function readIncidentRows(
+	db: Database,
+	table: IncidentTable,
+	options: { limit?: number; openOnly?: boolean },
+): IncidentRow[] {
+	const where = options.openOnly === true ? "WHERE status = 'alerted'" : "";
+	const limit = options.limit === undefined ? "" : `LIMIT ${Math.max(0, Math.trunc(options.limit))}`;
+	const rows = db
+		.query(
+			`SELECT ${KEY_COLUMN[table]} AS key, status, count, last_at FROM ${table} ${where} ORDER BY last_at DESC, incident_id DESC ${limit}`,
+		)
+		.all() as Array<{ key: string; status: "alerted" | "resolved"; count: number; last_at: number }>;
+	return rows.map((r) => ({ key: r.key, status: r.status, count: r.count, lastAt: r.last_at }));
+}
+
+/**
+ * The `#ops` panel's incident view. `monitors`: enabled count and the monitors with open incidents (one entry per
+ * monitor, counts summed over its signatures, a deleted monitor keeps its id as name). `recent`: the newest rows of
+ * both tables (any status, one per scope; monitor rows are `monitor:<name>`), newest first.
+ */
+export function readOpsIncidents(
+	db: Database,
+	limit: number,
+): {
+	monitors: { total: number; failing: Array<{ name: string; count: number; lastAt: number }> };
+	recent: Array<{ scope: string; status: "alerted" | "resolved"; lastAt: number }>;
+} {
+	const monitors = db.query("SELECT id, name, enabled FROM monitors").all() as Array<{
+		id: string;
+		name: string;
+		enabled: number;
+	}>;
+	const nameOf = (id: string): string => monitors.find((m) => m.id === id)?.name ?? id;
+	const failing = new Map<string, { name: string; count: number; lastAt: number }>();
+	for (const row of readIncidentRows(db, "monitor_incidents", { openOnly: true })) {
+		const entry = failing.get(row.key) ?? { name: nameOf(row.key), count: 0, lastAt: 0 };
+		entry.count += row.count;
+		entry.lastAt = Math.max(entry.lastAt, row.lastAt);
+		failing.set(row.key, entry);
+	}
+	const rows = [
+		...readIncidentRows(db, "alert_incidents", { limit }),
+		...readIncidentRows(db, "monitor_incidents", { limit }).map((r) => ({ ...r, key: `monitor:${nameOf(r.key)}` })),
+	].sort((a, b) => b.lastAt - a.lastAt);
+	const seen = new Set<string>();
+	const recent = rows
+		.filter((r) => !seen.has(r.key) && seen.add(r.key))
+		.slice(0, limit)
+		.map((r) => ({ scope: r.key, status: r.status, lastAt: r.lastAt }));
+	return {
+		monitors: {
+			total: monitors.filter((m) => m.enabled === 1).length,
+			failing: [...failing.values()].sort((a, b) => b.lastAt - a.lastAt),
+		},
+		recent,
+	};
 }

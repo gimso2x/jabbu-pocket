@@ -4,10 +4,10 @@ import { callDaemon } from "../daemon/ipc";
 import { RestoreError, runRestore } from "../ops/restore";
 
 export const RESTORE_USAGE = `  restore <backup-db-path> [--yes]
-                                 replace jabbu.db with a backup while the daemon is stopped: copy → quick_check → current
-                                 db/-wal/-shm move to backups/pre-restore-<stamp>/ → rename. Source: backups/jabbu-
-                                 YYYYMMDD-HHMMSS.db or an absolute file. Without --yes only prints the plan (exit 3);
-                                 refuses (exit 1) while a daemon runs
+                                 replace jabbu.db with a backup while the daemon is stopped: copy → quick_check →
+                                 migration check → current db/-wal/-shm move to backups/pre-restore-<stamp>/ → rename.
+                                 Source: backups/jabbu-YYYYMMDD-HHMMSS.db or an absolute file. Without --yes only
+                                 prints the plan (exit 3); refuses (exit 1) while a daemon runs
 `;
 
 /** `jabbu-pocket restore`; resolves with the exit code. */

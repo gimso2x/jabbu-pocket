@@ -11,6 +11,7 @@ import {
 	renderTurnBotFilters,
 } from "./ops-renderers";
 import { renderHerdrAgentsBlock, renderHostChecksCard } from "./ops-views";
+import * as p0 from "./p0-renderers";
 import type { DashboardSnapshot, JobInfo, MonitorInfo } from "./snapshot";
 import {
 	APPROVAL_OUTCOMES,
@@ -390,23 +391,22 @@ export function renderDashboardMain(
 		// Without a live board, the `herdr agent list` of every host stays visible under the inbox.
 		const agents = live !== undefined ? "" : renderHerdrAgentsBlock(s.herdr, head, badge, state);
 		// The head's 확인 필요 is the 내 차례 rows, the same number as the tab title.
+		const closedInfo = closed.map((t) => ({
+			taskId: t.taskId,
+			title: t.title,
+			statusLabel: STATES[t.status]?.[0] ?? t.status,
+			closedAt: at(t.closedAt),
+		}));
 		const pulse = !idleInbox
 			? ""
-			: renderInboxPulse(
-					s,
-					closed.map((t) => ({
-						taskId: t.taskId,
-						title: t.title,
-						statusLabel: STATES[t.status]?.[0] ?? t.status,
-						closedAt: at(t.closedAt),
-					})),
-					badge,
-					ago,
-					at,
-					(scope) => alertText(scope).title,
-				);
+			: renderInboxPulse(s, closedInfo, badge, ago, at, (scope) => alertText(scope).title, dur);
+		const showExtra = q === "" && !staleOn;
+		const activeBlock = !idleInbox && showExtra ? p0.renderActiveTurnsSection(s, ago, dur, badge) : "";
+		const quotaBlock = showExtra ? p0.renderQuotaSection(s.usageLimits, clock) : "";
+		const rail = showExtra ? p0.renderLiveRail(s, ago) : "";
 		const top = `${head("에이전트 인박스", undefined, `<span class="view-sum">확인 필요 <b>${attention.length}</b></span>${staleHead}${machines}${viewTools}`)}${banners.join("")}${nextLine()}`;
-		return `${top}${hits === 0 ? nothing : ""}${idleInbox ? pulse : groupSum}<div class="groups${idleInbox ? " is-idle-inbox" : ""}">${columns}</div>${agents}`;
+		const bodyInner = `${hits === 0 ? nothing : ""}${idleInbox ? pulse : groupSum}${activeBlock}<div class="groups${idleInbox ? " is-idle-inbox" : ""}">${columns}</div>${quotaBlock}${agents}`;
+		return `${top}${rail === "" ? bodyInner : `<div class="dash-home has-rail"><div class="dash-main">${bodyInner}</div>${rail}</div>`}`;
 	};
 
 	const SORTS: Array<[string, string]> = [
@@ -549,23 +549,10 @@ export function renderDashboardMain(
 				: "";
 			// One card per conversation (chat thread = omp session), laid out like the inbox.
 			const bot = ui.bot ?? "";
+			const botOk = (t: (typeof turns.threads)[number]) =>
+				bot === "" || (bot === "own" ? !t.install : bot === "attention" ? t.column === "attention" : t.install === bot);
 			const threads = turns.threads.filter(
-				(thread) =>
-					(bot === ""
-						? true
-						: bot === "own"
-							? thread.install === undefined
-							: bot === "attention"
-								? thread.column === "attention"
-								: thread.install === bot) &&
-					hit(
-						thread.title,
-						thread.latest.preview,
-						thread.originKey,
-						thread.threadRef,
-						thread.install,
-						...(thread.jobs ?? []),
-					),
+				(t) => botOk(t) && hit(t.title, t.latest.preview, t.originKey, t.threadRef, t.install, ...(t.jobs ?? [])),
 			);
 			const openThreads = turns.threads.filter((thread) => thread.column === "working").length;
 			// Every number in the head says what it counts: open threads match the 진행 중 column, jobs link to their block.
@@ -644,6 +631,10 @@ export function renderDashboardMain(
 					.join(" · ");
 				// One open turn is already the state badge; more rows say whether they are one run or a queue.
 				const meta = [`턴 ${thread.turnCount}`, ...(thread.openCount > 1 ? [openTurnsText(thread)] : [])];
+				const ratioChip =
+					thread.column !== "done" && thread.context && !thread.context.tokensOnly
+						? `<small class="ctx-ratio">${esc(p0.fmtContextRatio(thread.context))}</small>`
+						: "";
 				return `<article class="card card-thread${isSel(key) ? " is-selected" : ""}"${agyTitle(key)} data-state="${esc(
 					`${thread.column}:${latest.state}`,
 				)}" data-row="${esc(key)}"><a class="card-link" data-row-link ${threadLink(key)}${
@@ -656,7 +647,9 @@ export function renderDashboardMain(
 					thread,
 				)}</span><span class="card-time">${ago(msOf(thread.updatedAt))}</span><span class="card-meta">${meta
 					.map((part) => `<span>${esc(part)}</span>`)
-					.join("")}${modelChip(thread.model)}${contextBar(thread.context, thread.column)}</span></div></article>`;
+					.join(
+						"",
+					)}${modelChip(thread.model)}${contextBar(thread.context, thread.column)}${ratioChip}</span></div></article>`;
 			};
 			const botFilters = renderTurnBotFilters(turns.threads, bot);
 			const lead = `${banners.join("")}${drainLine}${botFilters}${
@@ -1181,6 +1174,8 @@ export function renderDashboardMain(
 		}
 
 		if (s.costLedger) pushCard("cost", "7일 비용", s.costLedger.ok ? "ok" : "warn", costCardBody(s.costLedger));
+		if (s.hostMetrics) p0.renderHostMetricsCard(s.hostMetrics, note, pushCard);
+		if (s.usageLimits) p0.renderQuotaSysCard(s.usageLimits, clock, pushCard);
 
 		const gates = s.gates;
 		if (!gates.ok) pushCard("gates", "게이트", "bad", note(`게이트를 읽지 못했어요: ${gates.error}`), true);

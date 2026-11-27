@@ -11,6 +11,7 @@ import { openTaskLedger, TASK_STATUSES, TaskLedger, TaskTransitionError } from "
 import { migrateTaskSchema, TASK_SCHEMA, type TaskLandRecord } from "../src/tasks/ledger-schema";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { killSpawned, runMain } from "./helpers/daemon-process";
+import { unquoteRemote } from "./helpers/ssh-words";
 
 const base = {
 	title: "로그 정리",
@@ -30,6 +31,20 @@ function ledgerAt(now: { ms: number }): TaskLedger {
 }
 
 describe("TaskLedger", () => {
+	test("AC-1/AC-2: idStart sets the day's first number; an existing larger maximum wins; none keeps -01", () => {
+		const now = { ms: Date.parse("2026-10-26T01:00:00Z") };
+		const ledger = ledgerAt(now);
+		expect([101, 101].map((idStart) => ledger.register({ ...base, idStart }).taskId)).toEqual([
+			"T-20261026-101",
+			"T-20261026-102",
+		]);
+		expect(ledger.register({ ...base, idStart: 50 }).taskId).toBe("T-20261026-103");
+		expect(ledger.register({ ...base, idStart: 5 }).taskId).toBe("T-20261026-104");
+		now.ms = Date.parse("2026-10-26T15:00:00Z");
+		expect(ledger.register(base).taskId).toBe("T-20261027-01");
+		expect(ledger.register({ ...base, idStart: undefined }).taskId).toBe("T-20261027-02");
+	});
+
 	test("ids count per KST day and derive worktree, branch and agent", () => {
 		const now = { ms: Date.parse("2026-10-26T01:00:00Z") };
 		const ledger = ledgerAt(now);
@@ -425,7 +440,9 @@ const OLD_ROW = `INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref
 describe("host ops (fake runner)", () => {
 	function recorder(respond: (cmd: string[]) => { code: number | null; stdout?: string; timedOut?: boolean }) {
 		const commands: string[][] = [];
-		const run: ProcessRunner = async (cmd) => {
+		const run: ProcessRunner = async (raw) => {
+			// Every ssh word is single-quoted for the remote shell; the commands are kept as that shell reads them.
+			const cmd = raw.map(unquoteRemote);
 			commands.push(cmd);
 			const result = respond(cmd);
 			return { code: result.code, stdout: result.stdout ?? "", timedOut: result.timedOut ?? false };
@@ -480,7 +497,7 @@ describe("host ops (fake runner)", () => {
 	});
 
 	test("remote: ssh command lines for worktree add, existence, write and read", async () => {
-		const { commands, run } = recorder(() => ({ code: 0, stdout: "ok" }));
+		const { commands, run } = recorder((cmd) => ({ code: 0, stdout: cmd.includes("rev-parse") ? `${BASE}\n` : "ok" }));
 		const ops = createTaskHostOps({ sshTarget: "wsl", run });
 		await ops.createWorktree({ repo: "/r/repo", worktree: "/r/repo-t-20261026-01", branch: "task/T-20261026-01" });
 		await ops.pathExists("/r/repo-t-20261026-01");
@@ -488,31 +505,42 @@ describe("host ops (fake runner)", () => {
 		await ops.readFile("/r/x/spec.md");
 		await ops.removeWorktree({ repo: "/r/repo", worktree: "/r/wt", branch: "task/T-20261026-01" });
 		const ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", "wsl"];
-		expect(commands[0]).toEqual([
+		expect(commands[0]?.slice(7)).toEqual([
+			"git",
+			"-C",
+			"/r/repo",
+			"rev-parse",
+			"--verify",
+			"--quiet",
+			"HEAD^{commit}",
+			"2>&1",
+		]);
+		expect(commands[1]).toEqual([
 			...ssh,
 			"git",
 			"-C",
 			"/r/repo",
 			"worktree",
 			"add",
+			"--no-track",
 			"-b",
 			"task/T-20261026-01",
 			"/r/repo-t-20261026-01",
-			"HEAD",
+			BASE,
 			"2>&1",
 		]);
-		expect(commands[1]).toEqual([...ssh, "test", "-e", "/r/repo-t-20261026-01"]);
-		const write = commands[2]?.at(-2) ?? "";
+		expect(commands[2]).toEqual([...ssh, "test", "-e", "/r/repo-t-20261026-01"]);
+		const write = commands[3]?.at(-2) ?? "";
 		expect(write).toBe(
 			`mkdir -p /r/repo-t-20261026-01/docs/tasks/T && test ! -e /r/repo-t-20261026-01/docs/tasks/T/spec.md && echo ${Buffer.from("안녕").toString("base64")} | base64 -d > /r/repo-t-20261026-01/docs/tasks/T/spec.md`,
 		);
-		expect(commands[3]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
-		expect(commands[4]?.slice(7)).toEqual(["chmod", "-R", "u+w", "--", "/r/wt", "2>&1"]);
-		expect(commands[5]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
-		expect(commands[6]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
+		expect(commands[4]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
+		expect(commands[5]?.slice(7)).toEqual(["chmod", "-R", "u+w", "--", "/r/wt", "2>&1"]);
+		expect(commands[6]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
+		expect(commands[7]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
 	});
 
-	test("remote: the docs commit quotes its fixed message for the remote shell", async () => {
+	test("remote: the docs commit message reaches the remote shell as one word", async () => {
 		const { commands, run } = recorder((cmd) => ({ code: 0, stdout: cmd.includes("rev-parse") ? "abc1234def\n" : "" }));
 		const ops = createTaskHostOps({ sshTarget: "wsl", run });
 		expect(await ops.commitDocs({ worktree: "/r/wt", taskId: "T-20261026-01" })).toEqual({
@@ -528,7 +556,7 @@ describe("host ops (fake runner)", () => {
 				"commit",
 				"-q",
 				"-m",
-				"'docs(task): T-20261026-01 4문서'",
+				"docs(task): T-20261026-01 4문서",
 				"--",
 				"docs/tasks/T-20261026-01",
 				"2>&1",

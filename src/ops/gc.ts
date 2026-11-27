@@ -1,12 +1,12 @@
 import { Database } from "bun:sqlite";
-import { existsSync, lstatSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { isThreadOrigin } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { checkSchemaVersion } from "../store/schema-version";
 import { assertRegularLedger } from "./gates";
-import { gcLaneArtifacts, newestMtimeMs } from "./gc-lanes";
+import { gcLaneArtifacts, measureOriginActivity, prunePreviousEpochs } from "./gc-lanes";
 import * as ledgerGc from "./gc-ledger";
 
 export { LEDGER_RETENTION_DAYS } from "./gc-ledger";
@@ -16,7 +16,6 @@ const REMOVED_PLATFORM_THREAD = /^(slack|teams)\/ch\/[^/]+\/t\/[^/]+$/;
 
 export const DEFAULT_SESSION_RETENTION_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const EPOCH_DIR = /^e([1-9][0-9]*)$/;
 /** Inbound states that keep an origin whole (waiting, in flight or parked as uncertain). */
 const WAITING = "state IN ('pending', 'sending', 'dispatched', 'uncertain')";
 /** Re-checks the waiting rows at delete time: gc runs with foreign_keys off, so a late inbound would lose its origin. */
@@ -36,6 +35,8 @@ export interface GcResult {
 	removed: string[];
 	/** Previous-epoch directories still inside the retention window. */
 	retained: string[];
+	/** Session directories gc could not read or prune (e.g., EACCES): left untouched for the next gc. */
+	sessionsSkipped: string[];
 	/** Thread-session origins (`slack/ch/<C>/t/<R>`) removed whole (directory + ledger row) past retention. */
 	threadOriginsRemoved: string[];
 	/** Origins of deleted monitors (`monitor/<id>` with no row in `monitors`) removed whole past retention. */
@@ -46,15 +47,6 @@ export interface GcResult {
 	laneArtifactsSkipped: string[];
 	/** Finished conversation rows past `LEDGER_RETENTION_DAYS` deleted (counted only on a dry run). */
 	ledgerRemoved: ledgerGc.LedgerRemoved;
-}
-
-/** The real path of an existing path; a path that is not there is only resolved. */
-function realpathOrResolve(path: string): string {
-	try {
-		return realpathSync(path);
-	} catch {
-		return resolve(path);
-	}
 }
 
 /**
@@ -71,6 +63,7 @@ export function gcSessions(options: GcOptions): GcResult {
 	const result: GcResult = {
 		removed: [],
 		retained: [],
+		sessionsSkipped: [],
 		threadOriginsRemoved: [],
 		monitorOriginsRemoved: [],
 		laneArtifactsRemoved: [],
@@ -114,34 +107,15 @@ export function gcSessions(options: GcOptions): GcResult {
 		monitorIds !== undefined &&
 		key.startsWith(MONITOR_ORIGIN_PREFIX) &&
 		!monitorIds.has(key.slice(MONITOR_ORIGIN_PREFIX.length));
-	// Whole-origin activity is measured BEFORE pass 1: pruning an old epoch dir bumps the origin dir's own mtime
-	// to now, which would otherwise make every origin with a pruned epoch look freshly active.
-	const originActivity = new Map<string, number>();
-	for (const origin of origins) {
-		if (!isOrphanMonitor(origin.origin_key) && !expiresWhole(origin.origin_key)) continue;
-		const originDir = dirname(sessionDirFor(sessionsRoot, origin.origin_key, 1));
-		// A missing directory (the row was made, the first turn has not written yet) ages by the row's updated_at.
-		const exists = lstatSync(originDir, { throwIfNoEntry: false }) !== undefined;
-		originActivity.set(origin.origin_key, exists ? newestMtimeMs(originDir) : origin.updated_at);
-	}
-	for (const origin of origins) {
-		const originDir = dirname(sessionDirFor(sessionsRoot, origin.origin_key, 1));
-		// An origin directory that is not a plain directory (a link swapped in) is skipped whole: gc never reaches past it.
-		if (lstatSync(originDir, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
-		for (const name of readdirSync(originDir)) {
-			const epoch = EPOCH_DIR.exec(name)?.[1];
-			if (epoch === undefined || Number(epoch) >= origin.epoch) continue;
-			const path = join(originDir, name);
-			// `/resume-jabbu` can make an older epoch's directory the live one again.
-			// Compared by real path: a symlinked home must not make the live directory look like another one.
-			if (realpathOrResolve(path) === realpathOrResolve(origin.session_dir)) continue;
-			if (!lstatSync(path).isDirectory()) continue;
-			if (newestMtimeMs(path) < cutoff) {
-				if (!options.dryRun) rmSync(path, { recursive: true, force: true });
-				result.removed.push(path);
-			} else result.retained.push(path);
-		}
-	}
+	const skippedOrigins = new Set<string>();
+	const originActivity = measureOriginActivity(
+		origins,
+		sessionsRoot,
+		(key) => isOrphanMonitor(key) || expiresWhole(key),
+		skippedOrigins,
+		result.sessionsSkipped,
+	);
+	prunePreviousEpochs(origins, sessionsRoot, cutoff, options.dryRun, skippedOrigins, result);
 	// The read-only handle is closed before the cleanup pass opens, so the writable short-lived connection
 	// never fights a lock. busy_timeout mirrors the ledger's open options: a turn committing at the same
 	// moment must not fail the gc with an immediate SQLITE_BUSY. Expired origins and `gcLedger` delete rows.
@@ -154,13 +128,20 @@ export function gcSessions(options: GcOptions): GcResult {
 		for (const origin of origins) {
 			const orphanMonitor = isOrphanMonitor(origin.origin_key);
 			if (!orphanMonitor && !expiresWhole(origin.origin_key)) continue;
+			if (skippedOrigins.has(origin.origin_key)) continue;
 			const originDir = dirname(sessionDirFor(sessionsRoot, origin.origin_key, 1));
 			const activity = originActivity.get(origin.origin_key);
 			if (activity !== undefined && activity >= cutoff) {
 				result.retained.push(originDir);
 				continue;
 			}
-			const present = lstatSync(originDir, { throwIfNoEntry: false });
+			let present: ReturnType<typeof lstatSync>;
+			try {
+				present = lstatSync(originDir, { throwIfNoEntry: false });
+			} catch {
+				result.sessionsSkipped.push(originDir);
+				continue;
+			}
 			// Inbound still waiting for a turn keeps its origin whole; a link in place of the directory is never followed.
 			if (waiting.has(origin.origin_key)) {
 				result.retained.push(originDir);
@@ -176,7 +157,12 @@ export function gcSessions(options: GcOptions): GcResult {
 			}
 			(orphanMonitor ? result.monitorOriginsRemoved : result.threadOriginsRemoved).push(origin.origin_key);
 		}
-		result.ledgerRemoved = ledgerGc.gcLedger(write, options);
+		result.ledgerRemoved = ledgerGc.gcLedger(
+			write,
+			options.dryRun
+				? { ...options, removingOrigins: [...result.threadOriginsRemoved, ...result.monitorOriginsRemoved] }
+				: options,
+		);
 	} finally {
 		write.close();
 	}

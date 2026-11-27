@@ -8,6 +8,8 @@ const PROTECTED_HOME_DIRS = [
 	".gnupg",
 	".aws",
 	".omp/agent",
+	".agy-accounts",
+	".gemini",
 	".git-credentials",
 	".netrc",
 	".config/gh",
