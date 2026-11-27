@@ -322,8 +322,10 @@ export function findBun(pathEnv: string, isExecutable: (path: string) => boolean
  * `read-tree -m -u HEAD prev` only touches paths that differ between the two, so unrelated local edits and untracked
  * files survive (and a conflicting local edit makes it refuse instead of overwriting). */
 export function revertCommandFor(repoDir: string, prev: string): string {
+	// The owner pastes this into a shell: a checkout path with a space or a shell character goes out single-quoted.
+	const dir = /^[\w/.,:@+=-]+$/.test(repoDir) ? repoDir : `'${repoDir.replaceAll("'", `'\\''`)}'`;
 	// Staged changes would ride along in the revert commit (its tree would no longer be prev's): refuse instead.
-	return `git -C ${repoDir} diff --cached --quiet && git -C ${repoDir} read-tree -m -u HEAD ${prev} && git -C ${repoDir} commit -m "revert: restore tree of ${prev}"`;
+	return `git -C ${dir} diff --cached --quiet && git -C ${dir} read-tree -m -u HEAD ${prev} && git -C ${dir} commit -m "revert: restore tree of ${prev}"`;
 }
 
 const LAST_GOOD_SUFFIX = ".last-good";
