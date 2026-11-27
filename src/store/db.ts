@@ -699,8 +699,7 @@ export class Store {
 
 	/** pending -> dispatched. Records the op_ref and the omp leafId cursor taken just before dispatch. */
 	markDispatched(platformMessageId: string, input: { opRef: string; entryCursor: string | null }): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "dispatched");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "dispatched");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'dispatched', dispatched_at = ?, op_ref = ?, entry_cursor = ? WHERE platform_message_id = ?",
@@ -726,8 +725,7 @@ export class Store {
 
 	/** pending|sending -> uncertain: the input may already have reached the omp child, so nothing replays it until the owner decides. */
 	markUncertain(platformMessageId: string, reason: UncertainReason): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "uncertain");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "uncertain");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'uncertain', uncertain_reason = ?, uncertain_at = ? WHERE platform_message_id = ?",
@@ -755,8 +753,7 @@ export class Store {
 
 	/** pending|dispatched|uncertain -> discarded. With `opRef` the row is re-linked to that op (see `newEpoch`). */
 	discard(platformMessageId: string, opRef?: string): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "discarded");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "discarded");
 		this.db
 			.query("UPDATE inbound SET state = 'discarded', op_ref = COALESCE(?, op_ref) WHERE platform_message_id = ?")
 			.run(opRef ?? null, platformMessageId);
@@ -1809,6 +1806,20 @@ export class Store {
 				.query("UPDATE deliveries SET sent_parts = ?, reply_ts = COALESCE(?, reply_ts) WHERE delivery_id = ?")
 				.run(sentParts, replyTs ?? null, deliveryId);
 			return this.requireDelivery(deliveryId);
+		})();
+	}
+
+	/** Hold + owner notice in one transaction (nested calls run as savepoints): a notice failure leaves the row `inflight`. */
+	markAmbiguousWithNotice(
+		deliveryId: number,
+		error: string,
+		sentParts = 0,
+		replyTs?: string,
+		ownerUserId?: string,
+	): boolean {
+		return this.db.transaction(() => {
+			this.markAmbiguous(deliveryId, error, sentParts, replyTs);
+			return this.noticeAmbiguous(deliveryId, ownerUserId);
 		})();
 	}
 
