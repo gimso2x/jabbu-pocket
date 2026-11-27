@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { acquireLock, currentBootId, LockHeldError } from "../src/daemon/lock";
+import { acquireLock, currentBootId, LockHeldError, pidAlive } from "../src/daemon/lock";
 
 // The stale-lock reclaim is serialized by an exclusive `<lock>.reclaim` barrier.
 
@@ -37,6 +37,111 @@ describe("a directory at the lock path", () => {
 		expect((thrown as LockHeldError).message).toContain(path);
 		expect(statSync(path).isDirectory()).toBe(true);
 	});
+});
+
+describe("staged lock files", () => {
+	test("acquire removes a staged file left by a dead starter, and keeps a live starter's", async () => {
+		const path = join(dir, "jabbu.lock");
+		const probe = Bun.spawn([process.execPath, "--version"], { stdout: "ignore", stderr: "ignore" });
+		await probe.exited;
+		const deadPid = probe.pid;
+		expect(pidAlive(deadPid)).toBe(false);
+		const deadStaged = `${path}.${deadPid}.00000000-0000-4000-8000-000000000000.tmp`;
+		const liveStaged = `${path}.${process.pid}.00000000-0000-4000-8000-000000000001.tmp`;
+		writeFileSync(deadStaged, "{}");
+		writeFileSync(liveStaged, "{}");
+		const lock = acquireLock(path);
+		expect(existsSync(deadStaged)).toBe(false);
+		expect(existsSync(liveStaged)).toBe(true);
+		lock.release();
+		rmSync(liveStaged, { force: true });
+	});
+
+	test.skipIf(process.platform === "win32" || Bun.which("sh") === null)(
+		"a failed staged write leaves no .tmp file behind",
+		async () => {
+			// `ulimit -f 0` makes the staged write fail with EFBIG (SIGXFSZ ignored): the bug left the file.
+			const path = join(dir, "jabbu.lock");
+			const childFile = join(dir, "child.ts");
+			writeFileSync(
+				childFile,
+				[
+					`import { acquireLock } from ${JSON.stringify(resolve(import.meta.dir, "../src/daemon/lock.ts"))};`,
+					`import { readdirSync } from "node:fs";`,
+					"let error = '';",
+					`try { acquireLock(${JSON.stringify(path)}); } catch (e) { error = String(e); }`,
+					`console.log(JSON.stringify({ error, staged: readdirSync(${JSON.stringify(dir)}).filter((n) => n.endsWith(".tmp")) }));`,
+					"",
+				].join("\n"),
+			);
+			const child = Bun.spawn(
+				["sh", "-c", `trap "" XFSZ; ulimit -f 0; exec "${process.execPath}" ${JSON.stringify(childFile)}`],
+				{ stdout: "pipe", stderr: "pipe" },
+			);
+			const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+			await child.exited;
+			expect(err).toBe("");
+			const result = JSON.parse(out) as { error: string; staged: string[] };
+			expect(result.error).toContain("EFBIG");
+			expect(result.staged).toEqual([]);
+		},
+	);
+
+	test.skipIf(process.platform === "win32" || Bun.which("nice") === null)(
+		"three lost races throw LockHeldError, not a bare lock_unavailable",
+		async () => {
+			const path = join(dir, "jabbu.lock");
+			const module = resolve(import.meta.dir, "../src/daemon/lock.ts");
+			// A spoiler that re-plants a stale lock (earlier boot) as fast as it is reclaimed, so every link hits EEXIST.
+			const spoilerCode = `
+			import { existsSync, writeFileSync } from "node:fs";
+			const content = JSON.stringify({ pid: process.pid, bootId: "some-earlier-boot", startedAt: 1 });
+			for (;;) {
+				if (!existsSync(${JSON.stringify(path)})) {
+					try { writeFileSync(${JSON.stringify(path)}, content, { flag: "wx" }); } catch {}
+				}
+			}
+		`;
+			// The acquirer runs niced down: on a small machine the spoiler would otherwise starve mid-race and the
+			// acquirer would win a link. With the spoiler preferred, every attempt loses the race.
+			const acquirerCode = `
+			import { acquireLock } from ${JSON.stringify(module)};
+			import { existsSync } from "node:fs";
+			const started = Date.now();
+			while (!existsSync(${JSON.stringify(path)})) {
+				if (Date.now() - started > 5_000) throw new Error("spoiler never planted the lock");
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+			let thrown: { name: string; message: string } | null = null;
+			for (let round = 0; round < 5 && thrown === null; round++) {
+				try { acquireLock(${JSON.stringify(path)}).release(); }
+				catch (error) { thrown = { name: (error as Error).name, message: (error as Error).message }; }
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+			console.log(JSON.stringify({ thrown }));
+		`;
+			const spoiler = Bun.spawn([process.execPath, "-e", spoilerCode], { stdout: "ignore", stderr: "ignore" });
+			try {
+				const acquirer = Bun.spawn(["nice", "-n", "19", process.execPath, "-e", acquirerCode], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [out, err] = await Promise.all([
+					new Response(acquirer.stdout).text(),
+					new Response(acquirer.stderr).text(),
+				]);
+				await acquirer.exited;
+				expect(err).toBe("");
+				const { thrown } = JSON.parse(out) as { thrown: { name: string; message: string } | null };
+				expect(thrown?.name).toBe("LockHeldError");
+				expect(thrown?.message).toContain("already_running");
+			} finally {
+				spoiler.kill();
+				await spoiler.exited;
+			}
+		},
+		20_000,
+	);
 });
 
 describe("stale lock reclaim", () => {

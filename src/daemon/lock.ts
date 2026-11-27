@@ -1,4 +1,5 @@
 import { closeSync, linkSync, lstatSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { sweepStaleStaged } from "./lock-staged";
 
 export interface LockInfo {
 	pid: number;
@@ -109,20 +110,17 @@ export interface Lock {
  * Exclusive create of `path` holding `{pid, bootId, startedAt}`. The content is written to a private, randomly named file (opened `wx`, so a planted link is never followed) first and
  * hard-linked into place, so the lock never exists empty. An existing lock is stale (and replaced) when its process
  * is dead, its boot id differs from this boot, or the file is unreadable and older than `UNREADABLE_LOCK_GRACE_MS`;
- * otherwise acquisition is refused.
+ * otherwise acquisition is refused. Write and link share one try so a failed write drops the staged file too; after 3 lost races the refusal is a `LockHeldError`, so `runDaemon` prints the `already_running` guidance.
  */
 export function acquireLock(path: string, now: number = Date.now()): Lock {
 	const info: LockInfo = { pid: process.pid, bootId: currentBootId(), startedAt: now };
+	sweepStaleStaged(path, pidAlive);
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const staged = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
 		const fd = openSync(staged, "wx", 0o600);
-		try {
-			writeSync(fd, JSON.stringify(info));
-		} finally {
-			closeSync(fd);
-		}
 		let linked = false;
 		try {
+			writeSync(fd, JSON.stringify(info));
 			linkSync(staged, path);
 			linked = true;
 		} catch (error) {
@@ -130,6 +128,8 @@ export function acquireLock(path: string, now: number = Date.now()): Lock {
 				unlinkSync(staged);
 				throw error;
 			}
+		} finally {
+			closeSync(fd);
 		}
 		unlinkSync(staged);
 		if (linked) {
@@ -143,7 +143,7 @@ export function acquireLock(path: string, now: number = Date.now()): Lock {
 		}
 		reclaimStale(path, info.bootId, now);
 	}
-	throw new Error(`lock_unavailable: ${path}`);
+	throw new LockHeldError(path, readLock(path));
 }
 
 /**
