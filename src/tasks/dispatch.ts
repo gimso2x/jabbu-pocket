@@ -11,6 +11,7 @@ import { type StartCapacity, startCapacity } from "../ops/start-capacity";
 import { redact } from "../redact";
 import { buildWorkerFloorsPrompt } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
+import { type BaseInfo, resolveTaskBase } from "./base-ref";
 import { summarizeJudgement } from "./checker";
 import {
 	acceptanceItems,
@@ -39,6 +40,7 @@ import {
 } from "./records";
 import { restatedHash } from "./resume-check";
 import { releaseHold, runtimeFor, type TaskMailboxPort, type TaskRuntime, type TaskStartResult } from "./runtime";
+import { threadLink } from "./thread-link";
 import { agyModelOf, agySecretsDirs, agyWorkerArgs, type WorkerTier, withWorkerModel, workerLine } from "./worker-tier";
 
 type HostEntry = DispatchHostConfig;
@@ -80,6 +82,8 @@ export interface TaskDispatchDeps {
 	boardLink?: BoardLinkResolver;
 	/** Keeps a prompt herdr took for the dashboard's 마지막 지시 (`Store.recordHerdrPrompt`); absent → nothing kept. */
 	recordPrompt?: (input: HerdrPromptInput) => void;
+	/** Gate a resume handoff brief before a worker switch starts it (absent → the brief goes unscanned). */
+	gateBrief?: (brief: string) => Promise<{ suffix: string; approved: boolean }>;
 	log: TaskChatLog & { info(event: string, fields?: Record<string, unknown>): void };
 }
 
@@ -190,23 +194,7 @@ export function agyOccupant(ledger: TaskLedger, except?: string): string | undef
 
 /** The board card of a just-started agent; `undefined` when no board is configured. */
 async function cardLink(deps: TaskDispatchDeps, row: TaskRow, paneId: string): Promise<string | undefined> {
-	return deps.boardLink === undefined || row.runtime === "headless"
-		? undefined
-		: await deps.boardLink(row.host, paneId);
-}
-
-/** Permalink of the task thread root; the bare thread ref when the platform cannot resolve it. */
-async function threadLink(channels: ChannelRegistry, log: TaskChatLog, threadRef: string): Promise<string> {
-	const target = parseThreadRef(threadRef);
-	if (target === undefined) return threadRef;
-	try {
-		const port = channels.portFor(target.channel);
-		const root = { platform: port.platform, conversationId: target.channel, messageId: target.threadTs };
-		return (await port.permalink(root)) ?? threadRef;
-	} catch (error) {
-		log.warn("task_permalink_failed", { thread: threadRef, error: String(error) });
-		return threadRef;
-	}
+	return deps.boardLink === undefined || row.runtime === "headless" ? undefined : deps.boardLink(row.host, paneId);
 }
 
 /** New task: ID → worktree → four docs → agent → card and ⏳; rolls back on pre-agent failure. */
@@ -250,6 +238,7 @@ export async function startTask(
 		}
 		if (capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
 	}
+	const baseRef = resolveTaskBase(hostEntryOf(deps, host)?.branchRules, spec.repo, spec.base); // unsafe: refused before anything is reserved
 	const ops = opsFor(deps, host);
 	const recordsRoot = recordsRootFor(deps.recordsRepo, host, hostEntryOf(deps, host));
 	const row = deps.ledger.register({
@@ -261,6 +250,7 @@ export async function startTask(
 		threadRef,
 		host,
 		repo: spec.repo,
+		...(spec.branch === undefined ? {} : { branch: spec.branch }),
 		// Local tasks (agy ones too: the agy print driver) run headless on the daemon's Mailbox; remote ones on herdr.
 		runtime: host === null && deps.headless !== undefined ? "headless" : "herdr",
 		acceptance: acceptanceItems(spec.acceptance),
@@ -272,9 +262,10 @@ export async function startTask(
 		},
 	});
 	const git = { repo: row.repo, worktree: row.worktree, branch: row.branch };
-	let worktreeCreated = false;
-	let recorded = false;
+	let worktreeCreated = false,
+		recorded = false;
 	let paneId = "";
+	let base: BaseInfo | undefined;
 	const fail = async (error: string): Promise<string> => {
 		if (worktreeCreated) await ops.removeWorktree(git).catch(() => undefined);
 		await rollbackRecords(row, ops, deps.recordsRepo, recorded).catch(() => undefined);
@@ -288,10 +279,12 @@ export async function startTask(
 		const exists = await ops.pathExists(row.worktree);
 		if (!exists.ok) return await fail(exists.error);
 		if (exists.value) return await fail(`워크트리 경로가 이미 있습니다: ${row.worktree}`);
-		const created = await ops.createWorktree(git);
+		const created = await ops.createWorktree({ ...git, base: baseRef });
 		if (!created.ok) return await fail(created.error);
 		worktreeCreated = true;
-		deps.ledger.setBaseSha(row.taskId, (await ops.headOf(row.worktree)).sha);
+		const baseSha = (await ops.headOf(row.worktree)).sha;
+		deps.ledger.setBaseSha(row.taskId, baseSha);
+		base = { ref: baseRef, sha: baseSha };
 
 		const meta: TaskDocsMeta = {
 			taskId: row.taskId,
@@ -299,6 +292,7 @@ export async function startTask(
 			repo: row.repo,
 			worktree: row.worktree,
 			branch: row.branch,
+			base,
 			agent: row.agent,
 			threadLink: await threadLink(deps.channels, deps.log, threadRef),
 			registeredAt: row.createdAt,
@@ -334,7 +328,7 @@ export async function startTask(
 
 	deps.log.info("task_started", { task: row.taskId, host: row.host, agent: row.agent });
 	const link = await cardLink(deps, row, paneId);
-	const posted = await postToThread(deps.channels, deps.log, threadRef, buildAcceptedCard(row, spec, link));
+	const posted = await postToThread(deps.channels, deps.log, threadRef, buildAcceptedCard(row, spec, link, base));
 	await setStatusReaction(deps.channels, deps.log, threadRef, "working", []);
 	const where = `${row.host ?? "local"}:${row.worktree}`;
 	const workerText = workerLine(row);
@@ -397,19 +391,18 @@ export async function resumeTask(
 	let how: string;
 	let link: string | undefined;
 	let switched: string | undefined;
+	let suffix = "";
 	if (switchTo !== undefined) {
 		const outcome = await resumeOnOtherWorker(deps, { row, ops, runtime, alive: alive.exists, switchTo, promptFor });
 		if (typeof outcome === "string") return outcome;
-		({ how, link, switched } = outcome);
+		({ how, link, switched, suffix } = outcome);
 	} else if (alive.exists) {
 		const prompt = promptFor();
 		const sent = await runtime.prompt(row, prompt);
 		// Unconfirmed: herdr took the text but saw no start; the resume goes on (the sweep watches what follows).
 		if (!sent.ok && sent.unconfirmed !== true) return `재개 실패: ${sent.error ?? "unknown"}`;
 		notePrompt(deps, { host: row.host, agent: row.agent, kind: "followup", text: prompt, originKey: deps.originKey });
-		how = sent.ok
-			? "살아 있는 에이전트에 재개 프롬프트를 보냈습니다"
-			: "살아 있는 에이전트에 재개 프롬프트를 보냈습니다(시작 확인 안 됨)";
+		how = `살아 있는 에이전트에 재개 프롬프트를 보냈습니다${sent.ok ? "" : "(시작 확인 안 됨)"}`;
 	} else {
 		// A dead agy worker comes back as agy or not at all: one task never mixes worker kinds.
 		const busy = agyModelOf(row.workerModel) === undefined ? undefined : agyOccupant(deps.ledger, row.taskId);
@@ -438,6 +431,7 @@ export async function resumeTask(
 	return [
 		`${row.taskId}: ${how} (${row.status} → working).${link === undefined ? "" : ` 진행 보기: ${link}.`} 진행 확인: jabbu_dispatch ${row.host === null ? '{mode:"worker"' : `{host:"${row.host}"`}, name:"${row.agent}"}`,
 		...(switched === undefined ? [] : [switched]),
+		...(suffix === "" ? [] : [suffix.replace(/^\n/, "")]),
 		...resumeCheckLines(check.findings, check.notes),
 	].join("\n");
 }
@@ -458,7 +452,7 @@ async function resumeOnOtherWorker(
 		switchTo: WorkerTier;
 		promptFor(handoff: string): string;
 	},
-): Promise<string | { how: string; link: string | undefined; switched: string }> {
+): Promise<string | { how: string; link: string | undefined; switched: string; suffix: string }> {
 	const { row, ops, runtime, switchTo } = input;
 	if (agyModelOf(switchTo.model) !== undefined) {
 		const busy = agyOccupant(deps.ledger, row.taskId);
@@ -470,10 +464,8 @@ async function resumeOnOtherWorker(
 	const docsDir = docsDirOf(row);
 	const progress = await settled(() => ops.readFile(`${docsDir}/PROGRESS.md`));
 	const screen = input.alive ? await runtime.read(row) : undefined;
-	const label = (worker: { tier: string | null; model: string | null }): string =>
-		`${worker.tier ?? "?"}(${worker.model ?? "기본 모델"})`;
-	const from = label({ tier: row.tier, model: row.workerModel });
-	const to = label(switchTo);
+	const from = `${row.tier ?? "?"}(${row.workerModel ?? "기본 모델"})`;
+	const to = `${switchTo.tier}(${switchTo.model ?? "기본 모델"})`;
 	const brief = buildHandoffBrief({
 		from,
 		to,
@@ -481,22 +473,22 @@ async function resumeOnOtherWorker(
 		progress: progress.ok ? progress.value : undefined,
 		screen: screen?.ok === true ? screen.output : undefined,
 	});
+	const gate = deps.gateBrief === undefined ? undefined : await deps.gateBrief(brief);
 	if (input.alive) {
 		const closed = await runtime.close(row);
 		if (!closed.ok) return `재개 실패: 이전 워커를 닫지 못했습니다: ${closed.error}`;
 	}
-	const before = {
-		tier: row.tier,
-		tierReason: row.tierReason,
-		model: row.workerModel,
-		tierConfidence: row.tierConfidence,
-	};
 	const worker = { tier: switchTo.tier, tierReason: switchTo.tierReason, tierConfidence: null };
 	deps.ledger.setWorker(row.taskId, { ...worker, model: switchTo.model });
 	const next: TaskRow = { ...row, ...worker, workerModel: switchTo.model };
 	const started = await startAgent(deps, next, input.promptFor(brief));
 	if (!started.ok) {
-		deps.ledger.setWorker(row.taskId, before);
+		deps.ledger.setWorker(row.taskId, {
+			tier: row.tier,
+			tierReason: row.tierReason,
+			model: row.workerModel,
+			tierConfidence: row.tierConfidence,
+		});
 		deps.log.warn("task_resume_model_switch_failed", { task: row.taskId, from, to, error: started.error });
 		return `재개 실패: ${started.error} (${row.taskId} 워커는 원래 ${from}로 되돌렸습니다. 이전 워커는 이미 닫혔으니 다시 재개하면 원래 설정으로 뜹니다)`;
 	}
@@ -506,6 +498,7 @@ async function resumeOnOtherWorker(
 		how: `워커를 ${from} → ${to}로 바꿔 새 에이전트를 시작했습니다(인계 브리프 포함)`,
 		link: await cardLink(deps, next, started.paneId),
 		switched: workerLine(next) ?? `워커: ${to}`,
+		suffix: gate?.suffix ?? "",
 	};
 }
 

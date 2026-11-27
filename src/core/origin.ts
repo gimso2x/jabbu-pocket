@@ -67,6 +67,8 @@ export interface OriginRouterDeps {
 	onCacheMiss?: MailboxDeps["onCacheMiss"];
 	/** Thread notice for a large conversation resumed on a cold cache; see `MailboxDeps`. */
 	onColdCache?: MailboxDeps["onColdCache"];
+	coldResumeRotateTokens?: MailboxDeps["coldResumeRotateTokens"]; // see `MailboxDeps`
+	onColdResumeRotated?: MailboxDeps["onColdResumeRotated"];
 	onSessionMismatch?: MailboxDeps["onSessionMismatch"];
 	/** Thread notice for a turn aborted on a tool repeat loop; see `MailboxDeps`. */
 	onStuckLoop?: MailboxDeps["onStuckLoop"];
