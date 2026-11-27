@@ -181,9 +181,12 @@ describe("retry card (AC-1)", () => {
 				prMode,
 			);
 		const pr = reached(true);
-		expect(pr.buttons?.map((b) => [b.actionId, b.label])).toEqual([[`jabbu:task:merge:${row.taskId}`, "PR 올리기"]]);
+		expect(pr.buttons?.map((b) => [b.actionId, b.label])).toEqual([
+			[`jabbu:task:merge:${row.taskId}`, "PR 올리기"],
+			[`jabbu:task:cancel:${row.taskId}`, "취소"],
+		]);
 		expect(pr.note).toStartWith("PR 올리기 = ");
-		expect(reached(false).buttons?.map((b) => b.label)).toEqual(["머지"]);
+		expect(reached(false).buttons?.map((b) => b.label)).toEqual(["머지", "취소"]);
 	});
 
 	test("the stop line keeps the words the 3b tests look for", () => {

@@ -1,12 +1,5 @@
 import { hostname } from "node:os";
-import {
-	type ActionButton,
-	type ChannelPort,
-	type MessageRef,
-	mentionToken,
-	type OutboundMessage,
-	renderMentions,
-} from "../channel/port";
+import { type ChannelPort, type MessageRef, mentionToken, type OutboundMessage, renderMentions } from "../channel/port";
 import type { ChannelRegistry } from "../channel/registry";
 import { cutCodePointSafe } from "../channel/text";
 import { parseThreadRef } from "../core/normalize";
@@ -14,11 +7,48 @@ import { confidentBand, type ReceiptNow, receiptBlockers, receiptNowOf } from ".
 import { formatConfidence } from "../lanes/review";
 import { redact, redactThenClip } from "../redact";
 import { type AutoLandPolicy, checkBlockers } from "./auto-land-policy";
+import {
+	branchField,
+	CANCEL_NOTE,
+	cancelButton,
+	hostLabelOf,
+	MERGE_NOTE,
+	mergeButton,
+	ownerTag,
+	PR_MERGE_LABEL,
+	PR_MERGE_NOTE,
+	parseTaskCancelAction,
+	parseTaskRecommendActionId,
+	RECOMMEND_NOTE,
+	recommendButton,
+	type TaskCard,
+	taskCancelActionId,
+	taskCancelConfirmActionId,
+	taskCancelKeepActionId,
+	taskMergeActionId,
+	taskRecommendActionId,
+	workerField,
+} from "./card-buttons";
 import type { TaskJudgement } from "./checker";
 import { docsDirOf, TASK_RISKS, type TaskRisk } from "./docs";
 import type { TaskLandOutcome, TaskLandRebase } from "./land";
 import { TASK_STATUSES, type TaskGate, type TaskRow, type TaskStatus } from "./ledger";
 import { workerLine } from "./worker-tier";
+
+export {
+	CANCEL_NOTE,
+	MERGE_NOTE,
+	PR_MERGE_LABEL,
+	parseTaskCancelAction,
+	parseTaskRecommendActionId,
+	RECOMMEND_NOTE,
+	type TaskCard,
+	taskCancelActionId,
+	taskCancelConfirmActionId,
+	taskCancelKeepActionId,
+	taskMergeActionId,
+	taskRecommendActionId,
+};
 
 /** One status reaction lives on the task root: ⏳ working, 🔍 review, 🚧 blocked, ✅ done, ❌ cancelled. */
 export const STATUS_REACTIONS: Record<TaskStatus, string> = {
@@ -61,20 +91,6 @@ export async function setStatusReaction(
 		if (!String(error).includes("already_reacted"))
 			log.warn("task_reaction_failed", { thread: threadRef, error: String(error) });
 	});
-}
-
-/**
- * A task notice as a card: `text` is the whole notice as one string (notifications, block-less clients, the dashboard
- * and logs), `title`/`body`/`fields`/`buttons`/`note` what the card shows.
- */
-export interface TaskCard {
-	text: string;
-	title: string;
-	body: string;
-	fields?: ReadonlyArray<{ label: string; value: string }>;
-	buttons?: readonly ActionButton[];
-	/** The small grey line under the card. */
-	note?: string;
 }
 
 /** A card section's text holds 3,000 characters: a longer card body is cut there. */
@@ -139,59 +155,8 @@ export async function editThreadCard(
 	}
 }
 
-export const hostLabelOf = (row: Pick<TaskRow, "host">): string => row.host ?? "local";
-
-/** `local/t-20261030-01 · T-20261030-01`: where the agent runs and which task it carries. */
-const ownerTag = (row: TaskRow): string => `${hostLabelOf(row)}/${row.agent} · ${row.taskId}`;
-
 /** The board link closes a notice on its own lines; no link, no footer. */
 const boardFooter = (link: string | undefined): string[] => (link === undefined ? [] : ["", "작업 보드", link]);
-
-/** Button ids of a card's `머지` and `추천대로` buttons; the task id carries no colon. */
-const TASK_MERGE_ACTION_PREFIX = "jabbu:task:merge:";
-const TASK_RECOMMEND_ACTION_PREFIX = "jabbu:task:recommend:";
-const TASK_ID = /^T-\d{8}-\d{2,}$/;
-
-export const taskMergeActionId = (taskId: string): string => `${TASK_MERGE_ACTION_PREFIX}${taskId}`;
-export const taskRecommendActionId = (taskId: string): string => `${TASK_RECOMMEND_ACTION_PREFIX}${taskId}`;
-
-/** The task id behind `prefix` in a button click; `undefined` for any other action id. */
-function taskIdOf(actionId: string, prefix: string): string | undefined {
-	if (!actionId.startsWith(prefix)) return undefined;
-	const taskId = actionId.slice(prefix.length);
-	return TASK_ID.test(taskId) ? taskId : undefined;
-}
-
-/** The task id of a `머지` button click; `undefined` for any other action id. */
-export const parseTaskMergeActionId = (actionId: string): string | undefined =>
-	taskIdOf(actionId, TASK_MERGE_ACTION_PREFIX);
-
-/** The task id of a `추천대로` button click; `undefined` for any other action id. */
-export const parseTaskRecommendActionId = (actionId: string): string | undefined =>
-	taskIdOf(actionId, TASK_RECOMMEND_ACTION_PREFIX);
-
-/** What one click on `머지` (`PR 올리기` where the repository lands through a PR) does: the same as answering "머지해". */
-export const MERGE_NOTE = "머지 = close → ff merge → push → 정리 · 재시작은 포함 안 됨";
-export const PR_MERGE_LABEL = "PR 올리기";
-const PR_MERGE_NOTE = `${PR_MERGE_LABEL} = PR → CI 초록이면 squash 머지 → 정리 · 재시작은 포함 안 됨`;
-/** What one click on `추천대로` does: the same as answering "추천대로" in the thread. */
-export const RECOMMEND_NOTE = "추천대로 = 위 추천 그대로 진행 · 다른 결정은 이 스레드에 답장";
-/** The recommendation a `추천대로` button carries in its `value` (redacted), so the click can say what it approved. */
-export const RECOMMEND_VALUE_MAX = 300;
-
-const mergeButton = (row: TaskRow, prMode = false): ActionButton => ({
-	actionId: taskMergeActionId(row.taskId),
-	label: prMode ? PR_MERGE_LABEL : "머지",
-	value: row.taskId,
-	style: "primary",
-});
-
-const recommendButton = (row: TaskRow, recommend: string): ActionButton => ({
-	actionId: taskRecommendActionId(row.taskId),
-	label: "추천대로",
-	value: cutCodePointSafe(redact(recommend), RECOMMEND_VALUE_MAX),
-	style: "primary",
-});
 
 /** The grey line: the button's note on a card with a button, then the board link; nothing when neither applies. */
 function cardNote(link: string | undefined, buttonNote?: string): string | undefined {
@@ -207,9 +172,6 @@ const workerLines = (row: TaskRow): string[] => {
 	const line = workerLine(row);
 	return line === undefined ? [] : [line];
 };
-
-const branchField = (row: TaskRow) => ({ label: "브랜치", value: `\`${row.branch}\`` });
-const workerField = (row: TaskRow) => ({ label: "워커", value: ownerTag(row) });
 
 /** The accepted card posted once the agent started: who took it (a local task: this `hostname()`), board link, goal, assumptions. */
 export function buildAcceptedCard(
@@ -407,7 +369,7 @@ export function buildReachedCard(
 		evidenceLine(row),
 		...boardFooter(link),
 	].join("\n");
-	const note = cardNote(link, prMode ? PR_MERGE_NOTE : MERGE_NOTE);
+	const note = cardNote(link, `${prMode ? PR_MERGE_NOTE : MERGE_NOTE} · ${CANCEL_NOTE}`);
 	return {
 		text,
 		title: `🔍 머지 대기 · ${row.title}`,
@@ -429,7 +391,7 @@ export function buildReachedCard(
 			branchField(row),
 			workerField(row),
 		],
-		buttons: [mergeButton(row, prMode)],
+		buttons: [mergeButton(row, prMode), cancelButton(row, { kind: prMode ? "pr" : "merge" })],
 		...(note === undefined ? {} : { note }),
 	};
 }
@@ -540,8 +502,8 @@ export function buildBlockedCard(
 	];
 	const step = judgement.current === "" ? "-" : judgement.current;
 	const howTo = "*답하는 법*: 이 스레드에 결정을 적어 주시면 그 답을 담당 에이전트에 넘겨 재개합니다.";
-	// `추천대로` only means something when the agent wrote a recommendation.
-	const note = cardNote(link, recommend === "" ? undefined : RECOMMEND_NOTE);
+	// `추천대로` only means something when the agent wrote a recommendation; `취소` is always offered.
+	const note = cardNote(link, recommend === "" ? CANCEL_NOTE : `${RECOMMEND_NOTE} · ${CANCEL_NOTE}`);
 	return {
 		text: [
 			`🚧 멈춤 · ${row.title} — 결정이 필요합니다. (${ownerTag(row)}) ${mentionToken(ownerUserId)}`,
@@ -554,7 +516,10 @@ export function buildBlockedCard(
 		title: `🚧 막힘 · ${row.title}`,
 		body: [...decision, "", `${mentionToken(ownerUserId)} ${howTo}`].join("\n"),
 		fields: [{ label: "단계", value: step }, branchField(row)],
-		...(recommend === "" ? {} : { buttons: [recommendButton(row, recommend)] }),
+		buttons: [
+			...(recommend === "" ? [] : [recommendButton(row, recommend)]),
+			cancelButton(row, { kind: "blocked", recommend }),
+		],
 		...(note === undefined ? {} : { note }),
 	};
 }
@@ -787,7 +752,7 @@ export function buildNudgeLimitCard(
 /** A task left in review: the owner hears it again every 24 hours until it is closed or resumed. */
 export function buildReviewWaitingCard(row: TaskRow, hours: number, ownerUserId: string, link?: string): TaskCard {
 	const howTo = `*답하는 법*: "머지해"라고 답하거나 고칠 점을 적어 주세요. 그만두려면 \`tasks close ${row.taskId} --as cancelled\`.`;
-	const note = cardNote(link, MERGE_NOTE);
+	const note = cardNote(link, `${MERGE_NOTE} · ${CANCEL_NOTE}`);
 	return {
 		text: [
 			`🔍 리뷰 대기 ${hours}시간 · ${row.title} — Outcome 도달 뒤 닫히지 않았습니다. (${ownerTag(row)}) ${mentionToken(ownerUserId)}`,
@@ -797,7 +762,7 @@ export function buildReviewWaitingCard(row: TaskRow, hours: number, ownerUserId:
 		title: `⏳ 리뷰 대기 · ${row.title}`,
 		body: [`Outcome 도달 뒤 닫히지 않았습니다. ${mentionToken(ownerUserId)}`, howTo].join("\n"),
 		fields: [{ label: "대기 시간", value: `${hours}시간` }, branchField(row)],
-		buttons: [mergeButton(row)],
+		buttons: [mergeButton(row), cancelButton(row, { kind: "merge" })],
 		...(note === undefined ? {} : { note }),
 	};
 }
