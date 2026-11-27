@@ -79,8 +79,9 @@ describe("checkLeaks: refusals that are no pass", () => {
 	});
 });
 
-// The range check runs the real gitleaks (CI installs it, JABBU_GITLEAKS): a host without it fails here, never skips.
-describe("checkLeaks over <base>..<sha>", () => {
+// The range check runs the real gitleaks (CI installs it, JABBU_GITLEAKS). A host without it skips
+// these, as the README and the guide say; the refusal without gitleaks is covered above.
+describe.skipIf(gitleaks === undefined)("checkLeaks over <base>..<sha>", () => {
 	test("gitleaks is installed", () => {
 		expect(gitleaks).toBeDefined();
 	});

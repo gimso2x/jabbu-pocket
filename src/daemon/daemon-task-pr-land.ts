@@ -47,11 +47,18 @@ export class DaemonTaskPrLand {
 	readonly #errors = new Map<string, number>();
 	/** The last read failure told per task: the same reason is not repeated until a read succeeds. */
 	readonly #warned = new Map<string, string>();
+	/** Cut on stop (as PrLandHost's): in-flight reads die with the daemon instead of running to their timeout. */
+	readonly #abort = new AbortController();
 
 	constructor(ctx: DaemonContext, locks: Set<string>, afterDone: (row: TaskRow) => Promise<string[]>) {
 		this.#ctx = ctx;
 		this.#locks = locks;
 		this.#afterDone = afterDone;
+	}
+
+	/** The reads of a poll are cut; the write steps are not aborted — a re-run continues from the saved step. */
+	stop(): void {
+		this.#abort.abort();
 	}
 
 	/** The `TaskLandDeps.pr` of one core landing. */
@@ -99,7 +106,7 @@ export class DaemonTaskPrLand {
 		return prLandDeps({
 			seams,
 			tools,
-			signal: new AbortController().signal,
+			signal: this.#abort.signal,
 			removeWorktree: (input) => resolveTaskHost(null, undefined).removeWorktree(input),
 			beforeCleanup,
 			...(remote === undefined

@@ -12,7 +12,7 @@ const MULTIPART_OVERHEAD_BYTES = 512 * 1024;
 const CONTROL_CHARS = /\p{Cc}/u;
 
 const FORBIDDEN_PATH_TOKENS =
-	/(?:^|[/\\])(?:\.\.|secrets|\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.git-credentials|\.netrc|\.npmrc)(?:$|[/\\])/i;
+	/(?:^|[/\\])(?:\.\.|secrets|\.ssh|\.gnupg|\.aws|\.kube|\.docker|\.agy-accounts|\.gemini|\.git-credentials|\.netrc|\.npmrc)(?:$|[/\\])/i;
 
 export interface UploadedWebFile {
 	path: string;
