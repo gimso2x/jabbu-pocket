@@ -53,13 +53,13 @@ export interface DiscordChannelConfig {
 	/** Absolute, resolved against the config directory; one line, mode 0600. */
 	botTokenFile: string;
 	applicationId: string;
-	/** Servers whose messages are taken; absent: every server the bot is in. DMs are not affected. */
+	/** Servers whose messages are taken (a reload takes a change live); absent: every server the bot is in. DMs are not affected. */
 	guildIds?: string[];
-	/** Channel ids where the owner's root messages are answered without a mention. */
+	/** Channel ids where the owner's root messages are answered without a mention (a reload takes a change live). */
 	mentionFreeChannels?: string[];
 	/** Server channels where the owner's root messages get a reply in the channel body (no thread) unless a thread is asked for. */
 	inlineReplyChannels?: string[];
-	/** In a server channel only a mention addresses the bot. Default false. */
+	/** In a server channel only a mention addresses the bot. Default false (a reload takes a change live). */
 	requireMention?: boolean;
 	/** Server text channel where lanes asked for from the Discord DM open (a DM has no threads); absent: no DM lanes. */
 	laneChannelId?: string;
@@ -82,7 +82,7 @@ export interface DiscordChannelConfig {
 	displayName?: string;
 	/**
 	 * Peer bots (other jabbu instances) whose server channel messages that mention this bot are taken as review
-	 * requests. Changing it needs a restart (`channels` is a restart key).
+	 * requests. Changing it needs a restart (`channels` is a restart key apart from `guildIds`·`mentionFreeChannels`·`requireMention`).
 	 */
 	peerBots?: Array<{ userId: string; name: string }>;
 }
