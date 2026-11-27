@@ -134,6 +134,19 @@ export type {
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
 
+/** Head + tail of a long failure reason, with an explicit marker for the dropped middle: the head names the failing
+ * call, the tail carries the cause. Short text passes through unchanged; the 8 KiB log-line cap (`src/log.ts`) is
+ * the bound, so callers do not slice further. Classification still uses the full text (`classifyReason`). */
+const REASON_HEAD_CHARS = 1000;
+const REASON_TAIL_CHARS = 1000;
+
+function headTailReason(text: string): string {
+	const chars = [...text];
+	if (chars.length <= REASON_HEAD_CHARS + REASON_TAIL_CHARS) return text;
+	const dropped = chars.length - REASON_HEAD_CHARS - REASON_TAIL_CHARS;
+	return `${chars.slice(0, REASON_HEAD_CHARS).join("")}…[truncated ${dropped} chars]…${chars.slice(-REASON_TAIL_CHARS).join("")}`;
+}
+
 /** Serial actor per origin: processes inbound messages, driver finals, and exits on one promise chain. */
 export class OriginMailbox {
 	readonly #deps: MailboxDeps & IdleKeepDeps;
@@ -510,7 +523,7 @@ export class OriginMailbox {
 			return true;
 		turn.providerLimitSeen = true;
 		const attempt = typeof event.attempt === "number" ? event.attempt : 0;
-		log.warn("provider_limit_hit", { origin: originKey, attempt, error: redact(errorMessage).slice(0, 200) });
+		log.warn("provider_limit_hit", { origin: originKey, attempt, error: redact(headTailReason(errorMessage)) });
 		this.#deps.onProviderLimit?.({ originKey, threadRef: turn.threadRef, attempt, maxAttempts, errorMessage });
 		return true;
 	}
@@ -1442,7 +1455,7 @@ export class OriginMailbox {
 			origin: originKey,
 			failures: this.#consecFailures,
 			modelHealed,
-			reason: reason.replace(/\s+/g, " ").slice(0, 160),
+			reason: headTailReason(reason.replace(/\s+/g, " ")),
 		});
 		onEscalate?.({ originKey, threadRef, failures: this.#consecFailures, reason, modelHealed });
 	}
@@ -1588,7 +1601,7 @@ export class OriginMailbox {
 			origin: originKey,
 			code: info.code,
 			expected: info.expected,
-			...(info.stderr === "" ? {} : { stderr: redact(info.stderr.slice(-300)) }),
+			...(info.stderr === "" ? {} : { stderr: redact(headTailReason(info.stderr)) }),
 		});
 		const turn = this.#turn;
 		this.#turn = undefined;
@@ -1600,8 +1613,8 @@ export class OriginMailbox {
 			const codeReason = `omp_exited code=${info.code ?? "null"}`;
 			const stderrTail = info.stderr.trim();
 			const classifyReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail}`;
-			const logReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail.slice(-300)}`;
-			this.#logTurnFailed(logReason, classifyReason);
+			// Full text: #logTurnFailed keeps the head + tail — a pre-cut copy would miscount the dropped chars.
+			this.#logTurnFailed(classifyReason);
 			store.recordTurnFailure({
 				originKey,
 				opRef: turn.opRef,
@@ -1620,7 +1633,7 @@ export class OriginMailbox {
 		this.#deps.log.error("turn_failed", {
 			origin: this.#deps.originKey,
 			kind,
-			reason: redact(rawReason).slice(0, 300),
+			reason: redact(headTailReason(rawReason)),
 		});
 	}
 
