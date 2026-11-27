@@ -497,7 +497,7 @@ describe("host ops (fake runner)", () => {
 	});
 
 	test("remote: ssh command lines for worktree add, existence, write and read", async () => {
-		const { commands, run } = recorder(() => ({ code: 0, stdout: "ok" }));
+		const { commands, run } = recorder((cmd) => ({ code: 0, stdout: cmd.includes("rev-parse") ? `${BASE}\n` : "ok" }));
 		const ops = createTaskHostOps({ sshTarget: "wsl", run });
 		await ops.createWorktree({ repo: "/r/repo", worktree: "/r/repo-t-20261026-01", branch: "task/T-20261026-01" });
 		await ops.pathExists("/r/repo-t-20261026-01");
@@ -505,28 +505,39 @@ describe("host ops (fake runner)", () => {
 		await ops.readFile("/r/x/spec.md");
 		await ops.removeWorktree({ repo: "/r/repo", worktree: "/r/wt", branch: "task/T-20261026-01" });
 		const ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "--", "wsl"];
-		expect(commands[0]).toEqual([
+		expect(commands[0]?.slice(7)).toEqual([
+			"git",
+			"-C",
+			"/r/repo",
+			"rev-parse",
+			"--verify",
+			"--quiet",
+			"HEAD^{commit}",
+			"2>&1",
+		]);
+		expect(commands[1]).toEqual([
 			...ssh,
 			"git",
 			"-C",
 			"/r/repo",
 			"worktree",
 			"add",
+			"--no-track",
 			"-b",
 			"task/T-20261026-01",
 			"/r/repo-t-20261026-01",
-			"HEAD",
+			BASE,
 			"2>&1",
 		]);
-		expect(commands[1]).toEqual([...ssh, "test", "-e", "/r/repo-t-20261026-01"]);
-		const write = commands[2]?.at(-2) ?? "";
+		expect(commands[2]).toEqual([...ssh, "test", "-e", "/r/repo-t-20261026-01"]);
+		const write = commands[3]?.at(-2) ?? "";
 		expect(write).toBe(
 			`mkdir -p /r/repo-t-20261026-01/docs/tasks/T && test ! -e /r/repo-t-20261026-01/docs/tasks/T/spec.md && echo ${Buffer.from("안녕").toString("base64")} | base64 -d > /r/repo-t-20261026-01/docs/tasks/T/spec.md`,
 		);
-		expect(commands[3]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
-		expect(commands[4]?.slice(7)).toEqual(["chmod", "-R", "u+w", "--", "/r/wt", "2>&1"]);
-		expect(commands[5]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
-		expect(commands[6]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
+		expect(commands[4]).toEqual([...ssh, "cat", "/r/x/spec.md"]);
+		expect(commands[5]?.slice(7)).toEqual(["chmod", "-R", "u+w", "--", "/r/wt", "2>&1"]);
+		expect(commands[6]?.slice(7, 12)).toEqual(["git", "-C", "/r/repo", "worktree", "remove"]);
+		expect(commands[7]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
 	});
 
 	test("remote: the docs commit message reaches the remote shell as one word", async () => {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { homeDeps } from "../src/cli/apply";
 import { restoreLedgerForRollback } from "../src/ops/apply-rollback-db";
 import type { Runner } from "../src/ops/run-types";
+import { openStore } from "../src/store/db";
 
 let root: string;
 let home: string;
@@ -24,16 +25,30 @@ afterEach(() => {
 	rmSync(root, { recursive: true, force: true });
 });
 
-/** A ledger file stamped at `version`; with `tables`, a jabbu ledger `runRestore` accepts. */
+/**
+ * A ledger file stamped at `version`; with `tables`, a real jabbu ledger `runRestore` accepts — built with
+ * `openStore`, then stamped back down. The old three one-column-table stub passed the shallow checks but no daemon
+ * could open it, and restore now refuses such a backup (U2). Without `tables` the file is version-only, for the
+ * tests that only compare `user_version`.
+ */
 function writeLedger(path: string, version: number, tables = false): void {
-	const db = new Database(path);
-	if (tables) {
-		db.run("CREATE TABLE origins (origin_key TEXT PRIMARY KEY)");
-		db.run("CREATE TABLE inbound (id INTEGER PRIMARY KEY)");
-		db.run("CREATE TABLE deliveries (id INTEGER PRIMARY KEY)");
+	if (!tables) {
+		const db = new Database(path);
+		db.run(`PRAGMA user_version = ${version}`);
+		db.close();
+		return;
 	}
+	const store = openStore({
+		path,
+		clock: { now: () => Date.now() },
+		timezone: "Asia/Seoul",
+		redact: (text: string) => text,
+	});
+	store.close();
+	const db = new Database(path);
 	db.run(`PRAGMA user_version = ${version}`);
 	db.close();
+	for (const ext of ["-wal", "-shm"]) rmSync(`${path}${ext}`, { force: true });
 }
 
 function writeSchemaVersion(version: number): void {

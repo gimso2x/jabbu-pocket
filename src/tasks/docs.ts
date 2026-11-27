@@ -2,11 +2,10 @@
  * The four task documents (context / spec / PROGRESS / outcome): renderers for the files the bot writes and parsers
  * for the files the agent edits. Renderer and parser live together so the format has one definition.
  */
-
 import { LANE_MODEL_TIERS, type LaneModelTier } from "../model-tiers";
 import { redact } from "../redact";
 import { localIso } from "../time";
-import { parseBranchArg } from "./branch";
+import { type BaseInfo, baseFrontmatter, baseLine, parseBranchBase } from "./base-ref";
 import { assertCheckPlacement, checkSignalsOf, parseChecks, type Signal, SignalSyntaxError } from "./signals";
 import { TaskSpecError } from "./spec-error";
 
@@ -43,6 +42,7 @@ export interface NewTaskSpec {
 	tierConfidence?: number;
 	/** The worker's branch name (a repository's `branchRules` demand it); absent = `task/<TASKID>`. */
 	branch?: string;
+	base?: string;
 }
 
 export type TaskSpecInput =
@@ -140,7 +140,6 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 	const tierReason = record.tierReason;
 	if (tierReason !== undefined && typeof tierReason !== "string")
 		throw new TaskSpecError("taskSpec.tierReason은 문자열이어야 합니다");
-	const branch = parseBranchArg(record.branch);
 	const tierConfidence = parseTierConfidence(record.tierConfidence);
 	if (tierConfidence === null) throw new TaskSpecError("taskSpec.tierConfidence는 0 이상 1 이하의 숫자여야 합니다");
 	// Masked here once: the ledger row, the four documents, the accepted card and the logs all take these values.
@@ -168,7 +167,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 			...(tier === undefined ? {} : { tier: tier as LaneModelTier }),
 			...(tierReason === undefined || oneLine(tierReason) === "" ? {} : { tierReason: redact(oneLine(tierReason)) }),
 			...(tierConfidence === undefined ? {} : { tierConfidence }),
-			...(branch === undefined ? {} : { branch }),
+			...parseBranchBase(record),
 		},
 	};
 }
@@ -261,6 +260,7 @@ export interface TaskDocsMeta {
 	repo: string;
 	worktree: string;
 	branch: string;
+	base?: BaseInfo;
 	agent: string;
 	threadLink: string;
 	registeredAt: number;
@@ -285,7 +285,7 @@ export function renderContext(meta: TaskDocsMeta, spec: NewTaskSpec, original: s
 		spec.assumptions ?? "(없음)",
 		"## 메타",
 		`- 요청 위치: ${meta.threadLink} · 등록: ${localIso(meta.registeredAt, meta.timezone)} · 위험등급: ${spec.risk}`,
-		`- 레포: ${meta.hostLabel}:${meta.repo} · 워크트리: ${meta.worktree} (branch ${meta.branch}) · 에이전트: ${meta.agent}`,
+		`- 레포: ${meta.hostLabel}:${meta.repo} · 워크트리: ${meta.worktree} (branch ${meta.branch}) · 에이전트: ${meta.agent}${meta.base === undefined ? "" : ` · ${baseLine(meta.base)}`}`,
 		"",
 	].join("\n");
 }
@@ -300,6 +300,7 @@ export function renderSpec(meta: TaskDocsMeta, spec: NewTaskSpec, acceptance: re
 		`title: ${spec.title}`,
 		`risk: ${spec.risk}`,
 		`repo: ${meta.hostLabel}:${meta.repo}`,
+		...baseFrontmatter(meta.base),
 		"---",
 		"# 목표",
 		spec.goal,

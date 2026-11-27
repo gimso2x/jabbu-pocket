@@ -231,15 +231,16 @@ describe("monitors: dispatch failure", () => {
 		};
 		const summary = await run();
 		expect(summary.dispatched).toBe(1);
-		expect(logged("monitor_dispatch_failed")).toHaveLength(1);
-		expect(logged("monitor_dispatch_failed")[0]).toContain(`monitor=${first.id}`);
-		expect(logged("monitor_dispatch_failed")[0]).toContain(
-			`event=${store.monitors.listEvents({ monitorId: first.id })[0]?.eventId}`,
-		);
+		const failed = logged("monitor_dispatch_failed");
+		expect(failed).toHaveLength(1);
+		// The dispatch order is not the creation order (ids are random): whichever went first is the one that threw.
+		const [broken, healthy] = failed[0]?.includes(`monitor=${first.id}`) ? [first, second] : [second, first];
+		expect(failed[0]).toContain(`monitor=${broken.id}`);
+		expect(failed[0]).toContain(`event=${store.monitors.listEvents({ monitorId: broken.id })[0]?.eventId}`);
 		expect(logged("monitor_dispatch")).toHaveLength(1);
-		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${second.id}`);
+		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${healthy.id}`);
 		// The failed event was never marked, so it stays admitted for the next tick.
-		expect(store.monitors.listEvents({ monitorId: first.id })[0]?.stage).toBe("admitted");
+		expect(store.monitors.listEvents({ monitorId: broken.id })[0]?.stage).toBe("admitted");
 	});
 });
 
