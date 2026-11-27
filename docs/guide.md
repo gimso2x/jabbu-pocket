@@ -139,7 +139,7 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | `peerHopLimit` | 아니요 | 스레드마다 피어 입력 상한 `{"turns": 3, "windowMinutes": 30}`(기본값). `windowMinutes` 안에 `turns`개를 넘는 피어 글은 버립니다 |
 | `peerSilenceAlert` | 아니요 | 피어 무응답 알림 `{"minutes": 10}`(기본값, 0~1440, 0이면 끔). Discord 스레드에서 `channels.discord.peerBots`를 멘션한 봇 글이 발송된 뒤 `minutes` 안에 그 피어가 그 스레드에 아무 글도 안 쓰면 오너를 멘션해 한 번 알립니다 |
 | `herdr` | 아니요 | herdr 켜기. `{}`이면 PATH의 `herdr`, `{"bin": "/절대경로/herdr"}`이면 그 파일을 로컬 herdr로 씁니다(`bin`이 절대경로가 아니면 `config_invalid field=herdr.bin`). 없으면 꺼짐: 원격 `host` 위임이 없고 agy 요청은 omp 등급 워커로 뜹니다(로컬 `[TASK]`와 스윕은 herdr 없이 돎). 데몬 시작 때만 읽습니다. [herdr(선택)](#herdr선택) 참고 |
-| `dispatchHosts` | 아니요 | herdr 필요(`herdr` 없이 넣으면 `config_invalid field=herdr`). 원격 위임 대상. 예: `{"wsl": {"ssh": "wsl", "workDir": "/home/<user>/work", "herdrBin": "/home/<user>/.local/bin/herdr"}}`. `herdrBin`은 비대화형 ssh의 PATH에 herdr가 없을 때 절대경로로 지정합니다. `ompArgs`(문자열 배열, 예: `["--prewalk"]`)를 넣으면 그 호스트에 띄우는 herdr 워커 omp에 덧붙입니다(`herdr agent start … -- <인자>`). 인자는 그 호스트의 omp 설정으로 해석되므로(`--prewalk`면 그 호스트의 smol 모델로 넘어감) 그 호스트 smol을 먼저 맞추고 켭니다. `workerOmpArgs`를 물려받지 않습니다. `ssh`는 공백·제어문자가 없고 `-`로 시작하지 않아야 하며(ssh 옵션으로 읽히지 않게), 어기면 `config_invalid field=dispatchHosts.<이름>.ssh`입니다 |
+| `dispatchHosts` | 아니요 | herdr 필요(`herdr` 없이 넣으면 `config_invalid field=herdr`). 원격 위임 대상. 예: `{"wsl": {"ssh": "wsl", "workDir": "/home/<user>/work", "herdrBin": "/home/<user>/.local/bin/herdr"}}`. `herdrBin`은 비대화형 ssh의 PATH에 herdr가 없을 때 절대경로로 지정합니다. `ompArgs`(문자열 배열, 예: `["--prewalk"]`)를 넣으면 그 호스트에 띄우는 herdr 워커 omp에 덧붙입니다(`herdr agent start … -- <인자>`). 인자는 그 호스트의 omp 설정으로 해석되므로(`--prewalk`면 그 호스트의 smol 모델로 넘어감) 그 호스트 smol을 먼저 맞추고 켭니다. `workerOmpArgs`를 물려받지 않습니다. `ssh`는 공백·제어문자가 없고 `-`로 시작하지 않아야 하며(ssh 옵션으로 읽히지 않게), 어기면 `config_invalid field=dispatchHosts.<이름>.ssh`입니다 `branchRules`(배열)는 그 호스트 저장소의 `[TASK]` 브랜치 이름 규칙입니다: `{"repoPrefix": "/home/<user>/repo/", "exclude": ["/home/<user>/repo/personal"], "pattern": "^(feature/\\d{6}|hotfix/\\d{8})-[^\\s/]+$", "example": "feature/YYYYMM-기능명"}`. `repoPrefix`는 호스트의 절대경로 접두로 경로 경계에서 맞고(`/a/repo`는 `/a/repo-x`에 맞지 않음) 여럿이 맞으면 가장 긴 접두가 이깁니다. `exclude`(선택)는 규칙에서 뺄 저장소 절대경로입니다. 규칙이 맞는 저장소의 신규 `taskSpec`은 `branch`가 `pattern`에 맞아야 하고(없거나 어긋나면 승인 카드 전에 `example`과 함께 거부), 규칙이 없는 저장소는 `branch`를 생략하면 `task/<TASKID>`입니다. 알 수 없는 키·상대경로·컴파일 안 되는 `pattern`은 `config_invalid field=dispatchHosts.<이름>.branchRules[n]…`입니다 |
 | `workerOmpArgs` | 아니요 | 로컬 `[TASK]` 워커 omp에 덧붙이는 인자(문자열 배열, 원소는 빈 문자열이면 안 됨). 예: `["--prewalk"]`이면 워커가 기본 모델로 계획을 세우고 첫 edit/write부터 smol 모델로 넘어갑니다. `jabbu_dispatch` taskSpec 신규 시작과 재개 때 죽은 에이전트 재기동에 붙고, `omp -p` 단순 위임·원격 호스트(`dispatchHosts.<h>.ompArgs`를 씀)·대화 세션에는 붙지 않습니다. 배열이 아니거나 빈 문자열이 있으면 `config_invalid field=workerOmpArgs` |
 | `idStart` | 아니요 | 정수 1~9000, 기본 1. 그날 `[TASK]`·작업 레인 번호를 이 값부터 매깁니다(`T-<날짜>-101`, `L-<날짜>-101`). 그날 기존 최대 번호가 더 크면 최대+1입니다. 같은 기록 저장소·저장소를 쓰는 봇끼리 값을 다르게 두어 번호 충돌을 막습니다. `reload`로 바로 반영 |
 | `workerAgy` | 아니요 | `{"model": "<agy 모델 id>"}`. `taskSpec.worker: "agy"`인 로컬 L0·L1 `[TASK]`를 herdr `--kind agy`(Antigravity CLI)로 띄웁니다(동시 1개, 품질 미검증). `model`은 영숫자로 시작하는 한 단어(`-` 시작 불가). 없거나 `herdr`가 꺼져 있으면 `worker: "agy"`도 omp 등급 워커로 뜨고 답에 이유 한 줄이 붙습니다. `reload`로 바로 반영 |
@@ -350,7 +350,7 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 - **작업 레인**: 레인 스레드의 피어 글은 행을 만들기 전에 버립니다(`peer_in_lane_thread`).
 - **홉 상한**: 같은 스레드에서 `windowMinutes` 안의 피어 글이 `turns`를 넘으면 버리고(`peer_hop_cap`) 그 스레드에 "피어 대화 상한에 닿았습니다. 이어 가려면 오너가 말해 주세요."를 한 번만 올립니다(다른 봇 멘션 없음). 오너 메시지가 들어오면 그 스레드의 카운트가 초기화됩니다. 상한은 봇마다 따로 세므로 두 봇이 맞서면 최악의 경우 스레드당 `windowMinutes`마다 봇마다 `turns`턴입니다.
 - **주소 규칙(오너 글)**: 채널에서 오너가 피어 봇만 멘션하고 이 봇은 멘션하지 않으면 이 봇에게 온 글이 아니라 `not_addressed`로 버립니다. 둘 다 멘션하면 받습니다.
-- **재시작 없이 반영**: `peerHopLimit`는 `jabbu-pocket reload`로 다음 메시지부터 바뀝니다(`channels.discord.*`는 재시작해야 반영됩니다). 목록에서 뺀 봇의 지난 피어 글이 만든 "권한 없음" 표시는 장부에 남아 그 스레드에서 계속 적용됩니다.
+- **재시작 없이 반영**: `peerHopLimit`는 `jabbu-pocket reload`로 다음 메시지부터 바뀝니다(`channels.discord`에서는 `guildIds`·`mentionFreeChannels`·`requireMention`만 재시작 없이 반영되고, 그 밖 키와 목록 자체는 재시작해야 반영됩니다). 목록에서 뺀 봇의 지난 피어 글이 만든 "권한 없음" 표시는 장부에 남아 그 스레드에서 계속 적용됩니다.
 - **백필 동작**: [놓친 메시지 백필](#놓친-메시지-백필)은 허용된 피어 봇의 멘션 글도 복구하지만, 분할 답장 대기(8초)는 건너뛰고 각 글을 바로 기록합니다.
 - **설정**: 목록은 `channels.discord.peerBots`(snowflake, 재시작 필요)에 두고, 상한은 같은 `peerHopLimit`을 씁니다. 피어 봇이 프롬프트에 `이 대화의 피어 봇: <name> = <멘션>` 줄로 들어갑니다. 설정은 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket)을 봅니다.
 
@@ -384,18 +384,18 @@ omp 에이전트와의 차이:
 
 Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다 (`init --platform discord`, [설치 3절](#3-홈과-설정-만들기-init)). 데몬 알림(턴 실패·게이트 등)은 오너의 가장 최근 1:1 대화로 가고 `!home`으로 바꿀 수 있습니다. 봇 만들기·토큰·초대·문제 해결은 [Discord 봇 만들기](discord.md)에 있습니다.
 
-- **켜기**: `config.json`의 `channels.discord`에 아래 키를 넣고 재시작합니다(`channels`는 `reload`로 반영되지 않음). 토큰 파일이 없으면 `secret_missing`, 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
+- **켜기**: `config.json`의 `channels.discord`에 아래 키를 넣고 재시작합니다(`channels`는 `reload`로 반영되지 않지만 `guildIds`·`mentionFreeChannels`·`requireMention`은 예외로 바로 반영됩니다). 토큰 파일이 없으면 `secret_missing`, 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
 
   | `channels.discord` 키 | 뜻 |
   | --- | --- |
   | `ownerUserId` | 오너의 Discord 사용자 ID(숫자 17~20자리, 필수). 이 사용자의 글만 받습니다 |
   | `botTokenFile` | 봇 토큰 파일, 홈 기준 상대경로(필수, 예: `secrets/discord-bot-token`) |
   | `applicationId` | Application ID(필수) |
-  | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버) |
-  | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택) |
+  | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버). `reload`로 바로 반영 |
+  | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택). `reload`로 바로 반영 |
   | `peerBots` | 피어 봇 목록(선택): `[{"userId": "<snowflake>", "name": "<1~32자>"}]`. 이 봇을 멘션한 그 봇의 서버 채널 글을 요청으로 받습니다(오너 id는 안 됨, 재시작 필요). [피어 봇](#피어-봇)과 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket) 참고 |
   | `inlineReplyChannels` | 스레드 없이 채널 본문에 답장으로 답할 서버 채널 ID 목록(선택). `이건 따로 빼줘` 같은 요청이면 스레드를 엽니다. `logChannelId`와 같으면 `config_invalid`. 자세한 동작은 [Discord](discord.md) |
-  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다 |
+  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다. `reload`로 바로 반영 |
   | `laneChannelId` | Discord DM에서 요청한 작업 레인을 열 서버 텍스트 채널 ID(선택). 없으면 DM에서는 레인을 열지 않고 그 이유를 답합니다(서버 채널·스레드에서 요청한 레인은 그 채널에 열림) |
   | `logChannelId` | Discord #log 장부로 쓸 서버 텍스트 채널 ID(선택). Discord 대화·레인의 `✅ 완료` 답 사본이 올라가고, 이 채널과 그 스레드의 글은 턴이 되지 않습니다. `escalationChannelId`·`laneChannelId`·`mentionFreeChannels`와 같으면 `config_invalid` |
   | `escalationChannelId` | Discord 요청의 승인 카드를 받을 서버 텍스트 채널 ID(선택). 없으면 요청한 대화에 카드가 뜹니다 |
@@ -445,7 +445,7 @@ herdr는 config로 켜는 선택 기능입니다. 원격 [TASK] (`host`, `dispat
 
 ### [TASK] 상태 문서
 
-세션이 `taskSpec`(신규: `title, risk(L0~L4), goal, scope[], exclusions[], falsePasses[]?(수락기준을 채워도 실패로 볼 통과 방식 — spec.md "# 이렇게 통과하면 실패" 절로 들어가 워커·리뷰·QA가 읽음), acceptance[](1개 이상), repo(대상 호스트의 git 저장소 절대경로), background?, assumptions?, tier?(high|middle|low, 생략하면 위험 등급이 정함: L0·L1 low, L2 middle, L3 이상 high), tierReason?, tierConfidence?(0~1, 등급 판정 확신도), worker?("agy")` + `task` 지시문, 재개: `{id:"T-…"}` — `tier?`·`tierReason?`·`worker?`를 함께 주면 그 모델로 바꿔 재개하고 마지막 PROGRESS·이전 워커 화면 80줄·spec 경로를 인계 브리프로 새 워커 첫 입력에 넣습니다)을 채우면 jabbu-pocket가 한 번에 다음을 만듭니다. `taskSpec` 없는 dispatch는 달라지지 않습니다.
+세션이 `taskSpec`(신규: `title, risk(L0~L4), goal, scope[], exclusions[], falsePasses[]?(수락기준을 채워도 실패로 볼 통과 방식 — spec.md "# 이렇게 통과하면 실패" 절로 들어가 워커·리뷰·QA가 읽음), acceptance[](1개 이상), repo(대상 호스트의 git 저장소 절대경로), background?, assumptions?, tier?(high|middle|low, 생략하면 위험 등급이 정함: L0·L1 low, L2 middle, L3 이상 high), tierReason?, tierConfidence?(0~1, 등급 판정 확신도), worker?("agy"), branch?(워커 브랜치 이름, 신규에서만; 생략하면 `task/<TASKID>`, 그 저장소에 `dispatchHosts.<h>.branchRules`가 있으면 필수)` + `task` 지시문, 재개: `{id:"T-…"}` — `tier?`·`tierReason?`·`worker?`를 함께 주면 그 모델로 바꿔 재개하고 마지막 PROGRESS·이전 워커 화면 80줄·spec 경로를 인계 브리프로 새 워커 첫 입력에 넣습니다)을 채우면 jabbu-pocket가 한 번에 다음을 만듭니다. `taskSpec` 없는 dispatch는 달라지지 않습니다.
 
 - **위험등급 하한**: `title`·`goal`·`scope`·`background`(금지·검사 문장인 `exclusions`·`falsePasses`·`acceptance`는 보지 않음)에 인증·권한·결제·마이그레이션·시크릿·인프라·프로덕션 같은 주제 키워드가 있으면 적힌 등급이 `L3`보다 낮을 때 `L3`으로, `drop table`·강제 푸시·이력 재작성·키 교체·백업 삭제가 있으면 `L4`로 올립니다(내리지는 않음). 영어 키워드는 단어 경계로만 맞추고(`author`·`reproduction`은 해당 없음), 단독 "토큰"은 보지 않습니다. 올렸으면 접수 응답에 `위험등급을 L1→L3으로 올렸습니다(키워드: 결제).` 한 줄이 붙습니다. `jabbu_work_start`·`작업: …` 레인 시작도 `title`·`brief`로 같은 하한을 적용합니다. 끄는 설정은 없습니다(오탐이면 자동 머지 대신 카드 승인이 될 뿐입니다).
 - TASKID `T-YYYYMMDD-NN`(봇 시간대 날짜 + 그날 순번), 대상 호스트(로컬 또는 `host` 원격)의 워크트리 `<repo>-t-yyyymmdd-nn`(branch `task/T-…`), 에이전트 이름 `t-yyyymmdd-nn`(로컬 headless는 Mailbox origin `jabbu/task/t-yyyymmdd-nn`, herdr는 herdr 에이전트 이름).
@@ -853,8 +853,8 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 `bun src/main.ts reload`나 `kill -HUP <데몬 pid>`를 보내면 실행 중인 데몬이 `config.json`을 다시 읽습니다. 결과는 `config_reloaded changed=… restart_required=… cli=…` 한 줄로 CLI 출력과 로그에 남습니다.
 
-- **바로 반영(`changed`)**: `skillReviewTurns`, `idStart`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `hostTools`, `wikiNotes`, `costCap`, `quotaGate`, `opsPanel`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
-- **재시작 필요(`restart_required`)**: `channels`, `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
+- **바로 반영(`changed`)**: `skillReviewTurns`, `idStart`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `hostTools`, `wikiNotes`, `costCap`, `quotaGate`, `opsPanel`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요), `channels.discord.guildIds`·`channels.discord.mentionFreeChannels`·`channels.discord.requireMention`(그 밖 `channels` 값은 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
+- **재시작 필요(`restart_required`)**: `channels`(위 세 Discord 접속 정책 키는 제외), `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
 - **CLI 전용(`cli`)**: `sessionRetentionDays`, `maxBundleBytes`는 `gc`·`backup`이 실행할 때마다 직접 읽습니다. 데몬은 `maxBundleBytes`를 첫 기동 백업(`boot_backup`)에서만 기동 시점의 값으로 쓰므로, 바꾼 값은 다음 `backup` 실행부터 적용되고 데몬의 첫 기동 백업에는 재시작 뒤에야 반영됩니다. `apply`는 `jabbu-pocket apply`가 실행할 때마다 읽습니다.
 - 파일이 없거나 JSON·검증 오류가 있으면 아무것도 바꾸지 않고 `config_reload_failed`를 남기며, `reload`는 1로 끝납니다.
 

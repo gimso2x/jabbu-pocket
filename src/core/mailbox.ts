@@ -30,7 +30,12 @@ import { typicalTurnDuration } from "../store/turn-duration";
 import { classifyFailure } from "./failure-kind";
 import { type IdleKeepDeps, IdleKeeper, type IdleSweepContext } from "./idle-keep";
 import { newActiveTurn } from "./mailbox-active-turn";
-import { coldResumeContextBlock, rotateOnColdResume, warnColdCache } from "./mailbox-cold-resume";
+import {
+	coldResumeContextBlock,
+	noticeColdResumeRotated,
+	rotateOnColdResume,
+	warnColdCache,
+} from "./mailbox-cold-resume";
 import { askBtw, commandReply, startBrief, waitingRows } from "./mailbox-commands";
 import { ContextMemory, type LiveViewWithContext } from "./mailbox-context";
 import { judgeTurnCost, recordDailyCost, refreshSubAgentCost } from "./mailbox-cost";
@@ -1111,17 +1116,7 @@ export class OriginMailbox {
 		await this.#stopDriver();
 		this.#cache = new CacheMonitor();
 		this.#coldResume = rotation;
-		const { originKey, log, onColdResumeRotated } = this.#deps;
-		try {
-			onColdResumeRotated?.({
-				originKey,
-				threadRef: row.threadRef,
-				prefixTokens: rotation.prefixTokens,
-				idleMs: rotation.idleMs,
-			});
-		} catch (error) {
-			log.warn("cold_resume_notice_failed", { origin: originKey, error: String(error) });
-		}
+		noticeColdResumeRotated(this.#deps, row.threadRef, rotation);
 		return rotation.row;
 	}
 
@@ -1524,6 +1519,12 @@ export class OriginMailbox {
 		if (final.status === "completed") {
 			const answer = await this.#turnAnswer(driver, turn, final.text);
 			store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
+			log.info("turn_completed", {
+				origin: originKey,
+				opRef: turn.opRef,
+				ms: this.#deps.clock.now() - turn.startedAt,
+				chars: answer.whole.length,
+			});
 			if (isTaskOrigin(originKey))
 				log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
 			this.#consecFailures = 0;

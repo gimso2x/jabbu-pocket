@@ -11,6 +11,7 @@ import { openTaskLedger, TASK_STATUSES, TaskLedger, TaskTransitionError } from "
 import { migrateTaskSchema, TASK_SCHEMA, type TaskLandRecord } from "../src/tasks/ledger-schema";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { killSpawned, runMain } from "./helpers/daemon-process";
+import { unquoteRemote } from "./helpers/ssh-words";
 
 const base = {
 	title: "로그 정리",
@@ -439,7 +440,9 @@ const OLD_ROW = `INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref
 describe("host ops (fake runner)", () => {
 	function recorder(respond: (cmd: string[]) => { code: number | null; stdout?: string; timedOut?: boolean }) {
 		const commands: string[][] = [];
-		const run: ProcessRunner = async (cmd) => {
+		const run: ProcessRunner = async (raw) => {
+			// Every ssh word is single-quoted for the remote shell; the commands are kept as that shell reads them.
+			const cmd = raw.map(unquoteRemote);
 			commands.push(cmd);
 			const result = respond(cmd);
 			return { code: result.code, stdout: result.stdout ?? "", timedOut: result.timedOut ?? false };
@@ -526,7 +529,7 @@ describe("host ops (fake runner)", () => {
 		expect(commands[6]?.slice(7)).toEqual(["git", "-C", "/r/repo", "branch", "-D", "task/T-20261026-01", "2>&1"]);
 	});
 
-	test("remote: the docs commit quotes its fixed message for the remote shell", async () => {
+	test("remote: the docs commit message reaches the remote shell as one word", async () => {
 		const { commands, run } = recorder((cmd) => ({ code: 0, stdout: cmd.includes("rev-parse") ? "abc1234def\n" : "" }));
 		const ops = createTaskHostOps({ sshTarget: "wsl", run });
 		expect(await ops.commitDocs({ worktree: "/r/wt", taskId: "T-20261026-01" })).toEqual({
@@ -542,7 +545,7 @@ describe("host ops (fake runner)", () => {
 				"commit",
 				"-q",
 				"-m",
-				"'docs(task): T-20261026-01 4문서'",
+				"docs(task): T-20261026-01 4문서",
 				"--",
 				"docs/tasks/T-20261026-01",
 				"2>&1",

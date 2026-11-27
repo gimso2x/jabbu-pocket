@@ -122,6 +122,20 @@ export function rotateOnColdResume(
 	};
 }
 
+/** Tells the owner's thread about the rotation; a failing notice is logged and never stops the turn. */
+export function noticeColdResumeRotated(
+	deps: Pick<MailboxDeps, "originKey" | "log" | "onColdResumeRotated">,
+	threadRef: string,
+	rotation: ColdResumeRotation,
+): void {
+	const { originKey, log, onColdResumeRotated } = deps;
+	try {
+		onColdResumeRotated?.({ originKey, threadRef, prefixTokens: rotation.prefixTokens, idleMs: rotation.idleMs });
+	} catch (error) {
+		log.warn("cold_resume_notice_failed", { origin: originKey, error: String(error) });
+	}
+}
+
 /** `text` on one line, cut to `EXCHANGE_PREVIEW_CHARS` characters (not bytes: a Korean answer survives whole). */
 const preview = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, EXCHANGE_PREVIEW_CHARS);
 
