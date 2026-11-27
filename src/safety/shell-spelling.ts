@@ -57,39 +57,42 @@ export function replaced(spelling: Spelling, pattern: RegExp, insert = ""): Spel
 }
 
 const ANSI_C_QUOTE = /\$'((?:\\.|[^'\\])*)'/g;
-const ANSI_C_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|[\s\S])/g;
+const ANSI_C_ESCAPE = /\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|c[@-_a-z]|[\s\S])/g;
 
-function decodeCodePoint(cp: number): string {
+function decodeCodePoint(cp: number, newline: string): string {
 	// 개행·복귀 문자는 절 경계(`;`)로 바꿔 뒤따른 금지 문구가 앞 명령 절로 섞이지 않게 막는다.
-	if (cp === 0x0a || cp === 0x0d) return " ; ";
+	if (cp === 0x0a || cp === 0x0d) return newline;
 	if (cp === 0x09) return " ";
 	if (cp < 0x20 || cp === 0x7f || cp > 0x10ffff) return "";
 	return String.fromCodePoint(cp);
 }
 
-function decodeAnsiCBody(body: string): string {
+function decodeAnsiCBody(body: string, newline: string): string {
 	return body.replace(ANSI_C_ESCAPE, (_whole, esc: string) => {
-		if (esc === "n" || esc === "r") return " ; ";
+		if (esc === "n" || esc === "r") return newline;
 		if (esc === "t") return " ";
 		if (esc === "\\") return "\\";
 		if (esc === "'") return "'";
 		if (esc === '"') return '"';
-		if (esc === "a" || esc === "b" || esc === "e" || esc === "E" || esc === "f" || esc === "v") return "";
-		if (esc.startsWith("x")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16));
-		if (esc.startsWith("u") || esc.startsWith("U")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16));
-		if (/^[0-7]{1,3}$/.test(esc)) return decodeCodePoint(Number.parseInt(esc, 8) & 0xff);
+		// `\f`·`\v`는 SQL에서 공백이다: SQL 읽기(`newline`이 공백)에서만 공백으로, 셸 읽기에서는 단어 안에서 사라진다.
+		if (esc === "f" || esc === "v") return newline === " " ? " " : "";
+		if (esc === "a" || esc === "b" || esc === "e" || esc === "E") return "";
+		if (esc.length === 2 && esc.startsWith("c")) return decodeCodePoint(esc.charCodeAt(1) & 0x1f, newline);
+		if (esc.startsWith("x")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
+		if (esc.startsWith("u") || esc.startsWith("U")) return decodeCodePoint(Number.parseInt(esc.slice(1), 16), newline);
+		if (/^[0-7]{1,3}$/.test(esc)) return decodeCodePoint(Number.parseInt(esc, 8) & 0xff, newline);
 		return esc;
 	});
 }
 
-function decodeAnsiCQuotes(spelling: Spelling): Spelling {
+function decodeAnsiCQuotes(spelling: Spelling, newline: string): Spelling {
 	if (!spelling.text.includes("$'")) return spelling;
 	const edits: Edit[] = [];
 	for (const match of spelling.text.matchAll(ANSI_C_QUOTE)) {
 		edits.push({
 			start: match.index,
 			end: match.index + match[0].length,
-			insert: decodeAnsiCBody(match[1] ?? ""),
+			insert: decodeAnsiCBody(match[1] ?? "", newline),
 		});
 	}
 	return edited(spelling, edits);
@@ -97,14 +100,14 @@ function decodeAnsiCQuotes(spelling: Spelling): Spelling {
 
 /**
  * The line as the shell reads its words:
- * 1) `$'...'` ANSI-C 쿼팅을 디코딩한다(`\n`·`\r`은 절 경계 `;`로 분리).
+ * 1) `$'...'` ANSI-C 쿼팅을 디코딩한다(`\n`·`\r`은 기본적으로 절 경계 `;`로 분리, `newline`으로 바꿀 수 있다).
  * 2) 이스케이프된 따옴표(`\"`, `\'`)를 해제한다.
  * 3) 공백·역따옴표 없는 인용 구간(`'--hard'`, `r""m`, `s'ec'rets`)의 따옴표를 걷어낸다.
  *    단어 안에 따옴표 하나만 있는 축약형(`don't`)은 짝이 없어 보존된다.
  * 4) 단어 문자·`/`·`-` 앞의 역슬래시(`\/etc`, `\--hard`)를 해제한다.
  */
-export function shellSpelling(spelling: Spelling): Spelling {
-	const unescapedQuotes = replaced(decodeAnsiCQuotes(spelling), /\\(?=['"])/g);
+export function shellSpelling(spelling: Spelling, newline = " ; "): Spelling {
+	const unescapedQuotes = replaced(decodeAnsiCQuotes(spelling, newline), /\\(?=['"])/g);
 	const quotes = Array.from(unescapedQuotes.text.matchAll(/(['"])([^'"\s`]*)\1/g), (m) => [
 		{ start: m.index, end: m.index + 1, insert: "" },
 		{ start: m.index + m[0].length - 1, end: m.index + m[0].length, insert: "" },
