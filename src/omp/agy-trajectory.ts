@@ -48,3 +48,15 @@ function withDropped(
 ): { status: OmpFinal["status"]; error: string } {
 	return { status, error: dropped > 0 ? `${error} (steer ${dropped}건 미전달)` : error };
 }
+
+/** Attaches `droppedSteers` (and the undelivered-steer note if absent) when queued steers were dropped. */
+export function withDroppedSteers(final: Omit<OmpFinal, "usage">, dropped: number): Omit<OmpFinal, "usage"> {
+	if (final.droppedSteers !== undefined || dropped <= 0) return final;
+	return {
+		...final,
+		droppedSteers: dropped,
+		...(final.error === undefined || final.error.includes("미전달")
+			? {}
+			: { error: `${final.error} (steer ${dropped}건 미전달)` }),
+	};
+}

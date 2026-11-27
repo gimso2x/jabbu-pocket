@@ -1,4 +1,14 @@
-import { closeSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+	accessSync,
+	closeSync,
+	constants,
+	mkdtempSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildChildEnv } from "./env";
@@ -19,19 +29,35 @@ export interface OmpRuntimeProblem {
 const VERSION_TIMEOUT_MS = 15_000;
 const VERSION_LINE = /^omp\/(\d+\.\d+\.\d+\S*)/;
 
-/** Versions already read, by executable identity (realpath, mtime, size): unchanged executables run `--version` once per process. */
+/** Versions already read, by executable identity (realpath, mtime, size, mode): unchanged executables run `--version` once per process. */
 const knownVersions = new Map<string, string>();
+
+function errProblem(executable: string, error: unknown, verb: string): OmpRuntimeProblem {
+	const reason = error instanceof Error && "code" in error ? String(error.code) : String(error);
+	return problem(executable, `error=${reason}`, `${executable} cannot be ${verb} (${reason})`);
+}
 
 function identity(executable: string): string | OmpRuntimeProblem {
 	try {
 		const real = realpathSync(executable);
+		accessSync(real, constants.X_OK);
 		const stat = statSync(real);
-		return `${real}\0${stat.mtimeMs}\0${stat.size}`;
+		return `${real}\0${stat.mtimeMs}\0${stat.size}\0${stat.mode}`;
 	} catch (error) {
-		const reason = error instanceof Error && "code" in error ? String(error.code) : String(error);
-		return problem(executable, `error=${reason}`, `${executable} cannot be read (${reason})`);
+		return errProblem(executable, error, "read");
 	}
 }
+
+function killGroup(pid: number): void {
+	try {
+		process.kill(-pid, "SIGKILL");
+	} catch {
+		/* ESRCH: the group is already gone */
+	}
+}
+
+const timeoutProblem = (executable: string, timeoutMs: number): OmpRuntimeProblem =>
+	problem(executable, "error=timeout", `\`${executable} --version\` did not finish within ${timeoutMs / 1000}s`);
 
 function problem(executable: string, detail: string, cause: string): OmpRuntimeProblem {
 	return {
@@ -53,16 +79,8 @@ function verdict(
 		return undefined;
 	}
 	const shown = (run.stdout.trim() || run.stderr.trim()).split("\n")[0]?.slice(0, 200) ?? "";
-	return problem(
-		executable,
-		`version=unrecognized exit=${run.exitCode ?? "killed"}`,
-		`\`${executable} --version\` did not print omp/<version> (exit ${run.exitCode ?? "killed"}: ${shown || "no output"})`,
-	);
-}
-
-function spawnFailure(executable: string, error: unknown): OmpRuntimeProblem {
-	const reason = error instanceof Error && "code" in error ? String(error.code) : String(error);
-	return problem(executable, `error=${reason}`, `${executable} cannot be run (${reason})`);
+	const msg = `\`${executable} --version\` did not print omp/<version> (exit ${run.exitCode ?? "killed"}: ${shown || "no output"})`;
+	return problem(executable, `version=unrecognized exit=${run.exitCode ?? "killed"}`, msg);
 }
 
 /**
@@ -94,22 +112,14 @@ export async function checkOmpRuntime(
 		const finished = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
 		const result = await Promise.race([finished, timedOut]);
 		if (result === "timeout") {
-			try {
-				process.kill(-child.pid, "SIGKILL");
-			} catch {
-				// ESRCH: the group is already gone
-			}
+			killGroup(child.pid);
 			await child.exited;
-			return problem(
-				executable,
-				"error=timeout",
-				`\`${executable} --version\` did not finish within ${timeoutMs / 1000}s`,
-			);
+			return timeoutProblem(executable, timeoutMs);
 		}
 		const [stdout, stderr, exitCode] = result;
 		return verdict(executable, key, { exitCode, stdout, stderr });
 	} catch (error) {
-		return spawnFailure(executable, error);
+		return errProblem(executable, error, "run");
 	} finally {
 		// Never fire after a normal exit: the pgid may be reused by then.
 		clearTimeout(timer);
@@ -126,9 +136,7 @@ export function checkOmpRuntimeSync(
 	if (typeof key !== "string") return key;
 	if (knownVersions.has(key)) return undefined;
 	// Output goes to a file, not a pipe: a grandchild holding a pipe open would keep the call waiting past the limit.
-	let dir: string | undefined;
-	let outFd: number | undefined;
-	let errFd: number | undefined;
+	let [dir, outFd, errFd]: [string?, number?, number?] = [];
 	try {
 		dir = mkdtempSync(join(tmpdir(), "jabbu-omp-version-"));
 		outFd = openSync(join(dir, "out"), "w");
@@ -144,16 +152,8 @@ export function checkOmpRuntimeSync(
 			killSignal: "SIGKILL",
 		});
 		if (run.exitedDueToTimeout) {
-			try {
-				process.kill(-run.pid, "SIGKILL");
-			} catch {
-				/* ESRCH: the group is already gone */
-			}
-			return problem(
-				executable,
-				"error=timeout",
-				`\`${executable} --version\` did not finish within ${timeoutMs / 1000}s`,
-			);
+			killGroup(run.pid);
+			return timeoutProblem(executable, timeoutMs);
 		}
 		return verdict(executable, key, {
 			exitCode: run.exitCode,
@@ -161,10 +161,9 @@ export function checkOmpRuntimeSync(
 			stderr: readFileSync(join(dir, "err"), "utf8"),
 		});
 	} catch (error) {
-		return spawnFailure(executable, error);
+		return errProblem(executable, error, "run");
 	} finally {
-		if (outFd !== undefined) closeSync(outFd);
-		if (errFd !== undefined) closeSync(errFd);
+		for (const fd of [outFd, errFd]) if (fd !== undefined) closeSync(fd);
 		if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
 	}
 }

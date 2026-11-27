@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import {
 	OWN_ANSWER_LINE,
@@ -8,6 +8,7 @@ import {
 	THREAD_CONTEXT_HEADER,
 } from "../core/mailbox-thread-context";
 import type { Logger } from "../log";
+import { writeAtomic0600 } from "../ops/stamp";
 import { INJECTION_WARNING_HEAD, injectionWarning, scanForInjection } from "../safety/injection";
 import type { Store } from "../store/db";
 import { formatLocal } from "../time";
@@ -19,6 +20,7 @@ import { isRecord } from "./type-guards";
 export const DEFAULT_QUOTA_BLOCK_MS = 60 * 60_000;
 export const QUOTA_RESET_BUFFER_MS = 120_000;
 export const EFFORT_SUFFIX = /-(low|medium|high|xhigh)$/;
+const MAX_POINTER_BYTES = 64 * 1024;
 
 /** Updates that only refresh state; any other kind is debug-logged once. */
 export const QUIET_UPDATES: Record<string, true> = {
@@ -142,12 +144,12 @@ export function recordQuotaFailure(
 
 /** Records a final-line quota notice on a normal `end_turn` reply when no earlier notice or failure already did. */
 export function recordFinalQuotaNotice(
-	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number },
+	turn: { rateLimit?: string; rateLimitDetail?: string; rateLimitResetMs?: number; hadToolCall?: boolean },
 	stopReason: string | undefined,
 	text: string,
 ): boolean {
 	if (turn.rateLimit !== undefined || stopReason !== "end_turn") return false;
-	const detail = finalLineQuotaNotice(text);
+	const detail = finalLineQuotaNotice(text, { standaloneOnly: turn.hadToolCall !== true });
 	if (detail === undefined) return false;
 	setQuotaNotice(turn, detail);
 	return true;
@@ -166,7 +168,17 @@ export interface AgyPointer {
 
 export function readAgyPointer(pointerPath: string): AgyPointer | undefined {
 	try {
-		const parsed: unknown = JSON.parse(readFileSync(pointerPath, "utf8"));
+		if (lstatSync(pointerPath).isFile() !== true) return undefined;
+		const fd = openSync(pointerPath, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+		let raw: string;
+		try {
+			const stat = fstatSync(fd);
+			if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return undefined;
+			raw = readFileSync(fd, "utf8");
+		} finally {
+			closeSync(fd);
+		}
+		const parsed: unknown = JSON.parse(raw);
 		if (!isRecord(parsed) || typeof parsed.conversationId !== "string") return undefined;
 		const account = typeof parsed.account === "string" && parsed.account !== "" ? parsed.account : undefined;
 		return account === undefined
@@ -180,7 +192,7 @@ export function readAgyPointer(pointerPath: string): AgyPointer | undefined {
 export function writeAgyPointer(sessionDir: string, pointerPath: string, sessionId: string, account?: string): void {
 	mkdirSync(resolve(sessionDir), { recursive: true });
 	const payload = account === undefined ? { conversationId: sessionId } : { conversationId: sessionId, account };
-	writeFileSync(pointerPath, `${JSON.stringify(payload)}\n`);
+	writeAtomic0600(pointerPath, `${JSON.stringify(payload)}\n`);
 }
 
 export function clearAgyPointer(pointerPath: string): void {
