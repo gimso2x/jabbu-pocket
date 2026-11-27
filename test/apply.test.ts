@@ -1101,6 +1101,34 @@ describe("revertCommandFor", () => {
 		expect(() => sh(revertCommandFor(r, prev))).toThrow();
 		expect(sh("git rev-parse HEAD")).toBe(head);
 	});
+
+	test("a checkout path with a space, a quote or a shell character still restores the previous tree and runs nothing else", () => {
+		expect(revertCommandFor("/home/u/jabbu-pocket", "abc123")).toStartWith("git -C /home/u/jabbu-pocket diff --cached");
+		for (const name of ["my repo", "it's repo", "a$b", "semi;touch pwned"]) {
+			const r = join(root, `rev ${name}`);
+			mkdirSync(r);
+			const run = (cmd: string, cwd: string) => {
+				const out = Bun.spawnSync(["sh", "-c", cmd], {
+					cwd,
+					env: {
+						...process.env,
+						GIT_AUTHOR_NAME: "t",
+						GIT_AUTHOR_EMAIL: "t@t",
+						GIT_COMMITTER_NAME: "t",
+						GIT_COMMITTER_EMAIL: "t@t",
+					},
+				});
+				if (out.exitCode !== 0) throw new Error(`${cmd}: ${out.stderr.toString()}`);
+				return out.stdout.toString().trim();
+			};
+			run("git init -q -b main && echo a > a && git add a && git commit -qm base", r);
+			const prev = run("git rev-parse HEAD", r);
+			run("echo b > b && git add b && git commit -qm two", r);
+			run(revertCommandFor(r, prev), root);
+			expect({ name, tree: run("git ls-tree -r --name-only HEAD", r) }).toEqual({ name, tree: "a" });
+			expect(existsSync(join(root, "pwned"))).toBe(false);
+		}
+	});
 });
 
 describe("runApply report", () => {
