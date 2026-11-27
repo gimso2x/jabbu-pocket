@@ -885,6 +885,10 @@ describe("scanHandoffBrief: ANSI-C quoting, quote splicing, escaped slash, and s
 			"psql -c $'DELETE\\nFROM users;'",
 			"psql -c $'TRUNCATE\\r\\nTABLE users'",
 			"psql -c $'SELECT 1\\nDROP TABLE users'",
+			// `\f`, `\v` and `\cJ` are whitespace to the database too, not vanishing characters.
+			"psql -c $'DROP\\fTABLE users'",
+			"psql -c $'DROP\\vTABLE users'",
+			"psql -c $'DROP\\cJTABLE users'",
 		]) {
 			const scan = scanHandoffBrief(brief);
 			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
