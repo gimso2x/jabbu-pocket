@@ -10,6 +10,7 @@ import { resumeTask } from "../tasks/dispatch";
 import { resolveTaskHost } from "../tasks/host";
 import { clip, type TaskLandDeps, type TaskLandResult, taskLandHold } from "../tasks/land";
 import {
+	dropTempRef,
 	isRemoteMode,
 	landModeOfRow,
 	localRepoOf,
@@ -178,6 +179,13 @@ export class DaemonTaskPrLand {
 		}
 	}
 
+	/** A remote landing that settles without a merge leaves its fetched temporary ref behind: drop it (best-effort). */
+	async #dropTempRef(row: TaskRow): Promise<void> {
+		if (row.host === null) return;
+		const mode = await landModeOfRow(this.#ctx.options.config, row);
+		if (mode !== undefined && isRemoteMode(mode)) await dropTempRef(this.#remoteEnv(defaultGit), mode, row);
+	}
+
 	/** A landing that stopped before the PR: the record that exists (a landing of an earlier commit) waits for the owner too. */
 	#stopped(row: TaskRow, reason: string): TaskLandResult {
 		const record = this.#store().get(row.taskId)?.land;
@@ -196,6 +204,7 @@ export class DaemonTaskPrLand {
 	): Promise<TaskLandResult> {
 		const tasks = this.#store();
 		const record = { mode: "pr", requestedBy: at.requestedBy } as const;
+		if (outcome.kind !== "pr-open") await this.#dropTempRef(row);
 		switch (outcome.kind) {
 			case "pr-open": {
 				tasks.setLand(row.taskId, {
@@ -377,6 +386,7 @@ export class DaemonTaskPrLand {
 		this.#errors.delete(taskId);
 		const reason = clip(`${count}번 연속 실패: ${text}`);
 		this.#store().setLand(taskId, { ...row.land, state: "blocked", reason });
+		await this.#dropTempRef(row);
 		await postPrLandStop(this.#ctx, row, "blocked", reason);
 	}
 }
