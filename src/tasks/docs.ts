@@ -29,6 +29,7 @@ export interface NewTaskSpec {
 	goal: string;
 	scope: string[];
 	exclusions: string[];
+	falsePasses?: string[];
 	acceptance: string[];
 	repo: string;
 	background?: string;
@@ -82,9 +83,8 @@ function textList(
 	normalize: (text: string) => string = oneLine,
 ): string[] {
 	const value = record[key] ?? [];
-	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || oneLine(item) === "")) {
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || oneLine(item) === ""))
 		throw new TaskSpecError(`taskSpec.${key}는 비어 있지 않은 문자열 배열이어야 합니다`);
-	}
 	const list = (value as string[]).map(normalize);
 	if (list.length < min) throw new TaskSpecError(`taskSpec.${key}는 ${min}개 이상이어야 합니다`);
 	return list;
@@ -107,9 +107,8 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 			throw new TaskSpecError("taskSpec.tierReason은 문자열이어야 합니다");
 		if (resumeReason !== undefined && resumeTier === undefined)
 			throw new TaskSpecError("재개에서 tierReason은 tier와 함께 줍니다(등급을 바꿀 때만 쓰입니다)");
-		if (typeof record.id !== "string" || !TASK_ID_PATTERN.test(record.id)) {
+		if (typeof record.id !== "string" || !TASK_ID_PATTERN.test(record.id))
 			throw new TaskSpecError(`taskSpec.id 형식이 아닙니다(T-YYYYMMDD-NN): ${String(record.id)}`);
-		}
 		return {
 			kind: "resume",
 			id: record.id,
@@ -120,13 +119,11 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 		};
 	}
 	const risk = record.risk;
-	if (typeof risk !== "string" || !(TASK_RISKS as readonly string[]).includes(risk)) {
+	if (typeof risk !== "string" || !(TASK_RISKS as readonly string[]).includes(risk))
 		throw new TaskSpecError("taskSpec.risk는 L0~L4 중 하나여야 합니다");
-	}
 	const repo = requireText(record, "repo");
-	if (!TASK_PATH_PATTERN.test(repo) || repo.includes("..")) {
+	if (!TASK_PATH_PATTERN.test(repo) || repo.includes(".."))
 		throw new TaskSpecError(`taskSpec.repo는 대상 호스트의 git 저장소 절대경로여야 합니다(영숫자·_ . / - 만): ${repo}`);
-	}
 	if (repo.replace(/\/+$/, "") === "") throw new TaskSpecError(`taskSpec.repo는 루트(/)일 수 없습니다: ${repo}`);
 	const background = record.background;
 	if (background !== undefined && typeof background !== "string")
@@ -145,6 +142,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 	// Masked here once: the ledger row, the four documents, the accepted card and the logs all take these values.
 	// Raw here: redactCriterion validates the check block as written, then collapses only the prose around it.
 	const acceptance = textList(record, "acceptance", 1, (text) => text).map(redactCriterion);
+	const falsePasses = textList(record, "falsePasses", 0).map(redact);
 	// A bare `AC-1:` would be snapshotted as "" and no claim could ever match it (qa-l #38).
 	if (acceptance.some((text) => stripAcPrefix(criterionLine(text)) === ""))
 		throw new TaskSpecError("taskSpec.acceptance는 비어 있지 않은 문자열 배열이어야 합니다");
@@ -156,6 +154,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 			goal: redact(requireText(record, "goal")),
 			scope: textList(record, "scope", 0).map(redact),
 			exclusions: textList(record, "exclusions", 0).map(redact),
+			...(falsePasses.length === 0 ? {} : { falsePasses }),
 			acceptance,
 			repo: repo.replace(/\/+$/, ""),
 			...(background === undefined || oneLine(background) === "" ? {} : { background: redact(background.trim()) }),
@@ -309,6 +308,7 @@ export function renderSpec(meta: TaskDocsMeta, spec: NewTaskSpec, acceptance: re
 		...bullets(spec.scope),
 		"# 제외",
 		...bullets(spec.exclusions),
+		...(spec.falsePasses === undefined ? [] : ["# 이렇게 통과하면 실패", ...bullets(spec.falsePasses)]),
 		"# 수락기준",
 		...acceptance.map((item) => `- [ ] ${item.id}: ${item.text}`),
 		"",

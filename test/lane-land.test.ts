@@ -1032,6 +1032,47 @@ describe("landLane: the lane worktree is checked before the merge and the cleanu
 		h.close();
 	});
 
+	test("(c2) ignored files that are not rebuilt output keep the worktree and branch: landed with a ⚠️ note naming them", async () => {
+		const { repo, bare, base } = repoWithOrigin();
+		writeFileSync(join(repo, ".git", "info", "exclude"), ".env\nnode_modules/\n");
+		const h = laneHarness(home.dir);
+		const { lane, sha } = await closeLane(h, repo);
+		const worktree = lane.meta.worktree ?? "";
+		writeFileSync(join(worktree, ".env"), "LOCAL=1\n");
+		mkdirSync(join(worktree, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(worktree, "node_modules", "pkg", "index.js"), "\n");
+
+		await h.manager.requestLand(lane.name, "owner");
+		await h.settle();
+		const after = requireLane(h, lane.name);
+		expect(after.meta.land?.state).toBe("landed");
+		expect(headOf(bare, `refs/heads/${base}`)).toBe(sha);
+		const cleanup = after.meta.land?.cleanup ?? "";
+		expect(cleanup).toContain("git이 무시하는 파일 1건(.env)");
+		expect(cleanup).not.toContain("node_modules");
+		expect(existsSync(join(worktree, ".env"))).toBe(true);
+		expect(git(repo, "branch", "--list", lane.meta.branch ?? "")).not.toBe("");
+		h.close();
+	});
+
+	test("(c3) only rebuilt ignored output (node_modules) in the worktree: removed as before", async () => {
+		const { repo } = repoWithOrigin();
+		writeFileSync(join(repo, ".git", "info", "exclude"), "node_modules/\n");
+		const h = laneHarness(home.dir);
+		const { lane } = await closeLane(h, repo);
+		const worktree = lane.meta.worktree ?? "";
+		mkdirSync(join(worktree, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(worktree, "node_modules", "pkg", "index.js"), "\n");
+
+		await h.manager.requestLand(lane.name, "owner");
+		await h.settle();
+		const after = requireLane(h, lane.name);
+		expect(after.meta.land?.state).toBe("landed");
+		expect(after.meta.land?.cleanup).toBeUndefined();
+		expect(existsSync(worktree)).toBe(false);
+		h.close();
+	});
+
 	test("(d) the worktree path is gone before the merge: the lane still lands and its branch is removed", async () => {
 		const { repo, bare, base } = repoWithOrigin();
 		const h = laneHarness(home.dir);

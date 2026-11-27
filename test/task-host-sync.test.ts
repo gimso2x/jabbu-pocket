@@ -35,6 +35,7 @@ describe("removeRemoteWorktree", () => {
 		const { run, calls } = fake(() => undefined);
 		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toBeUndefined();
 		expect(calls.map((call) => call.words)).toEqual([
+			["git", "-C", REMOVE.worktree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
 			["git", "-C", REMOVE.repo, "worktree", "remove", "--force", REMOVE.worktree],
 			["git", "-C", REMOVE.repo, "branch", "-D", REMOVE.branch],
 		]);
@@ -43,24 +44,53 @@ describe("removeRemoteWorktree", () => {
 
 	test("이미 없음은 성공이다(worktree·branch 둘 다)", async () => {
 		const { run } = fake((words) =>
-			has(words, "worktree")
-				? { code: 128, stdout: `fatal: '${REMOVE.worktree}' is not a working tree` }
-				: { code: 1, stdout: `error: branch '${REMOVE.branch}' not found.` },
+			has(words, "ls-files")
+				? { code: 128, stdout: `fatal: cannot change to '${REMOVE.worktree}': No such file or directory` }
+				: has(words, "worktree")
+					? { code: 128, stdout: `fatal: '${REMOVE.worktree}' is not a working tree` }
+					: { code: 1, stdout: `error: branch '${REMOVE.branch}' not found.` },
 		);
 		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toBeUndefined();
 	});
 
+	test("다시 못 만드는 무시 파일이 있으면 지우지 않고 그 목록을 돌려준다", async () => {
+		const { run, calls } = fake((words) =>
+			has(words, "ls-files") ? { stdout: "node_modules/\n.env\ndata/local.db\nsrc/x.pyc\n" } : undefined,
+		);
+		const left = await removeRemoteWorktree(run, "wsl", REMOVE);
+		expect(left).toContain("git이 무시하는 파일 2건(.env; data/local.db)");
+		expect(calls).toHaveLength(1);
+	});
+
+	test("다시 만들어지는 무시 파일뿐이면 그대로 지운다", async () => {
+		const { run, calls } = fake((words) =>
+			has(words, "ls-files") ? { stdout: "node_modules/\npkg/dist/\n__pycache__/\n" } : undefined,
+		);
+		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toBeUndefined();
+		expect(calls).toHaveLength(3);
+	});
+
+	test("무시 파일을 못 읽으면(ls-files 실패) 지우지 않는다", async () => {
+		const { run, calls } = fake((words) =>
+			has(words, "ls-files") ? { code: 128, stdout: "fatal: not a git repository" } : undefined,
+		);
+		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toContain("git ls-files 실패");
+		expect(calls).toHaveLength(1);
+	});
+
 	test("실패한 첫 줄을 돌려주되 두 번째 명령도 돌린다", async () => {
 		const { run, calls } = fake((words) =>
-			has(words, "worktree")
-				? { code: 128, stdout: "hint: nothing\nfatal: cannot remove a locked working tree" }
-				: { code: 1, stdout: "error: cannot delete branch used by worktree" },
+			has(words, "ls-files")
+				? undefined
+				: has(words, "worktree")
+					? { code: 128, stdout: "hint: nothing\nfatal: cannot remove a locked working tree" }
+					: { code: 1, stdout: "error: cannot delete branch used by worktree" },
 		);
 		const left = await removeRemoteWorktree(run, "wsl", REMOVE);
 		expect(left).toContain("worktree 제거 실패");
 		expect(left).toContain("cannot remove a locked working tree");
 		expect(left).not.toContain("branch -D");
-		expect(calls).toHaveLength(2);
+		expect(calls).toHaveLength(3);
 	});
 
 	test("ssh 255는 오류 문자열이고 다음 명령은 돌리지 않는다", async () => {

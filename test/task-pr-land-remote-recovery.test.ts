@@ -517,7 +517,9 @@ describe("AC-11e 셸 위험 문자와 인용", () => {
 		const calls: Calls = [];
 		const run: ProcessRunner = async (cmd) => {
 			calls.push({ words: cmd.slice(7, -1).map(unquote), raw: cmd.slice(7, -1) });
-			return { code: 0, stdout: `${GITHUB_URL}\n`, timedOut: false };
+			// The ignored-file listing of a clean worktree is empty; every other call answers with the remote's URL.
+			const listing = cmd.some((word) => word.includes("ls-files"));
+			return { code: 0, stdout: listing ? "" : `${GITHUB_URL}\n`, timedOut: false };
 		};
 		return { run, calls };
 	};
@@ -578,7 +580,7 @@ describe("AC-11e 셸 위험 문자와 인용", () => {
 		const remove = recorder();
 		await removeRemoteWorktree(remove.run, SSH_TARGET, REMOVE);
 		expect(sync.calls.length).toBeGreaterThan(0);
-		expect(remove.calls).toHaveLength(2);
+		expect(remove.calls).toHaveLength(3);
 		for (const call of [...sync.calls, ...remove.calls]) {
 			expect(call.raw).toEqual(call.words.map(remoteShellQuote));
 		}
