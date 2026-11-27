@@ -255,19 +255,10 @@ describe("AC-9: child_restart miss lines name which prompt changed", () => {
 		h = new ColdResumeHarness({ tokens: 0 });
 		h.events = [usageEvent(300_000, 30_000)];
 		await h.turn("하나");
-		h.events = [
-			{
-				...usageEvent(28_000, 302_000),
-				message: {
-					...(usageEvent(0, 0) as { message: object }).message,
-					model: "other-model",
-					provider: "anthropic",
-					usage: { input: 3, output: 5, cacheRead: 28_000, cacheWrite: 302_000, cost: { cacheWrite: 1 } },
-				},
-			} as never,
-		];
+		h.events.splice(0, h.events.length, usageEvent(28_000, 302_000, "other-model")); // the live child reads the same array
 		await h.turn("둘");
 		const lines = h.logs("cache_miss").filter((line) => !line.includes("reason=child_restart"));
+		expect(lines.some((line) => line.includes("reason=model_switch"))).toBe(true);
 		for (const line of lines) {
 			expect(line).not.toContain("jabbu_prompt_changed");
 			expect(line).not.toContain("omp_digest_changed");

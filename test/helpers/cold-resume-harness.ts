@@ -26,13 +26,13 @@ export class FakeClock {
 }
 
 /** omp's `message_end` of an assistant call with its usage. */
-export const usageEvent = (cacheRead: number, cacheWrite: number): OmpEvent => ({
+export const usageEvent = (cacheRead: number, cacheWrite: number, model = MODEL): OmpEvent => ({
 	type: "message_end",
 	message: {
 		role: "assistant",
 		content: [],
 		provider: "anthropic",
-		model: MODEL,
+		model,
 		usage: { input: 3, output: 5, cacheRead, cacheWrite, cost: { cacheWrite: cacheWrite * 6.25e-6 } },
 	},
 });
