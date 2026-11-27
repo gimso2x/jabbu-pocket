@@ -9,10 +9,6 @@ import type { FreezeState } from "../ops/freeze";
 import type { HostLoadReader, StatfsReader } from "../ops/host-resources";
 import type { SessionCeilingGate } from "../ops/host-sessions";
 import type { QuotaRefusalCheck } from "../ops/quota-gate";
-import type { LaneAttachOutcome, LaneSessionOps } from "./manager-session";
-
-export type { LaneAttachOutcome, LaneSessionOps };
-
 import type { ApprovalDetail, ApprovalOrigin, ApprovalResult } from "../safety/approval";
 import type { Store } from "../store/db";
 import type { AutoLandPolicy } from "../tasks/auto-land-policy";
@@ -21,6 +17,7 @@ import type { WikiNotes } from "../wiki/notes";
 import type { IntegrityInput, IntegrityRefusal, LaneDiffRange } from "./integrity";
 import type { CoreRebaseResult, LandLane } from "./land";
 import type { LaneDiff } from "./lane-diff";
+import type { LaneAttachOutcome, LaneSessionOps } from "./manager-session";
 import type { PrTools } from "./pr";
 import type { LaneLandMode, PrLandSeams } from "./pr-land-steps";
 import type { GateSlot } from "./qa";
@@ -47,8 +44,9 @@ export interface LaneRequestOutcome {
 }
 
 export interface LaneManagerDeps {
-	/** `recordsRepo` as of now (live config): the lane's `doc/plans/*.md` are read from there, read-only. */
+	/** `recordsRepo` as of now (live config): the lane's `doc/plans/*.md` are read from there. */
 	recordsRepo?(): string | undefined;
+	idStart?(): number | undefined; // `idStart` as of now (live config): the first daily lane number
 	/** `herdrBoard.url` as of now (live config); the owner-facing cards link the dashboard's diff view under it. */
 	boardUrl?(): string | undefined;
 	store: Store;
@@ -136,3 +134,5 @@ export interface LaneManagerDeps {
 	hostSessions?: SessionCeilingGate;
 	quotaRefusal?: QuotaRefusalCheck;
 }
+
+export type { LaneAttachOutcome, LaneSessionOps };

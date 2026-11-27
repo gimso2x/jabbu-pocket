@@ -15,8 +15,16 @@ import type { ProcessRunner } from "../src/dispatch/omp";
 import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import type { HostLoadReader } from "../src/ops/host-resources";
+import { hostPressure } from "../src/ops/host-resources";
 import { LoadHysteresisTracker, loadPolicyFromConfig, sampleLoadMetrics } from "../src/ops/load-hysteresis";
-import { OPS_ACTION_LIMITS, OPS_ACTION_MUTE, OPS_ACTION_REFRESH, parseOpsPanelActionId } from "../src/ops/ops-panel";
+import {
+	OPS_ACTION_LIMITS,
+	OPS_ACTION_MUTE,
+	OPS_ACTION_REFRESH,
+	type OpsPanelRenderInput,
+	parseOpsPanelActionId,
+	renderOpsPanel,
+} from "../src/ops/ops-panel";
 import { quotaGatePath, writeQuotaLift } from "../src/ops/quota-gate";
 import { redact } from "../src/redact";
 import {
@@ -615,5 +623,294 @@ describe("Daemon #ops panel and hysteresis alerts", () => {
 		const quotaValue = editedFields?.find((f) => f.name === "쿼터 게이트")?.value;
 		expect(quotaValue).toContain("경보 전용(차단 안 함)");
 		expect(quotaValue).toContain("• anthropic: 5시간 97%");
+	});
+});
+
+const MIN = 60_000;
+
+function baseRender(extra: Partial<OpsPanelRenderInput> = {}): OpsPanelRenderInput {
+	const sample = sampleLoadMetrics(hostPressure(makeHostLoad({}).reader));
+	const config = { channelId: OPS_CHANNEL };
+	const snapshot = new LoadHysteresisTracker().evaluate(sample, loadPolicyFromConfig(config), BASE_NOW).snapshot;
+	return {
+		now: BASE_NOW,
+		timezone: "Asia/Seoul",
+		status: {
+			ompVersion: "0.0.0-test",
+			timezone: "Asia/Seoul",
+			daemonRunning: true,
+			origins: [],
+			ledger: { pending: 0, inflight: 0, confirmed: 0, ambiguous: 0, expired: 0 },
+			inbound: { pending: 0, dispatched: 0, confirmed: 0, failed: 0, expired: 0 } as never,
+			monitors: { count: 0, next: null },
+			openGates: [],
+		},
+		lanes: { working: 0, paused: 0, pendingLand: 0 },
+		load: { sample, snapshot },
+		quota: { snapshot: { updatedAt: null, held: [] }, lifts: new Map() },
+		config,
+		...extra,
+	};
+}
+
+const fieldOf = (input: OpsPanelRenderInput, name: string): string | undefined =>
+	renderOpsPanel(input).message.fields?.find((f) => f.label === name)?.value;
+
+describe("renderOpsPanel monitors, recent incidents and usage fields", () => {
+	test("monitors field lists failing names with counts and raises tone; none failing says all normal", () => {
+		const failing = [
+			{ name: "backup-watch", count: 3, lastAt: BASE_NOW - 5 * MIN },
+			{ name: "disk-watch", count: 1, lastAt: BASE_NOW - 2 * 3_600_000 },
+		];
+		const out = renderOpsPanel(baseRender({ monitors: { total: 4, failing } }));
+		const value = out.message.fields?.find((f) => f.label === "🛠️ 모니터")?.value ?? "";
+		expect(value).toContain("backup-watch 실패 3회 · 5분 전");
+		expect(value).toContain("disk-watch 실패 1회 · 2시간 전");
+		expect(out.message.tone).toBe("warn");
+		expect(fieldOf(baseRender({ monitors: { total: 4, failing: [] } }), "🛠️ 모니터")).toBe("모두 정상 (4개)");
+		expect(renderOpsPanel(baseRender({ monitors: { total: 4, failing: [] } })).message.tone).toBe("ok");
+	});
+
+	test("recent field keeps the newest 3, marks alerted/resolved, names gates in Korean; empty says 아직 없음", () => {
+		const recent = [
+			{ scope: "gate:backup_age", status: "alerted" as const, lastAt: BASE_NOW - MIN },
+			{ scope: "provider:limit", status: "resolved" as const, lastAt: BASE_NOW - 2 * MIN },
+			{ scope: "monitor:nightly", status: "alerted" as const, lastAt: BASE_NOW - 3 * MIN },
+			{ scope: "dispatch:old-1", status: "alerted" as const, lastAt: BASE_NOW - 4 * MIN },
+			{ scope: "dispatch:old-2", status: "resolved" as const, lastAt: BASE_NOW - 5 * MIN },
+		];
+		const lines = (fieldOf(baseRender({ recent }), "📮 최근") ?? "").split("\n");
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toBe("🔴 백업이 36시간 넘게 없음 · 1분 전");
+		expect(lines[1]).toBe("✅ 모델 공급자 사용 한도 · 2분 전");
+		expect(lines[2]).toBe("🔴 nightly · 3분 전");
+		expect(fieldOf(baseRender({ recent: [] }), "📮 최근")).toBe("아직 없음");
+	});
+
+	test("usage field: one line per provider with bar and percent; empty, failed and omitted states", () => {
+		const usage = {
+			state: "ok" as const,
+			rows: [
+				{ provider: "Claude", label: "5시간", usedPct: 40, resetsAt: BASE_NOW + 3_600_000 },
+				{ provider: "GLM", label: "주간", usedPct: 95 },
+			],
+		};
+		const lines = (fieldOf(baseRender({ usage }), "🔋 사용량") ?? "").split("\n");
+		expect(lines).toEqual(["Claude 5시간 ▰▰▰▰▱▱▱▱▱▱ 40% · 11:00", "GLM 주간 ▰▰▰▰▰▰▰▰▰▰ 95%"]);
+		expect(fieldOf(baseRender({ usage: { state: "empty" } }), "🔋 사용량")).toBe("보고된 한도 없음");
+		expect(fieldOf(baseRender({ usage: { state: "failed", error: "boom" } }), "🔋 사용량")).toBe("조회 실패");
+		expect(fieldOf(baseRender(), "🔋 사용량")).toBeUndefined();
+	});
+
+	test("fingerprint ignores relative-time drift and 5%-bucket usage jitter, but follows monitor counts", () => {
+		const monitors = (count: number) => ({ total: 2, failing: [{ name: "m", count, lastAt: BASE_NOW - MIN }] });
+		const usage = (pct: number) => ({
+			state: "ok" as const,
+			rows: [{ provider: "Claude", label: "5시간", usedPct: pct }],
+		});
+		const fp = (extra: Partial<OpsPanelRenderInput>) => renderOpsPanel(baseRender(extra)).fingerprint;
+		const base = { monitors: monitors(2), usage: usage(41), recent: [] };
+		expect(fp({ ...base, now: BASE_NOW + MIN })).toBe(fp({ ...base, now: BASE_NOW + 10 * MIN }));
+		expect(fp(base)).toBe(fp({ ...base, usage: usage(42) }));
+		expect(fp(base)).not.toBe(fp({ ...base, monitors: monitors(3) }));
+	});
+
+	test("without the three inputs the fields and fingerprint are the pre-change five-field panel", () => {
+		const out = renderOpsPanel(baseRender());
+		expect(out.message.fields?.map((f) => f.label)).toEqual([
+			"호스트 부하",
+			"세션 · 작업",
+			"건강 게이트",
+			"쿼터 게이트",
+			"갱신 시각",
+		]);
+		expect(out.fingerprint).not.toContain("monitorsKey");
+		expect(out.fingerprint).not.toContain("usageKey");
+	});
+
+	test("50 failing monitors with long names and long scopes keep all 8 fields under the embed limits", () => {
+		const long = "가".repeat(400);
+		const failing = Array.from({ length: 50 }, (_, i) => ({ name: `${long}${i}`, count: i + 1, lastAt: BASE_NOW }));
+		const recent = Array.from({ length: 5 }, (_, i) => ({
+			scope: `dispatch:${long}${i}`,
+			status: "alerted" as const,
+			lastAt: BASE_NOW - i,
+		}));
+		const usage = {
+			state: "ok" as const,
+			rows: Array.from({ length: 30 }, (_, i) => ({ provider: `p${long}${i}`, label: long, usedPct: i * 3 })),
+		};
+		const base = baseRender();
+		const input = baseRender({
+			monitors: { total: 50, failing },
+			recent,
+			usage,
+			status: {
+				...base.status,
+				openGates: Array.from({ length: 40 }, (_, i) => ({ name: `gate_${long}${i}`, detail: "" })) as never,
+			},
+		});
+		const { message } = renderOpsPanel(input);
+		const fields = message.fields ?? [];
+		expect(fields).toHaveLength(8);
+		for (const f of fields) expect(f.value.length).toBeLessThanOrEqual(1024);
+		const total =
+			(message.title?.length ?? 0) +
+			(message.body?.length ?? 0) +
+			fields.reduce((n, f) => n + f.label.length + f.value.length, 0);
+		expect(total).toBeLessThanOrEqual(6000);
+	});
+});
+
+describe("incident rows behind the panel", () => {
+	test("resolving an incident moves its last_at to the resolution time and it tops the recent list as resolved", async () => {
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: OPS_CHANNEL, type: 0, guildId: GUILD });
+		daemon = await startOpsDaemon({ transport, hostLoad: makeHostLoad({}).reader });
+		const store = daemon.store;
+		store.recordAlertIncident("gate:backup_age", "old", BASE_NOW - 10 * MIN);
+		store.recordAlertIncident("gate:disk_low", "newer", BASE_NOW - 5 * MIN);
+		now = BASE_NOW;
+		store.resolveAlertIncidents("gate:backup_age");
+		const rows = store.opsIncidents(5).recent;
+		expect(rows[0]).toEqual({ scope: "gate:backup_age", status: "resolved", lastAt: BASE_NOW });
+		expect(rows[1]).toMatchObject({ scope: "gate:disk_low", status: "alerted" });
+		const out = renderOpsPanel(baseRender({ recent: rows }));
+		expect(out.message.fields?.find((f) => f.label === "📮 최근")?.value.split("\n")[0]).toBe(
+			"✅ 백업이 36시간 넘게 없음 · 방금",
+		);
+	});
+});
+
+describe("Daemon #ops panel monitors, usage collection and pin retry", () => {
+	const okRun =
+		(calls: { n: number }): ProcessRunner =>
+		async () => {
+			calls.n += 1;
+			return {
+				code: 0,
+				signal: null,
+				timedOut: false,
+				stdout: JSON.stringify({
+					reports: [
+						{
+							provider: "anthropic",
+							limits: [{ label: "5h", window: { id: "5h", label: "5h" }, amount: { usedFraction: 0.4 } }],
+						},
+					],
+				}),
+				stderr: "",
+			};
+		};
+	const usageConfig = {
+		dashboard: { port: 7331, usageLimits: { omp: [["fake-omp", "usage", "--json", "-r", "-p", "anthropic"]] } },
+	};
+
+	/** Yields to the event loop (bounded) until `done`: a background collection settles without any timer. */
+	async function until(done: () => boolean): Promise<void> {
+		for (let i = 0; i < 500 && !done(); i++) await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(done()).toBe(true);
+	}
+
+	function panelId(transport: WaitingDiscordTransport): string {
+		const created = transport.calls.find((c) => c.method === "createMessage" && c.channelId === OPS_CHANNEL);
+		if (created?.method !== "createMessage") throw new Error("expected panel createMessage");
+		return created.id;
+	}
+
+	const refresh = (transport: WaitingDiscordTransport): Promise<void> =>
+		transport.emitInteraction(clickButton(OPS_ACTION_REFRESH, panelId(transport)));
+
+	function panelFields(transport: WaitingDiscordTransport): Array<{ name: string; value: string }> {
+		const last = transport.calls
+			.filter((c) => (c.method === "createMessage" || c.method === "editMessage") && c.embeds !== undefined)
+			.at(-1);
+		if (last === undefined || (last.method !== "createMessage" && last.method !== "editMessage")) {
+			throw new Error("expected a panel post");
+		}
+		return (last.embeds?.[0] as { fields?: Array<{ name: string; value: string }> } | undefined)?.fields ?? [];
+	}
+
+	test("posts the failing monitor's name and collects usage once per 15 minutes", async () => {
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: OPS_CHANNEL, type: 0, guildId: GUILD });
+		const calls = { n: 0 };
+		daemon = await startOpsDaemon({
+			transport,
+			hostLoad: makeHostLoad({}).reader,
+			usageLimitsRun: okRun(calls),
+			configPatch: usageConfig,
+		});
+		const monitor = daemon.store.monitors.addMonitor({
+			name: "nightly-sync",
+			trigger: { kind: "cron", schedule: "* * * * *", timezone: "UTC" },
+			instruction: "x",
+			overlap: "queue",
+			enabled: true,
+		});
+		daemon.store.monitors.recordMonitorIncident(monitor.id, "boom", BASE_NOW - 3 * MIN);
+		await daemon.sweep();
+		await daemon.opsPanelIdle();
+		expect(panelFields(transport).find((f) => f.name === "🛠️ 모니터")?.value).toContain("nightly-sync 실패 1회");
+		await until(() => calls.n >= 1);
+
+		now = BASE_NOW + 2 * MIN;
+		const usageValue = (): string | undefined => panelFields(transport).find((f) => f.name === "🔋 사용량")?.value;
+		for (let i = 0; i < 50 && usageValue() === undefined; i++) await refresh(transport);
+		expect(usageValue()).toContain("Claude 5h");
+		expect(calls.n).toBe(1);
+		now = BASE_NOW + 14 * MIN;
+		await refresh(transport);
+		expect(calls.n).toBe(1);
+		now = BASE_NOW + 16 * MIN;
+		await refresh(transport);
+		await until(() => calls.n >= 2);
+		expect(calls.n).toBe(2);
+	});
+
+	test("a collector that never finishes does not hold ticks, refresh or mute", async () => {
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: OPS_CHANNEL, type: 0, guildId: GUILD });
+		let started = 0;
+		const hang: ProcessRunner = () => {
+			started += 1;
+			return new Promise(() => {});
+		};
+		daemon = await startOpsDaemon({
+			transport,
+			hostLoad: makeHostLoad({}).reader,
+			usageLimitsRun: hang,
+			configPatch: usageConfig,
+		});
+		await daemon.sweep();
+		await daemon.opsPanelIdle();
+		expect(started).toBe(1);
+		now = BASE_NOW + 2 * MIN;
+		await refresh(transport);
+		await refresh(transport);
+		await transport.emitInteraction(clickButton(OPS_ACTION_MUTE, panelId(transport)));
+		expect(started).toBe(1);
+		expect(transport.count("editMessage")).toBeGreaterThanOrEqual(3);
+		expect(panelFields(transport).some((f) => f.name === "🔋 사용량")).toBe(false);
+	});
+
+	test("a failed pin is retried after an hour and not again once it succeeds", async () => {
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: OPS_CHANNEL, type: 0, guildId: GUILD });
+		transport.failNext.pinMessage = [new DiscordCallError("definitive", "Missing Access", 403, 50013)];
+		daemon = await startOpsDaemon({ transport, hostLoad: makeHostLoad({}).reader });
+		await daemon.sweep();
+		await daemon.opsPanelIdle();
+		expect(transport.count("pinMessage")).toBe(1);
+
+		now = BASE_NOW + 30 * MIN;
+		await refresh(transport);
+		expect(transport.count("pinMessage")).toBe(1);
+		now = BASE_NOW + 61 * MIN;
+		await refresh(transport);
+		expect(transport.count("pinMessage")).toBe(2);
+		now = BASE_NOW + 130 * MIN;
+		await refresh(transport);
+		expect(transport.count("pinMessage")).toBe(2);
 	});
 });
