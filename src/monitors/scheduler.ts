@@ -214,13 +214,7 @@ export class MonitorScheduler {
 	#tick(): TickSummary {
 		const { store, clock } = this.#deps;
 		const now = clock.now();
-		const summary: TickSummary = {
-			claimed: 0,
-			skippedOverlap: 0,
-			skippedCatchUp: 0,
-			skippedFrozen: 0,
-			dispatched: 0,
-		};
+		const summary: TickSummary = { claimed: 0, skippedOverlap: 0, skippedCatchUp: 0, skippedFrozen: 0, dispatched: 0 };
 		store.monitors.reconcileDeliveries();
 		const monitors = store.monitors.listMonitors();
 		// The freeze records skipped events and never replays them: `frozen` when the switch is on, else nothing holds.
@@ -349,22 +343,6 @@ export class MonitorScheduler {
 						: result.exitCode !== null && !result.timedOut && result.error === undefined
 							? "unmet"
 							: "error";
-					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
-					const logIt =
-						result.fired ||
-						outcome !== (store.monitors.getMonitor(monitor.id)?.lastScriptState ?? null) ||
-						result.timedOut ||
-						result.error !== undefined ||
-						result.stderr !== "";
-					if (logIt)
-						log.info("monitor_script", {
-							monitor: monitor.id,
-							fired: result.fired,
-							exit: result.exitCode,
-							timed_out: result.timedOut,
-							...(result.error === undefined ? {} : { error: result.error }),
-							...(result.stderr === "" ? {} : { tail: result.stderr }),
-						});
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
@@ -378,6 +356,26 @@ export class MonitorScheduler {
 						...(result.fired ? { hash: result.outputHash } : {}),
 						...(suppressReason === undefined ? {} : { suppressReason }),
 					});
+					// An unchanged, quiet check is the steady state; logging it every interval only adds noise. A met
+					// check only counts as fired when it actually claimed an event, so a steady edge-met check stays
+					// quiet while a `fire: "every"` met check — which claims every time — still logs.
+					// `lastScriptState` here is the tick-time snapshot, i.e. the state before this check, because the
+					// claim above already moved it.
+					const logIt =
+						(result.fired && claim !== undefined) ||
+						outcome !== monitor.lastScriptState ||
+						result.timedOut ||
+						result.error !== undefined ||
+						result.stderr !== "";
+					if (logIt)
+						log.info("monitor_script", {
+							monitor: monitor.id,
+							fired: result.fired,
+							exit: result.exitCode,
+							timed_out: result.timedOut,
+							...(result.error === undefined ? {} : { error: result.error }),
+							...(result.stderr === "" ? {} : { tail: result.stderr }),
+						});
 					if (suppressReason !== undefined && claim !== undefined)
 						log.info("monitor_suppressed", { monitor: monitor.id, reason: suppressReason });
 					if (claim) this.#dispatchReady();
