@@ -101,10 +101,11 @@ export function askText(
 	return win.text;
 }
 
-/** A text answer to one `ask` question: option numbers/labels, else free text (`customInput`). */
-function textAnswer(question: OmpAskQuestion, text: string): AskAnswer {
+/** A text answer to one `ask` question: option numbers/labels, else free text (`customInput`); undefined when the reply is blank and answers nothing. */
+function textAnswer(question: OmpAskQuestion, text: string): AskAnswer | undefined {
 	const labels = question.options.map((option) => option.label);
 	const trimmed = text.trim();
+	if (trimmed === "") return undefined;
 	if (question.multi === true) {
 		const parts = trimmed.split(/[,\s]+/).filter((part) => part !== "");
 		const picked = parts.map((part) => optionOf(labels, part));
@@ -136,5 +137,7 @@ export function applyAskEvent(
 	}
 	const first = answers.indexOf(undefined);
 	const question = questions[first];
-	if (question !== undefined) answers[first] = textAnswer(question, event.text);
+	if (question === undefined) return;
+	const answer = textAnswer(question, event.text);
+	if (answer !== undefined) answers[first] = answer;
 }

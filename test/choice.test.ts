@@ -769,6 +769,25 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("ask: a blank reply answers nothing and the question stays open", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "b1",
+			questions: [{ id: "q1", question: "어디로?", options: [{ label: "dev" }, { label: "prod" }] }],
+		});
+		await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "   ")).toBe(true);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "b1")).toEqual(
+			reply("b1", { answers: [{ id: "q1", selectedOptions: ["prod"] }] }),
+		);
+		await h.close();
+	});
+
 	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
 		const h = harness();
 		h.send({
