@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { COMMAND_TEXT } from "../src/core/types";
 import { buildLaneOutcomeCard, type LaneCardView } from "../src/lanes/card";
 import { type FenceStore, fenceUncertain, uncertainCount } from "../src/lanes/send-fence";
 import type { LaneRow } from "../src/lanes/status";
@@ -278,8 +279,8 @@ describe("the lane card names the parked rows (AC-4)", () => {
 		const fencedCard = cards.find((text) => text.includes("머지 대기 · card-fenced"));
 		const cleanCard = cards.find((text) => text.includes("머지 대기 · card-clean"));
 		expect(fencedCard).toBeDefined();
-		expect(fencedCard).toContain("⚠️ 전달 불확실 1건");
-		expect(fencedCard).toContain("/queue-jabbu`에서 retry 또는 close");
+		expect(fencedCard).toContain("⚠️ 전달 불확실 1건 — 코어 발신 보류 중");
+		expect(fencedCard).toContain(`${COMMAND_TEXT.queue}\`에서 \`retry <번호>\` 또는 \`close <번호>\``);
 		expect(cleanCard).toBeDefined();
 		expect(cleanCard).not.toContain("전달 불확실");
 		h.close();
@@ -287,7 +288,7 @@ describe("the lane card names the parked rows (AC-4)", () => {
 
 	test("AC-4: every card but a superseded one opens with the line; a view without the count draws none", () => {
 		const lane = { name: "demo", title: "Demo", meta: {} } as unknown as LaneRow;
-		const line = "⚠️ 전달 불확실 2건 — `/queue-jabbu`에서 retry 또는 close";
+		const line = `⚠️ 전달 불확실 2건 — 코어 발신 보류 중 · \`${COMMAND_TEXT.queue}\`에서 \`retry <번호>\` 또는 \`close <번호>\``;
 		for (const view of VIEWS) {
 			const card = buildLaneOutcomeCard(lane, { ...view, uncertain: 2 });
 			if (view.kind === "superseded") {

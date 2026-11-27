@@ -110,7 +110,7 @@ import { formatConfidence, reviewLane } from "./review";
 import { currentRuntime, primeGateChanges } from "./runtime";
 import { openLanesOfRepo, type RepoMatcher, sameRepo } from "./same-repo";
 import { appendFollowups, checkLaneScope, parseLaneLeftovers } from "./scope";
-import { fenceUncertain } from "./send-fence";
+import { fenceUncertain, uncertainCount } from "./send-fence";
 import { parseStartArgs } from "./start-args";
 import {
 	INCONCLUSIVE_APPROVED,
@@ -2980,11 +2980,11 @@ export class LaneManager {
 		}
 	}
 
-	/** A rework card names how long lanes usually take (nothing under 10 closed lanes). */
-	#withTypical(view: LaneCardView): LaneCardView {
-		if (view.kind !== "rework") return view;
-		const typical = typicalLaneDuration(this.#deps.store, this.#deps.log);
-		return typical === undefined ? view : { ...view, typical };
+	/** A rework card names how long lanes take (nothing under 10 closed lanes); a lane with parked rows counts them. */
+	#dressed(lane: LaneRow, view: LaneCardView): LaneCardView {
+		const typical = view.kind === "rework" ? typicalLaneDuration(this.#deps.store, this.#deps.log) : undefined;
+		const uncertain = uncertainCount(this.#deps.store, lane.originKey);
+		return { ...view, ...(typical === undefined ? {} : { typical }), ...(uncertain === 0 ? {} : { uncertain }) };
 	}
 
 	/** Augments a card view with the lane worker session's cost totals; on failure leaves cost undefined and logs lane_cost_failed. */
@@ -3005,7 +3005,7 @@ export class LaneManager {
 		if (route === undefined) return undefined;
 		try {
 			const withCost = await this.#withCost(lane, view);
-			const card = buildLaneOutcomeCard(lane, this.#withTypical(withCost), this.#deps.boardUrl?.());
+			const card = buildLaneOutcomeCard(lane, this.#dressed(lane, withCost), this.#deps.boardUrl?.());
 			return (await route.port.post(route.target, cardMessage(card, route.port))).messageId;
 		} catch (error) {
 			this.#deps.log.warn("lane_card_post_failed", { lane: lane.name, error: String(error) });
@@ -3019,7 +3019,7 @@ export class LaneManager {
 		if (route === undefined) return;
 		try {
 			const withCost = await this.#withCost(lane, view);
-			const card = buildLaneOutcomeCard(lane, this.#withTypical(withCost), this.#deps.boardUrl?.());
+			const card = buildLaneOutcomeCard(lane, this.#dressed(lane, withCost), this.#deps.boardUrl?.());
 			await route.port.edit(
 				{
 					platform: route.port.platform,
