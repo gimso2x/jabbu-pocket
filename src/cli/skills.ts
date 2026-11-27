@@ -1,16 +1,15 @@
 import { basename, join } from "node:path";
 import { parseArgs } from "node:util";
 import { agentSkillsRoot, NAME_PATTERN, rollbackSkill } from "../review/skills";
+import { SKILLS_LOCK_USAGE, skillsLockCommand } from "./skills-lock";
 
 export const SKILLS_USAGE = `  skills rollback <name>         restore an installed skill's previous revision (every install keeps the replaced
                                  SKILL.md under revisions/)
-`;
+${SKILLS_LOCK_USAGE}`;
 
-/**
- * `jabbu-pocket skills rollback <이름>`: restores the newest saved revision of an installed skill. Installs copy the
- * previous SKILL.md to `revisions/` first, so this is always one command — the safety net of the review loop.
- */
+/** `jabbu-pocket skills <rollback|lock|verify>` 실행기. */
 export function skillsCommand(args: string[], env: Record<string, string | undefined> = process.env): number {
+	if (args[0] === "lock" || args[0] === "verify") return skillsLockCommand(args[0], args.slice(1), env);
 	const { positionals } = parseArgs({ args, allowPositionals: true, options: {} });
 	const [sub, name] = positionals;
 	if (sub !== "rollback" || typeof name !== "string" || name === "" || positionals.length !== 2) {
