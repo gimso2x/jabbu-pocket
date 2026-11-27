@@ -120,8 +120,8 @@ umask 077; cat > ~/.jabbu/secrets/discord-bot-token   # 2절의 봇 토큰 붙�
 - `alertChannelId`는 선택입니다. 넣으면 오너 경보(게이트 열림·회복, 턴 연속 실패·멈춤, 처리 정체, 공급자 한도, 모니터 실패)가 오너 DM 대신 이 채널 최상위에 올라갑니다. 답장으로 이어 물으려면 `mentionFreeChannels`에도 넣습니다. `logChannelId`와 같으면 기동하지 않습니다.
 - `escalationChannelId`는 선택입니다. 넣으면 Discord 대화에서 올린 승인 카드가 이 채널에 뜹니다(Discord 오너 멘션, `요청 위치` 링크). 요청한 대화에 스레드가 있으면 그곳에 버튼 달린 사본 카드가 뜨고, 카드 스레드에 단 답글도 카드를 결정합니다. 없으면 지금처럼 요청한 대화에 카드가 뜹니다.
 - 두 채널 모두 봇이 보고 글을 쓸 수 있어야 합니다(View Channel·Send Messages). `channels`는 재시작 키라 두 값도 재시작해야 반영됩니다.
-- `guildIds`·`mentionFreeChannels`·`requireMention`은 선택입니다. `guildIds`를 비우면 봇이 들어간 모든 서버의 글을 받습니다(오너 글만 처리하는 건 같습니다).
-- `channels`는 재시작이 필요한 키입니다. `reload`로는 반영되지 않습니다.
+- `guildIds`·`mentionFreeChannels`·`requireMention`은 선택입니다. `guildIds`를 비우면 봇이 들어간 모든 서버의 글을 받습니다(오너 글만 처리하는 건 같습니다). 이 세 키는 바꾼 뒤 `reload`로 다음 메시지부터 바로 반영됩니다.
+- `channels`는 재시작이 필요한 키입니다. `reload`로는 위 세 접속 정책 키(`guildIds`·`mentionFreeChannels`·`requireMention`)만 바로 반영되고, 그 밖 값(토큰 파일·서버 채널 지정·`peerBots` 등)은 재시작해야 반영됩니다.
 
 반영과 확인:
 

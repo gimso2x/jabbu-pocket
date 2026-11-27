@@ -462,8 +462,8 @@ test("abort returns while a detached descendant holds stdout: exit settles on th
 	// log to prove the detached sleeper exists before aborting, or the test passes vacuously.
 	await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
 	await driver.abort();
-	// Returned: the turn is over and its final out. The detached sleeper kept stdout open, so only the exit
-	// code (plus a short drain grace) settled the exit.
+	// Returned: the turn is over and its final out. The exit settles on the code, whether the killed sleeper's end
+	// closed stdout first or the drain grace did.
 	expect(finals).toEqual([{ opRef, status: "aborted", text: "", error: "cancel unanswered; agy killed" }]);
 	expect(await driver.state()).toMatchObject({ idle: true });
 	expect(driver.pid).toBeUndefined();
@@ -477,7 +477,7 @@ test("abort returns while a detached descendant holds stdout: exit settles on th
 	expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([session]);
 	expect(finals).toHaveLength(2);
 	await driver.stop();
-	// The detached sleeper outlives the group kill: end it so its pipe does not outlive the test file.
+	// The sleeper is meant to die with the child's tree; end it if it outlived, so its pipe does not outlive the test file.
 	const grand = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
 	if (grand !== undefined) {
 		try {
@@ -524,7 +524,9 @@ test("AgyAcpClient ignores stdout notifications written after exit settles", asy
 		await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
 		grand = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
 		if (grand === undefined) throw new Error("missing detached sleeper pid");
-		client.kill("SIGKILL");
+		// The group alone, on purpose: `client.kill` ends the detached sleeper too (the test after this one), and
+		// this one needs it alive to write its late line.
+		process.kill(-client.pid, "SIGKILL");
 		await exited.promise;
 		await client.gone;
 		const before = notifications.length;
@@ -544,6 +546,39 @@ test("AgyAcpClient ignores stdout notifications written after exit settles", asy
 				// already gone
 			}
 		}
+	}
+});
+
+test("AgyAcpClient.kill ends a descendant that left the process group, not the group alone", async () => {
+	const harness = makeHarness();
+	const exited = Promise.withResolvers<number>();
+	const client = new AgyAcpClient(
+		{
+			executable: join(harness.root, "bin", "agy"),
+			cwd: harness.root,
+			env: { FAKE_AGY_LOG: harness.logFile, HOME: harness.root, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+		},
+		{
+			onNotification: () => undefined,
+			onExit: (code) => exited.resolve(code),
+		},
+	);
+	let grand: number | undefined;
+	try {
+		await client.request("initialize", { protocolVersion: 1 });
+		const opened = await client.request("session/new", { cwd: harness.root, mcpServers: [] });
+		void client
+			.request("session/prompt", { sessionId: opened.sessionId, prompt: [{ type: "text", text: "@hold-stdout" }] })
+			.catch(() => undefined);
+		await until(() => harness.readLog().some((entry) => entry.dir === "grand"), "the detached sleeper");
+		const started = harness.readLog().find((entry) => entry.dir === "grand")?.pid;
+		if (started === undefined) throw new Error("missing detached sleeper pid");
+		grand = started;
+		client.kill("SIGKILL");
+		await client.gone;
+		await until(() => !alive(started), "the detached sleeper dies with the child");
+	} finally {
+		if (grand !== undefined && alive(grand)) process.kill(grand, "SIGKILL");
 	}
 });
 
