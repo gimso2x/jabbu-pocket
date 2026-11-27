@@ -15,6 +15,9 @@ import {
 	TURN_LABELS,
 } from "./text";
 import { renderApprovalCards, renderDiffNav } from "./ux-renderers";
+import { discordThreadHref } from "./work-types";
+
+export { discordThreadHref };
 
 /**
  * A TASK's facts for the detail panel: ID and risk, branch, machine, AC and step progress, PROGRESS, blocker, worker.
@@ -31,15 +34,13 @@ export function renderTaskFacts(task: TaskInfo): string {
 				: `-/${task.acTotal}`
 			: `${task.acChecked}/${task.acTotal}<span class="meter" role="img" aria-label="AC ${percent}%"><i style="width:${percent}%"></i></span>`;
 	const rows: Array<[string, string]> = [
-		["TASK", `<span class="mono">${esc(task.taskId)}</span> · 위험 ${esc(task.risk)}`],
+		["TASK", `<span class="mono">${esc(task.rawTaskId ?? task.taskId)}</span> · 위험 ${esc(task.risk)}`],
 		["브랜치", `<code>${esc(task.branch)}</code>`],
 		["머신", `${esc(task.host)} · ${esc(task.agent)}`],
 		["AC 충족", acValue],
 		[
 			"단계",
-			`${task.stepsDone === undefined ? "-" : `${task.stepsDone}/${task.stepsTotal ?? "-"}`}${
-				task.progress?.current ? ` · 지금 ${esc(task.progress.current)}` : ""
-			}`,
+			`${task.stepsDone === undefined ? "-" : `${task.stepsDone}/${task.stepsTotal ?? "-"}`}${task.progress?.current ? ` · 지금 ${esc(task.progress.current)}` : ""}`,
 		],
 		["PROGRESS", task.progress ? `${esc(task.progress.status || "?")} · ${at(task.progress.updated)}` : "-"],
 	];
@@ -142,29 +143,6 @@ export function renderTaskFacts(task: TaskInfo): string {
 		}" aria-label="진행 띠">${items}</ol>`;
 	};
 	return `<dl class="facts">${rows.map(([name, value]) => `<dt>${esc(name)}</dt><dd>${value}</dd>`).join("")}</dl>${band()}${checks}${steps}`;
-}
-
-/**
- * The `https://discord.com/channels/…` link that opens a Discord conversation: a DM at its message
- * (`discord/dm/…`, `<dm>:<message>`), a server thread or a lane (`<parent>:<thread>`) at the thread, a server channel
- * at its message. "" for a ref that is not two snowflakes, or a server conversation without the one server id (a DM
- * needs none). Self-contained (shipped to the page).
- */
-export function discordThreadHref(
-	guild: string | null | undefined,
-	originKey: string | null | undefined,
-	threadRef: string | null | undefined,
-): string {
-	const ref = /^(\d{17,20}):(\d{17,20})$/.exec(threadRef ?? "");
-	if (ref === null) return "";
-	const key = (originKey ?? "").replace(/^[^/:]+:/, "");
-	if (key.startsWith("discord/dm/")) return `https://discord.com/channels/@me/${ref[1]}/${ref[2]}`;
-	if (!guild) return "";
-	if (/^discord\/ch\/\d+\/t\/\d+$/.test(key) || key.startsWith("jabbu/work/")) {
-		return `https://discord.com/channels/${guild}/${ref[2]}`;
-	}
-	if (key.startsWith("discord/ch/")) return `https://discord.com/channels/${guild}/${ref[1]}/${ref[2]}`;
-	return "";
 }
 
 /**
@@ -309,14 +287,14 @@ export function renderTaskDetail(
 		cardKey === undefined
 			? ""
 			: `<a class="button is-ghost" href="?card=${esc(encodeURIComponent(cardKey))}" data-card="${esc(cardKey)}">에이전트 패널 보기</a>`;
-	const actions = `<div class="detail-actions"><span class="badge ${tone}">${esc(label)}</span>${task.pausedAt === undefined ? "" : '<span class="badge is-warning" title="스윕 재촉·stale 알림·자동 머지 보류 중">멈춤 중</span>'}<button type="button" class="copy-btn" data-copy="${esc(task.taskId)}" data-copy-label="TASK ID" aria-label="TASK ID 복사">TASK ID 복사</button><button type="button" class="copy-btn" data-copy="${esc(task.branch)}" data-copy-label="브랜치" aria-label="브랜치 복사">브랜치 복사</button></div>`;
+	const actions = `<div class="detail-actions"><span class="badge ${tone}">${esc(label)}</span>${task.pausedAt === undefined ? "" : '<span class="badge is-warning" title="스윕 재촉·stale 알림·자동 머지 보류 중">멈춤 중</span>'}<button type="button" class="copy-btn" data-copy="${esc(task.rawTaskId ?? task.taskId)}" data-copy-label="TASK ID" aria-label="TASK ID 복사">TASK ID 복사</button><button type="button" class="copy-btn" data-copy="${esc(task.branch)}" data-copy-label="브랜치" aria-label="브랜치 복사">브랜치 복사</button></div>`;
 	const leadText =
 		task.acChecked === undefined && !task.open
 			? `AC ${task.acTotal}개`
 			: `AC ${task.acChecked === undefined ? "-" : task.acChecked}/${task.acTotal} · 단계 ${
 					task.stepsDone === undefined ? "-" : `${task.stepsDone}/${task.stepsTotal ?? "-"}`
 				}`;
-	return `<p class="eyebrow">TASK · ${esc(task.host)}</p><h2 class="detail-title" id="detail-title" tabindex="-1">${esc(
+	return `<p class="eyebrow">TASK · ${task.install ? `${esc(task.install)} · ` : ""}${esc(task.host)}</p><h2 class="detail-title" id="detail-title" tabindex="-1">${esc(
 		task.title,
 	)}</h2>${actions}<p class="lead">${leadText}</p>${renderTaskFacts(task)}${card}${
 		chain === undefined ? "" : renderFlowChain(chain, task.taskId, true)
@@ -541,7 +519,15 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 			const model = thread.model;
 			const modelName = model === undefined ? "" : model.model.slice(model.model.lastIndexOf("/") + 1);
 			const lane = s.lanes.ok ? s.lanes.items.find((item) => item.originKey === thread.originKey) : undefined;
-			const cmd = terminal(lane === undefined ? [["lanes", "watch", thread.originKey]] : laneCommands(lane.name));
+			const cmd = terminal(
+				lane
+					? lane.install
+						? []
+						: laneCommands(lane.name)
+					: thread.install
+						? []
+						: [["lanes", "watch", thread.originKey]],
+			);
 			return `${show(thread.title, [
 				["상태", esc(latest.state)],
 				...(model === undefined
@@ -598,7 +584,7 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 				],
 			])}${
 				// An open TASK on this machine: its herdr worker's session (a remote one is watched on its host).
-				step.host === "local" && step.status !== "done" && step.status !== "cancelled"
+				step.host === "local" && !step.taskId.includes(":") && step.status !== "done" && step.status !== "cancelled"
 					? terminal([["lanes", "watch", step.taskId]])
 					: ""
 			}${
@@ -611,12 +597,23 @@ export function renderItemDetail(s: DashboardSnapshot, view: string, id: string,
 	if (view === "lanes" && s.lanes.ok) {
 		const lane = s.lanes.items.find((item) => item.name === id);
 		if (lane) {
-			return `${show(lane.title, [
+			const rows: Array<[string, string]> = [
+				...(lane.install ? ([["봇", esc(lane.install)]] as [string, string][]) : []),
 				["이름", esc(lane.name)],
 				["상태", esc(lane.status)],
+				...(lane.landState ? ([["착지 상태", esc(lane.landState)]] as [string, string][]) : []),
 				["cwd", `<code>${esc(lane.cwd)}</code>`],
 				["갱신", at(lane.updatedAt)],
-			])}${terminal(laneCommands(lane.name))}`;
+			];
+			const pr = lane.prUrl
+				? `<a class="button" href="${esc(lane.prUrl)}" target="_blank" rel="noopener noreferrer">PR 열기</a>`
+				: "";
+			const conv =
+				s.turns.ok && s.turns.threads.some((t) => t.originKey === lane.originKey)
+					? `<a class="button is-ghost" href="?view=turns&amp;item=${esc(encodeURIComponent(lane.originKey))}">이 레인의 대화 보기</a>`
+					: "";
+			const acts = pr || conv ? `<div class="detail-actions">${pr}${conv}</div>` : "";
+			return `${show(lane.title, rows)}${acts}${lane.install === undefined ? terminal(laneCommands(lane.name)) : ""}`;
 		}
 	}
 	if (view === "approvals" && s.approvals.ok) {

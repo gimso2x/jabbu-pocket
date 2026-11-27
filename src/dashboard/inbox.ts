@@ -70,8 +70,8 @@ export function inboxEntries(s: DashboardSnapshot, live?: BoardPanel | null): In
 			machine: task.host,
 			taskId: task.taskId,
 			task,
-			// While the board is live, an open TASK whose pane is not on it has lost its agent: the owner should look.
-			...(board === undefined ? {} : { orphan: true }),
+			// While the board is live, an open own herdr TASK whose pane is not on it has lost its agent.
+			...(board === undefined || task.runtime === "headless" || task.install !== undefined ? {} : { orphan: true }),
 		});
 	}
 	for (const entry of entries) entry.col = turnOf(entry).group;
