@@ -377,63 +377,44 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed through the normal failure
-	 * path (`recordTurnFailure` → monitor event failed with retry/backoff). The child is stopped afterwards — it was
-	 * wedged, and a monitor's next fire starts a fresh session anyway. A real `aborted` final that wins the race settles
-	 * the turn first; this then does nothing.
+	 * Aborts the turn's child and settles the turn as failed with `error` through the normal failure path
+	 * (`recordTurnFailure` → monitor event failed with retry/backoff); a final that settled the turn first wins, this
+	 * then does nothing. `stopFirst` stops the child before the drain; an abort that failed may leave it running, so
+	 * that also stops it, before an answer could arrive after the failure notice. `warnEvent` names a refused abort.
 	 */
-	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+	async #abortTurnWith(turn: ActiveTurn, error: string, stopFirst: boolean, warnEvent: string): Promise<void> {
 		const driver = this.#driver;
 		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		try {
-			await driver.abort();
-		} catch (error) {
-			log.warn("stall_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
-		}
-		if (this.#turn !== turn || this.#driver !== driver) return;
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: `stall_abort silent=${minutes(totalSilentMs)}`,
-			},
-			true,
-		);
-	}
-
-	/**
-	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: …`) through the
-	 * normal failure path. The child is kept — not wedged, its session holds the conversation — unless the abort itself
-	 * failed: then it is stopped before the drain. A final that settled the turn first wins; this then does nothing.
-	 */
-	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
-		const driver = this.#driver;
-		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
-		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
 		let abortFailed = false;
 		try {
 			await driver.abort();
-		} catch (error) {
+		} catch (abortError) {
 			abortFailed = true;
-			log.warn("stuck_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
+			this.#deps.log.warn(warnEvent, { origin: this.#deps.originKey, opRef: turn.opRef, error: String(abortError) });
 		}
 		if (this.#turn !== turn || this.#driver !== driver) return;
-		// An abort that failed may leave the child running: stop it, so no answer arrives after the failure notice.
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: stuckCancelReason(toolName, count),
-			},
-			abortFailed,
-		);
+		await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error }, stopFirst || abortFailed);
+	}
+
+	/**
+	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed. The child is stopped
+	 * afterwards — it was wedged, and a monitor's next fire starts a fresh session anyway.
+	 */
+	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+		await this.#abortTurnWith(turn, `stall_abort silent=${minutes(totalSilentMs)}`, true, "stall_abort_failed");
+	}
+
+	/**
+	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: ...`). The child is
+	 * kept — not wedged, its session holds the conversation — unless the abort itself failed: then it is stopped
+	 * before the drain.
+	 */
+	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
+		if (!this.#driver || this.#turn !== turn) return;
+		const { originKey, log } = this.#deps;
+		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
+		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
+		await this.#abortTurnWith(turn, stuckCancelReason(toolName, count), false, "stuck_abort_failed");
 	}
 
 	/**
