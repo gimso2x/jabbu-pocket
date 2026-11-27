@@ -1,3 +1,4 @@
+import { captureTree, type ProcessTree, signalTree } from "../core/terminate-tree";
 import { type OmpCommand, OmpDriverError, type OmpEntries, type OmpEvent, type TodoPhase } from "./driver";
 import { isRecord } from "./type-guards";
 
@@ -163,7 +164,8 @@ export interface RpcSpawnOptions {
 
 /**
  * Spawns `argv` as the leader of a new process group (`detached`), so `signal` reaches the tools and subagents omp
- * started as well. Limit: a descendant that left the group (`setsid`, its own `detached` spawn) is not reached.
+ * started as well. What of them left the group (`setsid`, its own `detached` spawn) is reached by pid: the tree is
+ * read from `/proc` before the first signal and kept for the ones after (the leader may be gone by then).
  */
 export function spawnProcessGroup(argv: string[], options: RpcSpawnOptions): RpcChild {
 	const child = Bun.spawn(argv, {
@@ -175,6 +177,7 @@ export function spawnProcessGroup(argv: string[], options: RpcSpawnOptions): Rpc
 		detached: true,
 	});
 	let tail = "";
+	let tree: ProcessTree | undefined;
 	void (async () => {
 		const decoder = new TextDecoder();
 		try {
@@ -195,11 +198,8 @@ export function spawnProcessGroup(argv: string[], options: RpcSpawnOptions): Rpc
 		stderr: () => tail,
 		exited: child.exited,
 		signal(signal) {
-			try {
-				process.kill(-child.pid, signal);
-			} catch {
-				// ESRCH: the whole group is already gone
-			}
+			tree ??= captureTree(child.pid);
+			signalTree(tree, signal);
 		},
 	};
 }
