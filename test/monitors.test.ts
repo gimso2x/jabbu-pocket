@@ -213,6 +213,36 @@ describe("monitors: exactly once", () => {
 	});
 });
 
+describe("monitors: dispatch failure", () => {
+	const logged = (name: string) => logLines.filter((line) => line.includes(`event=${name} `));
+
+	test("a dispatch that throws is logged with its monitor and event, and the next monitor still dispatches", async () => {
+		const first = cronMonitor("* * * * *", { name: "first" });
+		const second = cronMonitor("* * * * *", { name: "second" });
+		clock.advance(MINUTE);
+		const mark = store.monitors.markDispatched.bind(store.monitors);
+		let threw = false;
+		store.monitors.markDispatched = (eventId, inboundId) => {
+			if (!threw) {
+				threw = true;
+				throw new Error("ledger boom");
+			}
+			return mark(eventId, inboundId);
+		};
+		const summary = await run();
+		expect(summary.dispatched).toBe(1);
+		expect(logged("monitor_dispatch_failed")).toHaveLength(1);
+		expect(logged("monitor_dispatch_failed")[0]).toContain(`monitor=${first.id}`);
+		expect(logged("monitor_dispatch_failed")[0]).toContain(
+			`event=${store.monitors.listEvents({ monitorId: first.id })[0]?.eventId}`,
+		);
+		expect(logged("monitor_dispatch")).toHaveLength(1);
+		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${second.id}`);
+		// The failed event was never marked, so it stays admitted for the next tick.
+		expect(store.monitors.listEvents({ monitorId: first.id })[0]?.stage).toBe("admitted");
+	});
+});
+
 describe("monitors: cron cursor", () => {
 	test("a tick with no slot due leaves the cursor and the next fire alone; a due slot moves the cursor to now", async () => {
 		const monitor = cronMonitor("* * * * *");
