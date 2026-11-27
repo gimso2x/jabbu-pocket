@@ -7,8 +7,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildLaneOutcomeCard, type LaneCardView } from "../src/lanes/card";
+import { type FenceStore, fenceUncertain, uncertainCount } from "../src/lanes/send-fence";
 import type { LaneRow } from "../src/lanes/status";
 import type { VerifyResult } from "../src/lanes/verify";
+import { createLogger } from "../src/log";
+import { redact } from "../src/redact";
+import type { InboundRow } from "../src/store/db-rows";
 import { CHANNEL, makeHome, type TestHome } from "./helpers/bot-home";
 import { git, makeRepo } from "./helpers/git-fixtures";
 import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
@@ -163,9 +167,9 @@ describe("parked rows of the lane's origin fence the core's steers (AC-1~AC-3)",
 		await h.settle();
 		parkRow(h, other.originKey, other.threadRef, 1);
 
-		expect(await h.manager.claimDone(mine.originKey, { repo: mine.cwd, commit: "a".repeat(40), summary: "x" })).toContain(
-			"[not-done]",
-		);
+		expect(
+			await h.manager.claimDone(mine.originKey, { repo: mine.cwd, commit: "a".repeat(40), summary: "x" }),
+		).toContain("[not-done]");
 		await h.settle();
 		expect(h.steers(mine.originKey)).toHaveLength(1);
 		expect(h.steers(mine.originKey)[0]).toContain("not-done");
@@ -187,9 +191,9 @@ describe("the fence lifts with the row (AC-2)", () => {
 
 		h.store.retryUncertain(id);
 		expect(h.store.getInbound(id)?.state).toBe("pending");
-		expect(await h.manager.claimDone(lane.originKey, { repo: lane.cwd, commit: "b".repeat(40), summary: "again" })).toContain(
-			"[not-done]",
-		);
+		expect(
+			await h.manager.claimDone(lane.originKey, { repo: lane.cwd, commit: "b".repeat(40), summary: "again" }),
+		).toContain("[not-done]");
 		await h.settle();
 		expect(h.steers(lane.originKey).some((text) => text.includes("not-done"))).toBe(true);
 		expect(coreRows(h, lane.originKey)).toEqual([`lane:${lane.name}:start:1`, `lane:${lane.name}:not-done:2`]);
@@ -211,15 +215,47 @@ describe("the fence lifts with the row (AC-2)", () => {
 
 		h.store.discard(id);
 		expect(h.store.getInbound(id)?.state).toBe("discarded");
-		expect(await h.manager.claimDone(lane.originKey, { repo: lane.cwd, commit: "c".repeat(40), summary: "again" })).toContain(
-			"[not-done]",
-		);
+		expect(
+			await h.manager.claimDone(lane.originKey, { repo: lane.cwd, commit: "c".repeat(40), summary: "again" }),
+		).toContain("[not-done]");
 		await h.settle();
 		expect(h.steers(lane.originKey)).toHaveLength(1);
 		expect(h.steers(lane.originKey)[0]).toContain("not-done");
 		expect(coreRows(h, lane.originKey)).toEqual([`lane:${lane.name}:start:1`, `lane:${lane.name}:not-done:2`]);
 		expect(fenceLogs(h)).toHaveLength(1);
 		h.close();
+	});
+});
+
+describe("the fence's own two functions (pure)", () => {
+	test("uncertainCount counts the origin's parked rows only; fenceUncertain holds with their count, or lets go silently", () => {
+		/** Answers `listInbound` like the store does: by origin and by state. */
+		const storeOf = (...rows: Array<Pick<InboundRow, "originKey" | "state">>): FenceStore => ({
+			listInbound: (filter = {}) =>
+				rows.filter(
+					(row) =>
+						(filter.originKey === undefined || row.originKey === filter.originKey) &&
+						(filter.state === undefined || row.state === filter.state),
+				) as InboundRow[],
+		});
+		const store = storeOf(
+			{ originKey: "jabbu/work/a", state: "uncertain" },
+			{ originKey: "jabbu/work/a", state: "uncertain" },
+			{ originKey: "jabbu/work/a", state: "pending" },
+			{ originKey: "jabbu/work/a", state: "discarded" },
+			{ originKey: "jabbu/work/b", state: "uncertain" },
+		);
+		expect(uncertainCount(store, "jabbu/work/a")).toBe(2);
+		expect(uncertainCount(store, "jabbu/work/c")).toBe(0);
+
+		const lines: string[] = [];
+		const deps = { store, log: createLogger({ sink: (line) => lines.push(line), clock: { now: () => 0 }, redact }) };
+		expect(fenceUncertain(deps, { name: "a", originKey: "jabbu/work/a" }, "not-done")).toBe(true);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("event=lane_send_fenced_uncertain");
+		expect(lines[0]).toContain("lane=a kind=not-done uncertain=2");
+		expect(fenceUncertain(deps, { name: "c", originKey: "jabbu/work/c" }, "not-done")).toBe(false);
+		expect(lines).toHaveLength(1);
 	});
 });
 

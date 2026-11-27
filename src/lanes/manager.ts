@@ -110,6 +110,7 @@ import { formatConfidence, reviewLane } from "./review";
 import { currentRuntime, primeGateChanges } from "./runtime";
 import { openLanesOfRepo, type RepoMatcher, sameRepo } from "./same-repo";
 import { appendFollowups, checkLaneScope, parseLaneLeftovers } from "./scope";
+import { fenceUncertain } from "./send-fence";
 import { parseStartArgs } from "./start-args";
 import {
 	INCONCLUSIVE_APPROVED,
@@ -624,7 +625,7 @@ export class LaneManager {
 
 	/**
 	 * Feeds a core-authored message (first prompt, not-done reasons) into the lane's mailbox; most callers do not await
-	 * it. Resolves true once the mailbox took the message, false when it was held or the route failed (logged).
+	 * it. True once the mailbox took it; false when held (paused, parked rows: `fenceUncertain`) or the route failed.
 	 */
 	#send(name: string, kind: string, text: string): Promise<boolean> {
 		const lane = this.#deps.store.getLane(name);
@@ -634,6 +635,7 @@ export class LaneManager {
 			this.#deps.log.warn("lane_send_held_paused", { lane: name, kind });
 			return Promise.resolve(false);
 		}
+		if (fenceUncertain(this.#deps, lane, kind)) return Promise.resolve(false);
 		const seq = lane.meta.steerSeq + 1;
 		this.#deps.store.patchLane(name, undefined, { steerSeq: seq });
 		return this.#deps
@@ -644,13 +646,11 @@ export class LaneManager {
 				text,
 				threadRef: lane.threadRef,
 			})
-			.then(
-				() => true,
-				(error: unknown) => {
-					this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
-					return false;
-				},
-			);
+			.then(() => true)
+			.catch((error: unknown) => {
+				this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
+				return false;
+			});
 	}
 
 	/**
