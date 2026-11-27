@@ -769,6 +769,31 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("ask multi: a multi-word label is picked by name when comma-separated; space-separated numbers still work", async () => {
+		const questions = [
+			{
+				id: "q1",
+				question: "무엇을 고를까?",
+				options: [{ label: "Run tests" }, { label: "Cache" }, { label: "Deploy" }],
+				multi: true,
+			},
+		];
+		const h = harness();
+		h.send({ method: "ask", id: "m1", questions });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "Run tests, Cache")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m1")).toEqual(
+			reply("m1", { answers: [{ id: "q1", selectedOptions: ["Run tests", "Cache"] }] }),
+		);
+		h.send({ method: "ask", id: "m2", questions });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1 3")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m2")).toEqual(
+			reply("m2", { answers: [{ id: "q1", selectedOptions: ["Run tests", "Deploy"] }] }),
+		);
+		await h.close();
+	});
+
 	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
 		const h = harness();
 		h.send({
@@ -955,6 +980,27 @@ describe("omp 19.1 form dialogs on choice cards", () => {
 			reply("f1", { data: { db: "pg", tests: "yes", features: ["auth", "cache"], replicas: 3, svc: "web" } }),
 		);
 		expect((await h.finalEdit(shown.ts)).msg.text).toContain("✅ 답:");
+		await h.close();
+	});
+
+	test("form array choice: a multi-word label is picked by name when comma-separated", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f7",
+			html: `<form><fieldset><legend>Features</legend>
+<label><input type="checkbox" name="features" value="run-tests"> Run tests</label>
+<label><input type="checkbox" name="features" value="cache"> Cache</label>
+<label><input type="checkbox" name="features" value="deploy"> Deploy</label>
+</fieldset></form>`,
+		});
+		const posted = await h.card(false);
+		expect(posted.msg.buttons).toBeUndefined();
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "Run tests, Cache")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f7")).toEqual(
+			reply("f7", { data: { features: ["run-tests", "cache"] } }),
+		);
 		await h.close();
 	});
 
