@@ -335,11 +335,13 @@ export class MonitorScheduler {
 	}
 
 	#kickScript(monitor: MonitorRow, trigger: { command: string[]; intervalMs: number }, now: number): void {
-		if (now < monitor.cursorAt + trigger.intervalMs || this.#scriptsRunning.has(monitor.id)) return;
+		if (now < monitor.cursorAt + trigger.intervalMs || this.#scriptsRunning.has(monitor.id) || this.#stopping) return;
 		const { store, log } = this.#deps;
 		// The cursor moves before the run, so a crash mid-check never causes an immediate rerun.
 		store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		this.#scriptsRunning.add(monitor.id);
+		const controller = new AbortController();
+		this.#commands.add(controller);
 		this.#track(
 			(async () => {
 				try {
@@ -348,12 +350,17 @@ export class MonitorScheduler {
 						cwd: this.#deps.workspaceDir,
 						monitorId: monitor.id,
 						homeDir: this.#deps.homeDir,
+						signal: controller.signal,
 					});
-					const outcome = result.fired
-						? "met"
-						: result.exitCode !== null && !result.timedOut && result.error === undefined
-							? "unmet"
-							: "error";
+					// Killed by shutdown (ours, or a signal to the whole unit): no state change, no claim — the
+					// next tick re-runs the check. Without this a check that finishes during the drain still claims.
+					if (result.aborted === true || this.#stopping) {
+						log.info("monitor_script_aborted", { monitor: monitor.id, exit: result.exitCode });
+						return;
+					}
+					let outcome: "met" | "unmet" | "error" = "error";
+					if (result.fired) outcome = "met";
+					else if (result.exitCode !== null && !result.timedOut && result.error === undefined) outcome = "unmet";
 					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
 					const logIt =
 						result.fired ||
@@ -389,6 +396,7 @@ export class MonitorScheduler {
 				} catch (error) {
 					log.error("monitor_script_failed", { monitor: monitor.id, ...errorFields(error) });
 				} finally {
+					this.#commands.delete(controller);
 					this.#scriptsRunning.delete(monitor.id);
 				}
 			})(),
