@@ -11,6 +11,7 @@ import { type StartCapacity, startCapacity } from "../ops/start-capacity";
 import { redact } from "../redact";
 import { buildWorkerFloorsPrompt } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
+import { type BaseInfo, resolveTaskBase } from "./base-ref";
 import { summarizeJudgement } from "./checker";
 import {
 	acceptanceItems,
@@ -237,6 +238,7 @@ export async function startTask(
 		}
 		if (capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
 	}
+	const baseRef = resolveTaskBase(hostEntryOf(deps, host)?.branchRules, spec.repo, spec.base); // unsafe: refused before anything is reserved
 	const ops = opsFor(deps, host);
 	const recordsRoot = recordsRootFor(deps.recordsRepo, host, hostEntryOf(deps, host));
 	const row = deps.ledger.register({
@@ -263,6 +265,7 @@ export async function startTask(
 	let worktreeCreated = false;
 	let recorded = false;
 	let paneId = "";
+	let base: BaseInfo | undefined;
 	const fail = async (error: string): Promise<string> => {
 		if (worktreeCreated) await ops.removeWorktree(git).catch(() => undefined);
 		await rollbackRecords(row, ops, deps.recordsRepo, recorded).catch(() => undefined);
@@ -276,10 +279,12 @@ export async function startTask(
 		const exists = await ops.pathExists(row.worktree);
 		if (!exists.ok) return await fail(exists.error);
 		if (exists.value) return await fail(`워크트리 경로가 이미 있습니다: ${row.worktree}`);
-		const created = await ops.createWorktree(git);
+		const created = await ops.createWorktree({ ...git, base: baseRef });
 		if (!created.ok) return await fail(created.error);
 		worktreeCreated = true;
-		deps.ledger.setBaseSha(row.taskId, (await ops.headOf(row.worktree)).sha);
+		const baseSha = (await ops.headOf(row.worktree)).sha;
+		deps.ledger.setBaseSha(row.taskId, baseSha);
+		base = { ref: baseRef, sha: baseSha };
 
 		const meta: TaskDocsMeta = {
 			taskId: row.taskId,
@@ -287,6 +292,7 @@ export async function startTask(
 			repo: row.repo,
 			worktree: row.worktree,
 			branch: row.branch,
+			base,
 			agent: row.agent,
 			threadLink: await threadLink(deps.channels, deps.log, threadRef),
 			registeredAt: row.createdAt,
@@ -322,7 +328,7 @@ export async function startTask(
 
 	deps.log.info("task_started", { task: row.taskId, host: row.host, agent: row.agent });
 	const link = await cardLink(deps, row, paneId);
-	const posted = await postToThread(deps.channels, deps.log, threadRef, buildAcceptedCard(row, spec, link));
+	const posted = await postToThread(deps.channels, deps.log, threadRef, buildAcceptedCard(row, spec, link, base));
 	await setStatusReaction(deps.channels, deps.log, threadRef, "working", []);
 	const where = `${row.host ?? "local"}:${row.worktree}`;
 	const workerText = workerLine(row);

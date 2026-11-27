@@ -383,8 +383,8 @@ describe("daemon: channel roots are isolated sessions", () => {
 			};
 			// Both turns are still running: the supplier answers from each origin's own running turn.
 			expect(daemon.store.getInbound(ref(b))?.state).toBe("dispatched");
-			expect(await dispatch(rootOrigin(b))).toStartWith("시작 실패: git worktree add failed");
-			expect(await dispatch(rootOrigin(a))).toStartWith("시작 실패: git worktree add failed");
+			expect(await dispatch(rootOrigin(b))).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
+			expect(await dispatch(rootOrigin(a))).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 		} finally {
 			rmSync(repo, { recursive: true, force: true });
 		}
