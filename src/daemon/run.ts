@@ -25,6 +25,7 @@ import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
 import { acquireLock, type Lock, LockHeldError } from "./lock";
 import { testFatal, testStartStall } from "./run-test-hooks";
+import { createShutdown } from "./shutdown";
 import { readVersion } from "./tools";
 import { startWatchdog, watchdogStallMs } from "./watchdog";
 
@@ -216,16 +217,7 @@ export async function runDaemon(
 	// Seed the known-secret value index before anything can answer: masking sits below the agent.
 	indexRuntimeSecrets(config, env, log);
 	const exited = Promise.withResolvers<number>();
-	const shutdown = (signal: string) => {
-		log.info("signal", { signal });
-		daemon.stop().then(
-			() => exited.resolve(0),
-			(error: unknown) => {
-				log.error("stop_failed", { ...errorFields(error) });
-				exited.resolve(1);
-			},
-		);
-	};
+	const shutdown = createShutdown({ stop: () => daemon.stop(), log, env, exited });
 	const hostLoad = testHostLoad(env); // test-only idle host, behind JABBU_TEST_HOOKS=1
 	const statfs = testStatfs(env); // test-only roomy disk, behind JABBU_TEST_HOOKS=1
 	const ompVersion = await checkOmpVersion(config, log);
@@ -279,7 +271,7 @@ export async function runDaemon(
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 		process.removeAllListeners(signal);
 		process.on(signal, () => {
-			if (signal !== "SIGHUP") return shutdown(signal);
+			if (signal !== "SIGHUP") return shutdown.handle(signal);
 			log.info("signal", { signal });
 			daemon.reloadConfig("sighup");
 		});

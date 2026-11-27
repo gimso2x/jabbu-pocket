@@ -187,4 +187,29 @@ describe("runDaemon exit record (real daemon process)", () => {
 		expect(logFile()).not.toContain("daemon_fatal");
 		await daemon.waitLog(/event=daemon_exit code=0/);
 	}, 30_000);
+
+	test("a second SIGTERM while the stop stalls force-exits 1 with stop_forced (no daemon_stop)", async () => {
+		const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), { JABBU_TEST_STOP_STALL_MS: "5000" });
+		await daemon.waitLog(/event=daemon_ready/);
+		daemon.signal("SIGTERM");
+		await daemon.waitLog(/event=signal signal=SIGTERM/);
+		daemon.signal("SIGTERM");
+		expect(await daemon.exited).toBe(1);
+		expect(logFile()).toContain("event=stop_forced signal=SIGTERM");
+		expect(logFile()).toContain("event=daemon_exit code=1");
+		expect(logFile()).not.toContain("event=daemon_stop");
+	}, 30_000);
+
+	test("a stop stalled past the bound exits 1 with stop_timeout (no daemon_stop)", async () => {
+		const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), {
+			JABBU_TEST_STOP_STALL_MS: "5000",
+			JABBU_TEST_SHUTDOWN_TIMEOUT_MS: "500",
+		});
+		await daemon.waitLog(/event=daemon_ready/);
+		daemon.signal("SIGTERM");
+		expect(await daemon.exited).toBe(1);
+		expect(logFile()).toContain("event=stop_timeout boundMs=500");
+		expect(logFile()).toContain("event=daemon_exit code=1");
+		expect(logFile()).not.toContain("event=daemon_stop");
+	}, 30_000);
 });
