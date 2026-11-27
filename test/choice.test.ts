@@ -769,6 +769,31 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("ask multi: a partly-valid reply keeps the valid picks and puts only the rest into customInput", async () => {
+		const questions = [
+			{
+				id: "q1",
+				question: "무엇을 알릴까?",
+				options: [{ label: "discord" }, { label: "mail" }, { label: "sms" }],
+				multi: true,
+			},
+		];
+		const h = harness();
+		h.send({ method: "ask", id: "p1", questions });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1, 9")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "p1")).toEqual(
+			reply("p1", { answers: [{ id: "q1", selectedOptions: ["discord"], customInput: "9" }] }),
+		);
+		h.send({ method: "ask", id: "p2", questions });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9, 10")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "p2")).toEqual(
+			reply("p2", { answers: [{ id: "q1", selectedOptions: [], customInput: "9, 10" }] }),
+		);
+		await h.close();
+	});
+
 	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
 		const h = harness();
 		h.send({
