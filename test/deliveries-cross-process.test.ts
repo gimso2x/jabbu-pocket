@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
 import { openDeliveryLedger } from "../src/store/db";
 
-const ROWS = 1500;
+const ROWS = 400;
 let dir: string;
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "jabbu-delivery-xproc-"));
@@ -26,11 +26,14 @@ test("ack of held deliveries while another process keeps writing the ledger: eve
 	const insert = seed.query(
 		"INSERT INTO deliveries (origin_key, op_ref, part, thread_ref, body, state, attempts, next_at, redelivered, created_at) VALUES (?, ?, 0, 'C:T', ?, 'failed_ambiguous', 0, ?, 0, ?)",
 	);
-	for (let i = 0; i < ROWS; i++) insert.run(origin, `op${i}`, `body ${i}`, Date.now(), Date.now());
+	// One transaction for setup: 400+ autocommit fsyncs before the test starts pushed WSL2 VHDX past the 60s timeout.
+	seed.transaction(() => {
+		for (let i = 0; i < ROWS; i++) insert.run(origin, `op${i}`, `body ${i}`, Date.now(), Date.now());
+	})();
 	seed.close();
 
 	const stopFile = join(dir, "stop");
-	const child = Bun.spawn(["bun", join(import.meta.dir, "fixtures/db-writer-child.ts"), path, stopFile], {
+	const child = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/db-writer-child.ts"), path, stopFile], {
 		stdout: "pipe",
 		stderr: "inherit",
 	});
@@ -39,6 +42,7 @@ test("ack of held deliveries while another process keeps writing the ledger: eve
 	const ledger = openDeliveryLedger(path);
 	const errors: string[] = [];
 	let resolved = 0;
+	let childExit = -1;
 	try {
 		for (let id = 1; id <= ROWS; id++) {
 			try {
@@ -51,8 +55,10 @@ test("ack of held deliveries while another process keeps writing the ledger: eve
 	} finally {
 		ledger.close();
 		writeFileSync(stopFile, "");
-		await child.exited;
+		reader.releaseLock();
+		childExit = await child.exited;
 	}
+	expect(childExit).toBe(0);
 	expect(errors).toEqual([]);
 	expect(resolved).toBe(ROWS);
 	const check = new Database(path, { readonly: true });

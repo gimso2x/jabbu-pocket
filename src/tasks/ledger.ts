@@ -15,23 +15,13 @@ import {
 	worktreePathOf,
 } from "./docs";
 import { migrateTaskSchema, type TaskLandRecord, writeTx } from "./ledger-schema";
+import { BOT_TRANSITIONS, HUMAN_ONLY } from "./ledger-transitions";
 import type { SignalCheck } from "./signals";
 
 export const TASK_STATUSES = ["working", "blocked", "review", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** `core-land`: the core's own landing of a reached local task (`landTask`), which may only close a task in review. */
 export type TaskActor = "bot" | "human" | "core-land";
-
-/** Statuses only a human `close` (or, `review → done` alone, the core landing) can reach; a closed task never moves again. */
-const HUMAN_ONLY: readonly TaskStatus[] = ["done", "cancelled"];
-/** What the bot paths (tool, sweep) may do: working ⇄ blocked, working → review, review → working (resume). */
-const BOT_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
-	working: ["blocked", "review"],
-	blocked: ["working"],
-	review: ["working"],
-	done: [],
-	cancelled: [],
-};
 
 export class TaskTransitionError extends Error {
 	constructor(message: string) {
@@ -99,6 +89,8 @@ export interface TaskGate {
 }
 
 export interface NewTask {
+	/** First number of the day (`idStart`); the next id is still above the day's existing maximum. */
+	idStart?: number;
 	title: string;
 	risk: TaskRisk;
 	originKey: string;
@@ -111,6 +103,8 @@ export interface NewTask {
 	/** The worker tier fixed for the task's life (resume and restart included); absent → all three stay null. */
 	worker?: { tier: LaneModelTier; tierReason: string; model: string | null; tierConfidence?: number };
 	runtime?: TaskRow["runtime"]; // absent = herdr
+	/** The worker branch; absent = `task/<TASKID>` (`branchOf`). */
+	branch?: string;
 }
 
 /** One append-only line of a task's status history; the registration line has `fromStatus: null`. */
@@ -275,10 +269,7 @@ function latestMark(row: TaskRow, kind: "pause" | "unpause"): number {
 	return Math.max(0, ...marks);
 }
 
-/**
- * When the current owner pause began (its `pause:<ms>` mark), `undefined` for a task that is not paused. The key of
- * everything told once per pause.
- */
+/** Start of the current owner pause (`pause:<ms>` mark), undefined if not paused: key of once-per-pause notices. */
 export function taskPausedAt(row: TaskRow): number | undefined {
 	const paused = latestMark(row, "pause");
 	return paused > latestMark(row, "unpause") ? paused : undefined;
@@ -315,7 +306,7 @@ export class TaskLedger {
 			const { last } = this.#db
 				.query("SELECT MAX(CAST(substr(task_id, ?) AS INTEGER)) AS last FROM tasks WHERE task_id LIKE ?")
 				.get(prefix.length + 1, `${prefix}%`) as { last: number | null };
-			const taskId = formatTaskId(day, (last ?? 0) + 1);
+			const taskId = formatTaskId(day, Math.max(last ?? 0, (input.idStart ?? 1) - 1) + 1);
 			this.#db
 				.query(
 					`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
@@ -331,7 +322,7 @@ export class TaskLedger {
 					input.host,
 					input.repo,
 					worktreePathOf(input.repo, taskId),
-					branchOf(taskId),
+					input.branch ?? branchOf(taskId),
 					agentNameOf(taskId),
 					JSON.stringify(input.acceptance),
 					now,

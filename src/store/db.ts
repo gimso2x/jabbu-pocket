@@ -34,6 +34,7 @@ import {
 import type { ApprovalDetail, ApprovalInput, AutoChoiceInput, ExpiredApproval } from "../safety/approval";
 import { TaskLedger } from "../tasks/ledger";
 import { type CardAnswerVerdict, insertCardAnswer, judgeCardAnswer } from "./card-answers";
+import { bumpEpoch } from "./db-epoch";
 import {
 	type ApprovalRow,
 	type ApprovalSql,
@@ -71,7 +72,7 @@ import {
 	SCHEMA,
 } from "./db-schema";
 import { columnsOf, migrateInbound } from "./db-sending";
-import { countIncident, resolveIncidents } from "./incidents";
+import { countIncident, readOpsIncidents, resolveIncidents } from "./incidents";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { dropRemovedTables } from "./removed-tables";
 import { migrateOldNames } from "./rename-migration";
@@ -521,19 +522,13 @@ export class Store {
 	 * discarded rows are linked to that op, so the command's delivery also finishes their thread status messages.
 	 */
 	newEpoch(originKey: string, sessionDir: string, opRef?: string, sessionFile?: string): OriginRow {
-		this.db.transaction(() => {
-			this.requireOrigin(originKey);
-			this.db
-				.query(
-					"UPDATE origins SET epoch = epoch + 1, session_dir = ?, session_file = ?, updated_at = ? WHERE origin_key = ?",
-				)
-				.run(sessionDir, sessionFile ?? null, this.clock.now(), originKey);
-			this.db
-				.query(
-					"UPDATE inbound SET state = 'discarded', op_ref = COALESCE(?, op_ref) WHERE origin_key = ? AND state = 'pending'",
-				)
-				.run(opRef ?? null, originKey);
-		})();
+		bumpEpoch(this.db, this.clock.now(), originKey, sessionDir, { discard: true, opRef }, sessionFile);
+		return this.requireOrigin(originKey);
+	}
+
+	/** Cold-resume rotation: a new epoch and session dir like `newEpoch`, but the pending inbound rows move to it undiscarded. */
+	rotateEpochKeepPending(originKey: string, sessionDir: string): OriginRow {
+		bumpEpoch(this.db, this.clock.now(), originKey, sessionDir, { discard: false });
 		return this.requireOrigin(originKey);
 	}
 
@@ -1417,12 +1412,8 @@ export class Store {
 	// ---- alert incidents (owner-notice repeat suppression) ----
 
 	/**
-	 * Counts one occurrence of an alert condition and decides whether the owner should be told (the shared incident
-	 * state machine — see `store/incidents`): the first occurrence alerts, the same (scope, normalized sign) within
-	 * `repeatMs` stays quiet, a still-standing condition re-alerts after `repeatMs`, and a resolved condition that
-	 * comes back reopens loudly (monitor incident semantics, used by the turn-failure escalation and the daemon's
-	 * gate sweep). `standing` reports the row's pre-call state, so a restarting daemon can rebuild "the owner was
-	 * already alerted" from the ledger alone.
+	 * Counts one occurrence of an alert condition and decides whether the owner should be told (see `store/incidents`);
+	 * `standing` is the row's pre-call state, so a restarting daemon can rebuild "already alerted" from the ledger.
 	 */
 	recordAlertIncident(scope: string, sign: string, now: number, repeatMs = ALERT_INCIDENT_REPEAT_MS): AlertIncident {
 		return countIncident(this.db, "alert_incidents", scope, sign, now, repeatMs);
@@ -1430,7 +1421,11 @@ export class Store {
 
 	/** Marks the scope's open incidents resolved, so the same condition re-alerts when it comes back. */
 	resolveAlertIncidents(scope: string): void {
-		resolveIncidents(this.db, "alert_incidents", scope);
+		resolveIncidents(this.db, "alert_incidents", scope, this.clock.now());
+	}
+
+	opsIncidents(limit: number) {
+		return readOpsIncidents(this.db, limit);
 	}
 
 	// ---- herdr prompts (dashboard 마지막 지시) ----
@@ -2377,7 +2372,7 @@ export function openDeliveryLedger(path: string, clock?: StoreClock): DeliveryLe
 	const db = new Database(path, { create: false, strict: true });
 	try {
 		checkSchemaVersion(db);
-		db.run("PRAGMA busy_timeout = 5000");
+		db.run("PRAGMA busy_timeout = 30000"); // owner CLI: a daemon busy on a slow disk (WSL2) can hold it past 5s
 	} catch (error) {
 		db.close();
 		throw error;

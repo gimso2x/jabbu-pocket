@@ -5,7 +5,7 @@ import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
-import { borrowedStartReply, borrowThreadOf, inboundLane } from "../lanes/borrow-thread";
+import { borrowedStartReply, borrowThreadOf, chatStartReply } from "../lanes/borrow-thread";
 import { type LaneAction, parseLaneActionId } from "../lanes/card";
 import { classifyLaneControl } from "../lanes/control";
 import type { LaneManager } from "../lanes/manager";
@@ -17,11 +17,10 @@ import {
 	DISCORD_LANE_CHANNEL_MISSING,
 	isOwnerAcceptText,
 	type LaneTrigger,
-	parseLaneTrigger,
 	parsePrCommand,
 	parsePrWatchCommand,
 } from "../lanes/trigger";
-import { assertNoSpacedPath, laneTriggerRefusal } from "../lanes/trigger-format";
+import { assertNoSpacedPath } from "../lanes/trigger-format";
 import { triggerWorkflow } from "../lanes/workflow";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { parseOpsPanelActionId } from "../ops/ops-panel";
@@ -45,6 +44,7 @@ import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
 import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { withControlSource } from "./daemon-task-web";
+import { type LaneTriggerLine, laneInbound, laneTriggerLine } from "./lane-sibling";
 import { isSideOpRef } from "./restart";
 import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
@@ -81,8 +81,9 @@ export class DaemonInbound {
 		const sessionsRoot = deps.sessionsRoot;
 		const core: CoreSink = {
 			onInbound: (message) => {
-				// Route lane-thread messages to the lane origin; closed-lane questions carry the answer-only prefix.
-				const { lane, closedAs } = inboundLane(store.getLaneByThread(message.threadRef), message.text);
+				// Route lane-thread messages to the lane origin; closed-lane questions carry the answer-only prefix. A `작업:`
+				// line in a lane's thread is neither: it opens a sibling lane of that one, settled here with the start's answer.
+				const { lane, closedAs, sibling } = laneInbound(store.getLaneByThread(message.threadRef), message.text);
 				const originKey = lane?.originKey ?? message.originKey;
 				store.ensureOrigin(originKey, lane?.sessionDir ?? sessionDirFor(sessionsRoot, originKey, 1));
 				const { inserted, row } = store.recordInbound({
@@ -117,6 +118,11 @@ export class DaemonInbound {
 					return {};
 				}
 				if (lane) {
+					// A `작업:` line opens a sibling of this lane: answered here, the lane session never sees it.
+					if (sibling !== undefined) {
+						this.#settleLaneTrigger(row, sibling);
+						return {};
+					}
 					// `멈춰`/`계속` (the whole message) are the lane's hold and release: the core settles them itself,
 					// before any closed-lane reading — a closed lane's pause holds only its auto-merge.
 					const control = classifyLaneControl(message.text);
@@ -159,18 +165,9 @@ export class DaemonInbound {
 						void this.#settleTaskControl(row, control);
 						return {};
 					}
-					const trigger = parseLaneTrigger(message.text);
-					if (trigger) {
-						// A drain must not create a worktree and branch mid-restart, and a pending trigger row would reach
-						// the DM's omp session after it instead of starting the lane: refuse it with a retry hint.
-						if (ctx.router?.draining === true)
-							void this.#settleLaneCommand(row, trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
-						else void this.#startLane(row, trigger);
-						return {};
-					}
-					const triggerRefusal = laneTriggerRefusal(message.text);
-					if (triggerRefusal !== undefined) {
-						void this.#settleLaneCommand(row, "-", { kind: "refused", text: triggerRefusal });
+					const own = laneTriggerLine(message.text);
+					if (own !== undefined) {
+						this.#settleLaneTrigger(row, own);
 						return {};
 					}
 				}
@@ -295,21 +292,25 @@ export class DaemonInbound {
 					...borrowThreadOf(row.originKey),
 				});
 				if (lane.meta.borrowedThread === true) return borrowedStartReply(lane, lane.reused === true ? "↪ " : "🔄 ");
-				const link = await this.#lanes.threadLink(lane);
-				if (lane.reused === true) {
-					return `↪ 같은 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다${link === undefined ? "" : `: ${link}`}`;
-				}
-				const reply =
-					link === undefined
-						? `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 새 스레드에서 진행 상황을 확인하세요.`
-						: `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 레인 스레드에서 진행 상황을 확인하세요: ${link}`;
-				return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+				return chatStartReply(lane, await this.#lanes.threadLink(lane));
 			} catch (error) {
 				if (error instanceof LaneInputError) return `⚠️ 작업 레인을 시작하지 못했습니다: ${error.message}`;
 				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, error: String(error) });
 				return "⚠️ 작업 레인을 시작하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
+	}
+
+	/**
+	 * A `작업:` line, settled with its own answer (never sent to omp): a trigger starts a lane — in a lane's thread a
+	 * sibling of it — unless a restart drain is on (no worktree mid-restart, and the row would reach omp after it: refused
+	 * with a retry hint); a `~` or relative path is refused with the format notice.
+	 */
+	#settleLaneTrigger(row: InboundRow, line: LaneTriggerLine): void {
+		if (line.kind === "refused") void this.#settleLaneCommand(row, "-", line);
+		else if (this.#ctx.router?.draining === true)
+			void this.#settleLaneCommand(row, line.trigger.title, { kind: "refused", text: LANE_DRAIN_REFUSED_TEXT });
+		else void this.#startLane(row, line.trigger);
 	}
 
 	/**

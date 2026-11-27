@@ -212,28 +212,31 @@ export function renderQuotaSysCard(
 	pushCard: (id: string, title: string, level: string, body: string, wide?: boolean) => void,
 ): void {
 	let level: "ok" | "warn" | "bad" = "ok";
+	const applyRows = (rawRows: Array<{ window: string; remainingPct: number }>): void => {
+		const picked = rawRows.filter((row) => row.window !== "other");
+		const rows = picked.length === 0 ? rawRows : picked;
+		for (const r of rows) {
+			const t = usageLevel(r.remainingPct);
+			if (t === "danger") level = "bad";
+			else if (t === "warn" && level === "ok") level = "warn";
+		}
+	};
 	if (!usage.ok) level = "bad";
 	else {
 		for (const s of usage.sources) {
+			const accts = s.accounts;
+			if (accts !== undefined && accts.length > 0) {
+				for (const a of accts) {
+					if (a.blockedUntil !== undefined && a.blockedUntil > clock) level = "bad";
+					else if (!a.ok && level === "ok") level = "warn";
+					else if (a.ok) applyRows(a.rows);
+				}
+				continue;
+			}
 			if (!s.ok) {
 				if (level === "ok") level = "warn";
 			} else {
-				for (const r of s.rows) {
-					const t = usageLevel(r.remainingPct);
-					if (t === "danger") level = "bad";
-					else if (t === "warn" && level === "ok") level = "warn";
-				}
-			}
-			for (const a of s.accounts ?? []) {
-				if (a.blockedUntil !== undefined && a.blockedUntil > clock) level = "bad";
-				else if (!a.ok && level === "ok") level = "warn";
-				else if (a.ok) {
-					for (const r of a.rows) {
-						const t = usageLevel(r.remainingPct);
-						if (t === "danger") level = "bad";
-						else if (t === "warn" && level === "ok") level = "warn";
-					}
-				}
+				applyRows(s.rows);
 			}
 		}
 	}
@@ -253,6 +256,7 @@ export function renderActiveCards(
 	if (total === 0) return { count: 0, html: "" };
 	const placeOf = (key: string): string => {
 		const raw = key.replace(/^[^/:]+:/, "");
+		if (raw.startsWith("web/")) return "웹";
 		if (/^[a-z]+\/dm\//.test(raw)) return "DM";
 		const ch = /^(?:slack|discord)\/ch\/([^/]+)/.exec(raw);
 		if (ch?.[1]) return s.channelNames?.[ch[1]] ?? ch[1];
@@ -274,8 +278,8 @@ export function renderActiveCards(
 					: ctx.tokensOnly
 						? `<div class="active-ctx is-empty"><span class="note-sub">컨텍스트</span><span class="ctx-ratio">${esc(fmtContextRatio(ctx))}</span></div>`
 						: (() => {
-								const pct = Math.min(100, Math.round(ctx.percent));
-								const tone = ctx.percent >= 90 ? " is-danger" : ctx.percent >= 80 ? " is-warn" : "";
+								const pct = Math.min(100, Math.max(0, Math.round(ctx.percent)));
+								const tone = pct >= 90 ? " is-danger" : pct >= 80 ? " is-warn" : "";
 								return `<div class="active-ctx${tone}"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${pct}%"></i></span><span class="ctx-ratio">${esc(fmtContextRatio(ctx))} (${pct}%)</span></div>`;
 							})();
 			return `<a class="active-card" href="?view=turns&amp;item=${esc(encodeURIComponent(t.originKey))}"><div class="active-head"><span class="badges">${badge(t.install ?? "본체", "")}${place === "" ? "" : badge(place, "")}${modelChip}</span><span class="active-age">${badge("작업 중", "is-info")}<span class="card-time">${esc(dur(t.latest.ageMs))}</span></span></div><p class="active-title">${esc(t.title)}</p>${ctxHtml}</a>`;

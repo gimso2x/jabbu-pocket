@@ -14,6 +14,7 @@ import type { FloorsSurface } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
 import { offsetLabel } from "../time";
 import { approvalOf, type DaemonContext } from "./daemon-context";
+import { onboardingSurface, withOnboarding } from "./daemon-onboarding";
 import { taskMailboxPort, taskOfOrigin } from "./daemon-task-resume";
 import { runHostTool } from "./host-tool-run";
 import { laneChannelOf, uploadThreadTs } from "./thread-target";
@@ -62,7 +63,7 @@ export function floorsSurfaceFor(ctx: DaemonContext, originKey: string): FloorsS
 		peerBots === undefined || peerBots.length === 0 || port === undefined
 			? {}
 			: { peers: peerBots.map((peer) => ({ name: peer.name, mention: port.mentionUser(peer.userId) })) };
-	return noLaneChannel ? { noLaneChannel, ...timezone, ...peers } : { ...timezone, ...peers };
+	return { ...(noLaneChannel ? { noLaneChannel } : {}), ...timezone, ...peers, ...onboardingSurface(ctx, originKey) };
 }
 
 /**
@@ -102,10 +103,7 @@ function peerGuarded(ctx: DaemonContext, originKey: string, tool: HostToolDef): 
 	};
 }
 
-/**
- * The host tool set of `originKey` with (`peerTouched`) or without a peer bot in the conversation; `hostToolsFor`
- * builds both from here so the guarded difference follows any tool added later.
- */
+/** The host tool set of `originKey`, with (`peerTouched`) or without a peer bot; `hostToolsFor` builds both from here. */
 function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean): HostToolDef[] {
 	const { config } = ctx.options;
 	const lane = isLaneOrigin(originKey) ? ctx.store?.getLaneByOrigin(originKey) : undefined;
@@ -144,6 +142,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 						headless: taskMailboxPort(ctx),
 						now: () => ctx.clock.now(),
 						timezone: config.timezone,
+						idStart: () => ctx.options.config.idStart, // live: each new [TASK] reads it
 						...(config.recordsRepo === undefined ? {} : { recordsRepo: config.recordsRepo }),
 						...(ctx.options.statfs === undefined
 							? {}
@@ -160,8 +159,7 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 		// Resolved when the tool runs: the upload thread follows the origin's current conversation, not driver start.
 		threadTs: () => uploadThreadTs(ctx, originKey, lane?.threadRef),
 	});
-	const lanes = ctx.lanes;
-	const store = ctx.store;
+	const { lanes, store } = ctx;
 	const monitorTools = store
 		? buildMonitorTools({
 				originKey,
@@ -177,17 +175,19 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 	const otherPlatform = chatOrigin !== undefined && chatOrigin.platform !== "discord";
 	const laneChannel = laneChannelOf(ctx, originKey, channel);
 	const boardTools = store && (lane || chatOrigin) ? buildBoardTools(store, originKey) : [];
-	return peerTouched || otherPlatform
-		? base
-		: !lanes
-			? [...base, ...monitorTools, ...boardTools]
-			: lane
-				? [...base, ...buildLaneTools(lanes, originKey), ...boardTools]
-				: channel === undefined
-					? base
-					: laneChannel === undefined
-						? [...base, ...monitorTools, ...boardTools]
-						: [...base, buildWorkStartTool(lanes, laneChannel, originKey), ...monitorTools, ...boardTools];
+	const tools =
+		peerTouched || otherPlatform
+			? base
+			: !lanes
+				? [...base, ...monitorTools, ...boardTools]
+				: lane
+					? [...base, ...buildLaneTools(lanes, originKey), ...boardTools]
+					: channel === undefined
+						? base
+						: laneChannel === undefined
+							? [...base, ...monitorTools, ...boardTools]
+							: [...base, buildWorkStartTool(lanes, laneChannel, originKey), ...monitorTools, ...boardTools];
+	return withOnboarding(ctx, originKey, peerTouched, tools);
 }
 
 /** Dialogs (select/confirm/input/editor/ask) as thread cards; `flush` runs first up to `DIALOG_FLUSH_MS`. */

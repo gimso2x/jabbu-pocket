@@ -34,6 +34,18 @@ export function borrowedStartReply(lane: StartedLane, prefix = "", detail = ""):
 	return `${prefix}${said}${detail}${lane.startNote === undefined ? "" : `\n${lane.startNote}`}`;
 }
 
+/** The answer to a `작업:` line whose lane has a thread of its own (`link`: that thread's link, if the adapter has one). */
+export function chatStartReply(lane: StartedLane, link: string | undefined): string {
+	if (lane.reused === true) {
+		return `↪ 같은 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다${link === undefined ? "" : `: ${link}`}`;
+	}
+	const reply =
+		link === undefined
+			? `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 새 스레드에서 진행 상황을 확인하세요.`
+			: `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 레인 스레드에서 진행 상황을 확인하세요: ${link}`;
+	return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+}
+
 /**
  * The lane an owner message in `threadLane`'s thread belongs to, and how a closed lane reads it (`closedAs`). A
  * borrowed thread is the conversation's again once its lane closed: only `!reopen`, and while its landing waits

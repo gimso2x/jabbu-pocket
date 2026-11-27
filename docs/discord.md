@@ -120,8 +120,8 @@ umask 077; cat > ~/.jabbu/secrets/discord-bot-token   # 2절의 봇 토큰 붙�
 - `alertChannelId`는 선택입니다. 넣으면 오너 경보(게이트 열림·회복, 턴 연속 실패·멈춤, 처리 정체, 공급자 한도, 모니터 실패)가 오너 DM 대신 이 채널 최상위에 올라갑니다. 답장으로 이어 물으려면 `mentionFreeChannels`에도 넣습니다. `logChannelId`와 같으면 기동하지 않습니다.
 - `escalationChannelId`는 선택입니다. 넣으면 Discord 대화에서 올린 승인 카드가 이 채널에 뜹니다(Discord 오너 멘션, `요청 위치` 링크). 요청한 대화에 스레드가 있으면 그곳에 버튼 달린 사본 카드가 뜨고, 카드 스레드에 단 답글도 카드를 결정합니다. 없으면 지금처럼 요청한 대화에 카드가 뜹니다.
 - 두 채널 모두 봇이 보고 글을 쓸 수 있어야 합니다(View Channel·Send Messages). `channels`는 재시작 키라 두 값도 재시작해야 반영됩니다.
-- `guildIds`·`mentionFreeChannels`·`requireMention`은 선택입니다. `guildIds`를 비우면 봇이 들어간 모든 서버의 글을 받습니다(오너 글만 처리하는 건 같습니다).
-- `channels`는 재시작이 필요한 키입니다. `reload`로는 반영되지 않습니다.
+- `guildIds`·`mentionFreeChannels`·`requireMention`은 선택입니다. `guildIds`를 비우면 봇이 들어간 모든 서버의 글을 받습니다(오너 글만 처리하는 건 같습니다). 이 세 키는 바꾼 뒤 `reload`로 다음 메시지부터 바로 반영됩니다.
+- `channels`는 재시작이 필요한 키입니다. `reload`로는 위 세 접속 정책 키(`guildIds`·`mentionFreeChannels`·`requireMention`)만 바로 반영되고, 그 밖 값(토큰 파일·서버 채널 지정·`peerBots` 등)은 재시작해야 반영됩니다.
 
 반영과 확인:
 
@@ -143,6 +143,7 @@ bun src/main.ts apply --detach  # 재시작
 - 승인이 필요한 일을 시키면 버튼 카드가 오고, 누르면 결과 줄로 바뀝니다.
 - DM에서 `1분 뒤에 물 마시라고 알려줘` → 모니터가 등록되고(`모니터 목록 보여줘`에 보임) 1분 뒤 결과가 그 DM에 새 글로 옵니다.
 - DM에서 `작업: 테스트 @/home/<user>/work/<repo>` → `laneChannelId` 채널에 `🔄 테스트` 루트와 레인 스레드가 생기고 DM에 그 스레드 링크가 옵니다. 스레드 안 ⏸ 버튼·`멈춰`·`계속`이 동작하고, 끝나면 머지·폐기 카드가 옵니다.
+- 레인 스레드 안에서 `작업: 다음 @/home/<user>/work/<repo>` → 쓴 스레드에 시작 답이 오고, 같은 채널에 새 레인 스레드(`🔄 다음`)가 생깁니다. 쓴 레인은 그 줄을 받지 않고 그대로 있습니다(닫힌 레인의 스레드에서도 같습니다).
 - `bun src/main.ts inject --origin discord/dm/<DM 채널 ID> --as-owner --text '안녕'` → DM에 `🧪 inject` 마커와 답이 옵니다.
 - 데몬을 재시작하는 동안 DM을 보내 두면, 다시 뜬 뒤 그 DM에 답합니다.
 

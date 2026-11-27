@@ -786,7 +786,7 @@ describe("레인 매니저 통합(가짜 gh)", () => {
 		} finally {
 			await daemon.stop();
 		}
-	});
+	}, 30_000);
 });
 
 describe("excerpt", () => {

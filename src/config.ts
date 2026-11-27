@@ -23,6 +23,7 @@ import {
 	type ConfigWarning,
 	checkLaneLandRemotes,
 	checkLaneModels,
+	type DispatchHostConfig,
 	dispatchHostsOf,
 	gateTimeoutMs,
 	invalid,
@@ -41,7 +42,7 @@ import type { LaneReviewConfident } from "./tasks/auto-land-policy";
 import { TASK_RISKS, type TaskRisk } from "./tasks/docs";
 import { hostTimezone, isTimezone } from "./time";
 
-export { ConfigError } from "./config-validate";
+export { type BranchRule, ConfigError, type DispatchHostConfig } from "./config-validate";
 export { WEB_OWNER_USER_ID, type WebChannelConfig };
 /** Which child process powers a conversation: omp's RPC child (default) or the Antigravity CLI (`agy`). */
 export type AgentKind = "omp" | "agy";
@@ -53,13 +54,13 @@ export interface DiscordChannelConfig {
 	/** Absolute, resolved against the config directory; one line, mode 0600. */
 	botTokenFile: string;
 	applicationId: string;
-	/** Servers whose messages are taken; absent: every server the bot is in. DMs are not affected. */
+	/** Servers whose messages are taken (a reload takes a change live); absent: every server the bot is in. DMs are not affected. */
 	guildIds?: string[];
-	/** Channel ids where the owner's root messages are answered without a mention. */
+	/** Channel ids where the owner's root messages are answered without a mention (a reload takes a change live). */
 	mentionFreeChannels?: string[];
 	/** Server channels where the owner's root messages get a reply in the channel body (no thread) unless a thread is asked for. */
 	inlineReplyChannels?: string[];
-	/** In a server channel only a mention addresses the bot. Default false. */
+	/** In a server channel only a mention addresses the bot. Default false (a reload takes a change live). */
 	requireMention?: boolean;
 	/** Server text channel where lanes asked for from the Discord DM open (a DM has no threads); absent: no DM lanes. */
 	laneChannelId?: string;
@@ -82,7 +83,7 @@ export interface DiscordChannelConfig {
 	displayName?: string;
 	/**
 	 * Peer bots (other jabbu instances) whose server channel messages that mention this bot are taken as review
-	 * requests. Changing it needs a restart (`channels` is a restart key).
+	 * requests. Changing it needs a restart (`channels` is a restart key apart from `guildIds`·`mentionFreeChannels`·`requireMention`).
 	 */
 	peerBots?: Array<{ userId: string; name: string }>;
 }
@@ -99,6 +100,9 @@ export function primaryOwnerUserId(channels: ChannelsConfig): string {
 	if (owner === undefined) throw new Error("no chat channel is configured");
 	return owner;
 }
+
+/** `coldResumeRotateTokens` when the key is left out. */
+export const COLD_RESUME_ROTATE_DEFAULT_TOKENS = 150_000;
 
 /** `peerSilenceAlert.minutes` when the key is left out, and the largest value it takes (one day). */
 export const PEER_SILENCE_DEFAULT_MINUTES = 10;
@@ -134,7 +138,9 @@ const ROOT_KEYS = new Set([
 	"maxBundleBytes",
 	"offsite",
 	"idleTimeoutMinutes",
+	"coldResumeRotateTokens",
 	"idleKeepResident",
+	"idStart",
 	"skillReviewTurns",
 	"ownerSilenceFallbackMinutes",
 	"peerHopLimit",
@@ -174,15 +180,6 @@ const DEFAULT_CODE_ROLLBACK: CodeRollbackMode = "detach";
 /** The code rollback mode of a home's config (`DEFAULT_CODE_ROLLBACK` without config or setting). */
 export function codeRollbackMode(config: Pick<JabbuConfig, "apply"> | undefined): CodeRollbackMode {
 	return config?.apply?.codeRollback ?? DEFAULT_CODE_ROLLBACK;
-}
-
-/** One `dispatchHosts` entry: ssh target, remote work directory, remote herdr binary, worker omp extra arguments. */
-export interface DispatchHostConfig {
-	ssh: string;
-	workDir?: string;
-	herdrBin?: string;
-	ompArgs?: string[];
-	recordsDir?: string;
 }
 
 export type { AgyAccountsConfig, WorkerAgyConfig };
@@ -233,8 +230,11 @@ export interface JabbuConfig {
 	offsite?: { ssh: string; remoteDir: string; keep?: number };
 	/** Minutes after which an idle omp child becomes a candidate to stop (the session stays); 0 disables. Default 30. */
 	idleTimeoutMinutes?: number;
+	/** A conversation of this many tokens resumed past its cache TTL starts a new session (0: off). Default `COLD_RESUME_ROTATE_DEFAULT_TOKENS`. */
+	coldResumeRotateTokens?: number;
 	/** Keeps idle conversation children resident until 50% context, binary change, or pressure (default true). */
 	idleKeepResident?: boolean;
+	idStart?: number; // first daily [TASK]/lane number: bots sharing a records repo or repo split the day (default 1)
 	/** Owner DM turns between background skill reviews; 0 disables. Default 10 (each review costs tokens). */
 	skillReviewTurns?: number;
 	/** Minutes a reversible owner question waits before recommendation goes ahead; 0 disables. Default 30. */
@@ -307,10 +307,7 @@ export interface JabbuConfig {
 	 * (`jabbu_work_start` `model`); a tier left out cannot be picked. `land`: how each repository's lanes land.
 	 */
 	lanes?: { models?: LaneModelTiers; land?: Record<string, LaneLandRepoConfig> };
-	/**
-	 * Post "재시작 중" / "다시 연결됨" / "재시작 취소" notices to recently active conversations around a drain restart.
-	 * Default true.
-	 */
+	/** Post "재시작 중" / "다시 연결됨" / "재시작 취소" notices to recently active conversations; default true. */
 	restartNotice?: boolean;
 	/** Prepend channel-scoped recall of earlier conversation rows to a turn prompt that points at the past. Default true. */
 	recallEnabled?: boolean;
@@ -344,10 +341,7 @@ export interface JabbuConfig {
 		peerHomes?: Array<{ name: string; home: string }>;
 		channelNames?: Record<string, string>;
 	};
-	/**
-	 * `jabbu-pocket apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
-	 * also failed does with the code — see `CodeRollbackMode`; absent = `DEFAULT_CODE_ROLLBACK`.
-	 */
+	/** `jabbu-pocket apply` (CLI only). `codeRollback`: code fate when a failed apply's config rollback fails too; see `CodeRollbackMode`. */
 	apply?: { codeRollback?: CodeRollbackMode };
 	/**
 	 * `!brief`: the chromium that draws the picture. `chromium` is a name on PATH or an absolute path
@@ -748,7 +742,9 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 
 	const sessionRetentionDays = optionalInt(configPath, root, "sessionRetentionDays", 1, 100_000);
 	const maxBundleBytes = optionalInt(configPath, root, "maxBundleBytes", 1);
+	const idStart = optionalInt(configPath, root, "idStart", 1, 9_000);
 	const idleTimeoutMinutes = optionalInt(configPath, root, "idleTimeoutMinutes", 0);
+	const coldResumeRotateTokens = optionalInt(configPath, root, "coldResumeRotateTokens", 0);
 	const idleKeepResident = root.idleKeepResident;
 	if (idleKeepResident !== undefined && typeof idleKeepResident !== "boolean") invalid(configPath, "idleKeepResident");
 	const skillReviewTurns = optionalInt(configPath, root, "skillReviewTurns", 0);
@@ -1144,13 +1140,11 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (ompProfile !== undefined) config.ompProfile = ompProfile;
 	if (ompConfigOverlay !== undefined) config.ompConfigOverlay = ompConfigOverlay;
 	if (sessionRetentionDays !== undefined) config.sessionRetentionDays = sessionRetentionDays;
-	if (maxBundleBytes !== undefined) config.maxBundleBytes = maxBundleBytes;
 	if (offsite !== undefined) config.offsite = offsite;
-	if (idleTimeoutMinutes !== undefined) config.idleTimeoutMinutes = idleTimeoutMinutes;
-	if (idleKeepResident !== undefined) config.idleKeepResident = idleKeepResident;
-	if (skillReviewTurns !== undefined) config.skillReviewTurns = skillReviewTurns;
+	const plain = { maxBundleBytes, idleTimeoutMinutes, idleKeepResident, idStart, skillReviewTurns, hostSessionCeiling };
+	for (const [key, value] of Object.entries(plain)) if (value !== undefined) Object.assign(config, { [key]: value });
+	if (coldResumeRotateTokens !== undefined) config.coldResumeRotateTokens = coldResumeRotateTokens;
 	if (ownerSilenceFallbackMinutes !== undefined) config.ownerSilenceFallbackMinutes = ownerSilenceFallbackMinutes;
-	if (hostSessionCeiling !== undefined) config.hostSessionCeiling = hostSessionCeiling;
 	if (peerHopLimit !== undefined) config.peerHopLimit = peerHopLimit as { turns: number; windowMinutes: number };
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;
 	if (costCap !== undefined) config.costCap = costCap;

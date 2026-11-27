@@ -98,6 +98,76 @@ describe("planReload", () => {
 		expect(changed.next.channels.discord?.ownerUserId).toBe(OWNER);
 	});
 
+	test("channels.discord policy keys apply live: guildIds·mentionFreeChannels·requireMention need no restart", () => {
+		const discord = home.config.channels.discord;
+		if (discord === undefined) throw new Error("expected channels.discord");
+		const plan = planReload(
+			{ ...home.config },
+			{
+				...home.config,
+				channels: {
+					discord: { ...discord, guildIds: [GUILD], mentionFreeChannels: [CHANNEL], requireMention: true },
+				},
+			},
+		);
+		expect(plan.changed).toEqual([
+			"channels.discord.guildIds",
+			"channels.discord.mentionFreeChannels",
+			"channels.discord.requireMention",
+		]);
+		expect(plan.restartRequired).toEqual([]);
+		expect(plan.next.channels.discord).toMatchObject({
+			ownerUserId: OWNER,
+			guildIds: [GUILD],
+			mentionFreeChannels: [CHANNEL],
+			requireMention: true,
+		});
+		// A removed live key is removed from `next`, so the adapter falls back to "every server, mention needed only if asked".
+		const removed = planReload(
+			{ ...home.config, channels: { discord: { ...discord, guildIds: [GUILD], requireMention: true } } },
+			{ ...home.config },
+		);
+		expect(removed.changed).toEqual(["channels.discord.guildIds", "channels.discord.requireMention"]);
+		expect(removed.restartRequired).toEqual([]);
+		expect(removed.next.channels.discord?.guildIds).toBeUndefined();
+		expect(removed.next.channels.discord?.requireMention).toBeUndefined();
+	});
+
+	test("any other channels change keeps the restart, even beside a live policy key", () => {
+		const discord = home.config.channels.discord;
+		if (discord === undefined) throw new Error("expected channels.discord");
+		const web = {
+			enabled: true,
+			ownerEmails: ["owner@example.com"],
+			accessTeamDomain: "team.cloudflareaccess.com",
+			accessAud: "aud",
+		};
+		for (const channels of [
+			{ discord: { ...discord, peerBots: [{ userId: "200000000000000001", name: "떡" }] } },
+			{ discord: { ...discord, botTokenFile: join(home.dir, "secrets", "other-token") } },
+			{ discord: { ...discord, logChannelId: CHANNEL } },
+			{ discord: { ...discord, guildIds: [GUILD] }, web },
+		]) {
+			const plan = planReload({ ...home.config }, { ...home.config, channels });
+			expect(plan.changed).toEqual([]);
+			expect(plan.restartRequired).toEqual(["channels"]);
+			expect(plan.next.channels).toEqual(home.config.channels);
+		}
+		// One boot-bound key beside the live ones: the whole `channels` value stays the started one.
+		const mixed = planReload(
+			{ ...home.config },
+			{
+				...home.config,
+				channels: {
+					discord: { ...discord, guildIds: [GUILD], peerBots: [{ userId: "200000000000000001", name: "떡" }] },
+				},
+			},
+		);
+		expect(mixed.changed).toEqual([]);
+		expect(mixed.restartRequired).toEqual(["channels"]);
+		expect(mixed.next.channels).toEqual(home.config.channels);
+	});
+
 	test("hostTools applies live: a changed extraForbiddenPaths is taken without a restart", () => {
 		expect(LIVE_FIELDS as readonly string[]).toContain("hostTools");
 		const plan = planReload(
@@ -240,6 +310,47 @@ describe("peer bot policy reload", () => {
 	});
 });
 
+test("a reload carries the Discord channel policy to the running adapter: an unmentioned server root is taken once its channel is mention-free", async () => {
+	const transport = new WaitingDiscordTransport();
+	transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
+	const clock = { now: () => Date.now() };
+	const sessions = new FakeSessionStore();
+	const discord = home.config.channels.discord;
+	if (discord === undefined) throw new Error("home without channels.discord");
+	const started = { ...discord, mentionFreeChannels: [] };
+	const fileDiscord = { ...started, botTokenFile: "secrets/discord-bot-token" };
+	patchConfig({ channels: { discord: fileDiscord } });
+	daemon = new Daemon({
+		...daemonTestOptions(),
+		config: { ...home.config, channels: { discord: started } },
+		channels: [discordBinding(transport)],
+		clock,
+		log: createLogger({ sink: () => undefined, clock, redact }),
+		ompVersion: "omp-test 0",
+		bootId: "boot-reload-channel-policy",
+		sweepMs: 3_600_000,
+		gateSweepMs: 0,
+		taskSweepMs: 0,
+		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+	});
+	await daemon.start();
+	const row = (id: string) => daemon?.store.getInbound(`${CHANNEL}:${id}`);
+	await transport.emitMessage(
+		ownerMessage("600000000000000101", "멘션 없이", { channel_id: CHANNEL, guild_id: GUILD }),
+	);
+	expect(row("600000000000000101")).toBeUndefined(); // no mention-free channel at boot: an unmentioned root is not addressed
+	patchConfig({ channels: { discord: { ...fileDiscord, mentionFreeChannels: [CHANNEL] } } });
+	expect(daemon.reloadConfig("ipc")).toMatchObject({
+		ok: true,
+		changed: ["channels.discord.mentionFreeChannels"],
+		restartRequired: [],
+	});
+	await transport.emitMessage(
+		ownerMessage("600000000000000102", "멘션 없이 둘", { channel_id: CHANNEL, guild_id: GUILD }),
+	);
+	expect(row("600000000000000102")?.textRef).toBe("멘션 없이 둘");
+});
+
 test("reloading a config that turns herdr on answers restartRequired with herdr", async () => {
 	const clock = { now: () => Date.now() };
 	const sessions = new FakeSessionStore();
@@ -361,14 +472,66 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 				{ task: "구현", taskSpec: { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo } },
 				{ signal: new AbortController().signal },
 			);
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 		patchConfig({ ...live, lanes: { models: { middle: "b/two" } } });
 		expect(running.reloadConfig("ipc")).toMatchObject({ ok: true, changed: ["lanes"] });
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}
 	expect(models).toEqual(["a/one", "b/two"]);
+});
+
+test("AC-4 (T-20261127-06): a reloaded idStart numbers the next [TASK] through the running daemon's dispatch tool", async () => {
+	const transport = new WaitingDiscordTransport();
+	const clock = { now: () => Date.now() };
+	const sessions = new FakeSessionStore();
+	const live = { herdr: {} };
+	patchConfig({ ...live, idStart: 1 });
+	daemon = new Daemon({
+		...daemonTestOptions(),
+		config: { ...home.config, ...live, idStart: 1, hostSessionCeiling: 0 }, // 0: the host's own omp sessions never refuse
+		channels: [discordBinding(transport)],
+		clock,
+		log: createLogger({ sink: () => undefined, clock, redact }),
+		ompVersion: "omp-test 0",
+		bootId: "boot-reload-idstart",
+		sweepMs: 3_600_000,
+		gateSweepMs: 0,
+		taskSweepMs: 0,
+		driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+	});
+	await daemon.start();
+	const running = daemon;
+	await transport.emitMessage(ownerMessage("600000000000000001", "[TASK] 등록해줘"));
+	await transport.waitForPosts((text) => text.includes("ECHO [TASK] 등록해줘"));
+	// Fixture: the ledger records the worker model the real tool path hands it. The repo is a plain directory, so the
+	// start stops at `git worktree add` (before any herdr call) and the registration is undone.
+	const ledger = running.store.tasks;
+	const register = ledger.register.bind(ledger);
+	const starts: Array<number | undefined> = [];
+	ledger.register = (input) => {
+		starts.push(input.idStart);
+		return register(input);
+	};
+	// The tool is taken once, before the reload: only a per-call read of the config can see the new start.
+	const tool = running.hostToolsFor(`discord/dm/${OWNER_DM}`).find((t) => t.name === "jabbu_dispatch");
+	if (tool === undefined) throw new Error("dispatch tool missing");
+	const repo = mkdtempSync(join(tmpdir(), "jabbu-reload-idstart-"));
+	try {
+		const register1 = () =>
+			tool.execute(
+				{ task: "구현", taskSpec: { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo } },
+				{ signal: new AbortController().signal },
+			);
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
+		patchConfig({ ...live, idStart: 101 });
+		expect(running.reloadConfig("ipc")).toMatchObject({ ok: true, changed: ["idStart"] });
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+	expect(starts).toEqual([1, 101]);
 });
 
 test("qa-z #29: a reload logs the new file's config warnings and carries them", async () => {

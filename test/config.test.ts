@@ -13,7 +13,7 @@ import {
 	readDiscordToken,
 } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
-import { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS } from "../src/daemon/reload";
+import { CLI_FIELDS, LIVE_FIELDS, planReload, RESTART_FIELDS } from "../src/daemon/reload";
 import { channelBindings } from "../src/daemon/run";
 import { landModeOfRemote } from "../src/lanes/pr-land-remote";
 import { createLogger } from "../src/log";
@@ -140,6 +140,25 @@ describe("loadConfig", () => {
 		}
 	});
 
+	test("coldResumeRotateTokens: absent stays undefined, 0 and positive integers load, others are rejected", () => {
+		expect(loadConfig(home).coldResumeRotateTokens).toBeUndefined();
+		writeConfig(baseConfig({ coldResumeRotateTokens: 0 }));
+		expect(loadConfig(home).coldResumeRotateTokens).toBe(0);
+		writeConfig(baseConfig({ coldResumeRotateTokens: 80_000 }));
+		expect(loadConfig(home).coldResumeRotateTokens).toBe(80_000);
+		for (const bad of [-1, 1.5, "100000"]) {
+			writeConfig(baseConfig({ coldResumeRotateTokens: bad }));
+			expect(catchError(() => loadConfig(home)).message).toContain("field=coldResumeRotateTokens");
+		}
+	});
+
+	test("coldResumeRotateTokens is a live-reloadable field", () => {
+		const before = loadConfig(home);
+		const plan = planReload(before, { ...before, coldResumeRotateTokens: 50_000 });
+		expect(plan.changed).toEqual(["coldResumeRotateTokens"]);
+		expect(plan.restartRequired).toEqual([]);
+	});
+
 	test("agent omp is accepted", () => {
 		writeConfig(baseConfig({ agent: "omp" }));
 		expect(loadConfig(home).agent).toBe("omp");
@@ -231,6 +250,10 @@ describe("loadConfig", () => {
 		["recallEnabled", baseConfig({ recallEnabled: "false" })],
 		["recallEnabled", baseConfig({ recallEnabled: 0 })],
 		["idleKeepResident", baseConfig({ idleKeepResident: "false" })],
+		["idStart", baseConfig({ idStart: 0 })],
+		["idStart", baseConfig({ idStart: 9001 })],
+		["idStart", baseConfig({ idStart: 1.5 })],
+		["idStart", baseConfig({ idStart: "101" })],
 		["peerHopLimit", baseConfig({ peerHopLimit: 3 })],
 		["peerHopLimit.turns", baseConfig({ peerHopLimit: { turns: 0, windowMinutes: 30 } })],
 		["peerHopLimit.windowMinutes", baseConfig({ peerHopLimit: { turns: 3, windowMinutes: 1.5 } })],
@@ -282,6 +305,12 @@ describe("loadConfig", () => {
 		expect(loadConfig(home).idleKeepResident).toBeUndefined();
 		writeConfig(baseConfig({ idleKeepResident: false }));
 		expect(loadConfig(home).idleKeepResident).toBe(false);
+	});
+
+	test("AC-5: idStart is optional and accepts 1..9000", () => {
+		expect(loadConfig(home).idStart).toBeUndefined();
+		writeConfig(baseConfig({ idStart: 101 }));
+		expect(loadConfig(home).idStart).toBe(101);
 	});
 
 	test("peerHopLimit is optional and read as written", () => {

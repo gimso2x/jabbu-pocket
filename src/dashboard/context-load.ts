@@ -131,6 +131,10 @@ async function loadOf(
 	const context =
 		live !== undefined && thread.openCount > 0 ? liveContext(await live(rawOrigin).catch(() => undefined)) : undefined;
 	if (context !== undefined) {
+		if (!windows.has(key) && windows.size >= CACHE_ENTRIES) {
+			const oldest = windows.keys().next().value;
+			if (oldest !== undefined) windows.delete(oldest);
+		}
 		windows.set(key, { window: context.window, model });
 		return context.tokens === null
 			? undefined

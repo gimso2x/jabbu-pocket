@@ -29,7 +29,7 @@ Discord ──▶ channel adapter ──▶ CoreSink(daemon-sink) ──▶ stor
 | --- | --- | --- |
 | `src/main.ts`, `src/cli/` | 명령줄 진입점(`daemon`·`apply`·`tasks`·`lanes`·`doctor` 등) | `src/cli/index.ts` |
 | `src/daemon/` | 배선: store·라우터·어댑터·유닉스 소켓·타이머를 묶고, 시작 시 복구·종료 시 drain | `daemon.ts`, `recovery.ts`, `daemon-sink.ts` |
-| `src/core/` | 대화 하나의 직렬 액터(`Mailbox`)와 origin 라우팅, 채팅 명령, 세션 epoch | `mailbox.ts`, `origin.ts`, `mailbox-sending.ts` |
+| `src/core/` | 대화 하나의 직렬 액터(`Mailbox`)와 origin 라우팅, 채팅 명령, 세션 epoch. 자식 프로세스 트리 종료 공용 헬퍼(`terminate-tree.ts`: 프로세스 그룹 시그널에 더해, `/proc`에서 미리 기록한 그룹 밖 자손(`setsid`·`detached`)을 시작 시각이 같은 pid에만 개별 종료) | `mailbox.ts`, `origin.ts`, `mailbox-sending.ts`, `terminate-tree.ts` |
 | `src/omp/` | omp·agy 자식과의 경계. omp 패키지를 import하지 않고 공개 stdio RPC만 말한다 | `driver.ts`(`OmpSessionDriver`), `rpc-client.ts`, `agy-driver.ts` |
 | `src/channel/` | 플랫폼과 무관한 어댑터 계약과 공용 전달 펌프 | `adapter.ts`(`ChannelAdapter`), `port.ts`(`ChannelPort`), `types.ts`(`CoreSink`), `pump.ts` |
 | `src/discord/` | Discord 어댑터(게이트웨이·REST·카드·백필) | `adapter.ts` |
