@@ -130,6 +130,12 @@ export interface ApplyDeps {
 	drain: (timeoutMin: number, cutAfterMin?: number) => Promise<DrainWaitResult>;
 	backup: () => BackupResult;
 	/**
+	 * Re-opens the backup snapshot with the code the checkout holds now, before a restart onto a HEAD that moved
+	 * after preflight (a fresh process: this one loaded its modules before the merge). A throw refuses the restart.
+	 * Absent: no re-validation (tests that stub deps).
+	 */
+	revalidateBackup?: (backupFile: string) => Promise<void>;
+	/**
 	 * Restores the pre-apply snapshot (`runRestore` path) while no daemon runs; the code rollback calls it when
 	 * the ledger is newer than the rolled-back code's schema. Absent: the rollback names the restore command.
 	 */
@@ -261,7 +267,7 @@ export interface ApplyReceipt {
 	status: ApplyStatus;
 	exitCode: 0 | 1 | 3;
 	repoDir: string;
-	/** The commit the restarted daemon loads: read again right before the restart, since a merge can land during drain. */
+	/** The commit the restarted daemon loads: read again right before the restart, since a merge can land during drain. When it moved, the snapshot is re-validated against the new checkout before restarting onto it. */
 	head: string | undefined;
 	/** HEAD at preflight, set only when HEAD moved between preflight and the restart. */
 	headAtPreflight?: string;
@@ -388,9 +394,8 @@ export function readCodeRollbackJournal(gitDir: string): CodeRollbackJournal | u
 	const parsed: unknown = JSON.parse(text);
 	if (typeof parsed !== "object" || parsed === null) throw new Error("not a JSON object");
 	const fields = parsed as Record<string, unknown>;
-	for (const key of ["lastGood", "head", "stamp", "home"] as const) {
+	for (const key of ["lastGood", "head", "stamp", "home"] as const)
 		if (typeof fields[key] !== "string" || fields[key] === "") throw new Error(`no ${key}`);
-	}
 	return parsed as CodeRollbackJournal;
 }
 
@@ -566,42 +571,8 @@ export async function checkCheckout(
 	return result;
 }
 
-/** Prefix of every unit `apply --detach` (and `!restart`) starts; `jabbu-apply-<stamp>-<4 hex>`. */
-export const APPLY_UNIT_PREFIX = "jabbu-apply-";
-
-/**
- * The `systemd-run` command that runs `apply <childArgs>` as a transient user unit, for `apply --detach` and
- * `!restart` alike. The unit name carries a random suffix so two launches in the same second never collide; the
- * receipt keeps the bare stamp. `homeEnv`: pass `JABBU_HOME` (the caller runs under a non-default home).
- */
-export function detachedApplyCommand(input: {
-	bun: string;
-	repoDir: string;
-	pathEnv: string;
-	stamp: string;
-	childArgs: readonly string[];
-	homeEnv?: string;
-}): { unit: string; argv: string[] } {
-	const unit = `${APPLY_UNIT_PREFIX}${input.stamp}-${crypto.randomUUID().slice(0, 4)}`;
-	const setenv = [`--setenv=PATH=${input.pathEnv}`];
-	if (input.homeEnv !== undefined) setenv.push(`--setenv=JABBU_HOME=${input.homeEnv}`);
-	return {
-		unit,
-		argv: [
-			"systemd-run",
-			"--user",
-			"--collect",
-			`--unit=${unit}`,
-			`--working-directory=${input.repoDir}`,
-			...setenv,
-			input.bun,
-			// As the rendered units: no `.env` of the working directory swept up by Bun and handed on to the omp child.
-			"--no-env-file",
-			join(input.repoDir, "src", "main.ts"),
-			...input.childArgs,
-		],
-	};
-}
+/** Re-exported so existing importers (`daemon/restart`, `cli/apply`, tests) keep one import site. */
+export { APPLY_UNIT_PREFIX, detachedApplyCommand } from "./detached-apply-command";
 
 /**
  * The model-free apply report (`--report-plain`, `!restart`): one line with the outcome and the loaded commit, the
@@ -852,9 +823,8 @@ async function applyUnderLock(
 			receipt.head = check.head;
 			({ journalPath, journalOnMain, detached, checkout } = check);
 			const active = await deps.run(["systemctl", "--user", "is-active", unit], systemctlOptions);
-			if (active.code !== 0) {
+			if (active.code !== 0)
 				skipReasons.push(`systemctl --user is-active ${unit} rc=${active.code} (daemon not active or no user bus)`);
-			}
 			// The last verified commit is the revert target; without one, the reflog's previous position.
 			receipt.lastGoodHead = readHeadLastGood(homeDir);
 			let prev = receipt.lastGoodHead;
@@ -875,9 +845,8 @@ async function applyUnderLock(
 				systemctlOptions,
 			);
 			const enteredAt = show.code === 0 ? parseUnixTimestamp(show.stdout) : undefined;
-			if (enteredAt !== undefined && enteredAt > options.mergedAt.getTime()) {
+			if (enteredAt !== undefined && enteredAt > options.mergedAt.getTime())
 				alreadyApplied = `daemon active since ${new Date(enteredAt).toISOString()} is after merge ${options.mergedAt.toISOString()}`;
-			}
 		}
 		if (skipReasons.length > 0) return { ok: false, detail: [...skipReasons, ...preflightNotes].join("; ") };
 		const ready = alreadyApplied ?? `${checkout || `main@${receipt.head}`} clean, bun=${bun}`;
@@ -889,11 +858,10 @@ async function applyUnderLock(
 	// the whole apply into a failure (exit 1) so a caller does not mistake a half-applied checkout for done.
 	// true when every peer applied (or there is none).
 	const runPeers = async (afterCodeRollback: boolean): Promise<boolean> => {
-		const peers = deps.peers;
-		if (peers === undefined) return true;
+		if (deps.peers === undefined) return true;
 		let allOk = true;
 		await step("peers", async () => {
-			const results = await peers(afterCodeRollback);
+			const results = (await deps.peers?.(afterCodeRollback)) ?? [];
 			allOk = results.every((p) => p.exitCode === 0);
 			const detail = results.map((p) => `${p.unit}=${p.status}(${p.receiptPath})`).join(" ");
 			return { ok: allOk, detail: detail || "no other install on this checkout" };
@@ -1048,6 +1016,7 @@ async function applyUnderLock(
 	crash("apply_after_drain");
 
 	// 4+5. restart and wait for a daemon that started after the restart request.
+	let restartRefused = false;
 	const restartAndWait = async (): Promise<StepResult & { restartAt: number }> => {
 		// The daemon loads whatever the checkout holds at restart; a merge landing during drain moves HEAD past preflight.
 		const head = await git("rev-parse", "HEAD");
@@ -1056,6 +1025,21 @@ async function applyUnderLock(
 		if (moved) {
 			receipt.headAtPreflight ??= receipt.head;
 			receipt.head = current;
+			// The preflight backup check ran against the old code: re-validate the snapshot against the new
+			// checkout before restarting onto it. A failure refuses the restart — the merge is not a failed start,
+			// so no config/code rollback follows; the drained daemon resumes on the old code.
+			if (deps.revalidateBackup !== undefined && receipt.backupFile !== undefined) {
+				try {
+					await deps.revalidateBackup(receipt.backupFile);
+				} catch (error) {
+					restartRefused = true;
+					return {
+						ok: false,
+						detail: `HEAD moved after preflight to ${current.slice(0, 7)} but the new code cannot open the ledger snapshot: ${msg(error)}; not restarted (${await cancelDrain()})`,
+						restartAt: deps.now(),
+					};
+				}
+			}
 		}
 		const restartAt = deps.now();
 		deps.onRestart?.();
@@ -1075,9 +1059,8 @@ async function applyUnderLock(
 				const response = await deps.callDaemon({ op: "status" }, 5_000);
 				const answered = typeof response === "object" && response !== null && "ok" in response && response.ok === true;
 				const startedAt = deps.lockStartedAt();
-				if (answered && startedAt !== undefined && startedAt > restartAt) {
+				if (answered && startedAt !== undefined && startedAt > restartAt)
 					return { ok: true, detail: `daemon started ${new Date(startedAt).toISOString()}` };
-				}
 				last = answered
 					? `answering but started ${startedAt === undefined ? "unknown" : new Date(startedAt).toISOString()}, not after restart`
 					: "status not ok";
@@ -1109,13 +1092,12 @@ async function applyUnderLock(
 		}
 	};
 
-	const installDeps = async (): Promise<EnsureDepsResult> => {
-		try {
-			return await ensureDeps(repoDir, { ...deps, bun: bun ?? "bun", stamp });
-		} catch (error) {
-			return { ok: false, detail: msg(error), noted: true };
-		}
-	};
+	const installDeps = async (): Promise<EnsureDepsResult> =>
+		ensureDeps(repoDir, { ...deps, bun: bun ?? "bun", stamp }).catch((error: unknown) => ({
+			ok: false,
+			detail: msg(error),
+			noted: true,
+		}));
 
 	// 3b. dependencies: the restarted daemon loads node_modules as the checkout holds it. Recorded as a step only when
 	// the marker was not up to date; a failed install restarts nothing and lets the old daemon take turns again.
@@ -1268,6 +1250,8 @@ async function applyUnderLock(
 	// 7. rollback on failure: last known-good config back, one more restart. Only when that fails too, the code goes
 	// back to head.last-good (8); otherwise the code stays and the receipt describes how to revert it.
 	if (!ready) {
+		// The restart never happened: the merge is not a failed start, so no config/code rollback.
+		if (restartRefused) return finish("failed", 1);
 		let codeTarget: { lastGood: string; head: string } | undefined;
 		const recovered = await step("rollback", async () => {
 			const details: string[] = [];
@@ -1279,7 +1263,9 @@ async function applyUnderLock(
 			const r = await restartAndWait();
 			let ok = r.ok;
 			if (!r.ok) details.push(r.detail);
-			else {
+			// A refused restart never leads to a code rollback: the drain is already cancelled, the old daemon resumes.
+			if (restartRefused) return { ok: false, detail: details.join("; ") };
+			if (r.ok) {
 				const w = await waitReady(r.restartAt);
 				ok = w.ok;
 				details.push(`restart ${w.ok ? "ok" : "failed"}: ${w.detail}`);

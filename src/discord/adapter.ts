@@ -39,6 +39,7 @@ import {
 import {
 	cutCodePointSafe,
 	DENIED_TEXT,
+	errorFields,
 	errorText,
 	type FinalOutcome,
 	oneLine,
@@ -342,7 +343,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				return botUserId;
 			},
 			(err: unknown) => {
-				this.#log.error("discord_start_failed", { error: errorText(err) });
+				this.#log.error("discord_start_failed", { ...errorFields(err) });
 				return undefined;
 			},
 		);
@@ -514,11 +515,11 @@ export class DiscordAdapter implements ChannelAdapter {
 					replyEphemeral: (text) => this.#followupEphemeral(interaction, text, "action_reply_failed"),
 				});
 			} catch (err) {
-				this.#log.error("action_failed", { error: errorText(err), ...actionContext });
+				this.#log.error("action_failed", { ...errorFields(err), ...actionContext });
 				await this.#followupEphemeral(interaction, ACTION_FAILURE_TEXT, "action_failure_notice_failed");
 			}
 		} catch (err) {
-			this.#log.error("action_failed", { error: errorText(err), ...actionContext });
+			this.#log.error("action_failed", { ...errorFields(err), ...actionContext });
 		}
 	}
 
@@ -923,8 +924,7 @@ export class DiscordAdapter implements ChannelAdapter {
 	): Promise<void> {
 		let name: string | undefined;
 		if (!known) {
-			const line = progressLine(text.split("\n")[0] ?? "");
-			name = (line === "" ? "jabbu" : line).slice(0, THREAD_NAME_MAX);
+			name = (progressLine(text.split("\n")[0] ?? "") || "jabbu").slice(0, THREAD_NAME_MAX);
 			try {
 				await this.#transport.startThread({ channelId: conversationId, messageId: event.id, name });
 			} catch (err) {

@@ -1,26 +1,11 @@
-import { Database } from "bun:sqlite";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { timezoneOfHome } from "../config";
 import { acquireLock, LockHeldError } from "../daemon/lock";
-import { newerSchemaMessage, readSchemaVersion, SCHEMA_VERSION } from "../store/schema-version";
 import { BACKUP_FILE_PATTERN, backupStamp, fsyncPath } from "./backup";
+import { RestoreError, verifyRestoreCopy } from "./restore-verify";
 
-export type RestoreErrorCode =
-	| "bad_source"
-	| "daemon_running"
-	| "newer_schema"
-	| "integrity_check_failed"
-	| "restore_failed";
-
-export class RestoreError extends Error {
-	readonly code: RestoreErrorCode;
-
-	constructor(code: RestoreErrorCode, detail: string) {
-		super(`${code}: ${detail}`);
-		this.name = "RestoreError";
-		this.code = code;
-	}
-}
+export { RestoreError } from "./restore-verify";
 
 export interface RestoreOptions {
 	homeDir: string;
@@ -49,8 +34,6 @@ export interface RestoreResult {
 }
 
 const SIDECARS = ["", "-wal", "-shm", "-journal"] as const;
-/** Core ledger tables every jabbu db has: a restore source without them is not a jabbu ledger. */
-const REQUIRED_TABLES = ["origins", "inbound", "deliveries"] as const;
 
 /** `backups/pre-restore-<stamp>`, or `-2`, `-3`… when a restore in the same second already used that name. */
 function freshPreRestoreDir(homeDir: string, stamp: string): string {
@@ -101,9 +84,9 @@ export function resolveRestoreSource(homeDir: string, source: string): string {
 
 /**
  * Replaces `<home>/jabbu.db` with a verified backup while no daemon runs. The copy is made next to the target,
- * checked with `PRAGMA quick_check`, the current db (+wal/shm) moves to `backups/pre-restore-<stamp>/`, and a rename
- * installs the copy. Any failure after the first move puts the previous files back. The single-instance lock is held
- * throughout so a daemon cannot start halfway.
+ * checked with `PRAGMA quick_check` plus a throwaway open that runs the schema migration, the current db (+wal/shm)
+ * moves to `backups/pre-restore-<stamp>/`, and a rename installs the copy. Any failure after the first move puts the
+ * previous files back. The single-instance lock is held throughout so a daemon cannot start halfway.
  */
 export async function runRestore(options: RestoreOptions): Promise<RestoreResult> {
 	const { homeDir } = options;
@@ -141,14 +124,14 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 			moves: SIDECARS.map((suffix) => `${target}${suffix}`).filter((path) => existsSync(path)),
 		};
 		if (!options.yes) return { applied: false, plan };
-		install(plan, rename);
+		install(plan, rename, timezoneOfHome(homeDir));
 		return { applied: true, plan };
 	} finally {
 		lock.release();
 	}
 }
 
-function install(plan: RestorePlan, rename: (from: string, to: string) => void): void {
+function install(plan: RestorePlan, rename: (from: string, to: string) => void, timezone: string): void {
 	const { source, target, preRestoreDir } = plan;
 	const tmp = join(dirname(target), `jabbu.db.restore-${crypto.randomUUID()}.tmp`);
 	const moved: Array<{ from: string; to: string }> = [];
@@ -156,35 +139,7 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void):
 	try {
 		copyFileSync(source, tmp);
 		chmodSync(tmp, 0o600);
-		const copy = new Database(tmp, { readonly: true, strict: true });
-		let check: string;
-		let missing: string[];
-		let copyVersion: number;
-		try {
-			copyVersion = readSchemaVersion(copy);
-			check = (copy.query("PRAGMA quick_check").get() as { quick_check?: string } | undefined)?.quick_check ?? "";
-			// quick_check passes an empty file and any foreign sqlite db alike; the daemon would not start on either.
-			const tables = new Set(
-				(copy.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
-					(row) => row.name,
-				),
-			);
-			missing = REQUIRED_TABLES.filter((table) => !tables.has(table));
-		} catch (error) {
-			throw new RestoreError("integrity_check_failed", error instanceof Error ? error.message : String(error));
-		} finally {
-			copy.close();
-		}
-		if (copyVersion > SCHEMA_VERSION) {
-			throw new RestoreError("newer_schema", newerSchemaMessage(copyVersion).replace(/^newer_schema: /, ""));
-		}
-		if (check !== "ok") throw new RestoreError("integrity_check_failed", `quick_check=${check}`);
-		if (missing.length > 0) {
-			throw new RestoreError(
-				"integrity_check_failed",
-				`not a jabbu ledger: missing table${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
-			);
-		}
+		verifyRestoreCopy(tmp, timezone);
 		for (const ext of SIDECARS.slice(1)) rmSync(`${tmp}${ext}`, { force: true });
 		fsyncPath(tmp);
 
@@ -200,6 +155,8 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void):
 		fsyncPath(dirname(target));
 	} catch (error) {
 		rmSync(tmp, { force: true });
+		// The read-only check opens a WAL-mode copy, which leaves -wal/-shm beside it even when nothing is written.
+		for (const ext of SIDECARS.slice(1)) rmSync(`${tmp}${ext}`, { force: true });
 		if (placed || moved.length > 0) {
 			// The replaced ledger must be exactly what it was: drop the half-installed copy, move the old files back.
 			rmSync(target, { force: true });

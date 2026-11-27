@@ -1709,6 +1709,47 @@ describe("headless [TASK] runtime (no herdr): registration", () => {
 	});
 });
 
+describe("force:true capacity override asks the owner on a card", () => {
+	const tightDisk = () => ({ freeBytes: 1024, totalBytes: 100 * 1024 ** 3, asked: [] as string[] });
+	const forcedEvent = (h: Harness, event: string) => h.logs.some((line) => JSON.parse(line).event === event);
+
+	test("an approved force card starts past a disk refusal with the measured numbers", async () => {
+		const h = harness({ approval: "approved", disk: tightDisk() });
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go", force: true });
+		expect(out).toContain("등록·시작했습니다");
+		expect(h.approvals).toHaveLength(1);
+		expect(h.approvals[0]?.detail.action).toContain("디스크 여유 부족");
+		expect(forcedEvent(h, "task_start_forced")).toBe(true);
+		expect(h.ledger.list()).toHaveLength(1);
+	});
+
+	test("a denied force card refuses the start and registers nothing", async () => {
+		const h = harness({ approval: "denied", disk: tightDisk() });
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go", force: true });
+		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
+		expect(h.approvals).toHaveLength(1);
+		expect(h.ledger.list()).toEqual([]);
+		expect(h.herdr).toEqual([]);
+		expect(forcedEvent(h, "task_start_forced")).toBe(false);
+	});
+
+	test("force:true with no approver refuses the start", async () => {
+		const h = harness({ disk: tightDisk() });
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go", force: true });
+		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
+		expect(h.approvals).toHaveLength(0);
+		expect(h.ledger.list()).toEqual([]);
+	});
+
+	test("a free-text reply to the force card is not approval", async () => {
+		const h = harness({ approval: { replied: "강행해" }, disk: tightDisk() });
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go", force: true });
+		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
+		expect(h.approvals).toHaveLength(1);
+		expect(h.ledger.list()).toEqual([]);
+	});
+});
+
 describe("taskSpec.branch and dispatchHosts.<h>.branchRules", () => {
 	const RULE: BranchRule = {
 		repoPrefix: "/r/",

@@ -545,6 +545,85 @@ describe("runApply execution", () => {
 		expect(readReceipt(receipt).head).toBe(moved);
 	});
 
+	test("a merge landing during drain whose new code cannot migrate the backup: refuses the restart, cancels the drain, no rollback", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {
+				throw new Error("migration fails: boom");
+			},
+		});
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+		]);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"HEAD moved after preflight to ccccccc but the new code cannot open the ledger snapshot: migration fails: boom; not restarted (drain cancelled)",
+		);
+		expect(restartCommands(world)).toHaveLength(0);
+		expect(world.drainCancels).toBe(1);
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"before"}');
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a merge landing during drain whose new code can migrate the backup: proceeds as pinned", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {},
+		});
+		expect(exitCode).toBe(0);
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"restart requested (HEAD moved after preflight: aaaaaaa→ccccccc)",
+		);
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a restart that fails twice (apply and rollback) skips the code rollback target without waiting for ready", async () => {
+		const world = makeWorld();
+		world.restartRc = 1;
+		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+			["rollback", false],
+		]);
+		const rollback = receipt.steps.find((s) => s.name === "rollback")?.detail ?? "";
+		expect(rollback).toContain("systemctl restart rc=1: boom");
+		expect(rollback).toContain("code rollback skipped: head.last-good 없음");
+		expect(rollback).not.toContain("not ready within");
+		expect(restartCommands(world)).toHaveLength(2);
+		expect(world.drainCancels).toBe(1);
+	});
+
 	test("an old daemon still answering is not ready: waits, then rolls back config with one more restart", async () => {
 		const world = makeWorld();
 		world.restartMakesFreshDaemon = false; // restart returns 0 but no new process ever takes the lock
@@ -2150,6 +2229,8 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		};
 	}
 
+	// Real git spawns under a loaded host: the rollback flow alone passed bun's 5 s default (full suite,
+	// 2026-11-27). A bound, not a wait: a hung rollback still fails the test.
 	test("U1: a code rollback restores the pre-apply snapshot when the ledger is newer than the rolled-back code", async () => {
 		const { r, backupFile } = u1Scene();
 		const world = failingWorld();
@@ -2190,7 +2271,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(codeStep(receipt)?.detail).toContain("ledger schema v13 > rolled-back code v12");
 		expect(codeStep(receipt)?.detail).toContain(`db restored from ${backupFile}`);
 		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
-	});
+	}, 30_000);
 
 	test("U1: without a restore path the code rollback fails fast and names jabbu-pocket restore", async () => {
 		const { r, backupFile } = u1Scene();
@@ -2219,7 +2300,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
 		const inject = world.injects[0] as { text: string };
 		expect(inject.text).toContain(`jabbu-pocket restore ${backupFile}`);
-	});
+	}, 30_000);
 
 	test("U1: a ledger the rolled-back code can open rolls back without a restore", async () => {
 		const { r } = u1Scene(12);
@@ -2238,7 +2319,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toHaveLength(0);
 		expect(codeStep(receipt)?.detail ?? "").not.toContain("db restore");
 		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
-	});
+	}, 30_000);
 
 	test("U1: a failed db restore fails the code rollback and names jabbu-pocket restore", async () => {
 		const { backupFile } = u1Scene();
@@ -2253,7 +2334,7 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(codeStep(receipt)?.detail).toContain(`jabbu-pocket restore ${backupFile}`);
 		expect(restartCommands(world)).toHaveLength(2);
 		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toHaveLength(1);
-	});
+	}, 30_000);
 
 	describe("apply.codeRollback detach and off (apply-rollback-mode)", () => {
 		const detach: ApplyOptions = { ...base, codeRollback: "detach" };
