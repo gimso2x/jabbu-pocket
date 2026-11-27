@@ -8,10 +8,8 @@ import { clampPct, collectAgyAccounts, parseAgy, type UsageAccount, type UsageRo
 export { parseAgy, type UsageAccount, type UsageRow };
 
 /**
- * The "모델 한도" card's data: config `dashboard.usageLimits` lists commands, each
- * one a source. `omp usage --json -r -p <provider>` (Claude, GLM) prints JSON; `agy -p /usage` (Antigravity) prints
- * tab-separated lines. Both are read here at this boundary (outside-controlled output): a source whose output has an
- * unexpected shape fails alone, and no account identifier (the `-r` masked e-mail, ids) is carried out.
+ * The "모델 한도" card: config `dashboard.usageLimits` runs `omp usage --json -r -p <provider>` (Claude, GLM)
+ * and `agy -p /usage` (Antigravity). Each source fails alone without leaking account identifiers or secrets.
  */
 
 /** A run is reused this long, failed runs too: the dashboard polls every 60 seconds even from a hidden tab. */
@@ -43,20 +41,15 @@ type Kind = "omp" | "agy";
 const PROVIDER_NAMES: Record<string, string> = { anthropic: "Claude", zai: "GLM" };
 
 const cache = sectionCache<UsageLimitsInfo>(USAGE_LIMITS_TTL_MS);
-
 /** Test only: forget every cached run. */
 export const clearUsageLimitsCache = (): void => cache.clear();
-
 /** The card's section, one run per config within {@link USAGE_LIMITS_TTL_MS}. Never rejects. */
 export function readUsageLimits(
 	config: UsageLimitsConfig,
 	run: ProcessRunner,
 	now: () => number,
 ): Promise<Section<UsageLimitsInfo>> {
-	return cache.read(JSON.stringify(config), now, async () => ({
-		ok: true,
-		sources: await collect(config, run),
-	}));
+	return cache.read(JSON.stringify(config), now, async () => ({ ok: true, sources: await collect(config, run) }));
 }
 
 async function readAgySource(config: UsageLimitsConfig, run: ProcessRunner): Promise<UsageSource | undefined> {
@@ -67,23 +60,10 @@ async function readAgySource(config: UsageLimitsConfig, run: ProcessRunner): Pro
 		if (multi !== undefined) {
 			const primary = multi.accounts.find((entry) => entry.active) ?? multi.accounts[0];
 			const account = multi.account ?? primary?.name;
-			const acctField = account === undefined ? {} : { account };
-			if (primary === undefined || !primary.ok) {
-				return {
-					name: "Antigravity",
-					...acctField,
-					ok: false,
-					error: primary?.error ?? "유효한 계정 없음",
-					accounts: multi.accounts,
-				};
-			}
-			return {
-				name: "Antigravity",
-				...acctField,
-				ok: true,
-				rows: primary.rows,
-				accounts: multi.accounts,
-			};
+			const base = { name: "Antigravity", ...(account === undefined ? {} : { account }), accounts: multi.accounts };
+			return primary === undefined || !primary.ok
+				? { ...base, ok: false, error: primary?.error ?? "유효한 계정 없음" }
+				: { ...base, ok: true, rows: primary.rows };
 		}
 	}
 	const source = await readSource("agy", config.agy, run);
@@ -148,7 +128,24 @@ async function readSource(kind: Kind, argv: string[], run: ProcessRunner): Promi
 		return failed("JSON이 아닌 출력");
 	}
 	const rows = parseOmp(parsed);
-	return typeof rows === "string" ? failed(`모양이 다름: ${rows}`) : { name, ok: true, rows };
+	if (typeof rows !== "string") return { name, ok: true, rows };
+	return failed((rows === "reports" ? ompEmptyReason(parsed) : undefined) ?? `모양이 다름: ${rows}`);
+}
+
+function ompEmptyReason(value: unknown): string | undefined {
+	if (!isRecord(value) || !Array.isArray(value.reports) || value.reports.length > 0) return undefined;
+	if (Array.isArray(value.disabledCredentials) && value.disabledCredentials.length > 0) {
+		const causes = value.disabledCredentials
+			.map((item) => (isRecord(item) && typeof item.cause === "string" ? item.cause.trim() : ""))
+			.filter(Boolean);
+		if (causes.some((c) => /invalid_grant|refresh token expired|token refresh failed/i.test(c))) {
+			return "인증 만료 (재로그인 필요)";
+		}
+		return causes[0] ? `인증 비활성: ${causes[0]}` : "인증 비활성 (재로그인 필요)";
+	}
+	return Array.isArray(value.accountsWithoutUsage) && value.accountsWithoutUsage.length > 0
+		? "한도 정보 없음"
+		: undefined;
 }
 
 /** Weekly `window.id`s: `7d` is Anthropic's, `1w` Zai's (2026-11-16 `omp usage --json`). */
