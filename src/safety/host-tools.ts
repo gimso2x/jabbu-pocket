@@ -37,7 +37,7 @@ export const UPLOAD_SCAN_CARRY_CHARS = 4096;
  * `redact`'s secret shapes, except that an `sk-` key needs 20+ characters after `sk-` / `sk-ant-`: binary data decoded
  * as UTF-8 is full of short `sk-…` runs. Chat masking (`redact`) keeps the shorter shape.
  */
-const UPLOAD_SECRET_PATTERN = new RegExp(secretShapes("{20,}"));
+const UPLOAD_SECRET_PATTERN = new RegExp(secretShapes("{20,}"), "g"); // global: `hasUploadSecret` sets `lastIndex`
 /**
  * PEM private key header (`RSA`, `EC`, `OPENSSH`, `ENCRYPTED`, bare): uploads refuse it even without its END line in the
  * scanned span; chat masking (`secretShapes`) masks whole BEGIN–END blocks only.
@@ -49,9 +49,10 @@ const HARD_LINK_SCAN_FILES = 2000;
 
 /**
  * The upload verdict on one scanned span: a token-shaped string, a private key header or a fragment of an indexed
- * secret value.
+ * secret value. The first `contextChars` characters are only the carry cut's left edge (a shape there was judged before).
  */
-export function hasUploadSecret(text: string): boolean {
+export function hasUploadSecret(text: string, contextChars = 0): boolean {
+	UPLOAD_SECRET_PATTERN.lastIndex = contextChars;
 	return UPLOAD_SECRET_PATTERN.test(text) || PRIVATE_KEY_HEADER.test(text) || maskKnownFragments(text) !== text;
 }
 
@@ -169,11 +170,10 @@ export function checkUploadable(
 		for (;;) {
 			const read = readSync(fd, chunk, 0, chunk.length, null);
 			const text = carry + decoder.decode(chunk.subarray(0, read), { stream: read > 0 });
-			if (hasUploadSecret(text)) throw new Error("upload refused: file contains a token-like secret");
+			if (hasUploadSecret(text, carry.length > UPLOAD_SCAN_CARRY_CHARS ? 1 : 0))
+				throw new Error("upload refused: file contains a token-like secret");
 			if (read === 0) break;
-			carry = text.slice(-UPLOAD_SCAN_CARRY_CHARS);
-			// `sk-` needs a non-alphanumeric left edge that the cut hides; a key starting there was judged whole already.
-			if (carry.startsWith("sk-")) carry = carry.slice(1);
+			carry = text.slice(-(UPLOAD_SCAN_CARRY_CHARS + 1)); // one more character, as the cut's left edge
 		}
 	} finally {
 		closeSync(fd);
