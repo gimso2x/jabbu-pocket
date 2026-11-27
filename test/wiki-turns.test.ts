@@ -83,6 +83,32 @@ describe("conversation turn notes", () => {
 		expect(wiki.outbox()).toEqual([]);
 	});
 
+	test("AC-3: a note whose sweep never started stays unsent and is retried at the next flush", async () => {
+		const repo = makeRepo(repos);
+		await wiki.notes.recordTurn({
+			originKey: "discord/dm/200000000000000001",
+			opRef: "op1",
+			threadRef: "200000000000000001:400000000000000001",
+			rows: [commitTurn(repo, "fix: 하나")],
+		});
+		// The wiki client is missing: the file is written but no sweep starts.
+		wiki.config = { ...(wiki.config as NonNullable<typeof wiki.config>), client: join(wiki.dir, "missing-client") };
+		await wiki.notes.flushTurns();
+		const ids = wiki.outbox();
+		expect(ids).toHaveLength(1);
+		expect(wiki.sweeps).toEqual([]);
+		expect(wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes("sweep"))).toBe(true);
+		expect(store.wikiNoteState(ids[0] as string)).toBeUndefined();
+		expect(store.listUnsentWikiTurns()).toHaveLength(1);
+
+		// Client back in place: the next flush retries the sweep and the note is sent.
+		wiki.config = { ...(wiki.config as NonNullable<typeof wiki.config>), client: join(wiki.dir, "client") };
+		await wiki.notes.flushTurns();
+		expect(store.wikiNoteState(ids[0] as string)).toEqual({ state: "sent" });
+		expect(store.listUnsentWikiTurns()).toEqual([]);
+		expect(wiki.sweeps).toHaveLength(1);
+	});
+
 	test("AC-3: a DM turn is its own note at the next flush, even on the same day", async () => {
 		const repo = makeRepo(repos);
 		const one = commitTurn(repo, "fix: 하나");
