@@ -406,7 +406,7 @@ describe("a damaged lanes row in the turn trace", () => {
 		damage("lane-obj-history", "history", "{}");
 		damage("lane-null-element", "history", "[null]");
 		damage("lane-string-at", "history", '[{"at":"x","event":"closed"}]');
-		damage("lane-number-reason", "meta", '{"parentOrigin":"' + ORIGIN + '","tierReason":5}');
+		damage("lane-number-reason", "meta", `{"parentOrigin":"${ORIGIN}","tierReason":5}`);
 		const trace = traceOf();
 		expect(workerIds(trace)).toEqual(["L-lane-ok"]);
 		expect(trace.skippedLanes).toBe(8);
