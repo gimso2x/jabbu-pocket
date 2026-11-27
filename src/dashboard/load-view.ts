@@ -13,17 +13,27 @@ import type { UsageLimitsInfo } from "./usage-limits";
  * The thread card's context bar: `.limit-row` colours the bar and the share (none under 80%, `is-warn` from 80%,
  * `is-danger` from 90%), `200k+` once the session passed 200k tokens. Nothing for an unknown use or `done` cards.
  */
-export function contextBar(context: { percent: number; tokens: number } | undefined, column?: string): string {
+export function contextBar(
+	context: { percent: number; tokens: number; tokensOnly?: true } | undefined,
+	column?: string,
+): string {
 	if (context === undefined) return "";
+	const k = Math.round(context.tokens / 1000);
+	if (context.tokensOnly === true) {
+		if (column === "done" && context.tokens <= 200_000) return "";
+		const tone = context.tokens >= 300_000 ? "is-danger" : context.tokens >= 200_000 ? "is-warning" : "";
+		const label =
+			context.tokens >= 1000 ? `${(context.tokens / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(context.tokens);
+		return `<span class="badge${tone ? ` ${tone}` : ""} ctx-hi" title="컨텍스트 ${k}k 토큰">${label}</span>`;
+	}
 	if (column === "done") {
 		if (context.tokens <= 200_000) return "";
-		const k = Math.round(context.tokens / 1000);
 		const tone = context.tokens >= 300_000 ? "is-danger" : "is-warning";
 		return `<span class="badge ${tone} ctx-hi" title="컨텍스트 ${k}k 토큰 — 새 스레드 분리 권장">${k}k</span>`;
 	}
 	const pct = Math.round(context.percent);
 	const tone = context.percent >= 90 ? " is-danger" : context.percent >= 80 ? " is-warn" : "";
-	return `<span class="limit-row${tone}" title="컨텍스트 ${Math.round(context.tokens / 1000)}k 토큰"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></span><b class="limit-pct">${pct}%${
+	return `<span class="limit-row${tone}" title="컨텍스트 ${k}k 토큰"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${Math.min(100, pct)}%"></i></span><b class="limit-pct">${pct}%${
 		context.tokens > 200_000 ? " · 200k+" : ""
 	}</b></span>`;
 }
@@ -114,8 +124,11 @@ export function renderLimitsPop(
 			: `<div class="limit-accts"><div class="limit-acct-head"><span>계정</span><span>5시간</span><span>주간</span><span>초기화</span></div>${accounts
 					.map((acct) => {
 						const activeCls = acct.active ? " is-active" : "";
+						const blkUntil = acct.blockedUntil;
+						const blkLeft = blkUntil !== undefined && blkUntil > clock ? resetIn(blkUntil, clock) : "";
 						if (!acct.ok) {
-							return `<div class="limit-acct-row is-failed${activeCls}" data-account="${esc(acct.name)}"><span class="limit-acct-name"><i class="dot is-muted" aria-hidden="true"></i>${esc(acct.name)}</span><span class="limit-acct-err" title="${esc(acct.error)}">${esc(acct.error)}</span></div>`;
+							const errText = blkLeft === "" ? acct.error : `차단 ${blkLeft} · ${acct.error}`;
+							return `<div class="limit-acct-row is-failed${activeCls}" data-account="${esc(acct.name)}"><span class="limit-acct-name"><i class="dot ${blkLeft === "" ? "is-muted" : "is-danger"}" aria-hidden="true"></i>${esc(acct.name)}</span><span class="limit-acct-err" title="${esc(errText)}">${esc(errText)}</span></div>`;
 						}
 						const filtered = acct.rows.filter((row) => row.window !== "other");
 						const acctPicked = filtered.length === 0 ? acct.rows : filtered;
@@ -129,7 +142,11 @@ export function renderLimitsPop(
 						const t5 = fiveH === undefined ? "ok" : usageLevel(fiveH.remainingPct);
 						const tw = weekly === undefined ? "ok" : usageLevel(weekly.remainingPct);
 						const rowTone =
-							t5 === "danger" || tw === "danger" ? "danger" : t5 === "warn" || tw === "warn" ? "warn" : "ok";
+							blkLeft !== "" || t5 === "danger" || tw === "danger"
+								? "danger"
+								: t5 === "warn" || tw === "warn"
+									? "warn"
+									: "ok";
 						const fiveHLeft = fiveH === undefined ? "" : resetIn(fiveH.resetsAt, clock);
 						const resetRow =
 							fiveH !== undefined && fiveH.remainingPct < 20
@@ -140,7 +157,8 @@ export function renderLimitsPop(
 										? fiveH
 										: (weekly ?? fiveH);
 						const left = resetRow === undefined ? "" : resetIn(resetRow.resetsAt, clock);
-						const detailTitle = acctPicked
+						const resetText = blkLeft !== "" ? `차단 ${blkLeft}` : left === "" ? "-" : left;
+						const detailTitle = `${acctPicked
 							.map((row) => {
 								const grp = groupOf(row.label, source.name);
 								const win = row.window === "5h" ? "5시간" : row.window === "weekly" ? "주간" : row.windowLabel;
@@ -148,8 +166,8 @@ export function renderLimitsPop(
 								const rLeft = resetIn(row.resetsAt, clock);
 								return `${name} ${row.remainingPct}%${rLeft === "" ? "" : ` (${rLeft})`}`;
 							})
-							.join(", ");
-						return `<div class="limit-acct-row is-${rowTone}${activeCls}" data-account="${esc(acct.name)}" title="${esc(detailTitle)}"><span class="limit-acct-name"><i class="dot is-${rowTone}" aria-hidden="true"></i>${esc(acct.name)}</span><b class="limit-pct is-${t5}">${fiveH === undefined ? "-" : `${fiveH.remainingPct}%`}</b><b class="limit-pct is-${tw}">${weekly === undefined ? "-" : `${weekly.remainingPct}%`}</b><span class="limit-reset">${esc(left === "" ? "-" : left)}</span></div>`;
+							.join(", ")}${blkLeft === "" ? "" : `, 차단 해제까지 ${blkLeft}`}`;
+						return `<div class="limit-acct-row is-${rowTone}${activeCls}" data-account="${esc(acct.name)}" title="${esc(detailTitle)}"><span class="limit-acct-name"><i class="dot is-${rowTone}" aria-hidden="true"></i>${esc(acct.name)}</span><b class="limit-pct is-${t5}">${fiveH === undefined ? "-" : `${fiveH.remainingPct}%`}</b><b class="limit-pct is-${tw}">${weekly === undefined ? "-" : `${weekly.remainingPct}%`}</b><span class="limit-reset">${esc(resetText)}</span></div>`;
 					})
 					.join("")}</div>`;
 		if (!source.ok) {
