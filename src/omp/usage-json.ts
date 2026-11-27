@@ -47,8 +47,15 @@ export const OMP_USAGE_TIMEOUT_MS = 30_000;
 export const OMP_USAGE_STDOUT_CAP = 4 * 1024 * 1024;
 
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
-const resetDay = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", weekday: "short" });
-const resetTime = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+/** The reset formatters for one zone (absent: the host zone). */
+function resetFormats(timezone?: string) {
+	const zone = { timeZone: timezone };
+	return {
+		day: new Intl.DateTimeFormat("ko-KR", { ...zone, month: "numeric", day: "numeric", weekday: "short" }),
+		time: new Intl.DateTimeFormat("ko-KR", { ...zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+		key: new Intl.DateTimeFormat("en-CA", { ...zone, year: "numeric", month: "2-digit", day: "2-digit" }),
+	};
+}
 
 /** Display names the chat uses: the provider ids are the wire's, not the owner's words. */
 const PROVIDER_NAMES: Record<string, string> = {
@@ -67,16 +74,10 @@ function limitAmount(value: unknown): UsageLimit["amount"] | undefined {
 	const unit = str(record.unit);
 	if (unit === undefined) return undefined;
 	const amount: UsageLimit["amount"] = { unit };
-	const used = num(record.used);
-	const limit = num(record.limit);
-	const remaining = num(record.remaining);
-	const usedFraction = num(record.usedFraction);
-	const remainingFraction = num(record.remainingFraction);
-	if (used !== undefined) amount.used = used;
-	if (limit !== undefined) amount.limit = limit;
-	if (remaining !== undefined) amount.remaining = remaining;
-	if (usedFraction !== undefined) amount.usedFraction = usedFraction;
-	if (remainingFraction !== undefined) amount.remainingFraction = remainingFraction;
+	for (const key of ["used", "limit", "remaining", "usedFraction", "remainingFraction"] as const) {
+		const value = num(record[key]);
+		if (value !== undefined) amount[key] = value;
+	}
 	return amount;
 }
 
@@ -100,12 +101,9 @@ function limitOf(value: unknown): UsageLimit | undefined {
 	const label = str(record.label);
 	const amount = limitAmount(record.amount);
 	if (label === undefined || amount === undefined) return undefined;
-	const limit: UsageLimit = { label, amount };
 	const window = limitWindow(record.window);
 	const status = str(record.status);
-	if (window !== undefined) limit.window = window;
-	if (status !== undefined) limit.status = status;
-	return limit;
+	return { label, amount, ...(window === undefined ? {} : { window }), ...(status === undefined ? {} : { status }) };
 }
 
 function reportOf(value: unknown): UsageReport | undefined {
@@ -123,8 +121,7 @@ function reportOf(value: unknown): UsageReport | undefined {
 }
 
 function providersOf(value: unknown): Array<{ provider: string }> | undefined {
-	if (value === undefined) return undefined;
-	if (!Array.isArray(value)) return undefined;
+	if (value === undefined || !Array.isArray(value)) return undefined;
 	const providers: Array<{ provider: string }> = [];
 	for (const entry of value) {
 		if (typeof entry !== "object" || entry === null) return undefined;
@@ -160,7 +157,7 @@ export function parseUsageResponse(value: unknown): UsageResponse | undefined {
 }
 
 /** `• <name>  <n% 남음 · n <unit> 남음 · 한도 도달 · 오늘 17:00 초기화>`. */
-export function limitLine(limit: UsageLimit, today: string): string {
+export function limitLine(limit: UsageLimit, today: string, formats: ReturnType<typeof resetFormats>): string {
 	const { amount, label, window } = limit;
 	const windowLabel = window?.label;
 	const shortWindow = window?.id === "5h" ? "5시간" : window?.id === "7d" || window?.id === "1w" ? "주간" : windowLabel;
@@ -196,14 +193,14 @@ export function limitLine(limit: UsageLimit, today: string): string {
 	if (parts.length === 0) parts.push("남은 한도 미확인");
 	const reset = window?.resetsAt === undefined ? undefined : new Date(window.resetsAt);
 	if (reset !== undefined && Number.isFinite(reset.getTime())) {
-		const day = reset.toDateString() === today ? "오늘" : resetDay.format(reset);
+		const day = formats.key.format(reset) === today ? "오늘" : formats.day.format(reset);
 		const action =
 			window?.resetLabel === "expires"
 				? "만료"
 				: window?.resetLabel === "tick" || window?.resetLabel === "regen"
 					? "충전"
 					: "초기화";
-		parts.push(`${day} ${resetTime.format(reset)} ${action}`);
+		parts.push(`${day} ${formats.time.format(reset)} ${action}`);
 	}
 	return `• ${name}  ${parts.join(" · ")}`;
 }
@@ -212,8 +209,9 @@ export function limitLine(limit: UsageLimit, today: string): string {
  * The whole limit block: one section per provider account (`Claude · 계정 2`), then the accounts omp could not read
  * ("남은 한도 미확인") and the disabled ones ("계정 비활성화됨"). Empty `accounts` means no provider reported a limit.
  */
-export function formatLimits(response: UsageResponse): string {
-	const today = new Date(response.generatedAt ?? Date.now()).toDateString();
+export function formatLimits(response: UsageResponse, timezone?: string): string {
+	const fmt = resetFormats(timezone);
+	const today = fmt.key.format(new Date(response.generatedAt ?? Date.now()));
 	const accounts = new Map<string, string[][]>();
 	const addAccount = (provider: string, lines: string[]): void => {
 		const entries = accounts.get(provider) ?? [];
@@ -223,7 +221,7 @@ export function formatLimits(response: UsageResponse): string {
 	for (const report of response.reports) {
 		addAccount(
 			report.provider,
-			report.limits.length > 0 ? report.limits.map((limit) => limitLine(limit, today)) : ["• 남은 한도 미확인"],
+			report.limits.length > 0 ? report.limits.map((limit) => limitLine(limit, today, fmt)) : ["• 남은 한도 미확인"],
 		);
 	}
 	for (const { provider } of response.accountsWithoutUsage ?? []) addAccount(provider, ["• 남은 한도 미확인"]);
@@ -235,12 +233,14 @@ export function formatLimits(response: UsageResponse): string {
 			[`${name}${entries.length > 1 ? ` · 계정 ${index + 1}` : ""}`, ...limits].join("\n"),
 		);
 	});
-	return `OMP 사용량 · ${resetTime.resolvedOptions().timeZone}\n\n${sections.join("\n\n")}`;
+	return `OMP 사용량 · ${fmt.time.resolvedOptions().timeZone}\n\n${sections.join("\n\n")}`;
 }
 
 export interface OmpUsageOptions {
 	/** The bot's omp executable (`config.ompExecutable`). */
 	executable: string;
+	/** The zone the reset times render in (`config.timezone`; absent: the host zone). */
+	timezone?: string;
 	/** `--profile=<name>` of config `ompProfile` (absent: the inherited agent dir). */
 	profile?: string;
 	/** `--config <overlay>` of config `ompConfigOverlay` (absent: omp's own config). */
@@ -298,7 +298,7 @@ export async function readOmpUsage(options: OmpUsageOptions): Promise<UsageRespo
 /** The line `!usage` adds under its token/cost totals: the limits, or one "확인 실패" line with the reason (redacted). */
 export async function usageLimitsBlock(options: OmpUsageOptions): Promise<string> {
 	try {
-		return redact(formatLimits(await readOmpUsage(options)));
+		return redact(formatLimits(await readOmpUsage(options), options.timezone));
 	} catch (error) {
 		return `모델 한도: 확인 실패 (${redact(error instanceof Error ? error.message : String(error))})`;
 	}
