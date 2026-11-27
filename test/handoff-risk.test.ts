@@ -878,4 +878,21 @@ describe("scanHandoffBrief: ANSI-C quoting, quote splicing, escaped slash, and s
 			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
 		}
 	});
+
+	test("ANSI-C newline inside destructive SQL is whitespace to the database, not a command boundary", () => {
+		for (const brief of [
+			"psql -c $'DROP\\nTABLE users'",
+			"psql -c $'DELETE\\nFROM users;'",
+			"psql -c $'TRUNCATE\\r\\nTABLE users'",
+			"psql -c $'SELECT 1\\nDROP TABLE users'",
+		]) {
+			const scan = scanHandoffBrief(brief);
+			expect({ brief, verdict: scan.verdict }).toEqual({ brief, verdict: "high_risk" });
+			expect(scan.findings).toContainEqual(expect.objectContaining({ rule: "sql_destructive", severity: "high_risk" }));
+		}
+		// The same decoding still splits commands for every other rule, and harmless SQL stays clear.
+		for (const brief of ["psql -c $'SELECT\\n1'", "echo $'a\\nb'"]) {
+			expect({ brief, verdict: scanHandoffBrief(brief).verdict }).toEqual({ brief, verdict: "clear" });
+		}
+	});
 });
