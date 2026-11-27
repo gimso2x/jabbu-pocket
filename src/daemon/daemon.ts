@@ -573,6 +573,7 @@ export class Daemon {
 			wikiNotes,
 			boardUrl: () => this.#options.config.herdrBoard?.url,
 			recordsRepo: () => this.#options.config.recordsRepo,
+			idStart: () => this.#options.config.idStart,
 			landMode: (repo) => landModeOf(this.#options.config, repo),
 			store,
 			channels: this.#channels,
