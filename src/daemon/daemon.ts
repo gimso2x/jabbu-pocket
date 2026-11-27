@@ -388,7 +388,6 @@ export class Daemon {
 			pid: process.pid,
 			omp_version: this.#options.ompVersion,
 			recovered_inflight: store.recoveredInflight,
-			requeued_ambiguous: store.requeueAmbiguous(),
 		});
 		for (const { field, reason } of config.warnings ?? []) log.warn("config_warning", { field, reason });
 		this.#bootBackup();
