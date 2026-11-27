@@ -110,6 +110,7 @@ import { formatConfidence, reviewLane } from "./review";
 import { currentRuntime, primeGateChanges } from "./runtime";
 import { openLanesOfRepo, type RepoMatcher, sameRepo } from "./same-repo";
 import { appendFollowups, checkLaneScope, parseLaneLeftovers } from "./scope";
+import { fenceUncertain, uncertainCount } from "./send-fence";
 import { parseStartArgs } from "./start-args";
 import {
 	INCONCLUSIVE_APPROVED,
@@ -624,7 +625,7 @@ export class LaneManager {
 
 	/**
 	 * Feeds a core-authored message (first prompt, not-done reasons) into the lane's mailbox; most callers do not await
-	 * it. Resolves true once the mailbox took the message, false when it was held or the route failed (logged).
+	 * it. True once the mailbox took it; false when held (paused, parked rows: `fenceUncertain`) or the route failed.
 	 */
 	#send(name: string, kind: string, text: string): Promise<boolean> {
 		const lane = this.#deps.store.getLane(name);
@@ -634,6 +635,7 @@ export class LaneManager {
 			this.#deps.log.warn("lane_send_held_paused", { lane: name, kind });
 			return Promise.resolve(false);
 		}
+		if (fenceUncertain(this.#deps, lane, kind)) return Promise.resolve(false);
 		const seq = lane.meta.steerSeq + 1;
 		this.#deps.store.patchLane(name, undefined, { steerSeq: seq });
 		return this.#deps
@@ -644,13 +646,11 @@ export class LaneManager {
 				text,
 				threadRef: lane.threadRef,
 			})
-			.then(
-				() => true,
-				(error: unknown) => {
-					this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
-					return false;
-				},
-			);
+			.then(() => true)
+			.catch((error: unknown) => {
+				this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
+				return false;
+			});
 	}
 
 	/**
@@ -2980,11 +2980,11 @@ export class LaneManager {
 		}
 	}
 
-	/** A rework card names how long lanes usually take (nothing under 10 closed lanes). */
-	#withTypical(view: LaneCardView): LaneCardView {
-		if (view.kind !== "rework") return view;
-		const typical = typicalLaneDuration(this.#deps.store, this.#deps.log);
-		return typical === undefined ? view : { ...view, typical };
+	/** A rework card names how long lanes take (nothing under 10 closed lanes); a lane with parked rows counts them. */
+	#dressed(lane: LaneRow, view: LaneCardView): LaneCardView {
+		const typical = view.kind === "rework" ? typicalLaneDuration(this.#deps.store, this.#deps.log) : undefined;
+		const uncertain = uncertainCount(this.#deps.store, lane.originKey);
+		return { ...view, ...(typical === undefined ? {} : { typical }), ...(uncertain === 0 ? {} : { uncertain }) };
 	}
 
 	/** Augments a card view with the lane worker session's cost totals; on failure leaves cost undefined and logs lane_cost_failed. */
@@ -3005,7 +3005,7 @@ export class LaneManager {
 		if (route === undefined) return undefined;
 		try {
 			const withCost = await this.#withCost(lane, view);
-			const card = buildLaneOutcomeCard(lane, this.#withTypical(withCost), this.#deps.boardUrl?.());
+			const card = buildLaneOutcomeCard(lane, this.#dressed(lane, withCost), this.#deps.boardUrl?.());
 			return (await route.port.post(route.target, cardMessage(card, route.port))).messageId;
 		} catch (error) {
 			this.#deps.log.warn("lane_card_post_failed", { lane: lane.name, error: String(error) });
@@ -3019,7 +3019,7 @@ export class LaneManager {
 		if (route === undefined) return;
 		try {
 			const withCost = await this.#withCost(lane, view);
-			const card = buildLaneOutcomeCard(lane, this.#withTypical(withCost), this.#deps.boardUrl?.());
+			const card = buildLaneOutcomeCard(lane, this.#dressed(lane, withCost), this.#deps.boardUrl?.());
 			await route.port.edit(
 				{
 					platform: route.port.platform,
