@@ -71,7 +71,7 @@ import {
 	SCHEMA,
 } from "./db-schema";
 import { columnsOf, migrateInbound } from "./db-sending";
-import { countIncident, resolveIncidents } from "./incidents";
+import { countIncident, readOpsIncidents, resolveIncidents } from "./incidents";
 import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "./lane-duration";
 import { dropRemovedTables } from "./removed-tables";
 import { migrateOldNames } from "./rename-migration";
@@ -1417,12 +1417,8 @@ export class Store {
 	// ---- alert incidents (owner-notice repeat suppression) ----
 
 	/**
-	 * Counts one occurrence of an alert condition and decides whether the owner should be told (the shared incident
-	 * state machine — see `store/incidents`): the first occurrence alerts, the same (scope, normalized sign) within
-	 * `repeatMs` stays quiet, a still-standing condition re-alerts after `repeatMs`, and a resolved condition that
-	 * comes back reopens loudly (monitor incident semantics, used by the turn-failure escalation and the daemon's
-	 * gate sweep). `standing` reports the row's pre-call state, so a restarting daemon can rebuild "the owner was
-	 * already alerted" from the ledger alone.
+	 * Counts one occurrence of an alert condition and decides whether the owner should be told (see `store/incidents`);
+	 * `standing` is the row's pre-call state, so a restarting daemon can rebuild "already alerted" from the ledger.
 	 */
 	recordAlertIncident(scope: string, sign: string, now: number, repeatMs = ALERT_INCIDENT_REPEAT_MS): AlertIncident {
 		return countIncident(this.db, "alert_incidents", scope, sign, now, repeatMs);
@@ -1430,7 +1426,11 @@ export class Store {
 
 	/** Marks the scope's open incidents resolved, so the same condition re-alerts when it comes back. */
 	resolveAlertIncidents(scope: string): void {
-		resolveIncidents(this.db, "alert_incidents", scope);
+		resolveIncidents(this.db, "alert_incidents", scope, this.clock.now());
+	}
+
+	opsIncidents(limit: number) {
+		return readOpsIncidents(this.db, limit);
 	}
 
 	// ---- herdr prompts (dashboard 마지막 지시) ----
