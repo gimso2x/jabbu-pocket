@@ -57,7 +57,7 @@ import {
 	threadRefOf,
 } from "../core/normalize";
 import { parseChatOrigin } from "../core/origin-key";
-import { parseCommand, parsePurposeCommand, TAKES_ARG } from "../core/types";
+import { isHomeCommand, parseCommand, parsePurposeCommand, TAKES_ARG } from "../core/types";
 import type { Logger } from "../log";
 import { redact } from "../redact";
 import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
@@ -748,11 +748,10 @@ export class DiscordAdapter implements ChannelAdapter {
 			await this.#startThread(conversationId, event, text.trim() === "" ? (forwarded[0] ?? "") : text);
 			onThread?.();
 		}
-		// A server root's gate decides once whether it is a command: one without an argument would stop parsing as a
-		// command once notes were appended, so its files are neither fetched nor noted (qa-l #28). DMs and threads keep
-		// their own handling.
-		const command = !dm && threadId === undefined ? parseCommand(inbound.text) : undefined;
-		const argless = command !== undefined && !TAKES_ARG.has(command.kind);
+		// Any argless command (`!stop`, `!status`, `!home`, …) would break once notes were appended, so its files are
+		// neither fetched nor noted across DMs, threads, and server roots.
+		const command = parseCommand(inbound.text);
+		const argless = (command !== undefined && !TAKES_ARG.has(command.kind)) || isHomeCommand(inbound.text);
 		if (!argless && (opensThread || files.length > 0)) {
 			const notes = files.length === 0 ? [] : await this.#collectAttachments(event, files);
 			const body = [text.trim(), ...forwardNote, ...notes].filter((line) => line !== "").join("\n");
