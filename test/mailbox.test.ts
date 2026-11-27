@@ -3999,7 +3999,7 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		}
 	});
 
-	test("dispatch failure keeps code prefix, classifies from raw error, and logs redacted turn_failed up to 300 chars", async () => {
+	test("dispatch failure keeps code prefix, classifies from raw error, and logs redacted turn_failed with the full tail", async () => {
 		const raw = `401 invalid api key token=xoxb-TEST-secret ${"x".repeat(350)}`;
 		driverOptions = { startError: new OmpDriverError("rpc_error", raw) };
 		await router.route(msg("hi"));
@@ -4015,7 +4015,25 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		expect(logLine).not.toContain("xoxb-TEST-secret");
 		expect(logLine).toContain("[REDACTED]");
 		const reasonMatch = /reason="([^"]*)"/.exec(logLine ?? "");
-		expect(reasonMatch?.[1]?.length).toBe(300);
+		expect(reasonMatch?.[1]).toContain("x".repeat(350));
+		expect(reasonMatch?.[1]).not.toContain("[truncated");
+	});
+
+	test("dispatch failure with a long reason logs its head and tail with a truncation marker", async () => {
+		const head = `HEAD ${"a".repeat(1200)}`;
+		const tail = `${"b".repeat(1200)} TAIL`;
+		const raw = `${head}${"m".repeat(1500)}${tail}`;
+		driverOptions = { startError: new OmpDriverError("rpc_error", raw) };
+		await router.route(msg("hi"));
+
+		const logLine = logLines.find((line) => line.includes("event=turn_failed"));
+		expect(logLine).toBeDefined();
+		expect(logLine).toContain("kind=unknown");
+		const reasonMatch = /reason="([^"]*)"/.exec(logLine ?? "");
+		const reason = reasonMatch?.[1] ?? "";
+		expect(reason.startsWith(`HEAD ${"a".repeat(995)}`)).toBe(true);
+		expect(reason.endsWith(`${"b".repeat(995)} TAIL`)).toBe(true);
+		expect(reason).toContain(`[truncated ${raw.length - 2000} chars]`);
 	});
 
 	test("omp exit keeps omp_exited code prefix, classifies from stderr tail, and logs turn_failed", async () => {
@@ -4033,6 +4051,27 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		expect(logLine).toBeDefined();
 		expect(logLine).toContain("kind=provider_limit");
 		expect(logLine).toContain("omp_exited code=1");
+	});
+
+	test("omp exit with long stderr logs its head and tail with a truncation marker", async () => {
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(ORIGIN);
+		await router.route(msg("crash test"));
+		const driver = drivers.at(-1) as SteerFailingDriver;
+		const stderr = `ERR-HEAD ${"c".repeat(1200)}${"d".repeat(1500)}${"e".repeat(1200)} ERR-TAIL`;
+		driver.crashWith(1, stderr);
+		await mailbox.sweepIdle();
+
+		const exitLine = logLines.find((line) => line.includes("event=omp_exit"));
+		expect(exitLine).toBeDefined();
+		expect(exitLine).toContain("ERR-HEAD");
+		expect(exitLine).toContain("ERR-TAIL");
+		expect(exitLine).toContain(`[truncated ${stderr.length - 2000} chars]`);
+		const failedLine = logLines.find((line) => line.includes("event=turn_failed"));
+		expect(failedLine).toBeDefined();
+		expect(failedLine).toContain("omp_exited code=1");
+		expect(failedLine).toContain("ERR-TAIL");
+		expect(failedLine).toContain(`[truncated ${`omp_exited code=1: ${stderr}`.length - 2000} chars]`);
 	});
 
 	test("peer failure mention stays unchanged even for provider_limit/auth/context_overflow", async () => {
