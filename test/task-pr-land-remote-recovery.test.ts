@@ -599,7 +599,7 @@ describe("AC-11e TaskHostOps.removeWorktree 불변", () => {
 	test("removeWorktree는 여전히 best-effort다: 쓰기 권한 복구·worktree remove·branch -D를 돌리고 실패해도 던지지 않는다", async () => {
 		const seen: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
-			seen.push(cmd.slice(7, -1));
+			seen.push(cmd.slice(7, -1).map(unquote));
 			return { code: 1, stdout: "fatal: nope", timedOut: false };
 		};
 		const ops = createTaskHostOps({ sshTarget: SSH_TARGET, run });

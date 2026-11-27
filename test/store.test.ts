@@ -283,6 +283,21 @@ describe("inbound", () => {
 	});
 });
 
+describe("rotateEpochKeepPending", () => {
+	test("bumps the epoch and dir and moves pending rows to the new epoch without discarding them", () => {
+		const store = open();
+		store.ensureOrigin("o1", "/s/o1");
+		store.recordInbound({ originKey: "o1", platformMessageId: "p", textRef: "x" });
+		store.recordInbound({ originKey: "o1", platformMessageId: "d", textRef: "x" });
+		store.markDispatched("d", { opRef: "op1", entryCursor: null });
+		const origin = store.rotateEpochKeepPending("o1", "/s/o1-2");
+		expect(origin).toMatchObject({ epoch: 2, sessionDir: "/s/o1-2" });
+		expect(store.getInbound("p")).toMatchObject({ state: "pending", epoch: 2 });
+		expect(store.getInbound("d")?.state).toBe("dispatched");
+		expect(store.listInbound({ state: "discarded" })).toHaveLength(0);
+	});
+});
+
 describe("owner DM origin", () => {
 	test("undefined before the owner ever DM'd (channel origins don't count)", () => {
 		const store = open();

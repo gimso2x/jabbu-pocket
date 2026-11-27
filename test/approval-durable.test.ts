@@ -214,6 +214,24 @@ describe("durable approvals", () => {
 		expect(JSON.stringify(final.embeds)).toContain("기다리던 작업이 중단돼 만료됨");
 	});
 
+	test("a buttons edit that throws lands as expired in the ledger, not an owner denial", async () => {
+		const transport = new CardTransport();
+		transport.failNext.editMessage = [new Error("discord down")];
+		const timers = new ManualTimers();
+		const broker = makeBroker(transport, timers, () => 1_000);
+		const done = broker.request(OWNER_DM, "deploy");
+		// The tool call still fails closed, exactly as the pinned test expects.
+		expect(await done).toBe("denied");
+		const ts = transport.calls.find((call) => call.method === "createMessage")?.id ?? "";
+		expect(store.getApproval(`${OWNER_DM}:${ts}`)?.status).toBe("expired");
+		expect(broker.pendingCount).toBe(0);
+		expect(timers.callbacks.size).toBe(0);
+		const final = await transport.finalized.promise;
+		expect(final.text).not.toContain("⛔ 거부됨");
+		expect(final.text).toContain("시간 초과");
+		expect(hasButtons(final.blocks)).toBe(false);
+	});
+
 	test("a ledger without the detail and link columns gains them; old rows stay and a second open is a no-op", () => {
 		const path = join(dir, "pre-detail.db");
 		const old = new Database(path);

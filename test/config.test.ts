@@ -13,7 +13,7 @@ import {
 	readDiscordToken,
 } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
-import { CLI_FIELDS, LIVE_FIELDS, RESTART_FIELDS } from "../src/daemon/reload";
+import { CLI_FIELDS, LIVE_FIELDS, planReload, RESTART_FIELDS } from "../src/daemon/reload";
 import { channelBindings } from "../src/daemon/run";
 import { landModeOfRemote } from "../src/lanes/pr-land-remote";
 import { createLogger } from "../src/log";
@@ -138,6 +138,25 @@ describe("loadConfig", () => {
 			expect(error.code).toBe("config_invalid");
 			expect(error.message).toContain("field=ompConfigOverlay");
 		}
+	});
+
+	test("coldResumeRotateTokens: absent stays undefined, 0 and positive integers load, others are rejected", () => {
+		expect(loadConfig(home).coldResumeRotateTokens).toBeUndefined();
+		writeConfig(baseConfig({ coldResumeRotateTokens: 0 }));
+		expect(loadConfig(home).coldResumeRotateTokens).toBe(0);
+		writeConfig(baseConfig({ coldResumeRotateTokens: 80_000 }));
+		expect(loadConfig(home).coldResumeRotateTokens).toBe(80_000);
+		for (const bad of [-1, 1.5, "100000"]) {
+			writeConfig(baseConfig({ coldResumeRotateTokens: bad }));
+			expect(catchError(() => loadConfig(home)).message).toContain("field=coldResumeRotateTokens");
+		}
+	});
+
+	test("coldResumeRotateTokens is a live-reloadable field", () => {
+		const before = loadConfig(home);
+		const plan = planReload(before, { ...before, coldResumeRotateTokens: 50_000 });
+		expect(plan.changed).toEqual(["coldResumeRotateTokens"]);
+		expect(plan.restartRequired).toEqual([]);
 	});
 
 	test("agent omp is accepted", () => {

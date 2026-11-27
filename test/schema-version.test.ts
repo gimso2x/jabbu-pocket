@@ -7,6 +7,7 @@ import { openMonitorLedger } from "../src/monitors/ledger";
 import { gcSessions } from "../src/ops/gc";
 import { RestoreError, runRestore } from "../src/ops/restore";
 import { openStore } from "../src/store/db";
+import { RENAMED_AT } from "../src/store/rename-migration";
 import { NewerSchemaError, readSchemaVersion, SCHEMA_VERSION } from "../src/store/schema-version";
 import { openTaskLedger } from "../src/tasks/ledger";
 
@@ -68,6 +69,20 @@ describe("schema version stamp", () => {
 		const columns = (db.query("PRAGMA table_info(origins)").all() as Array<{ name: string }>).map((c) => c.name);
 		db.close();
 		expect(columns).toContain("thinking");
+	});
+});
+
+describe("version-gated migrations", () => {
+	test("SCHEMA_VERSION covers every version gate", () => {
+		// A gate above SCHEMA_VERSION can never be reached: stampSchemaVersion only ever stamps up to
+		// SCHEMA_VERSION, and checkSchemaVersion refuses anything above it, so every ledger this code
+		// opens reads <= SCHEMA_VERSION — a migration gated higher re-runs on every open (defeating its
+		// run-once gate) while the downgrade guard never sees the change. A new version-gated migration
+		// therefore bumps SCHEMA_VERSION to (at least) its gate in the same commit; add its gate here.
+		// This cannot catch a gate written with the *current* version number and no bump — at introduction
+		// a gate legitimately equals SCHEMA_VERSION, so that mistake is statically indistinguishable from
+		// the correct commit; the AGENTS.md bump rule still covers it.
+		expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(RENAMED_AT);
 	});
 });
 

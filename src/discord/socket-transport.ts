@@ -1,4 +1,3 @@
-import { redact } from "../redact";
 import { downloadDiscordAttachment } from "./attachments";
 import { DiscordGateway } from "./gateway";
 import { DiscordRest } from "./rest";
@@ -23,7 +22,7 @@ import {
 
 /** Gateway lifecycle event surfaced to the daemon's structured log; `detail` is body-less (never the token). */
 export interface GatewayLifecycleEvent {
-	type: "connected" | "reconnecting" | "error";
+	type: "connected" | "reconnecting" | "error" | "display_name_failed";
 	detail?: string;
 }
 
@@ -77,10 +76,9 @@ export class DiscordSocketTransport implements DiscordTransport {
 				this.#options.onFatal?.(error);
 				handlers.fatal?.(error);
 			},
-			onError: (error) => {
-				console.error(redact(`[jabbu] discord gateway: ${error.message}`));
-				lifecycle({ type: "error", detail: error.message });
-			},
+			// Structured only: the daemon logs this as `discord_gateway_error`, so a console line here would log
+			// every gateway error twice (stderr/journal and jabbu.log).
+			onError: (error) => lifecycle({ type: "error", detail: error.message }),
 			onReconnect: (reason) => lifecycle({ type: "reconnecting", detail: reason }),
 		});
 		this.#gateway = gateway;
@@ -96,7 +94,9 @@ export class DiscordSocketTransport implements DiscordTransport {
 		if (displayName !== undefined) {
 			await this.#rest
 				.patchCurrentUser({ displayName })
-				.catch((err: Error) => console.error(redact(`[jabbu] discord display_name: ${err.message}`)));
+				// Logged, not fatal: the failure reaches the structured log as `discord_display_name_failed`
+				// (the daemon's `onLifecycle` handler) instead of an unstructured console line jabbu.log greps miss.
+				.catch((err: Error) => lifecycle({ type: "display_name_failed", detail: err.message }));
 		}
 		return ids;
 	}
