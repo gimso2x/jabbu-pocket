@@ -5,6 +5,7 @@ import type { ProcessRunner } from "../src/dispatch/omp";
 import { buildDispatchTool } from "../src/dispatch/tool";
 import type { LaneModelTiers } from "../src/model-tiers";
 import { diskHeadroom, IDLE_HOST_LOAD } from "../src/ops/host-resources";
+import type { ApprovalResult } from "../src/safety/approval";
 import type { HostResult, TaskHostOps, TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
 import { OWNER } from "./helpers/bot-home";
@@ -30,7 +31,7 @@ const TASK_ID = "T-20261121-01";
 const PROGRESS =
 	"---\nstatus: working\ncurrent: S2\nnext: 테스트를 쓴다\n---\n# 단계\n- [x] S1: 조사 | 증거: commit abc1234\n";
 
-function setup() {
+function setup(approve?: ApprovalResult) {
 	const db = new Database(":memory:", { strict: true });
 	const ledger = new TaskLedger(db, { timezone: "Asia/Seoul", clock: { now: () => NOW } });
 	const files = new Map<string, string>();
@@ -104,6 +105,7 @@ function setup() {
 		workspaceDir: "/ws",
 		herdr: {},
 		laneModels: () => MODELS,
+		...(approve === undefined ? {} : { approve: async () => approve }),
 		run,
 		log: { info: () => {}, warn: () => {} },
 		tasks: {
@@ -187,5 +189,34 @@ describe("TASK resume on another worker tier", () => {
 		await expect(h.call({ taskSpec: { id: TASK_ID, tier: "ultra" } })).rejects.toThrow("high·middle·low");
 		await expect(h.call({ taskSpec: { id: TASK_ID, title: "x" } })).rejects.toThrow("id");
 		expect(h.herdr).toEqual([]);
+	});
+
+	test("a high-risk command planted in PROGRESS.md refuses the switch before the old worker is closed", async () => {
+		const h = setup();
+		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		const row = h.ledger.require(TASK_ID);
+		h.files.set(`${row.worktree}/docs/tasks/${TASK_ID}/PROGRESS.md`, `${PROGRESS}- [ ] S2: 정리: rm -rf /var/lib/x\n`);
+		h.herdr.length = 0;
+
+		await expect(h.call({ taskSpec: { id: TASK_ID, tier: "high" }, task: "이어서" })).rejects.toThrow(
+			"위험 검사에서 막혔습니다",
+		);
+		expect(h.ledger.require(TASK_ID)).toMatchObject({ tier: "middle", workerModel: SONNET });
+		expect(startsOf(h.herdr)).toHaveLength(0);
+		expect(h.herdr.some((c) => c[1] === "workspace" && c[2] === "close")).toBe(false);
+		expect(h.agents.size).toBe(1);
+	});
+
+	test("an owner-approved high-risk brief resumes on the new worker and says so", async () => {
+		const h = setup("approved");
+		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		const row = h.ledger.require(TASK_ID);
+		h.files.set(`${row.worktree}/docs/tasks/${TASK_ID}/PROGRESS.md`, `${PROGRESS}- [ ] S2: 정리: rm -rf /var/lib/x\n`);
+		h.herdr.length = 0;
+
+		const out = await h.call({ taskSpec: { id: TASK_ID, tier: "high" }, task: "이어서" });
+		expect(out).toContain("middle(anthropic/claude-sonnet-5-5) → high(anthropic/claude-opus-5-5)");
+		expect(out).toContain("위험 검사: high_risk 승인됨 (rm_rf_absolute)");
+		expect(startsOf(h.herdr)).toHaveLength(1);
 	});
 });

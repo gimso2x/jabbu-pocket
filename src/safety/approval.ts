@@ -423,12 +423,12 @@ export class ApprovalBroker {
 
 	/** Best-effort link to one message; a failed lookup is logged and reads as no link. */
 	async #permalink(channel: string, ts: string): Promise<string | undefined> {
-		try {
-			return await this.#port(channel).permalink(this.#ref(channel, ts));
-		} catch (error) {
-			this.#options.log.warn("approval_permalink_failed", { channel, error: String(error) });
-			return undefined;
-		}
+		return this.#port(channel)
+			.permalink(this.#ref(channel, ts))
+			.catch((error) => {
+				this.#options.log.warn("approval_permalink_failed", { channel, error: String(error) });
+				return undefined;
+			});
 	}
 
 	/**
@@ -467,10 +467,9 @@ export class ApprovalBroker {
 			: undefined;
 		// `header` stays the notification/fallback text; the card itself shows the sections as fields, not as lines.
 		const header = renderCard(shown, sections, escalationLine);
-		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) => {
-			const value = sections[key];
-			return value === undefined ? [] : [{ label, value }];
-		});
+		const fields = DETAIL_SECTIONS.flatMap(({ key, label }) =>
+			sections[key] === undefined ? [] : [{ label, value: sections[key] }],
+		);
 		const cardShape = {
 			title: cardTitle(sections),
 			body:
@@ -535,6 +534,9 @@ export class ApprovalBroker {
 			cards: () => (mirror === undefined ? [card] : [card, mirror]),
 		});
 		let result: ApprovalResult = "denied";
+		// A card whose buttons never attached was never decidable: the ledger records it expired and the card
+		// shows the timeout line, never an owner denial (the tool call itself still returns `denied`).
+		let buttonsAttached = false;
 		try {
 			// The action ids carry the message's own ts, which exists only after the post.
 			await port.edit(card, {
@@ -543,6 +545,7 @@ export class ApprovalBroker {
 				buttons: approvalButtons(channel, card.messageId),
 				buttonsNote: deadlineNote(now + timeoutMs, timeoutMs, this.#deadline),
 			});
+			buttonsAttached = true;
 			log.info("approval_requested", { channel, ts: card.messageId });
 			this.#options.onOwnerTurn?.(ownerTurnInfo("approval", channel, card.messageId, shown, origin?.originKey));
 			if (escalated) {
@@ -578,10 +581,11 @@ export class ApprovalBroker {
 		// The ledger row is the authority: a racing click or sweeper already flipped it, and this no-ops then.
 		// A reply already settled its own ledger row (`handleCardReply`); only click/timeout/abort outcomes land here.
 		if (typeof result === "string") {
+			const ownerDenied = result === "denied" && !aborted && buttonsAttached;
 			try {
 				store.decideApproval(
 					key,
-					result === "approved" ? "approved" : result === "denied" && !aborted ? "denied" : "expired",
+					result === "approved" ? "approved" : ownerDenied ? "denied" : "expired",
 					this.#clock.now(),
 				);
 			} catch (error) {
@@ -594,7 +598,7 @@ export class ApprovalBroker {
 			: aborted
 				? ABORTED_TEXT
 				: typeof result === "string"
-					? FINAL_TEXT[result]
+					? FINAL_TEXT[buttonsAttached ? result : "timeout"]
 					: `💬 답장으로 처리됨: ${replyLine(result.replied)}`;
 		// The buttons give way to the result line; title and fields stay so the card still says what was decided.
 		const resultLine = `${outcomeText} · ${this.#deadline.format(this.#clock.now())}`;
@@ -828,10 +832,8 @@ export class ApprovalBroker {
 		if (held === undefined) return undefined;
 		this.#heldInput.delete(originKey);
 		if (held.opRef !== opRef || this.#clock.now() - held.at > HELD_INPUT_TTL_MS) {
-			this.#options.log.info("dialog_pending_text_dropped", {
-				origin: originKey,
-				reason: held.opRef !== opRef ? "other_turn" : "expired",
-			});
+			const reason = held.opRef !== opRef ? "other_turn" : "expired";
+			this.#options.log.info("dialog_pending_text_dropped", { origin: originKey, reason });
 			return undefined;
 		}
 		return held.text;
@@ -858,9 +860,8 @@ export class ApprovalBroker {
 
 	/** Drops a held text that will not be used (the next dialog is no `input`, or the turn ended). */
 	dropInput(originKey: string, reason: string): void {
-		if (this.#heldInput.delete(originKey)) {
+		if (this.#heldInput.delete(originKey))
 			this.#options.log.info("dialog_pending_text_dropped", { origin: originKey, reason });
-		}
 	}
 
 	/**
@@ -925,8 +926,10 @@ export class ApprovalBroker {
 
 	/**
 	 * The owner's reply in the thread of an approval card (`approvalId` = `<card channel>:<card ts>`). A still-pending
-	 * card is settled as `replied` (the waiting tool call returns the text); a settled one hands the reply back as a
-	 * `route` to the asking conversation. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
+	 * card with a live waiter is settled as `replied` (the waiting tool call returns the text); a settled one — or a
+	 * pending one whose asking turn is gone (no live waiter: the turn died with a restart and the boot sweep has not
+	 * expired the row yet) — hands the reply back as a `route` to the asking conversation, so the ledger never records
+	 * an answer nobody waited on. `undefined`: not a card this ledger knows (or nowhere to route a late reply).
 	 * An `injected` message (`jabbu-pocket inject`, which anyone with the socket can send) never answers a card: in the thread
 	 * of a real choice card or of any approval row (pending or settled) it is `injected_rejected`, the card untouched.
 	 */
@@ -960,11 +963,15 @@ export class ApprovalBroker {
 		// A backfill replay of the reply that settled the card: consumed already.
 		if (row.replyTs === reply.ts) return { kind: "duplicate" };
 		const pending = this.#pending.get(reply.approvalId);
-		if (row.status === "pending" && pending?.isSettled() !== true) {
+		// No live waiter means no turn is left to answer: the asking turn died with a restart and the boot sweep has
+		// not expired the row yet. Settling here would record `replied` for a request that never runs, and the sweep
+		// only touches `pending` rows, so the card would keep live-looking buttons forever. Route instead; the sweep
+		// expires the row and rewrites the card.
+		if (row.status === "pending" && pending !== undefined && !pending.isSettled()) {
 			if (store.replyApproval(reply.approvalId, reply.ts, reply.text, this.#clock.now())) {
 				recordAnswer(this.#answers, reply.approvalId, reply.ts, "replied");
 				log.info("approval_reply", { id: reply.approvalId, ts: reply.ts });
-				pending?.settle({ replied: reply.text });
+				pending.settle({ replied: reply.text });
 				return { kind: "settled" };
 			}
 		}
@@ -1012,16 +1019,11 @@ export class ApprovalBroker {
 	async redrawCards(approvalId: string, note: string, clicked?: { channel: string; ts: string }): Promise<void> {
 		const { store, log } = this.#options;
 		const row = store.getApproval(approvalId);
-		const message =
-			row === undefined
-				? { text: `🔐 승인 요청\n${note}`, buttons: [] }
-				: {
-						text: `🔐 승인 요청\n${row.summary}\n${note}`,
-						title: "🔐 승인 요청",
-						body: row.summary,
-						buttons: [],
-						buttonsNote: note,
-					};
+		const message = {
+			text: `🔐 승인 요청\n${row === undefined ? note : `${row.summary}\n${note}`}`,
+			...(row === undefined ? {} : { title: "🔐 승인 요청", body: row.summary, buttonsNote: note }),
+			buttons: [],
+		};
 		const refs = new Set([approvalId, ...(row === undefined || row.mirrorRef === null ? [] : [row.mirrorRef])]);
 		if (clicked !== undefined) refs.add(`${clicked.channel}:${clicked.ts}`);
 		for (const ref of refs) {
@@ -1086,12 +1088,9 @@ export class ApprovalBroker {
 		const value = parsed.decision === "approve" ? "approved" : "denied";
 		if (answerSeen(this.#answers, parsed, action.answerId, value)) return true;
 		const pending = this.#pending.get(cardId);
-		if (!pending) {
-			log.info("approval_click_ignored", { user: action.userId, reason: "no_pending_request" });
-			return false;
-		}
-		if (pending.isSettled()) {
-			log.info("approval_click_ignored", { user: action.userId, reason: "already_decided" });
+		if (pending === undefined || pending.isSettled()) {
+			const reason = pending === undefined ? "no_pending_request" : "already_decided";
+			log.info("approval_click_ignored", { user: action.userId, reason });
 			return false;
 		}
 		const outcome: ApprovalOutcome = parsed.decision === "approve" ? "approved" : "denied";

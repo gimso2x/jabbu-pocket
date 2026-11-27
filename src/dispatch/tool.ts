@@ -312,6 +312,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						...(deps.run === undefined ? {} : { run: deps.run }),
 						...(boardLink === undefined ? {} : { boardLink }),
 						...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
+						gateBrief: (brief) => gateWork(brief, signal),
 						log: deps.log,
 					};
 		if (params.taskSpec !== undefined) {
@@ -324,9 +325,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			const repoProblem =
 				input.kind === "resume" ? undefined : secretsCwdProblem(input.spec.repo, host !== undefined, deps.homeDir);
 			if (repoProblem !== undefined) throw new Error(repoProblem);
-			const briefed = task !== undefined && task !== "";
 			if (input.kind === "resume") {
-				const gate = await gateWork(briefed ? task : undefined, signal);
+				const gate = await gateWork(task === "" ? undefined : task, signal);
 				// tier or worker given: the resume runs on that worker (handoff) instead of the registered one.
 				const registered = taskDeps.ledger.get(input.id);
 				const switchTo =
@@ -351,7 +351,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				...(spec.background === undefined ? [] : [spec.background]),
 				...(spec.assumptions === undefined ? [] : [spec.assumptions]),
 			];
-			const gate = await gateWork(briefed ? [task, ...topics].join("\n") : undefined, signal);
+			const gate = await gateWork(task === undefined || task === "" ? undefined : [task, ...topics].join("\n"), signal);
 			const approvedRisk = gate.approved && ["L0", "L1", "L2"].includes(spec.risk) ? "L3" : spec.risk;
 			// Topic keywords put a floor under the class (raise only); `task` is the how, not the topic.
 			const floored = applyRiskFloor(approvedRisk, topics);
