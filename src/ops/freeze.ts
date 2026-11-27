@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { readRegularText, writeAtomic0600 } from "./stamp";
 
@@ -94,8 +94,8 @@ export function clearFreeze(homeDir: string, now: number = Date.now()): boolean 
 	const was = lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 	if (!was) return false;
 	const stampPath = unfrozenAtPath(homeDir);
-	// Opening a FIFO for writing blocks for good; refuse before touching anything so FROZEN stays and the CLI can report it.
-	const stampKind = statSync(stampPath, { throwIfNoEntry: false });
+	// Opening a FIFO for writing blocks for good; refuse symlinks and non-regular files before touching anything so FROZEN stays.
+	const stampKind = lstatSync(stampPath, { throwIfNoEntry: false });
 	if (stampKind !== undefined && !stampKind.isFile() && !stampKind.isDirectory()) {
 		throw Object.assign(new Error(`${stampPath} is not a regular file`), { code: "EINVAL", path: stampPath });
 	}
@@ -105,12 +105,12 @@ export function clearFreeze(homeDir: string, now: number = Date.now()): boolean 
 	} catch {
 		previous = undefined;
 	}
-	writeFileSync(stampPath, `${new Date(now).toISOString()}\n`, { mode: 0o600 });
+	writeAtomic0600(stampPath, `${new Date(now).toISOString()}\n`);
 	try {
 		rmSync(path, { recursive: true, force: true });
 	} catch (error) {
 		if (previous === undefined) rmSync(stampPath, { force: true });
-		else writeFileSync(stampPath, previous, { mode: 0o600 });
+		else writeAtomic0600(stampPath, previous);
 		throw error;
 	}
 	return true;

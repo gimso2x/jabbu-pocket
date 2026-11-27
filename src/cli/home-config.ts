@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type JabbuConfig, loadConfig } from "../config";
 
@@ -9,4 +9,26 @@ import { type JabbuConfig, loadConfig } from "../config";
  */
 export function loadConfigIfPresent(homeDir: string, options: { checkTokens?: boolean } = {}): JabbuConfig | undefined {
 	return existsSync(join(homeDir, "config.json")) ? loadConfig(homeDir, options) : undefined;
+}
+
+/** Verifies `homeDir` is a directory containing `jabbu.db`; writes a clear stderr line and returns false otherwise. */
+export function hasHomeDatabase(command: string, homeDir: string): boolean {
+	const dbPath = join(homeDir, "jabbu.db");
+	if (
+		statSync(homeDir, { throwIfNoEntry: false })?.isDirectory() !== true ||
+		lstatSync(dbPath, { throwIfNoEntry: false }) === undefined
+	) {
+		process.stderr.write(`${command}: no database at ${dbPath}\n`);
+		return false;
+	}
+	return true;
+}
+
+/** `lstatSync` returning `undefined` on missing/inaccessible paths without throwing. */
+export function lstatSafe(path: string) {
+	try {
+		return lstatSync(path, { throwIfNoEntry: false });
+	} catch {
+		return undefined;
+	}
 }

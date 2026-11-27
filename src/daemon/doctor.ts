@@ -141,7 +141,11 @@ function overlayJudgeRole(overlayConfig: string): string | undefined {
 }
 
 /** Config errors that only concern the token files; doctor reports those per file and keeps going. */
-const TOKEN_FILE_ERRORS: Record<string, true> = { secret_missing: true, secret_permissions: true };
+const isTokenFileError = (error: unknown): error is ConfigError =>
+	error instanceof ConfigError &&
+	(error.code === "secret_missing" ||
+		error.code === "secret_permissions" ||
+		(error.code === "config_invalid" && error.message.includes("field=channels.discord.botTokenFile")));
 
 /** `\uXXXX` for every control and format character, so a value read from a file cannot start a new doctor line. */
 export const escapeControl = (text: string): string =>
@@ -177,15 +181,15 @@ export async function checkDiscord(
 	const rest = new DiscordRest({ token, fetchImpl });
 	try {
 		const user = await rest.getCurrentUser();
-		report(true, "discord users/@me", `bot_user_id=${user.id} username=${user.username ?? "?"}`);
+		report(true, "discord users/@me", escapeControl(`bot_user_id=${user.id} username=${user.username ?? "?"}`));
 	} catch (error) {
-		report(false, "discord users/@me", error instanceof Error ? error.message : String(error));
+		report(false, "discord users/@me", escapeControl(error instanceof Error ? error.message : String(error)));
 	}
 	try {
 		const gateway = await rest.getGatewayBot();
-		report(true, "discord gateway/bot", `url=${gateway.url}`);
+		report(true, "discord gateway/bot", escapeControl(`url=${gateway.url}`));
 	} catch (error) {
-		report(false, "discord gateway/bot", error instanceof Error ? error.message : String(error));
+		report(false, "discord gateway/bot", escapeControl(error instanceof Error ? error.message : String(error)));
 	}
 }
 
@@ -303,15 +307,14 @@ export async function runDoctor(
 	let failures = 0;
 	const report = (ok: boolean, name: string, detail: string): void => {
 		if (!ok) failures += 1;
-		write(`${ok ? "ok" : "fail"} ${name}: ${detail}`);
+		write(`${ok ? "ok" : "fail"} ${name}: ${escapeControl(detail)}`);
 	};
-	const warn = (name: string, detail: string): void => write(`warn ${name}: ${detail}`);
+	const warn = (name: string, detail: string): void => write(`warn ${name}: ${escapeControl(detail)}`);
 
 	let config: JabbuConfig | undefined;
 	try {
-		if (!statSync(homeDir).isDirectory()) {
-			report(false, "home", `${homeDir} is not a directory`);
-		} else {
+		if (!statSync(homeDir).isDirectory()) report(false, "home", `${homeDir} is not a directory`);
+		else {
 			const homeMode = modeOf(homeDir);
 			report(homeMode === HOME_MODE, "home", `${homeDir} mode=${octal(homeMode)} expected=${octal(HOME_MODE)}`);
 		}
@@ -324,16 +327,16 @@ export async function runDoctor(
 		config = loadConfig(homeDir);
 		report(true, "config", config.configPath);
 	} catch (error) {
-		if (error instanceof ConfigError && TOKEN_FILE_ERRORS[error.code] === true) {
+		let failure: unknown = error;
+		if (isTokenFileError(error)) {
 			try {
 				config = loadConfig(homeDir, { checkTokens: false });
 				report(true, "config", config.configPath);
 			} catch (retry) {
-				report(false, "config", retry instanceof ConfigError ? retry.message : "unreadable");
+				failure = retry;
 			}
-		} else {
-			report(false, "config", error instanceof ConfigError ? error.message : "unreadable");
 		}
+		if (config === undefined) report(false, "config", failure instanceof ConfigError ? failure.message : "unreadable");
 	}
 	if (config) {
 		try {
@@ -358,9 +361,6 @@ export async function runDoctor(
 				"omp runtime",
 				problem === undefined ? `executable=${config.ompExecutable}` : `${problem.code} ${problem.message}`,
 			);
-		}
-
-		if ((config.agent ?? "omp") === "omp" && existsSync(config.ompExecutable)) {
 			const models = await countOmpModels(config.ompExecutable, 30_000, config.ompProfile);
 			report(
 				typeof models === "number" && models > 0,
@@ -376,12 +376,12 @@ export async function runDoctor(
 			// the missing role is actionable.
 			const judge = await readJudgeRole(config.ompExecutable, config.ompConfigOverlay, 30_000, config.ompProfile);
 			if ("model" in judge) report(true, "omp judge", `${judge.model}`);
-			else if ("missing" in judge) {
+			else if ("missing" in judge)
 				warn(
 					"omp judge",
 					`modelRoles.judge is empty (set it in omp: /models → Roles → Judge, or modelRoles.judge in ${config.ompConfigOverlay ?? "the omp config"})`,
 				);
-			} else warn("omp judge", `확인 불가 (${judge.unreadable})`);
+			else warn("omp judge", `확인 불가 (${judge.unreadable})`);
 		}
 
 		// agent "agy": the Antigravity CLI must exist, and its Google login must be on disk (presence only).

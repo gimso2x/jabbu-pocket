@@ -100,7 +100,13 @@ export const membership = (text: string, version: 1 | 2): string | undefined => 
 export const chain = (mount: Mount, path: string): { dir: string; label: string }[] => {
 	const base = PATH_SEGMENTS(mount.root);
 	const trail = [...base];
-	const inside = mount.root !== "/" && path.startsWith(mount.root) ? path.slice(mount.root.length) : path;
+	let inside = path;
+	if (mount.root !== "/" && base.length > 0) {
+		const root = `/${base.join("/")}`;
+		if (path === root) inside = "";
+		else if (path.startsWith(`${root}/`)) inside = path.slice(root.length);
+		else return [];
+	}
 	for (const part of inside.split("/")) {
 		if (part === "" || part === ".") continue;
 		if (part !== "..") trail.push(part);

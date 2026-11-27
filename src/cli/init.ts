@@ -1,8 +1,9 @@
-import { accessSync, chmodSync, constants, existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultHomeDir, HOME_MODE, SECRET_MODE, workspaceOverlapsHome } from "../config";
 import { remoteShellQuote } from "../dispatch/omp";
+import { lstatSafe } from "./home-config";
 
 export const INIT_USAGE = `  init [--platform discord] --owner <Discord user id> --app-id <application id> [--omp <abs path>] [--workspace <dir>] | --help
                                  create the home (0700), secrets/ (0700), the workspace and a minimal config.json (0600);
@@ -11,14 +12,8 @@ export const INIT_USAGE = `  init [--platform discord] --owner <Discord user id>
 `;
 
 const SNOWFLAKE = /^[0-9]{17,20}$/;
-
-const lstatSafe = (path: string) => {
-	try {
-		return lstatSync(path, { throwIfNoEntry: false });
-	} catch {
-		return undefined;
-	}
-};
+const CONTROL_CHARS = /\p{Cc}/u;
+const hasControlChars = (value?: string): boolean => value !== undefined && CONTROL_CHARS.test(value);
 
 function fail(message: string): number {
 	process.stderr.write(`init: ${message}\n${INIT_USAGE}`);
@@ -57,6 +52,7 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 	if (values.workspace === "") return fail("--workspace is empty; leave it out to use <home>/workspace");
 	const omp = values.omp === undefined ? Bun.which("omp", { PATH: env.PATH ?? "" }) : resolve(values.omp);
 	if (omp === null) return fail("omp not found on PATH; pass --omp <absolute path to omp>");
+	if (hasControlChars(values.omp) || hasControlChars(omp)) return fail("--omp contains control characters");
 	if (!existsSync(omp)) return fail(`--omp ${omp} does not exist`);
 	if (!statSync(omp).isFile()) return fail(`--omp ${omp} is a directory, not the omp executable`);
 	try {
@@ -66,13 +62,15 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 	}
 
 	const homeDir = resolve(defaultHomeDir(env));
+	if (hasControlChars(env.JABBU_HOME) || hasControlChars(homeDir)) return fail("home contains control characters");
 	const configPath = join(homeDir, "config.json");
 	if (lstatSafe(configPath) !== undefined) return fail(`${configPath} already exists; nothing changed`);
 	const workspaceDir = resolve(values.workspace ?? join(homeDir, "workspace"));
+	if (hasControlChars(values.workspace) || hasControlChars(workspaceDir))
+		return fail("--workspace contains control chars");
 	const secretsDir = join(homeDir, "secrets");
-	if (workspaceOverlapsHome(homeDir, workspaceDir)) {
+	if (workspaceOverlapsHome(homeDir, workspaceDir))
 		return fail(`--workspace ${workspaceDir} is the home, config.json or inside secrets/; pick another directory`);
-	}
 	// mkdir fails halfway (raw EEXIST/ENOTDIR, a bare home left behind) when a file or dangling link sits in the path.
 	for (const [label, dir] of [
 		["home", homeDir],

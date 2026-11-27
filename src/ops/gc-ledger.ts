@@ -15,6 +15,7 @@ export const LEDGER_RETENTION_DAYS = 90;
 interface LedgerGcOptions {
 	now: number;
 	dryRun?: boolean;
+	removingOrigins?: readonly string[];
 }
 
 /** Row counts `gcLedger` removed per table; `inboundOrphans` are the finished inbound rows the age rule left. */
@@ -113,6 +114,19 @@ export function gcLedger(db: Database, options: LedgerGcOptions): LedgerRemoved 
 		webMessages: web ? count(`web_messages w WHERE ${webWhere}`) : 0,
 		inboundConflicts: conflicts ? count("inbound_conflicts WHERE created_at < ?") : 0,
 	};
+	if (options.dryRun === true && options.removingOrigins !== undefined && options.removingOrigins.length > 0) {
+		const unique = [...new Set(options.removingOrigins)];
+		for (let i = 0; i < unique.length; i += 500) {
+			const chunk = unique.slice(i, i + 500);
+			const placeholders = chunk.map(() => "?").join(", ");
+			const row = db
+				.query(
+					`SELECT COUNT(*) AS n FROM inbound i WHERE i.created_at >= ? AND ${finished} AND EXISTS (SELECT 1 FROM origins o WHERE o.origin_key = i.origin_key) AND i.origin_key IN (${placeholders})`,
+				)
+				.get(cutoff, ...chunk) as { n: number };
+			removed.inboundOrphans += row.n;
+		}
+	}
 	if (options.dryRun === true) return removed;
 	db.transaction(() => {
 		if (hasDeliveries) db.query(`DELETE FROM deliveries AS d WHERE ${deliveriesWhere}`).run(cutoff);
