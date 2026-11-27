@@ -114,6 +114,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	#configOptions: AcpConfigOption[] = [];
 	/** Latest `usage_update` of the live session. */
 	#context: { used: number; size: number } | undefined;
+	/** A `usage_update` arrived for the live turn; without one rotation judges on the previous turn's numbers. */
+	#usageUpdatedThisTurn = false;
+	/** This blindness episode already warned once (a later update clears it). */
+	#contextBlindWarned = false;
 	/** Tool calls of the live child: open until their `completed|failed` update. */
 	readonly #tools = new Map<string, "open" | "done">();
 	readonly #unknownUpdates = new Set<string>();
@@ -130,8 +134,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			if (this.#client !== undefined && this.#turn !== undefined) this.#emit(event);
 		}, options.toolKeepalive);
 		this.#defaultModel = options.model === "" ? undefined : options.model;
-		const thinking = options.thinking;
-		this.#defaultThinking = thinking !== undefined && isThinkingLevel(thinking) ? thinking : undefined;
+		this.#defaultThinking =
+			options.thinking !== undefined && isThinkingLevel(options.thinking) ? options.thinking : undefined;
 	}
 
 	/** Pid of the live child (for leftover-process checks); undefined when not running. */
@@ -146,8 +150,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async start(): Promise<void> {
 		if (this.#started) throw new OmpDriverError("already_started", "driver already started");
 		resolveAgyExecutable(this.#options.agyExecutable, buildChildEnv(this.#options.env, this.#options.baseEnv));
-		mkdirSync(resolve(this.#options.cwd), { recursive: true });
-		mkdirSync(resolve(this.#options.sessionDir), { recursive: true });
+		for (const dir of [this.#options.cwd, this.#options.sessionDir]) mkdirSync(resolve(dir), { recursive: true });
 		this.#started = true;
 		await this.#bindPinnedConversation();
 	}
@@ -165,6 +168,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const opRef = `agy-${Date.now().toString(36)}-${++this.#entrySeq}`;
 		const turn = createPendingTurn(opRef, text);
 		this.#turn = turn;
+		this.#usageUpdatedThisTurn = false;
 		this.#sendPrompt(client, turn, promptText);
 		return opRef;
 	}
@@ -195,10 +199,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	#cancel(turn: PendingTurn, client: AgyAcpClient): Promise<void> {
 		this.#toolKeepalive.clear();
 		const keepQueued = turn.rateLimit !== undefined && !turn.hadToolCall && this.#options.accounts !== undefined;
-		if (!keepQueued) {
-			if (this.#queued.length > 0) turn.droppedSteers = (turn.droppedSteers ?? 0) + this.#queued.length;
-			this.#queued = [];
-		}
+		if (!keepQueued && this.#queued.length > 0) turn.droppedSteers = (turn.droppedSteers ?? 0) + this.#queued.length;
+		if (!keepQueued) this.#queued = [];
 		const reply = turn.promptReplied;
 		turn.cancelling ??= (async () => {
 			try {
@@ -247,10 +249,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	/** Binds the session the pointer names: restarts on it when the live child holds another one. */
 	async #bindPinnedConversation(): Promise<void> {
 		const pointer = readAgyPointer(this.#pointerPath);
-		if (pointer !== undefined && (pointer.conversationId !== this.#sessionId || !this.#client)) {
-			await this.#spawn(pointer.conversationId, "conversation rebind", pointer.account);
-			return;
-		}
+		if (pointer !== undefined && (pointer.conversationId !== this.#sessionId || !this.#client))
+			return this.#spawn(pointer.conversationId, "conversation rebind", pointer.account);
 		await this.#ensureChild();
 	}
 
@@ -274,9 +274,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async setModel(model: string): Promise<string> {
 		this.#requireStarted();
 		const slash = model.indexOf("/");
-		if (slash <= 0 || slash === model.length - 1) {
+		if (slash <= 0 || slash === model.length - 1)
 			throw new OmpDriverError("rpc_error", `model must be provider/id: ${model}`);
-		}
 		if (model.slice(0, slash) !== AGY_PROVIDER || !(await this.availableModels()).includes(model)) {
 			throw new OmpDriverError("rpc_error", `Model not found: ${model}`);
 		}
@@ -344,10 +343,9 @@ export class AgyOmpDriver implements OmpSessionDriver {
 
 	async entriesSince(since?: string): Promise<OmpEntries> {
 		const leafId = this.#entries.at(-1)?.id ?? null;
-		if (since === undefined) return { entries: [...this.#entries], leafId };
-		const index = this.#entries.findIndex((entry) => entry.id === since);
-		if (index === -1) throw new OmpDriverError("unknown_since", `no such entry: ${since}`);
-		return { entries: this.#entries.slice(index + 1), leafId };
+		const index = since === undefined ? -1 : this.#entries.findIndex((entry) => entry.id === since);
+		if (since !== undefined && index === -1) throw new OmpDriverError("unknown_since", `no such entry: ${since}`);
+		return { entries: since === undefined ? [...this.#entries] : this.#entries.slice(index + 1), leafId };
 	}
 
 	onFinal(listener: (final: OmpFinal) => void): () => void {
@@ -439,14 +437,12 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			}
 			if (this.#client && shouldSwitchAgyAccount(this.#account, wanted, accounts, now)) {
 				this.#dropSession(true);
-				await this.#spawn(undefined, "account switch");
-				return;
+				return this.#spawn(undefined, "account switch");
 			}
 		}
-		if (!this.#client) {
-			const account = this.#account?.name ?? readAgyPointer(this.#pointerPath)?.account;
-			await this.#spawn(this.#sessionId, "child restart", account);
-		}
+		if (this.#client) return;
+		const account = this.#account?.name ?? readAgyPointer(this.#pointerPath)?.account;
+		await this.#spawn(this.#sessionId, "child restart", account);
 	}
 
 	/**
@@ -472,10 +468,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				await this.#launch(executable, env, resume, resumeAccount, reason !== "session switch");
 			});
 		} finally {
-			if (cut !== undefined) {
-				const steer = dropped > 0 ? ` (steer ${dropped}건 미전달)` : "";
-				this.#abortTurn(cut, `agy restarted (${reason})${steer}`);
-			}
+			if (cut !== undefined)
+				this.#abortTurn(cut, `agy restarted (${reason})${dropped > 0 ? ` (steer ${dropped}건 미전달)` : ""}`);
 		}
 	}
 
@@ -494,6 +488,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		this.#tools.clear();
 		this.#configOptions = [];
 		this.#context = undefined;
+		this.#contextBlindWarned = false;
 		this.#resumedCurrent = false;
 		this.#loadedUnanswered = false;
 		this.#imageInput = false;
@@ -610,9 +605,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const options = configOptionsOf(result.configOptions);
 		if (options !== undefined) this.#configOptions = options;
 		const current = this.#option(configId)?.currentValue;
-		if (current !== value) {
+		if (current !== value)
 			throw new OmpDriverError("rpc_error", `agy did not apply ${configId}=${value} (now ${current ?? "unset"})`);
-		}
 	}
 
 	#onChildExit(client: AgyAcpClient, code: number, stderr: string): void {
@@ -627,10 +621,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 		this.#turn = undefined;
 		this.#queued = [];
-		if (!this.#stopping) {
-			const info: OmpExitInfo = { code, expected: false, stderr };
-			for (const listener of this.#exitListeners) listener(info);
-		}
+		if (!this.#stopping) for (const listener of this.#exitListeners) listener({ code, expected: false, stderr });
 	}
 
 	// ---- session updates ----
@@ -665,7 +656,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			case "usage_update": {
 				const used = num(update.used);
 				const size = num(update.size);
-				if (used !== undefined && size !== undefined) this.#context = { used, size };
+				if (used === undefined || size === undefined) return;
+				this.#context = { used, size };
+				this.#usageUpdatedThisTurn = true;
+				this.#contextBlindWarned = false;
 				return;
 			}
 			case "config_option_update": {
@@ -768,7 +762,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const end = promptReplyEnd({ ...turn, stopReason, failure, dropped });
 		if (this.#context !== undefined) turn.usage.contextTokens = this.#context.used;
 		// Before the final: a prompt sent on it must already find the conversation dropped.
-		turn.usage.rotated = this.#rotateIfFull();
+		turn.usage.rotated = this.#rotateIfFull(turn.usage.calls);
 		this.#finish(turn, { opRef: turn.opRef, text: turn.text, ...end });
 	}
 
@@ -829,11 +823,18 @@ export class AgyOmpDriver implements OmpSessionDriver {
 
 	/**
 	 * Between turns only: a session at or over the rotation share of its window drops its pointer, its id and its
-	 * child, so `#ensureChild` starts the next turn on a new session.
+	 * child, so `#ensureChild` starts the next turn on a new session. `usage_update` is the only source of the
+	 * window: a turn that called the model without one leaves rotation blind (no reading, or the previous turn's),
+	 * so it warns once per episode instead of silently never rotating.
 	 */
-	#rotateIfFull(): boolean {
+	#rotateIfFull(calls: number): boolean {
 		const context = this.#context;
-		if (context === undefined || context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
+		if ((context === undefined || !this.#usageUpdatedThisTurn) && calls > 0 && !this.#contextBlindWarned) {
+			this.#contextBlindWarned = true;
+			this.#options.log?.warn("agy_rotation_blind", { origin: this.#options.originKey, calls });
+		}
+		if (context === undefined) return false;
+		if (context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
 		const conversationId = this.#sessionId;
 		this.#dropSession(false);
 		this.#retireChild();
