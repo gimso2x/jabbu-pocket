@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	realpathSync,
@@ -13,6 +14,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { renderUnit, unitsCommand } from "../src/cli/units";
@@ -309,6 +311,26 @@ describe("tree-snapshot sees content, not timestamps", () => {
 		// The target's name is the link's content: `lstat` reports the same mode for both.
 		expect(after.get("current")?.mode).toBe(before.get("current")?.mode);
 		expect(after.get("current")?.sha256).not.toBe(before.get("current")?.sha256);
+	});
+
+	test("an empty directory, a FIFO and a socket show in the snapshot", async () => {
+		const dir = scratch();
+		const before = treeSnapshot(dir);
+		const empty = join(dir, "empty");
+		mkdirSync(empty);
+		expect(Bun.spawnSync(["mkfifo", join(dir, "pipe")]).exitCode).toBe(0);
+		const server = createServer();
+		try {
+			await new Promise<void>((resolve) => server.listen(join(dir, "sock"), resolve));
+			const after = treeSnapshot(dir);
+			expect([...after.keys()].sort()).toEqual([...before.keys(), "empty", "pipe", "sock"].sort());
+			// No content to hash: the entry records presence and mode, so the residue cannot hide.
+			expect(after.get("empty")).toEqual({ mode: lstatSync(empty).mode, sha256: "" });
+			expect(after.get("pipe")?.sha256).toBe("");
+			expect(after.get("sock")?.sha256).toBe("");
+		} finally {
+			server.close();
+		}
 	});
 });
 
