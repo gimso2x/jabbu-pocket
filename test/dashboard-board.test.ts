@@ -392,6 +392,8 @@ describe("agent board", () => {
 		const { base, upstream } = await setup();
 		const local = await fetch(`${base}/api/pane/conversation?card=${encodeURIComponent("w1:p1")}&before=c9&junk=x`);
 		expect(local.status).toBe(200);
+		expect(local.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(local.headers.get("referrer-policy")).toBe("no-referrer");
 		const localBody = (await local.json()) as typeof CONVERSATION & { echo: string };
 		expect(localBody.echo).toBe("/api/pane/conversation?pane_id=w1%3Ap1&before=c9");
 		expect(localBody.turns).toEqual(CONVERSATION.turns);

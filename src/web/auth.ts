@@ -171,7 +171,10 @@ async function verifyAccessJwt(jwt: string, state: WebAuthState): Promise<AuthOu
 	if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= nowSec) {
 		return { ok: false, status: 401, error: "jwt_expired" };
 	}
-	if (payload.nbf !== undefined && (typeof payload.nbf !== "number" || payload.nbf > nowSec + CLOCK_SKEW_SEC)) {
+	if (
+		payload.nbf !== undefined &&
+		(typeof payload.nbf !== "number" || !Number.isFinite(payload.nbf) || payload.nbf > nowSec + CLOCK_SKEW_SEC)
+	) {
 		return { ok: false, status: 401, error: "jwt_not_yet_valid" };
 	}
 
@@ -182,7 +185,7 @@ async function verifyAccessJwt(jwt: string, state: WebAuthState): Promise<AuthOu
 	if (!audOk) return { ok: false, status: 403, error: "invalid_aud" };
 
 	const expectedIss = `https://${state.config.accessTeamDomain}`;
-	if (payload.iss !== undefined && payload.iss !== expectedIss && payload.iss !== `${expectedIss}/`) {
+	if (typeof payload.iss !== "string" || (payload.iss !== expectedIss && payload.iss !== `${expectedIss}/`)) {
 		return { ok: false, status: 403, error: "invalid_iss" };
 	}
 
