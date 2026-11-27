@@ -229,6 +229,29 @@ describe("rate limits and failures", () => {
 		expect(failed).toHaveLength(0);
 	});
 
+	test("a 429 on one channel does not park posts to another channel", async () => {
+		const other = "222222222222222222";
+		transport.setChannel({ id: other, type: 0, guildId: GUILD });
+		const first = deliver(`${CH}:-`, "채널 A 답", "monitor/a");
+		const second = deliver(`${other}:-`, "채널 B 답", "monitor/b");
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		expect(await adapter.pumpDeliveries()).toBe(1);
+		expect(answers().map((post) => post.channelId)).toEqual([other]);
+		expect(row(first)).toMatchObject({ state: "pending", nextAt: now + 5_000 });
+		expect(row(second)?.state).toBe("confirmed");
+	});
+
+	test("a 429 on a notice to one channel does not park deliveries to another channel", async () => {
+		const other = "222222222222222222";
+		transport.setChannel({ id: other, type: 0, guildId: GUILD });
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		expect(await adapter.postNotice(CH, "공지")).toBe(false);
+		const id = deliver(`${other}:-`, "채널 B 답", "monitor/b");
+		expect(await adapter.pumpDeliveries()).toBe(1);
+		expect(answers().map((post) => post.channelId)).toEqual([other]);
+		expect(row(id)?.state).toBe("confirmed");
+	});
+
 	test("a 4xx before anything was posted is a definitive failure (failDelivery)", async () => {
 		const id = deliver(`${CH}:-`, "짧은 답", "monitor/x");
 		transport.createFailures.set(1, new DiscordCallError("definitive", "discord_http_403:50013", 403, 50013));
