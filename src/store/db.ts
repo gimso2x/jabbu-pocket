@@ -994,7 +994,6 @@ export class Store {
 		body: string,
 	): void {
 		if (threads.length === 0) return;
-		const first = cutCodePointSafe((body.split("\n").find((line) => line.trim() !== "") ?? "").trim(), 200);
 		const answered = parseThreadRef(input.threadRef);
 		const link =
 			answered === undefined || answered.threadTs === TOP_LEVEL_TS
@@ -1004,7 +1003,7 @@ export class Store {
 			this.insertDelivery(
 				{ originKey: input.originKey, opRef: `${input.opRef}${STEER_NOTICE_SUFFIX}${n}`, threadRef },
 				0,
-				`${STEER_NOTICE_HEAD}\n> ${first}${link}`,
+				`${STEER_NOTICE_HEAD}\n> ${cutCodePointSafe((body.split("\n").find((line) => line.trim() !== "") ?? "").trim(), 200)}${link}`,
 			);
 		});
 	}
@@ -1059,9 +1058,10 @@ export class Store {
 	}): DeliveryRow | undefined {
 		if (input.originKey.startsWith(MONITOR_ORIGIN_PREFIX)) return this.recordMonitorFailure(input);
 		return this.db.transaction(() => {
+			const steered = this.steeredThreads(input);
 			this.closeDispatched(input.originKey, input.opRef, "failed_notified");
 			const row = isTaskOrigin(input.originKey) ? undefined : this.insertDelivery(input, 0, input.notice);
-			this.notifySteeredThreads(input, this.steeredThreads(input), input.notice);
+			this.notifySteeredThreads(input, steered, input.notice);
 			return row;
 		})();
 	}
@@ -1206,11 +1206,12 @@ export class Store {
 
 	private recordMonitorAnswer(input: { originKey: string; opRef: string; parts: readonly string[] }): DeliveryRow[] {
 		return this.db.transaction(() => {
+			const eventIds = this.monitorEventsOfOp(input.originKey, input.opRef);
 			this.closeDispatched(input.originKey, input.opRef, "answered");
 			this.hooks.afterInboundAnswered?.();
 			const text = input.parts.join("\n");
 			const delivered: DeliveryRow[] = [];
-			for (const [part, eventId] of this.monitorEventsOfOp(input.originKey, input.opRef).entries()) {
+			for (const [part, eventId] of eventIds.entries()) {
 				if (text.trim() === EMPTY_ANSWER) {
 					this.failMonitorEvent(eventId, "[turn failed] empty_answer");
 					continue;
