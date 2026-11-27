@@ -2377,7 +2377,7 @@ export function openDeliveryLedger(path: string, clock?: StoreClock): DeliveryLe
 	const db = new Database(path, { create: false, strict: true });
 	try {
 		checkSchemaVersion(db);
-		db.run("PRAGMA busy_timeout = 5000");
+		db.run("PRAGMA busy_timeout = 30000"); // a CLI ack waits for the daemon's lock (WSL2 fsyncs exceed 5 s)
 	} catch (error) {
 		db.close();
 		throw error;

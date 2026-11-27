@@ -6,6 +6,6 @@ e673ce827fbe0964e855a09d2a2d4a68b07d5830  src/core/mailbox-types.ts
 cee7532d0ab1e629000c2e93b21640c2edaf9b4e  src/core/mailbox-sending.ts
 e5dfee035bec5cf5d509868be8a58d684809e370  src/core/mailbox-park.ts
 aec2e7ecb3d10365e8fd2543f99a0f05537f8a38  src/store/transitions.ts
-6d82db4375cc35f78db735906f441dec56d2c35b  src/store/db.ts
+15f0141bc0db6b1b5e63260703ac92d761f8f434  src/store/db.ts
 c79353752832026f78edb7665a50b4ff7e5fb0ae  src/daemon/recovery.ts
 5f27177f4f87c6970052e2998e0105777f949e43  src/channel/pump.ts
