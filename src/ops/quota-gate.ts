@@ -1,7 +1,7 @@
 // 프로바이더별 쿼터 게이트: 한도에 닿은 프로바이더의 새 레인·[TASK] 시작만 보류하고, 다른 프로바이더와 기존 세션 재개는 허용한다.
 import { existsSync, lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { QuotaGateConfig } from "../config-quota";
+import type { QuotaGateConfig, QuotaGateMode } from "../config-quota";
 import type { UsageLimit, UsageResponse } from "../omp/usage-json";
 import { readRegularText, writeAtomic0600 } from "./stamp";
 
@@ -32,6 +32,7 @@ export interface QuotaLiftEntry {
 
 export interface QuotaGateSnapshot {
 	updatedAt: number | null;
+	mode?: QuotaGateMode;
 	lastError?: string;
 	held: ProviderHold[];
 }
@@ -239,6 +240,8 @@ export function readQuotaGateSnapshot(homeDir: string, now: number): QuotaGateSn
 		const parsed = JSON.parse(readRegularText(path)) as Partial<QuotaGateSnapshot>;
 		const updatedAt =
 			typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : null;
+		const mode: QuotaGateMode | undefined =
+			parsed.mode === "hold" || parsed.mode === "warn" ? parsed.mode : undefined;
 		const lastError = typeof parsed.lastError === "string" && parsed.lastError !== "" ? parsed.lastError : undefined;
 		const held: ProviderHold[] = [];
 		if (Array.isArray(parsed.held)) {
@@ -261,7 +264,12 @@ export function readQuotaGateSnapshot(homeDir: string, now: number): QuotaGateSn
 				if (causes.length > 0) held.push({ provider: entry.provider, causes });
 			}
 		}
-		return { updatedAt, ...(lastError === undefined ? {} : { lastError }), held };
+		return {
+			updatedAt,
+			...(mode === undefined ? {} : { mode }),
+			...(lastError === undefined ? {} : { lastError }),
+			held,
+		};
 	} catch {
 		return { updatedAt: null, held: [] };
 	}
@@ -355,13 +363,14 @@ export class ProviderQuotaGate {
 		return causes === undefined || causes.length === 0 ? undefined : { provider, causes: [...causes] };
 	}
 
-	snapshot(now: number): QuotaGateSnapshot {
+	snapshot(now: number, mode?: QuotaGateMode): QuotaGateSnapshot {
 		this.pruneExpired(now);
 		const held = [...this.#holds.entries()]
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([provider, causes]) => ({ provider, causes: [...causes] }));
 		return {
 			updatedAt: this.#updatedAt,
+			...(mode === undefined ? {} : { mode }),
 			...(this.#lastError === undefined ? {} : { lastError: this.#lastError }),
 			held,
 		};

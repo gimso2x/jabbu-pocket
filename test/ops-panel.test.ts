@@ -17,7 +17,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import type { HostLoadReader } from "../src/ops/host-resources";
 import { LoadHysteresisTracker, loadPolicyFromConfig, sampleLoadMetrics } from "../src/ops/load-hysteresis";
 import { OPS_ACTION_LIMITS, OPS_ACTION_MUTE, OPS_ACTION_REFRESH, parseOpsPanelActionId } from "../src/ops/ops-panel";
-import { writeQuotaLift } from "../src/ops/quota-gate";
+import { quotaGatePath, writeQuotaLift } from "../src/ops/quota-gate";
 import { redact } from "../src/redact";
 import {
 	CHANNEL,
@@ -569,5 +569,50 @@ describe("Daemon #ops panel and hysteresis alerts", () => {
 			title: "✅ 호스트 부하 경보 — resolved",
 			color: toneColorInt("ok"),
 		});
+	});
+
+	test("displays warn-only quotaGate mode in #ops panel for both clear and held states", async () => {
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: OPS_CHANNEL, type: 0, guildId: GUILD });
+		const load = makeHostLoad({ load15: 0.4, cpus: 4, memAvailPct: 50, cgroupFreePct: 50 });
+		writeFileSync(quotaGatePath(home.dir), JSON.stringify({ updatedAt: BASE_NOW, mode: "warn", held: [] }), {
+			mode: 0o600,
+		});
+		daemon = await startOpsDaemon({
+			transport,
+			hostLoad: load.reader,
+			configPatch: { quotaGate: { holdPct: 95, mode: "warn" } },
+		});
+
+		await daemon.sweep();
+		await daemon.opsPanelIdle();
+		const first = transport.calls.find((c) => c.method === "createMessage" && c.channelId === OPS_CHANNEL);
+		if (first?.method !== "createMessage") throw new Error("expected panel createMessage");
+		const firstFields = (first.embeds?.[0] as { fields?: Array<{ name: string; value: string }> } | undefined)?.fields;
+		expect(firstFields?.find((f) => f.name === "쿼터 게이트")?.value).toBe("경보 전용 · 정상");
+
+		writeFileSync(
+			quotaGatePath(home.dir),
+			JSON.stringify({
+				updatedAt: BASE_NOW + 60_000,
+				mode: "warn",
+				held: [
+					{
+						provider: "anthropic",
+						causes: [{ provider: "anthropic", label: "5시간", usedPct: 97, releaseAt: BASE_NOW + 3_600_000 }],
+					},
+				],
+			}),
+			{ mode: 0o600 },
+		);
+		now = BASE_NOW + 61_000;
+		await daemon.sweep();
+		await daemon.opsPanelIdle();
+		const edited = transport.calls.filter((c) => c.method === "editMessage").at(-1);
+		if (edited?.method !== "editMessage") throw new Error("expected panel editMessage");
+		const editedFields = (edited.embeds?.[0] as { fields?: Array<{ name: string; value: string }> } | undefined)?.fields;
+		const quotaValue = editedFields?.find((f) => f.name === "쿼터 게이트")?.value;
+		expect(quotaValue).toContain("경보 전용(차단 안 함)");
+		expect(quotaValue).toContain("• anthropic: 5시간 97%");
 	});
 });

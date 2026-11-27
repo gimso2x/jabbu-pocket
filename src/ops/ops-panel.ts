@@ -136,9 +136,11 @@ function formatQuotaField(
 	timezone: string,
 ): string {
 	const lines: string[] = [];
+	const warnOnly = snapshot.mode === "warn";
 	if (snapshot.held.length === 0) {
-		lines.push("모두 열림");
+		lines.push(warnOnly ? "경보 전용 · 정상" : "모두 열림");
 	} else {
+		if (warnOnly) lines.push("경보 전용(차단 안 함)");
 		for (const hold of snapshot.held) {
 			const causes = hold.causes.map((c) => `${c.label} ${Math.round(c.usedPct)}%`).join(", ");
 			lines.push(`• ${hold.provider}: ${causes}`);
