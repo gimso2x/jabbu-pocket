@@ -7,11 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiveTurn, type LiveView } from "../src/core/live-turn";
 import { ContextMemory } from "../src/core/mailbox-context";
-import { clearContextLoad } from "../src/dashboard/context-load";
+import { clearContextLoad, withContextLoad } from "../src/dashboard/context-load";
 import { SCRIPT } from "../src/dashboard/html";
 import { renderDashboardMain } from "../src/dashboard/main-view";
 import { buildSnapshot, type DashboardSnapshot, type SnapshotDeps } from "../src/dashboard/snapshot";
 import { STYLE } from "../src/dashboard/style";
+import type { ThreadInfo } from "../src/dashboard/turn-board";
 import type { OmpState } from "../src/omp/driver";
 import { openStore } from "../src/store/db";
 
@@ -205,6 +206,81 @@ describe("context bar", () => {
 		expect(() => client(snapshot, undefined, NOW, { view: "turns" })).not.toThrow();
 		expect(barOf(server)).toContain("200k+");
 		expect(client(snapshot, undefined, NOW, { view: "turns" })).toBe(server);
+	});
+
+	test("windows cache evicts the oldest origin past 1000 entries", async () => {
+		const dbPath = join(home, "jabbu.db");
+		openStore({ timezone: "Asia/Seoul", path: dbPath, clock: { now: () => NOW }, redact: (text) => text }).close();
+		const dir = join(home, "sessions", "shared");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, "s.jsonl"),
+			`${JSON.stringify({
+				type: "message",
+				message: {
+					role: "assistant",
+					provider: "p",
+					model: "m",
+					usage: { input: 50_000, cacheRead: 0, cacheWrite: 0 },
+				},
+			})}\n`,
+		);
+		const origin0 = "discord/ch/300000000000000001/t/0";
+		const originLast = "discord/ch/300000000000000001/t/1004";
+		const db = new Database(dbPath, { strict: true });
+		db.run("INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 1, ?, ?)", [origin0, dir, NOW]);
+		db.run("INSERT INTO origins (origin_key, epoch, session_dir, updated_at) VALUES (?, 1, ?, ?)", [
+			originLast,
+			dir,
+			NOW,
+		]);
+		db.close();
+
+		const mkThread = (originKey: string, openCount: number): ThreadInfo => ({
+			originKey,
+			threadRef: "ch:1",
+			kind: "message",
+			title: "t",
+			column: openCount > 0 ? "working" : "done",
+			latest: {
+				inboundId: 1,
+				state: openCount > 0 ? "dispatched" : "answered",
+				createdAt: "2026-11-25T03:00:00Z",
+				preview: "x",
+				ageMs: 1_000,
+				silentMs: 1_000,
+				stalled: false,
+				waitReason: null,
+			},
+			turnCount: 1,
+			openCount,
+			runCount: openCount,
+			pendingCount: 0,
+			stalledCount: 0,
+			updatedAt: "2026-11-25T03:00:00Z",
+			recent: [],
+		});
+
+		const ro = new Database(dbPath, { readonly: true, strict: true });
+		try {
+			const batch = Array.from({ length: 1005 }, (_, i) => mkThread(`discord/ch/300000000000000001/t/${i}`, 1));
+			await withContextLoad({ threads: batch }, ro, {
+				homeDir: home,
+				usageLimits: true,
+				callDaemon: async () => ({ ok: true, live: { context: { tokens: 1_000, window: WINDOW, percent: 1 } } }),
+			});
+			const checked = await withContextLoad({ threads: [mkThread(origin0, 0), mkThread(originLast, 0)] }, ro, {
+				homeDir: home,
+				usageLimits: false,
+				callDaemon: async () => {
+					throw new Error("should not call daemon");
+				},
+			});
+			expect(checked.threads[0]?.context).toBeUndefined();
+			expect(checked.threads[1]?.context).toEqual({ tokens: 50_000, percent: 50 });
+		} finally {
+			ro.close();
+		}
 	});
 });
 
