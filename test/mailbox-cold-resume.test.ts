@@ -103,7 +103,7 @@ describe("cold-resume rotation", () => {
 		test("an agy bot's daemon hands the mailbox no threshold", async () => {
 			expect(coldResumeTokens({ agent: "agy" })).toBe(0);
 			expect(coldResumeTokens({ agent: "agy", coldResumeRotateTokens: 50_000 })).toBe(0);
-			expect(coldResumeTokens({})).toBe(100_000);
+			expect(coldResumeTokens({})).toBe(150_000);
 			expect(coldResumeTokens({ coldResumeRotateTokens: 0 })).toBe(0);
 			expect(coldResumeTokens({ agent: "omp", coldResumeRotateTokens: 70_000 })).toBe(70_000);
 			h = new ColdResumeHarness({ tokens: coldResumeTokens({ agent: "agy" }) });

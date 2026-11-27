@@ -102,7 +102,7 @@ export function primaryOwnerUserId(channels: ChannelsConfig): string {
 }
 
 /** `coldResumeRotateTokens` when the key is left out. */
-export const COLD_RESUME_ROTATE_DEFAULT_TOKENS = 100_000;
+export const COLD_RESUME_ROTATE_DEFAULT_TOKENS = 150_000;
 
 /** `peerSilenceAlert.minutes` when the key is left out, and the largest value it takes (one day). */
 export const PEER_SILENCE_DEFAULT_MINUTES = 10;
