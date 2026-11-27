@@ -232,14 +232,17 @@ describe("monitors: dispatch failure", () => {
 		const summary = await run();
 		expect(summary.dispatched).toBe(1);
 		expect(logged("monitor_dispatch_failed")).toHaveLength(1);
-		expect(logged("monitor_dispatch_failed")[0]).toContain(`monitor=${first.id}`);
+		// Both monitors fire in the same slot, so which one dispatches first (and hits the throw) is the ledger's order, not the test's.
+		const failed = [first, second].find((m) => logged("monitor_dispatch_failed")[0]?.includes(`monitor=${m.id}`));
+		const other = failed === first ? second : first;
+		expect(failed).toBeDefined();
 		expect(logged("monitor_dispatch_failed")[0]).toContain(
-			`event=${store.monitors.listEvents({ monitorId: first.id })[0]?.eventId}`,
+			`event=${store.monitors.listEvents({ monitorId: failed?.id })[0]?.eventId}`,
 		);
 		expect(logged("monitor_dispatch")).toHaveLength(1);
-		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${second.id}`);
+		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${other.id}`);
 		// The failed event was never marked, so it stays admitted for the next tick.
-		expect(store.monitors.listEvents({ monitorId: first.id })[0]?.stage).toBe("admitted");
+		expect(store.monitors.listEvents({ monitorId: failed?.id })[0]?.stage).toBe("admitted");
 	});
 });
 
