@@ -89,6 +89,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { sweepDeliveries } from "./delivery-sweep";
 import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
@@ -784,6 +785,7 @@ export class Daemon {
 		};
 		try {
 			await run("pump", () => this.pump());
+			await run("delivery_sweep", () => sweepDeliveries(this.#store, this.#log));
 			await run("sweep_stalls", () => this.#router?.sweepStalls());
 			await run("lane_tick", () => this.#startLaneTick());
 			try {
@@ -898,8 +900,7 @@ export class Daemon {
 	 * dashboard CLI's snapshot, except the daemon answers its own `status` op and no herdr board is started here.
 	 */
 	async #brief(originKey: string, threadRef: string): Promise<void> {
-		const store = this.#store;
-		if (store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
+		if (this.#store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
 		const config = this.#options.config;
 		const route = this.#channels.forThreadRef(threadRef);
 		if (route === undefined) throw new Error("이 대화의 채널을 찾지 못했습니다");

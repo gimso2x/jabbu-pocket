@@ -297,9 +297,7 @@ export class Store {
 		this.tasks = new TaskLedger(this.db, { clock: options.clock, timezone: options.timezone });
 		this.web = new WebMessageStore(this.db, options.clock, options.redact);
 		stampSchemaVersion(this.db);
-		this.recoveredInflight = this.db
-			.query("UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'inflight'")
-			.run(this.clock.now()).changes;
+		this.recoveredInflight = this.recoverInflight();
 	}
 
 	close(): void {
@@ -1624,6 +1622,13 @@ export class Store {
 			counts[row.state] = row.n;
 		}
 		return counts;
+	}
+
+	/** Inflight rows left by a dead process back to pending, for re-delivery: the boot recovery, and the daemon sweep. */
+	recoverInflight(): number {
+		return this.db
+			.query("UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'inflight'")
+			.run(this.clock.now()).changes;
 	}
 
 	/**
