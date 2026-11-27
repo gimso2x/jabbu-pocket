@@ -165,7 +165,7 @@ function recallLine(candidate: RecallCandidate, timezone: string): string {
  */
 export function buildRecallBlock(input: {
 	text: string;
-	candidates: readonly RecallCandidate[];
+	candidates: () => readonly RecallCandidate[]; // only called when a block is possible at all
 	freshSession: boolean;
 	channel: string;
 	/** The bot's zone (`config.timezone`): each recalled row is dated in it. */
@@ -174,7 +174,7 @@ export function buildRecallBlock(input: {
 	const query = topicText(input.text.split(QUOTED_HEADER)[0] ?? "");
 	const past = pointsAtPast(query);
 	if (!past && !input.freshSession) return { block: null, trigger: null, hits: 0, items: [] };
-	const own = input.candidates.filter((c) => c.threadRef.startsWith(`${input.channel}:`));
+	const own = input.candidates().filter((c) => c.threadRef.startsWith(`${input.channel}:`));
 	const ranked = rankRecall(query, own).filter((r) => (past ? r.score > 0 : r.sharedRare >= 2));
 	const items = ranked.slice(0, MAX_ITEMS).map((r) => r.candidate);
 	if (items.length === 0) {
