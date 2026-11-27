@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dispatchEnv } from "../dispatch/omp";
+import { hiddenChanges } from "../lanes/hidden-changes";
 import { coreRebase, type LandLane } from "../lanes/land";
 import { defaultGit, type GitResult, type GitRunner } from "../lanes/verify";
 import { redact, redactThenClip } from "../redact";
@@ -30,14 +31,7 @@ export interface TaskLandRebase {
 
 export type TaskLandResult =
 	/** Merged at `sha` (pushed to `pushed` when the repository has an `origin`), `done`; `notes`: what is left to do by hand. */
-	| {
-			state: "landed";
-			baseBranch: string;
-			sha: string;
-			pushed?: string;
-			rebase?: TaskLandRebase;
-			notes: string[];
-	  }
+	| { state: "landed"; baseBranch: string; sha: string; pushed?: string; rebase?: TaskLandRebase; notes: string[] }
 	/** Merged and `done`; `origin` refused the push (`reason`). */
 	| {
 			state: "merged-not-pushed";
@@ -91,11 +85,10 @@ export interface TaskLandDeps {
 
 /** A reason for the card: masked whole first (a key spans lines, a cut token escapes its shape), one line, capped. */
 export const clip = (text: string): string => redact(text).replace(/\s+/g, " ").trim().slice(0, REASON_MAX);
-const handoff = (reason: string, rebase?: TaskLandRebase): TaskLandResult => ({
-	state: "handoff",
-	reason: clip(reason),
-	...(rebase === undefined ? {} : { rebase }),
-});
+const handoff = (reason: string, rebase?: TaskLandRebase): TaskLandResult => {
+	const base = { state: "handoff" as const, reason: clip(reason) };
+	return rebase === undefined ? base : { ...base, rebase };
+};
 const shown = (items: readonly string[]): string =>
 	`${items.slice(0, SHOWN).join(", ")}${items.length > SHOWN ? ` 외 ${items.length - SHOWN}개` : ""}`;
 
@@ -130,8 +123,7 @@ export async function isAncestor(git: GitRunner, dir: string, ancestor: string, 
 export function maybeLiveCheckout(url: string): boolean {
 	const bare = url.replace(/\/+$/, "");
 	if (bare.endsWith(".git")) return false;
-	if (bare.startsWith("file://")) return true;
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(bare)) return false;
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(bare)) return bare.startsWith("file://");
 	if (bare.startsWith("/") || bare.startsWith(".") || bare.startsWith("~")) return true;
 	return /^[^/\s]+:/.test(bare);
 }
@@ -168,6 +160,10 @@ export async function precondition(git: GitRunner, row: TaskRow): Promise<string
 	if (status.code !== 0) return `git status 실패: ${failureLine(status)}`;
 	const dirty = status.stdout.split("\n").filter((line) => line.trim() !== "");
 	if (dirty.length > 0) return `worktree에 커밋 안 된 변경 ${dirty.length}건: ${shown(dirty.map((l) => l.trim()))}`;
+	const hidden = await hiddenChanges(git, row.worktree);
+	if ("failed" in hidden) return clip(hidden.failed);
+	if (hidden.length > 0)
+		return `worktree에 커밋 안 된 변경 ${hidden.length}건: ${shown(hidden.map((path) => `${path} (status가 숨긴 변경)`))}`;
 	return undefined;
 }
 
@@ -175,10 +171,9 @@ export async function precondition(git: GitRunner, row: TaskRow): Promise<string
 export async function baseBranchOf(git: GitRunner, repo: string): Promise<string | undefined> {
 	const head = await git(["-C", repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
 	const candidates = [...(head.code === 0 ? [head.stdout.trim().replace(/^origin\//, "")] : []), "main", "master"];
-	for (const candidate of candidates) {
+	for (const candidate of candidates)
 		if ((await git(["-C", repo, "rev-parse", "--verify", "-q", `refs/heads/${candidate}^{commit}`])).code === 0)
 			return candidate;
-	}
 	return undefined;
 }
 

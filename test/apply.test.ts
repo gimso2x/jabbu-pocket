@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -542,6 +543,85 @@ describe("runApply execution", () => {
 			"restart requested (HEAD moved after preflight: aaaaaaa→ccccccc)",
 		);
 		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a merge landing during drain whose new code cannot migrate the backup: refuses the restart, cancels the drain, no rollback", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {
+				throw new Error("migration fails: boom");
+			},
+		});
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+		]);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"HEAD moved after preflight to ccccccc but the new code cannot open the ledger snapshot: migration fails: boom; not restarted (drain cancelled)",
+		);
+		expect(restartCommands(world)).toHaveLength(0);
+		expect(world.drainCancels).toBe(1);
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"before"}');
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a merge landing during drain whose new code can migrate the backup: proceeds as pinned", async () => {
+		const world = makeWorld();
+		const moved = "c".repeat(40);
+		const deps = makeDeps(world);
+		const { exitCode, receipt } = await runApply(base, {
+			...deps,
+			drain: async (timeoutMin) => {
+				const result = await deps.drain(timeoutMin);
+				world.headSha = moved;
+				world.mainSha = moved;
+				return result;
+			},
+			revalidateBackup: async () => {},
+		});
+		expect(exitCode).toBe(0);
+		expect(receipt.head).toBe(moved);
+		expect(receipt.headAtPreflight).toBe(HEAD);
+		expect(receipt.steps.find((s) => s.name === "restart")?.detail).toBe(
+			"restart requested (HEAD moved after preflight: aaaaaaa→ccccccc)",
+		);
+		expect(readReceipt(receipt).head).toBe(moved);
+	});
+
+	test("a restart that fails twice (apply and rollback) skips the code rollback target without waiting for ready", async () => {
+		const world = makeWorld();
+		world.restartRc = 1;
+		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", false],
+			["rollback", false],
+		]);
+		const rollback = receipt.steps.find((s) => s.name === "rollback")?.detail ?? "";
+		expect(rollback).toContain("systemctl restart rc=1: boom");
+		expect(rollback).toContain("code rollback skipped: head.last-good 없음");
+		expect(rollback).not.toContain("not ready within");
+		expect(restartCommands(world)).toHaveLength(2);
+		expect(world.drainCancels).toBe(1);
 	});
 
 	test("an old daemon still answering is not ready: waits, then rolls back config with one more restart", async () => {
@@ -1774,18 +1854,31 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 	}
 
 	/** main: good (recorded as head.last-good) → bad; origin is a local bare repository holding both. */
-	function initRepo(opts: { lockChanges?: boolean } = {}): Repo {
+	function initRepo(opts: { lockChanges?: boolean; schemaVersions?: { good: number; bad: number } } = {}): Repo {
 		const origin = join(root, "origin.git");
 		sh(`git init -q --bare -b main ${origin}`, root);
 		sh("git init -q -b main && git config commit.gpgsign false");
 		writeFileSync(join(repo, "package.json"), '{"name":"x"}\n');
 		writeFileSync(join(repo, "bun.lock"), "lock-1\n");
 		writeFileSync(join(repo, "src", "main.ts"), "good\n");
-		sh("git add package.json bun.lock src/main.ts && git commit -qm good");
+		const schemaFile = opts.schemaVersions === undefined ? "" : " src/store/schema-version.ts";
+		if (opts.schemaVersions !== undefined) {
+			mkdirSync(join(repo, "src", "store"), { recursive: true });
+			writeFileSync(
+				join(repo, "src", "store", "schema-version.ts"),
+				`export const SCHEMA_VERSION = ${opts.schemaVersions.good};\n`,
+			);
+		}
+		sh(`git add package.json bun.lock src/main.ts${schemaFile} && git commit -qm good`);
 		const good = sh("git rev-parse HEAD");
 		writeFileSync(join(repo, "src", "main.ts"), "bad\n");
 		if (opts.lockChanges === true) writeFileSync(join(repo, "bun.lock"), "lock-2\n");
-		sh("git add src/main.ts bun.lock && git commit -qm bad");
+		if (opts.schemaVersions !== undefined)
+			writeFileSync(
+				join(repo, "src", "store", "schema-version.ts"),
+				`export const SCHEMA_VERSION = ${opts.schemaVersions.bad};\n`,
+			);
+		sh(`git add src/main.ts bun.lock${schemaFile} && git commit -qm bad`);
 		sh(`git remote add origin ${origin} && git push -q origin main`);
 		writeFileSync(join(repo, "scratch.txt"), "untracked\n");
 		writeFileSync(join(home, "head.last-good"), `${good}\n`, { mode: 0o600 });
@@ -1811,6 +1904,10 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 				return over.installRc === undefined || over.installRc === 0
 					? { code: 0, stdout: "", stderr: "" }
 					: { code: over.installRc, stdout: "", stderr: Array.from({ length: 30 }, (_, i) => `err ${i}`).join("\n") };
+			}
+			if (cmd[0] === "systemctl" && cmd[2] === "stop") {
+				world.commands.push(cmd);
+				return { code: 0, stdout: "", stderr: "" };
 			}
 			return fake.run(cmd, opts);
 		};
@@ -2104,6 +2201,140 @@ describe("runApply code rollback in a real git repository (AC-2..AC-5)", () => {
 		expect(existsSync(join(home, "autoland.hold"))).toBe(false);
 		expect(readAutoLandHold(home)).toBeUndefined();
 	});
+
+	/** A minimal ledger file stamped at `version` (`PRAGMA user_version`); the migrated ledger in the U1 story. */
+	function writeLedger(path: string, version: number): void {
+		const db = new Database(path);
+		db.run(`PRAGMA user_version = ${version}`);
+		db.close();
+	}
+
+	/** The U1 scene: a schema-bumping release (12→13) whose daemon fails post-start, the ledger already migrated. */
+	function u1Scene(ledgerVersion = 13): { r: Repo; backupFile: string } {
+		const r = initRepo({ schemaVersions: { good: 12, bad: 13 } });
+		writeLedger(join(home, "jabbu.db"), ledgerVersion);
+		const backupFile = join(home, "backups", "jabbu-20261030-050000.db");
+		mkdirSync(join(home, "backups"), { recursive: true });
+		writeLedger(backupFile, 12);
+		return { r, backupFile };
+	}
+
+	/** The backup dep returning the scene's pre-apply snapshot. */
+	function backupDep(world: World, backupFile: string): Partial<ApplyDeps> {
+		return {
+			backup: () => {
+				world.backups += 1;
+				return { file: backupFile } as BackupResult;
+			},
+		};
+	}
+
+	// Real git spawns under a loaded host: the rollback flow alone passed bun's 5 s default (full suite,
+	// 2026-11-27). A bound, not a wait: a hung rollback still fails the test.
+	test("U1: a code rollback restores the pre-apply snapshot when the ledger is newer than the rolled-back code", async () => {
+		const { r, backupFile } = u1Scene();
+		const world = failingWorld();
+		const restores: string[] = [];
+		const { deps } = repoDeps(world, {
+			...backupDep(world, backupFile),
+			restoreBackup: async (file) => {
+				restores.push(file);
+				copyFileSync(file, join(home, "jabbu.db"));
+				return { ok: true, detail: "db restored (test stub)" };
+			},
+		});
+		const { exitCode, receipt } = await runApply(base, deps);
+		expect(exitCode).toBe(1);
+		expect(receipt.status).toBe("failed");
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", true],
+			["ready", false],
+			["rollback", false],
+			["code_rollback", true],
+		]);
+		expect(restores).toEqual([backupFile]);
+		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toEqual([
+			["systemctl", "--user", "stop", "jabbu"],
+		]);
+		expect(restartCommands(world)).toHaveLength(3);
+		// The stop (and restore) happen before the code rollback's restart.
+		const seen = world.commands.map((c) => c.join(" ")).join("\n");
+		expect(seen.indexOf("systemctl --user stop jabbu")).toBeLessThan(
+			seen.lastIndexOf("systemctl --user restart jabbu"),
+		);
+		const ledger = new Database(join(home, "jabbu.db"), { readonly: true });
+		expect(ledger.query("PRAGMA user_version").get()).toMatchObject({ user_version: 12 });
+		ledger.close();
+		expect(codeStep(receipt)?.detail).toContain("ledger schema v13 > rolled-back code v12");
+		expect(codeStep(receipt)?.detail).toContain(`db restored from ${backupFile}`);
+		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
+	}, 30_000);
+
+	test("U1: without a restore path the code rollback fails fast and names jabbu-pocket restore", async () => {
+		const { r, backupFile } = u1Scene();
+		const world = failingWorld();
+		const { deps } = repoDeps(world, backupDep(world, backupFile));
+		const report: ApplyOptions = {
+			...base,
+			reportOrigin: "discord/ch/111111111111111111",
+			reportThread: "700000000000000001",
+		};
+		const { exitCode, receipt } = await runApply(report, deps);
+		expect(exitCode).toBe(1);
+		expect(receipt.steps.map((s) => [s.name, s.ok])).toEqual([
+			["preflight", true],
+			["backup", true],
+			["drain", true],
+			["restart", true],
+			["ready", false],
+			["rollback", false],
+			["code_rollback", false],
+		]);
+		expect(restartCommands(world)).toHaveLength(2); // no restart onto code that cannot open the ledger
+		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toHaveLength(0);
+		expect(codeStep(receipt)?.detail).toContain("ledger schema v13 > rolled-back code v12");
+		expect(codeStep(receipt)?.detail).toContain(`jabbu-pocket restore ${backupFile}`);
+		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
+		const inject = world.injects[0] as { text: string };
+		expect(inject.text).toContain(`jabbu-pocket restore ${backupFile}`);
+	}, 30_000);
+
+	test("U1: a ledger the rolled-back code can open rolls back without a restore", async () => {
+		const { r } = u1Scene(12);
+		const world = failingWorld();
+		let restores = 0;
+		const { deps } = repoDeps(world, {
+			restoreBackup: async () => {
+				restores += 1;
+				return { ok: true, detail: "db restored (test stub)" };
+			},
+		});
+		const { exitCode, receipt } = await runApply(base, deps);
+		expect(exitCode).toBe(1);
+		expect(codeStep(receipt)?.ok).toBe(true);
+		expect(restores).toBe(0);
+		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toHaveLength(0);
+		expect(codeStep(receipt)?.detail ?? "").not.toContain("db restore");
+		expect(sh("git rev-parse HEAD^{tree}")).toBe(sh(`git rev-parse ${r.good}^{tree}`));
+	}, 30_000);
+
+	test("U1: a failed db restore fails the code rollback and names jabbu-pocket restore", async () => {
+		const { backupFile } = u1Scene();
+		const world = failingWorld();
+		const { deps } = repoDeps(world, {
+			...backupDep(world, backupFile),
+			restoreBackup: async () => ({ ok: false, detail: "restore_failed: bad_source" }),
+		});
+		const { receipt } = await runApply(base, deps);
+		expect(codeStep(receipt)?.ok).toBe(false);
+		expect(codeStep(receipt)?.detail).toContain("db restore failed: restore_failed: bad_source");
+		expect(codeStep(receipt)?.detail).toContain(`jabbu-pocket restore ${backupFile}`);
+		expect(restartCommands(world)).toHaveLength(2);
+		expect(world.commands.filter((c) => c[0] === "systemctl" && c[2] === "stop")).toHaveLength(1);
+	}, 30_000);
 
 	describe("apply.codeRollback detach and off (apply-rollback-mode)", () => {
 		const detach: ApplyOptions = { ...base, codeRollback: "detach" };

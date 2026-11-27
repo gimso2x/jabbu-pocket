@@ -6,7 +6,7 @@ import {
 	MAX_PAGES,
 	SingleFlightBackfill,
 } from "../channel/backfill";
-import { errorText } from "../channel/text";
+import { errorFields, errorText } from "../channel/text";
 import type { IngestOutcome } from "../channel/types";
 import type { Logger } from "../log";
 import { redact } from "../redact";
@@ -117,7 +117,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 	}
 
 	protected failed(err: unknown): void {
-		this.#deps.log.error("discord_backfill_failed", { error: redact(errorText(err)) });
+		this.#deps.log.error("discord_backfill_failed", { ...errorFields(err) });
 	}
 
 	protected async pass(): Promise<void> {
@@ -274,7 +274,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 						return done.scanned;
 					}
 					cursors.deleteCursor(attemptKey);
-					log.error("backfill_dead_letter", { target: key, id: message.id, error: redact(errorText(err)) });
+					log.error("backfill_dead_letter", { target: key, id: message.id, ...errorFields(err) });
 				}
 				watermark = laterId(watermark, watermarkId);
 			}

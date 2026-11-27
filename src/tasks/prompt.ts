@@ -51,8 +51,8 @@ export function buildTaskPrompt(input: TaskPromptInput): string {
 		"7. 컨텍스트 예산: 단일 세션 컨텍스트가 200k 토큰을 넘기 전에 단계를 3~5개 안쪽으로 마무리한다(300k 초과 금지). 작업이 커지면 남은 단계를 후속 작업으로 분할할 수 있게 정리한다.",
 		"8. 전체 테스트는 `bun run test`로 한다(호스트에서 한 번에 하나씩 줄을 선다). 수정 중에는 고친 파일의 테스트만 돌린다.",
 		"9. 조사 전용 요청이면 찾은 것과 근거를 보고하고, 하지 않은 변경·돌리지 않은 테스트를 지어내지 않는다. 확실하지 않은 것은 이유와 함께 모른다고 적는다.",
+		"10. 커밋 메시지는 저장소 규칙(AGENTS.md·commit-msg 훅)을 따른다.",
 	].join("\n");
-	const instruction = input.instruction?.trim();
-	const handoff = input.handoff === undefined ? [] : [input.handoff];
-	return [header, ...handoff, ...(instruction ? [instruction] : [])].join("\n\n---\n");
+	const parts = [input.handoff, input.instruction?.trim()].filter((part): part is string => !!part);
+	return [header, ...parts].join("\n\n---\n");
 }

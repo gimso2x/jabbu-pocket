@@ -57,30 +57,34 @@ function writeExecScript(dir: string, name: string, body: string): string {
 }
 
 describe("qa-ad #5 & #6: export failed count and resilient stale cleanup", () => {
-	test.skipIf(isRoot)("#5: read-only export directory reports written=0 and failed=N in API and CLI", async () => {
-		const h = home("qa-ad-5-");
-		const ledger = ledgerOf(h);
-		const ctx = ctxOf(h);
-		for (const name of ["alpha", "beta", "gamma"]) {
-			ledger.addMonitor(
-				parseMonitorSpec({ name, trigger: { kind: "cron", schedule: "30 9 * * *" }, instruction: "check" }, ctx),
-			);
-		}
-		const dir = tempDir("qa-ad-5-ro-");
-		chmodSync(dir, 0o555);
-		cleanups.push(() => chmodSync(dir, 0o755));
+	test.skipIf(isRoot)(
+		"#5: read-only export directory reports written=0 and failed=N in API and CLI",
+		async () => {
+			const h = home("qa-ad-5-");
+			const ledger = ledgerOf(h);
+			const ctx = ctxOf(h);
+			for (const name of ["alpha", "beta", "gamma"]) {
+				ledger.addMonitor(
+					parseMonitorSpec({ name, trigger: { kind: "cron", schedule: "30 9 * * *" }, instruction: "check" }, ctx),
+				);
+			}
+			const dir = tempDir("qa-ad-5-ro-");
+			chmodSync(dir, 0o555);
+			cleanups.push(() => chmodSync(dir, 0o755));
 
-		const result = exportMonitors(ledger, dir, ctx);
-		expect(result.written).toBe(0);
-		expect(result.failed).toBe(3);
-		expect(result.removed).toBe(0);
-		expect(result.warnings.filter((w) => w.includes("not written"))).toHaveLength(3);
+			const result = exportMonitors(ledger, dir, ctx);
+			expect(result.written).toBe(0);
+			expect(result.failed).toBe(3);
+			expect(result.removed).toBe(0);
+			expect(result.warnings.filter((w) => w.includes("not written"))).toHaveLength(3);
 
-		const cli = await runCliCapture(h.dir, ["monitors", "export", "--dir", dir]);
-		expect(cli.code).toBe(0);
-		expect(cli.stdout).toBe("exported=0 removed=0 failed=3\n");
-		expect(cli.stderr).toContain("monitors export: warning:");
-	});
+			const cli = await runCliCapture(h.dir, ["monitors", "export", "--dir", dir]);
+			expect(cli.code).toBe(0);
+			expect(cli.stdout).toBe("exported=0 removed=0 failed=3\n");
+			expect(cli.stderr).toContain("monitors export: warning:");
+		},
+		30_000,
+	);
 
 	test.skipIf(isRoot /* root ignores permission bits, so the 0o400 file can be written (qa-ad #5) */)(
 		"#5: partial write failure counts written vs failed and keeps failed target out of stale deletion",

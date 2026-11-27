@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { errorFields } from "../src/channel/text";
 import { createLogger } from "../src/log";
 import { createAggregatingLogger, startServiceAlive } from "../src/ops/log-hygiene";
 import { openLogSink } from "../src/ops/logfile";
@@ -83,6 +84,44 @@ describe("logger", () => {
 		} finally {
 			clearSecretIndex();
 		}
+	});
+
+	test("errorFields keeps the message and the first 5 stack frames, skipping the message line", () => {
+		const err = new Error("boom");
+		err.stack = [
+			"Error: boom",
+			"at alpha (/a.ts:1:1)",
+			"at beta (/b.ts:2:2)",
+			"at gamma (/c.ts:3:3)",
+			"at delta (/d.ts:4:4)",
+			"at epsilon (/e.ts:5:5)",
+			"at zeta (/f.ts:6:6)",
+			"at eta (/g.ts:7:7)",
+		].join("\n");
+		expect(errorFields(err)).toEqual({
+			error: "boom",
+			stack:
+				"at alpha (/a.ts:1:1)\nat beta (/b.ts:2:2)\nat gamma (/c.ts:3:3)\nat delta (/d.ts:4:4)\nat epsilon (/e.ts:5:5)",
+		});
+	});
+
+	test("errorFields without frames or without an Error keeps the message only", () => {
+		const bare = new Error("bare");
+		bare.stack = "Error: bare";
+		expect(errorFields(bare)).toEqual({ error: "bare" });
+		expect(errorFields("timeout")).toEqual({ error: "timeout" });
+		expect(errorFields(undefined)).toEqual({ error: "undefined" });
+	});
+
+	test("an error log line carries the stack on one redacted line", () => {
+		const { lines, log } = capture();
+		const err = new Error("boom");
+		err.stack = "Error: boom\nat alpha (/a.ts:1:1)\nat beta (xoxb-TEST-0)";
+		log.error("sweep_failed", { ...errorFields(err) });
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).not.toContain("\n");
+		expect(lines[0]).toContain("error=boom");
+		expect(lines[0]).toContain('stack="at alpha (/a.ts:1:1)\\nat beta ([REDACTED])"');
 	});
 
 	test("line byte budget (incl. newline) is applied after redaction", () => {
