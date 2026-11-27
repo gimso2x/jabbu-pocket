@@ -258,6 +258,51 @@ describe("rate limits and failures", () => {
 		expect(answers()[1]?.messageReference).toEqual({ messageId: first?.id ?? "" });
 		expect(row(id)?.state).toBe("confirmed");
 	});
+
+	test("a restart resume after a 5xx posts exactly the missing tail, footer or not (round 14 F1)", async () => {
+		// An unbroken paragraph: the cut is a hard cut at the chunk limit, so any limit change moves the boundary.
+		// The first send carried the status footer; the restarted adapter has no status entry, so the resume has
+		// none — with a per-render limit the resumed part would start at the wrong offset and lose (or repeat) a slice.
+		await ownerDm();
+		const body = "가".repeat(4000);
+		const id = deliver(`${DM}:${QUESTION}`, body);
+		transport.createFailures.set(4, new DiscordCallError("ambiguous", "discord_http_500", 500));
+		await adapter.pumpDeliveries();
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 2 });
+		expect(answers()).toHaveLength(2);
+
+		const restarted = new DiscordAdapter({
+			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
+			core,
+			deliveries: source(),
+			ownerUserId: OWNER,
+			clock: { now: () => now },
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+		});
+		await restarted.start();
+		store.resolveAmbiguous(id, "resend");
+		expect(await restarted.pumpDeliveries()).toBe(1);
+		expect(answers()).toHaveLength(3);
+		expect(
+			answers()
+				.map((p) => p.content ?? "")
+				.join(""),
+		).toBe(body);
+		expect(row(id)?.state).toBe("confirmed");
+		await restarted.stop();
+	});
+
+	test("a resume with sentParts past every re-rendered part is held, never confirmed (round 14 F1)", async () => {
+		const id = deliver(`${CH}:-`, longBody(2500), "monitor/x");
+		store.claimDue();
+		store.markAmbiguous(id, "socket hang up", 5);
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 5 });
+		store.resolveAmbiguous(id, "resend");
+		await adapter.pumpDeliveries();
+		expect(answers()).toHaveLength(0);
+		expect(failed).toEqual([{ id, outcome: "ambiguous" }]);
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 2 });
+	});
 });
 
 describe("delivery nonces", () => {
