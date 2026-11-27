@@ -693,9 +693,8 @@ export class OriginMailbox {
 		if (!flushes.includes(event.type)) return;
 		const pending = turn.pendingAnswer;
 		turn.pendingAnswer = undefined;
-		if (pending !== undefined && this.#recordInterim(turn, pending)) {
+		if (pending !== undefined && this.#recordInterim(turn, pending))
 			turn.lastInterimDeliveredAt = this.#deps.clock.now();
-		}
 		if (event.type !== "message_end") return;
 		const interim = interimOf(event.message);
 		if (interim?.kind === "answer") turn.pendingAnswer = interim.text;
@@ -806,11 +805,8 @@ export class OriginMailbox {
 			return;
 		}
 		const command = parseCommand(record.text);
-		if (command?.kind === "restart") {
-			// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
-			await this.#runCommand(row, command);
-			return;
-		}
+		// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
+		if (command?.kind === "restart") return this.#runCommand(row, command);
 		if (this.#deps.isDraining?.()) {
 			log.info("drain_deferred", { origin: originKey, id: record.platformMessageId });
 			return;
