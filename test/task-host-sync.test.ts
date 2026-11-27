@@ -78,6 +78,31 @@ describe("removeRemoteWorktree", () => {
 		expect(calls).toHaveLength(1);
 	});
 
+	test("원격에 git이 없으면(command not found) 이미 없음이 아니라 실패다", async () => {
+		const { run, calls } = fake(() => ({ code: 127, stdout: "bash: line 1: git: command not found" }));
+		const left = await removeRemoteWorktree(run, "wsl", REMOVE);
+		expect(left).toContain("git ls-files 실패");
+		expect(left).toContain("command not found");
+		expect(calls).toHaveLength(1);
+	});
+
+	test("ls-files가 worktree가 남은 채 'No such file'로 실패해도 무시 파일을 못 본 채 지우지 않는다", async () => {
+		const { run, calls } = fake((words) =>
+			has(words, "ls-files")
+				? { code: 128, stdout: "fatal: index file open failed: No such file or directory" }
+				: undefined,
+		);
+		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toContain("git ls-files 실패");
+		expect(calls).toHaveLength(1);
+	});
+
+	test("git이 없어 worktree·branch 명령이 127이면 지웠다고 하지 않는다", async () => {
+		const { run } = fake((words) =>
+			has(words, "ls-files") ? undefined : { code: 127, stdout: "bash: line 1: git: command not found" },
+		);
+		expect(await removeRemoteWorktree(run, "wsl", REMOVE)).toContain("worktree 제거 실패");
+	});
+
 	test("실패한 첫 줄을 돌려주되 두 번째 명령도 돌린다", async () => {
 		const { run, calls } = fake((words) =>
 			has(words, "ls-files")

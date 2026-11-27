@@ -6,6 +6,7 @@
 import { LANE_MODEL_TIERS, type LaneModelTier } from "../model-tiers";
 import { redact } from "../redact";
 import { localIso } from "../time";
+import { parseBranchArg } from "./branch";
 import { assertCheckPlacement, checkSignalsOf, parseChecks, type Signal, SignalSyntaxError } from "./signals";
 import { TaskSpecError } from "./spec-error";
 
@@ -40,6 +41,8 @@ export interface NewTaskSpec {
 	tierReason?: string;
 	/** The judge's confidence in `tier`, 0..1 (new registrations only). */
 	tierConfidence?: number;
+	/** The worker's branch name (a repository's `branchRules` demand it); absent = `task/<TASKID>`. */
+	branch?: string;
 }
 
 export type TaskSpecInput =
@@ -137,6 +140,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 	const tierReason = record.tierReason;
 	if (tierReason !== undefined && typeof tierReason !== "string")
 		throw new TaskSpecError("taskSpec.tierReason은 문자열이어야 합니다");
+	const branch = parseBranchArg(record.branch);
 	const tierConfidence = parseTierConfidence(record.tierConfidence);
 	if (tierConfidence === null) throw new TaskSpecError("taskSpec.tierConfidence는 0 이상 1 이하의 숫자여야 합니다");
 	// Masked here once: the ledger row, the four documents, the accepted card and the logs all take these values.
@@ -164,6 +168,7 @@ export function parseTaskSpecInput(raw: unknown): TaskSpecInput {
 			...(tier === undefined ? {} : { tier: tier as LaneModelTier }),
 			...(tierReason === undefined || oneLine(tierReason) === "" ? {} : { tierReason: redact(oneLine(tierReason)) }),
 			...(tierConfidence === undefined ? {} : { tierConfidence }),
+			...(branch === undefined ? {} : { branch }),
 		},
 	};
 }
@@ -246,12 +251,6 @@ export const worktreePathOf = (repo: string, taskId: string): string => `${repo}
 export const taskDocsCommitTitle = (taskId: string): string => `docs(task): ${taskId} 4문서`;
 export const docsDirUnder = (root: string, taskId: string): string => `${root}/docs/tasks/${taskId}`;
 export const docsDirOf = (row: { docsDir: string }): string => row.docsDir;
-
-/** Epoch ms of an ISO timestamp, `undefined` when it does not parse. */
-export function parseIsoMs(text: string): number | undefined {
-	const ms = Date.parse(text);
-	return Number.isNaN(ms) ? undefined : ms;
-}
 
 // ---- renderers ----
 

@@ -33,7 +33,7 @@
 				},
 				"taskSpec": {
 					"type": "object",
-					"description": "여러 단계·하루 넘는 작업의 [TASK] 상태 문서 등록. 신규: title·risk·goal·acceptance·repo 필수(+scope·exclusions·falsePasses·background·tier·tierReason·tierConfidence·worker). falsePasses는 수락기준을 채워도 실패로 볼 통과 방식(테스트 빼기·실경로 대신 목업 등)으로, spec.md '# 이렇게 통과하면 실패'에 들어가 워커·리뷰·QA가 읽는다. 재개: {id}(기본: 처음 등록한 모델로 뜬다). tier(·tierReason)나 worker를 함께 주면 그 모델로 바꿔 재개하고 인계 브리프(마지막 PROGRESS·이전 워커 화면 80줄·spec 경로)를 새 워커 첫 입력에 넣는다. host가 있으면 그 호스트에, 없으면 로컬에 워크트리를 만든다",
+					"description": "여러 단계·하루 넘는 작업의 [TASK] 상태 문서 등록. 신규: title·risk·goal·acceptance·repo 필수(+scope·exclusions·falsePasses·background·tier·tierReason·tierConfidence·worker·branch). falsePasses는 수락기준을 채워도 실패로 볼 통과 방식(테스트 빼기·실경로 대신 목업 등)으로, spec.md '# 이렇게 통과하면 실패'에 들어가 워커·리뷰·QA가 읽는다. 재개: {id}(기본: 처음 등록한 모델로 뜬다). tier(·tierReason)나 worker를 함께 주면 그 모델로 바꿔 재개하고 인계 브리프(마지막 PROGRESS·이전 워커 화면 80줄·spec 경로)를 새 워커 첫 입력에 넣는다. host가 있으면 그 호스트에, 없으면 로컬에 워크트리를 만든다",
 					"properties": {
 						"id": {
 							"type": "string",
@@ -77,6 +77,10 @@
 						"repo": {
 							"type": "string",
 							"description": "대상 호스트의 git 저장소 절대경로"
+						},
+						"branch": {
+							"type": "string",
+							"description": "워커 브랜치 이름(신규 등록에서만). 생략하면 task/<TASKID>. 그 호스트 설정의 branchRules가 이 저장소에 맞는 규칙이면 필수이고 규칙의 pattern에 맞아야 한다(거부 메시지에 형식 예가 나온다)"
 						},
 						"background": {
 							"type": "string"

@@ -23,6 +23,7 @@ import {
 	type ConfigWarning,
 	checkLaneLandRemotes,
 	checkLaneModels,
+	type DispatchHostConfig,
 	dispatchHostsOf,
 	gateTimeoutMs,
 	invalid,
@@ -41,7 +42,7 @@ import type { LaneReviewConfident } from "./tasks/auto-land-policy";
 import { TASK_RISKS, type TaskRisk } from "./tasks/docs";
 import { hostTimezone, isTimezone } from "./time";
 
-export { ConfigError } from "./config-validate";
+export { type BranchRule, ConfigError, type DispatchHostConfig } from "./config-validate";
 export { WEB_OWNER_USER_ID, type WebChannelConfig };
 /** Which child process powers a conversation: omp's RPC child (default) or the Antigravity CLI (`agy`). */
 export type AgentKind = "omp" | "agy";
@@ -53,13 +54,13 @@ export interface DiscordChannelConfig {
 	/** Absolute, resolved against the config directory; one line, mode 0600. */
 	botTokenFile: string;
 	applicationId: string;
-	/** Servers whose messages are taken; absent: every server the bot is in. DMs are not affected. */
+	/** Servers whose messages are taken (a reload takes a change live); absent: every server the bot is in. DMs are not affected. */
 	guildIds?: string[];
-	/** Channel ids where the owner's root messages are answered without a mention. */
+	/** Channel ids where the owner's root messages are answered without a mention (a reload takes a change live). */
 	mentionFreeChannels?: string[];
 	/** Server channels where the owner's root messages get a reply in the channel body (no thread) unless a thread is asked for. */
 	inlineReplyChannels?: string[];
-	/** In a server channel only a mention addresses the bot. Default false. */
+	/** In a server channel only a mention addresses the bot. Default false (a reload takes a change live). */
 	requireMention?: boolean;
 	/** Server text channel where lanes asked for from the Discord DM open (a DM has no threads); absent: no DM lanes. */
 	laneChannelId?: string;
@@ -82,7 +83,7 @@ export interface DiscordChannelConfig {
 	displayName?: string;
 	/**
 	 * Peer bots (other jabbu instances) whose server channel messages that mention this bot are taken as review
-	 * requests. Changing it needs a restart (`channels` is a restart key).
+	 * requests. Changing it needs a restart (`channels` is a restart key apart from `guildIds`·`mentionFreeChannels`·`requireMention`).
 	 */
 	peerBots?: Array<{ userId: string; name: string }>;
 }
@@ -175,15 +176,6 @@ const DEFAULT_CODE_ROLLBACK: CodeRollbackMode = "detach";
 /** The code rollback mode of a home's config (`DEFAULT_CODE_ROLLBACK` without config or setting). */
 export function codeRollbackMode(config: Pick<JabbuConfig, "apply"> | undefined): CodeRollbackMode {
 	return config?.apply?.codeRollback ?? DEFAULT_CODE_ROLLBACK;
-}
-
-/** One `dispatchHosts` entry: ssh target, remote work directory, remote herdr binary, worker omp extra arguments. */
-export interface DispatchHostConfig {
-	ssh: string;
-	workDir?: string;
-	herdrBin?: string;
-	ompArgs?: string[];
-	recordsDir?: string;
 }
 
 export type { AgyAccountsConfig, WorkerAgyConfig };
