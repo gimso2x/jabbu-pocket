@@ -472,10 +472,10 @@ test("AC-9 (T-20261115-03): a reloaded lanes.models.middle reaches the next [TAS
 				{ task: "구현", taskSpec: { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo } },
 				{ signal: new AbortController().signal },
 			);
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 		patchConfig({ ...live, lanes: { models: { middle: "b/two" } } });
 		expect(running.reloadConfig("ipc")).toMatchObject({ ok: true, changed: ["lanes"] });
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}
@@ -524,10 +524,10 @@ test("AC-4 (T-20261127-06): a reloaded idStart numbers the next [TASK] through t
 				{ task: "구현", taskSpec: { title: "t", risk: "L2", goal: "g", acceptance: ["a"], repo } },
 				{ signal: new AbortController().signal },
 			);
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 		patchConfig({ ...live, idStart: 101 });
 		expect(running.reloadConfig("ipc")).toMatchObject({ ok: true, changed: ["idStart"] });
-		expect(await register1()).toStartWith("시작 실패: git worktree add failed");
+		expect(await register1()).toStartWith("시작 실패: 기준 ref를 찾을 수 없습니다: HEAD");
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
 	}

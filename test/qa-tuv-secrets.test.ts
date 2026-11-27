@@ -287,7 +287,7 @@ describe("결함 5: 자른 뒤 가리던 오류·증거 문구", () => {
 				),
 				// 233: worktree add (200)
 				await errorOf(() =>
-					local(async () => failing(straddle(200, token))).createWorktree({
+					local(gitRunner("worktree", failing(straddle(200, token)))).createWorktree({
 						repo: "/w/repo",
 						worktree: task.worktree,
 						branch: task.branch,

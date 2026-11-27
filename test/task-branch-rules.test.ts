@@ -101,7 +101,7 @@ describe("AC-5: one branch safety check for worktree, land and cleanup", () => {
 		const calls: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
 			calls.push(cmd);
-			return { code: 0, stdout: "", timedOut: false };
+			return { code: 0, stdout: cmd.includes("'rev-parse'") ? `${"a".repeat(40)}\n` : "", timedOut: false };
 		};
 		return { calls, run };
 	};
@@ -112,16 +112,17 @@ describe("AC-5: one branch safety check for worktree, land and cleanup", () => {
 		const git = { repo: "/home/dev/repo/app", worktree: "/home/dev/repo/app-t-1", branch: HANGUL };
 		expect(await ops.createWorktree(git)).toEqual({ ok: true, value: null });
 		await ops.removeWorktree(git);
-		expect(calls[0]?.slice(7, -1)).toEqual([
+		expect(calls[1]?.slice(7, -1)).toEqual([
 			"'git'",
 			"'-C'",
 			"'/home/dev/repo/app'",
 			"'worktree'",
 			"'add'",
+			"'--no-track'",
 			"'-b'",
 			`'${HANGUL}'`,
 			"'/home/dev/repo/app-t-1'",
-			"'HEAD'",
+			`'${"a".repeat(40)}'`,
 		]);
 		expect(calls.some((c) => c.includes(`'${HANGUL}'`) && c.includes("'-D'"))).toBe(true);
 		// Every remote word is quoted: nothing but the trailing `2>&1` reaches the remote shell bare.
