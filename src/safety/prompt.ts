@@ -202,6 +202,8 @@ export interface FloorsSurface {
 	timezone?: { name: string; offset: string };
 	/** The peer bots of the conversation's platform, each with its mention token there (`port.mentionUser`). */
 	peers?: ReadonlyArray<{ name: string; mention: string }>;
+	/** The first-run onboarding line for the stored state (daemon `floorsSurfaceFor`); absent when the conversation is not in onboarding. */
+	onboarding?: string;
 }
 
 /** Floor 6: when to raise an owner approval card. */
@@ -297,7 +299,7 @@ function floorsParts(lines: FloorsLine[]): { static: string; dynamic: string; na
 }
 
 /** Floors lines that can change between two spawns of the same origin without a code change. */
-export type FloorsDynamicLine = "noLaneChannel" | "peerTouched" | "peers" | "resume";
+export type FloorsDynamicLine = "noLaneChannel" | "onboarding" | "peerTouched" | "peers" | "resume";
 
 /** One floors line; a runtime-dependent one carries its name so the spawn log can tell it apart. */
 type FloorsLine = string | { dynamic: FloorsDynamicLine; text: string };
@@ -354,6 +356,7 @@ function floorsLines(
 		...(persona && platform === "discord" ? [monitorLine(surface.timezone)] : []),
 		...(surface.noLaneChannel === true ? [{ dynamic: "noLaneChannel" as const, text: NO_LANE_CHANNEL_LINE }] : []),
 		...(peerTouched ? [{ dynamic: "peerTouched" as const, text: peerTouchedToolsLine(fileTool) }] : []),
+		...(surface.onboarding === undefined ? [] : [{ dynamic: "onboarding" as const, text: surface.onboarding }]),
 	];
 	return [
 		"# jabbu 운영 안내 / jabbu operating floors",

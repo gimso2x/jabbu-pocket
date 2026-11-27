@@ -5,7 +5,8 @@ import { existsSync } from "node:fs";
 
 const [path, stopFile] = process.argv.slice(2) as [string, string];
 const db = new Database(path, { strict: true });
-db.run("PRAGMA busy_timeout = 5000");
+// High busy_timeout so slow virtual-disk fsyncs (WSL2 VHDX under --parallel=3) wait instead of dying with SQLITE_BUSY.
+db.run("PRAGMA busy_timeout = 30000");
 db.run("CREATE TABLE IF NOT EXISTS cross_process_noise (x INTEGER)");
 const insert = db.query("INSERT INTO cross_process_noise VALUES (?)");
 console.log("ready");
@@ -15,4 +16,5 @@ while (!existsSync(stopFile)) {
 	// sleep-ok: cross-process writer fixture pauses 1ms per burst so the other process can acquire the lock
 	if (n % 4 === 0) Bun.sleepSync(1);
 }
+db.close();
 console.log(`wrote ${n}`);
