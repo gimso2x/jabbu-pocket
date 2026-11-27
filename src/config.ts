@@ -658,10 +658,12 @@ function requireGitRepo(configPath: string, repo: string, field: string): void {
 		workTree = false;
 	}
 	if (!workTree) invalid(configPath, field);
-	// A repo without a commit never yields a HEAD (qa-l #19): require HEAD to resolve.
-	if (spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], { stdio: "ignore" }).status !== 0) {
+	// A repo without a commit never yields a HEAD (qa-l #19): require HEAD to resolve; the 10 s bound stops a wedged git hanging boot before any watchdog exists.
+	if (
+		spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], { stdio: "ignore", timeout: 10_000 })
+			.status !== 0
+	)
 		invalid(configPath, field);
-	}
 }
 
 /**
@@ -1089,9 +1091,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 		if (record.allowedHosts !== undefined && !validAllowedHosts(record.allowedHosts)) {
 			invalid(configPath, "dashboard.allowedHosts");
 		}
-		if (record.usageLimits !== undefined) {
-			dashboardUsageLimits = usageLimitsOf(configPath, record.usageLimits);
-		}
+		if (record.usageLimits !== undefined) dashboardUsageLimits = usageLimitsOf(configPath, record.usageLimits);
 		validateDashboardExtras(configPath, record);
 	}
 
