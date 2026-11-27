@@ -139,7 +139,7 @@ describe("query and candidate clean-up", () => {
 			buildRecallBlock({
 				timezone: "Asia/Seoul",
 				text,
-				candidates: candidatesOf("300000000000000001"),
+				candidates: () => candidatesOf("300000000000000001"),
 				freshSession: true,
 				channel: "300000000000000001",
 			}).block,
@@ -148,7 +148,7 @@ describe("query and candidate clean-up", () => {
 			buildRecallBlock({
 				timezone: "Asia/Seoul",
 				text: "아래 자료 요약해서 블록으로 정리",
-				candidates: candidatesOf("300000000000000001"),
+				candidates: () => candidatesOf("300000000000000001"),
 				freshSession: true,
 				channel: "300000000000000001",
 			}).block,
@@ -162,7 +162,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 말한 배포 스크립트 경로 뭐였지",
-			candidates: candidatesOf("300000000000000001"),
+			candidates: () => candidatesOf("300000000000000001"),
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -190,7 +190,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "아까 백업 보관 일수 얘기 뭐였지?",
-			candidates,
+			candidates: () => candidates,
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -208,7 +208,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 말한 배포 스크립트 경로",
-			candidates,
+			candidates: () => candidates,
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -235,7 +235,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 정한 백업 경로 뭐였지",
-			candidates: candidatesOf("300000000000000001"),
+			candidates: () => candidatesOf("300000000000000001"),
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -250,7 +250,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 			buildRecallBlock({
 				timezone: "Asia/Seoul",
 				text: "grafana 대시보드 손봐줘",
-				candidates,
+				candidates: () => candidates,
 				freshSession: false,
 				channel: "300000000000000001",
 			}),
@@ -259,7 +259,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 			buildRecallBlock({
 				timezone: "Asia/Seoul",
 				text: "grafana 새로 깔아줘",
-				candidates,
+				candidates: () => candidates,
 				freshSession: true,
 				channel: "300000000000000001",
 			}).block,
@@ -267,7 +267,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const fresh = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "grafana 대시보드 손봐줘",
-			candidates,
+			candidates: () => candidates,
 			freshSession: true,
 			channel: "300000000000000001",
 		});
@@ -287,7 +287,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 말한 배포 스크립트",
-			candidates: candidatesOf("300000000000000001"),
+			candidates: () => candidatesOf("300000000000000001"),
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -358,7 +358,7 @@ describe("listRecallCandidates + buildRecallBlock", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 올린 report media 파일",
-			candidates: candidatesOf("300000000000000001"),
+			candidates: () => candidatesOf("300000000000000001"),
 			freshSession: false,
 			channel: "300000000000000001",
 		});
@@ -380,12 +380,46 @@ describe("recall threadRef shape (qa50b K-3)", () => {
 		const result = buildRecallBlock({
 			timezone: "Asia/Seoul",
 			text: "저번에 말한 배포 스크립트 경로",
-			candidates,
+			candidates: () => candidates,
 			freshSession: false,
 			channel: "300000000000000001",
 		});
 		const lines = result.block?.split("\n") ?? [];
 		expect(lines).toHaveLength(1 + result.hits);
 		expect(byteLength(result.block ?? "")).toBeLessThanOrEqual(3200);
+	});
+});
+
+describe("buildRecallBlock lazy candidates", () => {
+	test("a turn with no past reference on a resumed session never asks for candidates", () => {
+		let calls = 0;
+		const result = buildRecallBlock({
+			timezone: "Asia/Seoul",
+			text: "grafana 대시보드 손봐줘",
+			candidates: () => {
+				calls += 1;
+				return [];
+			},
+			freshSession: false,
+			channel: "300000000000000001",
+		});
+		expect(result).toEqual({ block: null, trigger: null, hits: 0, items: [] });
+		expect(calls).toBe(0);
+	});
+
+	test("a past reference still asks for candidates", () => {
+		let calls = 0;
+		const result = buildRecallBlock({
+			timezone: "Asia/Seoul",
+			text: "저번에 말한 배포 스크립트 경로",
+			candidates: () => {
+				calls += 1;
+				return [];
+			},
+			freshSession: false,
+			channel: "300000000000000001",
+		});
+		expect(calls).toBe(1);
+		expect(result.trigger).toBe("past");
 	});
 });
