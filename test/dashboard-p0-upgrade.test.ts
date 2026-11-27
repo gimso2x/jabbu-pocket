@@ -16,7 +16,7 @@ import {
 import { SCRIPT } from "../src/dashboard/html";
 import { contextBar, renderLimitsPop } from "../src/dashboard/load-view";
 import { renderDashboardMain } from "../src/dashboard/main-view";
-import { fmtContextRatio, renderQuotaGrid } from "../src/dashboard/p0-renderers";
+import { fmtContextRatio, renderActiveCards, renderQuotaGrid, renderQuotaSysCard } from "../src/dashboard/p0-renderers";
 import type { DashboardSnapshot, Section } from "../src/dashboard/snapshot";
 import type { ThreadInfo } from "../src/dashboard/turn-board";
 import type { UsageLimitsInfo } from "../src/dashboard/usage-limits";
@@ -150,6 +150,26 @@ describe("host metrics collection and parsers", () => {
 			headless: 2,
 			playwright: 1,
 			agentBrowser: 1,
+		});
+	});
+
+	test("parseBrowserPs ignores non-browser commands mentioning browser keywords", () => {
+		const psOut = [
+			" 12000 grep            grep --color=auto playwright",
+			" 18000 rg              rg chromium src/",
+			" 95000 bun             bun test test/chrome-screenshot.test.ts",
+			" 40000 vim             vim playwright.config.ts",
+			"102400 node            node /usr/lib/node_modules/playwright-core/cli.js run-driver",
+			"204800 chrome          /opt/chrome --type=gpu-process",
+		].join("\n");
+		const br = parseBrowserPs(psOut);
+		expect(br).toEqual({
+			total: 2,
+			rssMb: 300,
+			chrome: 1,
+			headless: 0,
+			playwright: 1,
+			agentBrowser: 0,
 		});
 	});
 
@@ -594,5 +614,98 @@ describe("P0 dashboard main-view rendering and SSR/client parity", () => {
 		for (const view of ["inbox", "turns", "system"]) {
 			expect(client(snap, undefined, NOW, { view })).toBe(renderDashboardMain(snap, undefined, NOW, { view }));
 		}
+	});
+
+	test("renderQuotaSysCard matches renderQuotaGrid accounts precedence and window filtering", () => {
+		const levelOf = (usage: Section<UsageLimitsInfo>): string => {
+			let captured = "";
+			renderQuotaSysCard(usage, NOW, (_id, _title, level) => {
+				captured = level;
+			});
+			return captured;
+		};
+		expect(
+			levelOf({
+				ok: true,
+				sources: [
+					{
+						name: "Antigravity",
+						ok: true,
+						rows: [{ label: "Stale", window: "5h", windowLabel: "5h", remainingPct: 0 }],
+						accounts: [
+							{
+								name: "acct-a",
+								ok: true,
+								rows: [
+									{ label: "Gemini Models", window: "5h", windowLabel: "5h", remainingPct: 80 },
+									{ label: "Other", window: "other", windowLabel: "other", remainingPct: 0 },
+								],
+							},
+						],
+					},
+				],
+			}),
+		).toBe("ok");
+		expect(
+			levelOf({
+				ok: true,
+				sources: [
+					{
+						name: "Claude",
+						ok: true,
+						rows: [
+							{ label: "Claude 5h", window: "5h", windowLabel: "5h", remainingPct: 85 },
+							{ label: "Claude Extra", window: "other", windowLabel: "other", remainingPct: 0 },
+						],
+					},
+				],
+			}),
+		).toBe("ok");
+		expect(
+			levelOf({
+				ok: true,
+				sources: [
+					{
+						name: "Custom",
+						ok: true,
+						rows: [{ label: "Quota", window: "other", windowLabel: "other", remainingPct: 0 }],
+					},
+				],
+			}),
+		).toBe("bad");
+	});
+
+	test("renderActiveCards clamps context percentages to 0..100 and badges web origins", () => {
+		const snap = baseSnap({
+			turns: {
+				ok: true,
+				items: [],
+				threads: [
+					mkThread({
+						originKey: "web/dm/w_abcdefgh",
+						title: "웹 대화 음수 클램프",
+						context: { tokens: 1_000, percent: -12 },
+					}),
+					mkThread({
+						originKey: "web/ch/w_12345678",
+						title: "웹 대화 상한 클램프",
+						context: { tokens: 100_000, percent: 145 },
+					}),
+				],
+			},
+		});
+		const { count, html } = renderActiveCards(
+			snap,
+			() => "방금",
+			() => "1m",
+			(text, tone) => `<span class="badge ${tone}">${text}</span>`,
+		);
+		expect(count).toBe(2);
+		expect(html).toContain('<span class="badge ">웹</span>');
+		expect(html).toContain('aria-label="컨텍스트 0%"');
+		expect(html).toContain('style="width:0%"');
+		expect(html).toContain('aria-label="컨텍스트 100%"');
+		expect(html).toContain('style="width:100%"');
+		expect(html).toContain("active-ctx is-danger");
 	});
 });
