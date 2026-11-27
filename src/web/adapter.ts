@@ -116,6 +116,7 @@ export class WebAdapter implements ChannelAdapter {
 						finishStatus: (threadRef, originKey, outcome, action) =>
 							this.#status.finish(threadRef, originKey, outcome, action),
 						tracks: (threadRef, originKey) => this.#status.tracks(threadRef, originKey),
+						hasHeld: deps.deliveries.hasHeld,
 					}),
 			}),
 		});
