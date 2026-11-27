@@ -508,6 +508,8 @@ describe("LaneManager and startTask integration", () => {
 			},
 			quotaRefusal: (model) =>
 				providerOfModel(model) === "anthropic" ? "프로바이더 쿼터 보류(anthropic: 5시간 96% 사용)" : undefined,
+			// The owner's confirmation for a forced start (the card the dispatch tool asks on).
+			confirmForce: async () => true,
 		};
 		const spec = {
 			title: "쿼터 테스트",
@@ -557,6 +559,20 @@ describe("LaneManager and startTask integration", () => {
 		expect(logFields.filter((entry) => entry.event === "task_start_forced")).toEqual([
 			{ event: "task_start_forced", fields: { repo: "/r/repo", reason: "quota" } },
 		]);
+
+		// No confirmer, no force: the model's claim alone never passes a refusal.
+		const unconfirmed = await startTask(
+			{ ...deps, confirmForce: undefined },
+			{
+				spec,
+				task: "강행",
+				host: null,
+				worker: { tier: "high", tierReason: "L3", model: "anthropic/claude-opus-5-5" },
+				force: true,
+			},
+		);
+		expect(unconfirmed).toContain("시작 거부: 프로바이더 쿼터 보류(anthropic:");
+		expect(ledger.listActive()).toHaveLength(2);
 		db.close();
 	});
 });
