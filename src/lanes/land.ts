@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { type CrashPoint, crashHook } from "../daemon/crash";
 import { type AutoLandPolicy, checkBlockers, type LaneReviewConfident } from "../tasks/auto-land-policy";
 import { TASK_RISKS, type TaskRisk } from "../tasks/docs";
+import { keptIgnoredNote } from "../tasks/host-sync";
 import { hiddenChanges } from "./hidden-changes";
 import { formatConfidence, REVIEW_OVERLAY_YAML } from "./review";
 import { currentRuntime, gateChangedOf, overlayHash, receiptStale } from "./runtime";
@@ -142,13 +143,14 @@ export async function cleanUp(
 		const what = "dirty" in drift ? `미커밋 변경 ${drift.dirty.length}건` : `HEAD ${drift.head.slice(0, 12)}`;
 		return `${what}이 있어 worktree를 지우지 않았습니다: ${worktree} — 확인 뒤 손으로 지우세요`;
 	}
+	const kept = await keptIgnoredNote(git, worktree);
+	if (kept !== undefined) return kept;
 	await hooks.beforeCleanup?.();
 	await deps.removeWorktree({ repo, worktree, branch });
 	const left: string[] = [];
 	if (existsSync(worktree)) left.push(`worktree ${worktree}`);
-	if ((await git(["-C", repo, "rev-parse", "--verify", "-q", `refs/heads/${branch}`])).code === 0) {
+	if ((await git(["-C", repo, "rev-parse", "--verify", "-q", `refs/heads/${branch}`])).code === 0)
 		left.push(`브랜치 ${branch}`);
-	}
 	return left.length === 0 ? undefined : `worktree·브랜치 정리 실패: ${left.join(", ")} — 손으로 지우세요`;
 }
 
@@ -199,9 +201,8 @@ export async function landLane(request: LandRequest, deps: LanderDeps, hooks: La
 	const crash = deps.crash ?? crashHook();
 	const { repo, baseBranch, sha } = request;
 	const baseRef = `refs/heads/${baseBranch}`;
-	if ((await git(["-C", repo, "cat-file", "-e", sha])).code !== 0) {
+	if ((await git(["-C", repo, "cat-file", "-e", sha])).code !== 0)
 		return blocked(`클레임 커밋 ${sha.slice(0, 12)}이 ${repo}에 없습니다`);
-	}
 	const base = await git(["-C", repo, "rev-parse", "--verify", "-q", `${baseRef}^{commit}`]);
 	if (base.code !== 0) return blocked(`기준 브랜치 ${baseBranch}가 ${repo}에 없습니다`);
 	const oldSha = base.stdout.trim();
@@ -265,9 +266,8 @@ export async function landLane(request: LandRequest, deps: LanderDeps, hooks: La
 		hooks.onMerged?.(preSha);
 	}
 	// Nothing is pushed or removed unless the claim is in the base branch now.
-	if ((await git(["-C", repo, "merge-base", "--is-ancestor", sha, baseRef])).code !== 0) {
+	if ((await git(["-C", repo, "merge-base", "--is-ancestor", sha, baseRef])).code !== 0)
 		return blocked(`머지 뒤 ${baseBranch}에 ${sha.slice(0, 12)}이 없습니다`);
-	}
 	// The merge is durable from here (main moved); the push and the cleanup still have to happen.
 	crash("land_after_merge_before_push");
 	const push = request.push ? await pushOnce(git, deps.pushGit ?? gitRunner(PUSH_TIMEOUT_MS), request) : undefined;
