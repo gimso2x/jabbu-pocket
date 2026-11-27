@@ -1329,6 +1329,7 @@ export class Daemon {
 	async #shutdown(): Promise<void> {
 		clearInterval(this.#timer);
 		this.#lanes?.stop();
+		this.#landing.stop();
 		await this.#taskGates?.stop();
 		await this.#checkRunner?.stop();
 		this.#heartbeat?.stop();

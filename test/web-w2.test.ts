@@ -26,7 +26,7 @@ import { redact } from "../src/redact";
 import { ApprovalBroker, type ApprovalStore } from "../src/safety/approval";
 import { openStore } from "../src/store/db";
 import { WebBinding } from "../src/web/binding";
-import { renderWebMessageHtml } from "../src/web/card-html";
+import { renderCardElementHtml, renderWebMessageHtml } from "../src/web/card-html";
 import { WebChannel } from "../src/web/channel";
 import { notifyWebOwnerTurn } from "../src/web/notify";
 import type { WebDashboardOptions } from "../src/web/routes";
@@ -427,6 +427,35 @@ describe("Spec §5 & AC-10: json-render HTML cards/charts and ?view=chat SSR + i
 		expect(html).toContain('data-copy="bun run check"');
 		expect(html).toContain("{not-valid-json");
 		expect(html).toContain("https://example.com/docs");
+
+		const tableHtml = renderCardElementHtml({
+			type: "card",
+			children: [
+				{
+					type: "table",
+					headers: ["A", "B", "C"],
+					rows: [["1", "2", "3"]],
+					align: ["center", "right;background:red" as "left", "right"],
+				},
+			],
+		});
+		expect(tableHtml).toContain('style="text-align:center"');
+		expect(tableHtml).toContain('style="text-align:left"');
+		expect(tableHtml).toContain('style="text-align:right"');
+		expect(tableHtml).not.toContain("background:red");
+
+		const malformedCard = renderWebMessageHtml({
+			role: "assistant",
+			text: "fallback",
+			cardJson: JSON.stringify({
+				kind: "approval",
+				title: "승인",
+				fields: [null, { label: 123, value: "bad" }, { label: "유효", value: "값" }],
+			}),
+			filesJson: null,
+		});
+		expect(malformedCard).toContain("<dt>유효</dt><dd>값</dd>");
+		expect(malformedCard).not.toContain("123");
 	});
 
 	test("?view=chat is served without building a snapshot; a plain page builds one", async () => {
