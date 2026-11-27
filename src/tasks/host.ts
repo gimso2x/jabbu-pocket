@@ -12,6 +12,7 @@ import { redactThenClip } from "../redact";
 import type { CommitCheck } from "./checker";
 import { TASK_PATH_PATTERN, taskDocsCommitTitle } from "./docs";
 import { isFullTestArgv } from "./full-test";
+import { hiddenOnHost } from "./host-hidden";
 
 export type HostResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -70,7 +71,7 @@ export interface TaskHostOps {
 	 * reached.
 	 */
 	runCheck(input: { worktree: string; argv: string[]; timeoutMs: number; signal?: AbortSignal }): Promise<CheckRun>;
-	/** The worktree's HEAD commit and whether `git status --porcelain` is empty; throws when git cannot answer. */
+	/** The worktree's HEAD commit and whether it is clean (status empty, no flag-hidden edit); throws when git cannot answer. */
 	headOf(worktree: string): Promise<{ sha: string; clean: boolean }>;
 }
 
@@ -253,13 +254,8 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 
 		async readFile(path) {
 			assertPath(path);
-			if (sshTarget === undefined) {
-				try {
-					return { ok: true, value: (await readRegularFile(path))?.toString("utf8") };
-				} catch (error) {
-					return fail(error);
-				}
-			}
+			if (sshTarget === undefined)
+				return readRegularFile(path).then((bytes) => ({ ok: true as const, value: bytes?.toString("utf8") }), fail);
 			const result = await run(sshCommand(sshTarget, ["cat", path]), { timeoutMs: IO_TIMEOUT_MS });
 			if (unreachable(result)) return { ok: false, error: `host unreachable: ${unreachableReason(result)}` };
 			if (result.code !== 0) return { ok: true, value: undefined };
@@ -450,7 +446,8 @@ export function createTaskHostOps(options: TaskHostOptions = {}): TaskHostOps & 
 			};
 			const sha = await git("rev-parse", "HEAD");
 			if (!FULL_HASH.test(sha)) throw new Error(`cannot read HEAD of ${worktree}: ${redactThenClip(sha, 80)}`);
-			return { sha, clean: (await git("status", "--porcelain", "--untracked-files=all")) === "" };
+			const status = await git("status", "--porcelain", "--untracked-files=all");
+			return { sha, clean: status === "" && !(await hiddenOnHost(exec, worktree, GIT_TIMEOUT_MS)) };
 		},
 
 		async progressLag({ worktree, taskId, progressFile }) {
