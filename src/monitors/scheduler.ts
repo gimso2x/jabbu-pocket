@@ -56,10 +56,8 @@ export interface TickSummary {
 const FROZEN_SKIP = "frozen";
 
 /**
- * The procedure files of one fire, read from disk now (an edit between fires applies to the next one): one block per
- * file, a `읽기 실패` line for a file that cannot be read (the fire goes on), and a truncation marker once the files
- * together pass `MAX_PROCEDURE_BYTES`. A path that left workspaceDir / the scripts root since the monitor was saved
- * counts as unreadable.
+ * The procedure files of one fire, read now: one block per file, a `읽기 실패` line for an unreadable one (the fire
+ * goes on), and a truncation marker past `MAX_PROCEDURE_BYTES`; a path that left its root counts as unreadable.
  */
 export function buildProcedureBlocks(
 	files: readonly string[],
@@ -103,9 +101,7 @@ export function buildProcedureBlocks(
 	return blocks.join("\n\n");
 }
 
-/**
- * The turn text of one fire: instruction, procedure files, the payload as fenced data, and the NO_REPORT rule.
- */
+/** The turn text of one fire: instruction, procedure files, fenced payload, the NO_REPORT rule. */
 export function buildMonitorPrompt(
 	monitor: Pick<MonitorRow, "name" | "instruction">,
 	event: MonitorEventRow,
@@ -128,10 +124,7 @@ export function buildMonitorPrompt(
 		.replace(/\n{3,}/g, "\n\n");
 }
 
-/**
- * The owner-facing reason of a failed cron command: `timed out after <n>s` first for a timeout, then the first stdout
- * line, else the last stderr line, else the spawn/path error or the exit code.
- */
+/** The owner-facing reason of a failed cron command: timeout, then first stdout line, last stderr line, else error. */
 function commandFailure(result: ScriptResult, timeoutMs: number): string {
 	const lines = (text: string) =>
 		text
@@ -144,9 +137,8 @@ function commandFailure(result: ScriptResult, timeoutMs: number): string {
 }
 
 /**
- * Drives monitors from the daemon sweep: claims due slots exactly once, runs script checks, dispatches each admitted
- * event to the monitor's own origin (`monitor/<id>`) through the origin router, and reconciles deliveries. A fire that
- * finds its origin idle starts a fresh session (epoch bump): the per-fire context cost stays the size of the fire.
+ * Drives monitors from the daemon sweep: claims due slots once, runs script checks, dispatches each admitted event to
+ * `monitor/<id>` through the router, and reconciles deliveries; an idle origin starts a fresh session per fire.
  */
 export class MonitorScheduler {
 	readonly #deps: MonitorSchedulerDeps;
@@ -404,10 +396,8 @@ export class MonitorScheduler {
 	}
 
 	/**
-	 * Marks and routes the next event of every monitor that is free. Marking is synchronous, so ticks never
-	 * double-dispatch. A `verbatim` monitor's event settles right here without a turn, which frees its next event, so the
-	 * pass repeats until no verbatim event settled. A failure of one event is logged with its monitor and event and
-	 * does not hold back the other events.
+	 * Marks and routes the next free event of every monitor (synchronous marking, so ticks never double-dispatch);
+	 * a verbatim event settles here and frees the next, so the pass repeats; one failure does not hold back the rest.
 	 */
 	#dispatchReady(): number {
 		let dispatched = 0;
