@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { errorFields } from "../channel/text";
 import { isTaskOrigin } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
@@ -13,6 +14,7 @@ import {
 } from "../omp/driver";
 import { TAIL_WAIT_END_EVENT, TAIL_WAIT_START_EVENT } from "../omp/rpc-driver";
 import { type HealedSessionModel, healSessionModelFile, newestSessionFile } from "../omp/session-heal";
+import { childRestartCause, type SpawnSnapshot, spawnSnapshot } from "../ops/cache-miss-cause";
 import {
 	CACHE_MISS_NOTIFY_MS,
 	CACHE_MISS_NOTIFY_TOKENS,
@@ -20,7 +22,6 @@ import {
 	type CacheCall,
 	CacheMonitor,
 	cacheCallOf,
-	isColdCache,
 } from "../ops/cache-monitor";
 import { COST_CAP_STOP_PREFIX, messageCost } from "../ops/cost-cap";
 import { captureHeads } from "../ops/turn-heads";
@@ -32,6 +33,12 @@ import { typicalTurnDuration } from "../store/turn-duration";
 import { classifyFailure } from "./failure-kind";
 import { type IdleKeepDeps, IdleKeeper, type IdleSweepContext } from "./idle-keep";
 import { newActiveTurn } from "./mailbox-active-turn";
+import {
+	coldResumeContextBlock,
+	noticeColdResumeRotated,
+	rotateOnColdResume,
+	warnColdCache,
+} from "./mailbox-cold-resume";
 import { askBtw, commandReply, startBrief, waitingRows } from "./mailbox-commands";
 import { ContextMemory, type LiveViewWithContext } from "./mailbox-context";
 import { judgeTurnCost, recordDailyCost, refreshSubAgentCost } from "./mailbox-cost";
@@ -179,6 +186,10 @@ export class OriginMailbox {
 	#cache = new CacheMonitor();
 	#cacheNoticedAt: number | undefined;
 	#coldWarned: CacheBaseline | undefined;
+	/** Set by a cold-resume rotation: the turn's first prompt re-feeds the previous epoch (`coldResumeContextBlock`). */
+	#coldResume: { previousEpoch: number; previousFile: string | undefined } | undefined;
+	/** The session file's digests when the live child was spawned: `child_restart` misses name their cause from it. */
+	#spawn: SpawnSnapshot | undefined;
 
 	constructor(deps: MailboxDeps & IdleKeepDeps) {
 		this.#deps = deps;
@@ -648,6 +659,7 @@ export class OriginMailbox {
 			costCacheWrite: miss.costCacheWrite,
 			gapSec: Math.round(miss.gapMs / 1000),
 			model: call.model,
+			...(miss.reason === "child_restart" && this.#spawn !== undefined ? childRestartCause(this.#spawn) : {}),
 		});
 		const turn = this.#turn;
 		if (
@@ -678,26 +690,6 @@ export class OriginMailbox {
 		}
 	}
 
-	/** One line to the new turn's thread when it resumes a large conversation whose cache has expired. */
-	#warnColdCache(threadRef: string): void {
-		const { originKey, clock, log } = this.#deps;
-		if (originKey.startsWith(MONITOR_ORIGIN_PREFIX)) return;
-		const baseline = this.#cache.baseline;
-		const now = clock.now();
-		if (baseline === undefined || baseline === this.#coldWarned || !isColdCache(baseline, now)) return;
-		const price = this.#cache.writeCostPerToken;
-		const idleMs = now - baseline.at;
-		this.#deps.onColdCache?.({
-			originKey,
-			threadRef,
-			prefixTokens: baseline.prefix,
-			idleMs,
-			...(price === undefined ? {} : { estimatedCost: price * baseline.prefix }),
-		});
-		this.#coldWarned = baseline;
-		log.info("cold_cache_warned", { origin: originKey, prefix: baseline.prefix, idleSec: Math.round(idleMs / 1000) });
-	}
-
 	/**
 	 * Interim delivery of a running conversation turn (never a monitor's: its answer is machine-read at the turn end).
 	 * A note next to a `wait` call goes out at its `message_end`. A stop-ended answer waits for the next message or tool
@@ -711,9 +703,8 @@ export class OriginMailbox {
 		if (!flushes.includes(event.type)) return;
 		const pending = turn.pendingAnswer;
 		turn.pendingAnswer = undefined;
-		if (pending !== undefined && this.#recordInterim(turn, pending)) {
+		if (pending !== undefined && this.#recordInterim(turn, pending))
 			turn.lastInterimDeliveredAt = this.#deps.clock.now();
-		}
 		if (event.type !== "message_end") return;
 		const interim = interimOf(event.message);
 		if (interim?.kind === "answer") turn.pendingAnswer = interim.text;
@@ -803,7 +794,7 @@ export class OriginMailbox {
 	/** Events from the driver have nobody to reject to: errors are logged, never dropped silently. */
 	#background(event: string, task: () => Promise<void>): void {
 		this.#serial(task).catch((error: unknown) => {
-			this.#deps.log.error(event, { origin: this.#deps.originKey, error: String(error) });
+			this.#deps.log.error(event, { origin: this.#deps.originKey, ...errorFields(error) });
 		});
 	}
 
@@ -824,11 +815,8 @@ export class OriginMailbox {
 			return;
 		}
 		const command = parseCommand(record.text);
-		if (command?.kind === "restart") {
-			// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
-			await this.#runCommand(row, command);
-			return;
-		}
+		// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
+		if (command?.kind === "restart") return this.#runCommand(row, command);
 		if (this.#deps.isDraining?.()) {
 			log.info("drain_deferred", { origin: originKey, id: record.platformMessageId });
 			return;
@@ -1062,8 +1050,8 @@ export class OriginMailbox {
 		}
 		const rawReason = failureSign(failure);
 		const code = failure instanceof OmpDriverError ? failure.code : "dispatch_error";
-		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, error: String(failure) });
-		this.#logTurnFailed(rawReason);
+		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, ...errorFields(failure) });
+		this.#logTurnFailed(rawReason, undefined, failure);
 		const opRef = `failed:${row.platformMessageId}`;
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		const peer = turnPeerOf(row);
@@ -1128,8 +1116,20 @@ export class OriginMailbox {
 		}
 	}
 
-	async #openTurn(row: InboundRow, text: string): Promise<boolean> {
+	/** Cold-resume rotation (`rotateOnColdResume`): a new epoch for the turn about to start; the row moves with it. */
+	async #coldResumeRotate(row: InboundRow): Promise<InboundRow> {
+		const rotation = this.#turn === undefined ? rotateOnColdResume(this.#deps, this.#cache.baseline, row) : undefined;
+		if (rotation === undefined) return row;
+		await this.#stopDriver();
+		this.#cache = new CacheMonitor();
+		this.#coldResume = rotation;
+		noticeColdResumeRotated(this.#deps, row.threadRef, rotation);
+		return rotation.row;
+	}
+
+	async #openTurn(startRow: InboundRow, text: string): Promise<boolean> {
 		const { store, log, originKey } = this.#deps;
+		const row = await this.#coldResumeRotate(startRow);
 		const driver = await this.#ensureDriver(row.threadRef);
 		// A child started before a peer bot wrote here is kept: it is told once, in front of its next prompt.
 		const peerNotice = !this.#skipPeerNotice && store.originHasPeerInbound(originKey);
@@ -1169,7 +1169,7 @@ export class OriginMailbox {
 		this.#stalled = false;
 		log.info("turn_start", { origin: originKey, epoch: row.epoch, opRef });
 		try {
-			this.#warnColdCache(row.threadRef);
+			this.#coldWarned = warnColdCache(this.#deps, this.#cache, this.#coldWarned, row.threadRef);
 		} catch (error) {
 			log.warn("cold_cache_warn_failed", { origin: originKey, error: String(error) });
 		}
@@ -1196,7 +1196,7 @@ export class OriginMailbox {
 		try {
 			await onLaunchRefused?.(reason);
 		} catch (error) {
-			log.error("launch_refused_failed", { origin: originKey, error: String(error) });
+			log.error("launch_refused_failed", { origin: originKey, ...errorFields(error) });
 		}
 		return true;
 	}
@@ -1233,13 +1233,17 @@ export class OriginMailbox {
 		this.#freshSession = false;
 		const rotated = this.#rotatedSession;
 		this.#rotatedSession = false;
+		const coldResume = this.#coldResume;
+		this.#coldResume = undefined;
 		const blocks: string[] = peerNotice ? [peerTouchedTurnNotice(originKey)] : [];
 		// The rotation block already holds the thread head the fresh-session block would give.
-		const context = rotated
-			? rotationContextBlock(store, originKey, row)
-			: fresh
-				? threadContextBlock(store, originKey, row)
-				: null;
+		const context = coldResume
+			? coldResumeContextBlock(this.#deps, row, coldResume)
+			: rotated
+				? rotationContextBlock(store, originKey, row)
+				: fresh
+					? threadContextBlock(store, originKey, row)
+					: null;
 		if (context !== null) {
 			const answers = context
 				.split("\n")
@@ -1255,7 +1259,7 @@ export class OriginMailbox {
 		if (channel !== undefined && row.peerUserId === null && this.#deps.recallEnabled?.() === true) {
 			const recall = buildRecallBlock({
 				text,
-				candidates: store.listRecallCandidates(channel, row.threadRef, RECALL_CANDIDATE_LIMIT),
+				candidates: () => store.listRecallCandidates(channel, row.threadRef, RECALL_CANDIDATE_LIMIT),
 				freshSession: fresh,
 				channel,
 				timezone: this.#deps.timezone,
@@ -1380,6 +1384,7 @@ export class OriginMailbox {
 		// Freshness must be read before the child exists: an empty epoch dir means this session is brand-new.
 		this.#freshSession = epochDirIsFresh(origin.sessionDir);
 		const expected = sessionToResume(origin);
+		this.#spawn = spawnSnapshot(origin.sessionDir, expected);
 		const peerTouched = store.originHasPeerInbound(originKey);
 		const spawnIdentity = this.#idle.identity();
 		const driver = driverFactory(originKey, origin.sessionDir);
@@ -1521,6 +1526,12 @@ export class OriginMailbox {
 		if (final.status === "completed") {
 			const answer = await this.#turnAnswer(driver, turn, final.text);
 			store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
+			log.info("turn_completed", {
+				origin: originKey,
+				opRef: turn.opRef,
+				ms: this.#deps.clock.now() - turn.startedAt,
+				chars: answer.whole.length,
+			});
 			if (isTaskOrigin(originKey))
 				log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
 			this.#consecFailures = 0;
@@ -1625,12 +1636,13 @@ export class OriginMailbox {
 		await this.#drain();
 	}
 
-	#logTurnFailed(rawReason: string, classifyReason = rawReason): void {
+	#logTurnFailed(rawReason: string, classifyReason = rawReason, error?: unknown): void {
 		const { kind } = classifyFailure(classifyReason);
 		this.#deps.log.error("turn_failed", {
 			origin: this.#deps.originKey,
 			kind,
 			reason: redact(rawReason).slice(0, 300),
+			...(error === undefined ? {} : errorFields(error)),
 		});
 	}
 
@@ -1682,7 +1694,7 @@ export class OriginMailbox {
 			text = await commandReply(this.#host, command, opRef, threadRef);
 		} catch (error) {
 			const reason = error instanceof OmpDriverError ? error.message : String(error);
-			log.error("command_failed", { origin: originKey, command: command.kind, error: reason });
+			log.error("command_failed", { origin: originKey, command: command.kind, ...errorFields(error) });
 			const notice = NO_MODEL_SIGN.test(reason) ? NO_MODEL_NOTICE : failedNotice(`${command.kind}: ${reason}`);
 			store.recordTurnFailure({ originKey, opRef, threadRef, notice });
 			return;
@@ -1809,6 +1821,7 @@ export class OriginMailbox {
 		const epoch = origin.epoch + 1;
 		store.newEpoch(originKey, this.#deps.sessionDirFor(originKey, epoch), opRef);
 		this.#cache = new CacheMonitor();
+		this.#coldResume = undefined;
 		// Rows dispatched into the aborted turn belong to the old epoch: their output must never be delivered.
 		// They are linked to the command op so the command's delivery also finishes their status messages.
 		for (const dispatched of store.listInbound({ originKey, state: "dispatched" })) {

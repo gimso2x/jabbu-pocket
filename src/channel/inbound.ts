@@ -3,7 +3,7 @@
 import { parseThreadRef, THREAD_LINK_PREFIX } from "../core/normalize";
 import { parseCommand } from "../core/types";
 import type { Logger } from "../log";
-import { errorText } from "./text";
+import { errorFields, errorText } from "./text";
 import type { CoreSink, InboundMessage, IngestOutcome, PeerInboundMessage } from "./types";
 
 /** Posted once in a thread whose peer-input cap was hit; mentions no bot. */
@@ -30,7 +30,7 @@ export async function guardInbound(
 	try {
 		await run();
 	} catch (err) {
-		log.error("inbound_failed", { ...where, error: errorText(err) });
+		log.error("inbound_failed", { ...where, ...errorFields(err) });
 		try {
 			onFailure?.();
 		} catch (cbErr) {

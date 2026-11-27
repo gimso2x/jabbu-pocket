@@ -654,6 +654,24 @@ describe("recovery of turns a planned restart cut (restart-cut.json)", () => {
 		// The lock is reported, never removed.
 		expect(existsSync(join(locked, ".git", "index.lock"))).toBe(true);
 	});
+
+	test("the resume prompt names a linked worktree's real index.lock (its .git is a file)", async () => {
+		const gitdir = join(dir, "repo-main", ".git", "worktrees", "lane-wt");
+		const wt = join(dir, "lane-wt");
+		mkdirSync(gitdir, { recursive: true });
+		mkdirSync(wt, { recursive: true });
+		writeFileSync(join(wt, ".git"), `gitdir: ${gitdir}\n`);
+		writeFileSync(join(gitdir, "index.lock"), "");
+		const { opRef } = await dispatchedTurn("m1", "push it", { finish: false });
+		writeCut([{ originKey: ORIGIN, opRef }]);
+		expect(await recover(() => [wt])).toEqual({ answered: 0, interrupted: 0, continued: 1 });
+		const lines = (store.getInbound("cut-m1")?.textRef ?? "").split("\n");
+		expect(lines).toEqual([
+			CONTINUE_PROMPT,
+			`잠금 파일 있음: ${join(gitdir, "index.lock")} — 다른 git 프로세스가 없는지 확인한 뒤 처리하세요`,
+		]);
+		expect(existsSync(join(gitdir, "index.lock"))).toBe(true);
+	});
 });
 
 describe("inbound.thread_ref migration", () => {

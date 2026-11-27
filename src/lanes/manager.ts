@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type ActionButton, type MessageRef, renderMentions } from "../channel/port";
-import { cutCodePointSafe, escapeMrkdwn, formatElapsed } from "../channel/text";
+import { cutCodePointSafe, errorFields, escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
 import { parseThreadRef, platformOfThreadRef, threadRefOf } from "../core/normalize";
 import { pidAlive } from "../daemon/lock";
@@ -144,6 +144,10 @@ import { findReusableOpenLane, normalizeLaneTitle } from "./trigger-format";
 import { type ClaimEvidence, defaultGit, resolveBaseSha, type VerifyResult, verifyClaim } from "./verify";
 import { advertisedWorkflow, isUlwWorkflow } from "./workflow";
 import { DEFAULT_LANE_RISK, laneBranchOf, laneIdsOnBranches, nextLaneId, resolveLaneRepo } from "./worktree";
+
+/** A forced lane start past a capacity/quota refusal asks the owner on a card; only an explicit 승인 counts. */
+const FORCE_START_SUMMARY = "시작 거부 사유를 무시하고 레인을 강행 시작합니다";
+const FORCE_START_IMPACT = "승인하면 거부 사유를 무시하고 레인의 worktree와 워커를 시작합니다(중간에 실패할 수 있음)";
 
 /** Work lanes: one omp session per long task with its own thread, registry row and verified end. */
 export class LaneManager {
@@ -295,7 +299,7 @@ export class LaneManager {
 					this.#nextSettleAt.set(name, { claimedAt, at: clock.now() + CLAIM_GRACE_MS });
 				}
 			})
-			.catch((error: unknown) => log.error("lane_tick_failed", { lane: name, error: String(error) }))
+			.catch((error: unknown) => log.error("lane_tick_failed", { lane: name, ...errorFields(error) }))
 			.finally(() => this.#settlesInBackground.delete(run));
 		this.#settlesInBackground.add(run);
 	}
@@ -312,9 +316,8 @@ export class LaneManager {
 	/** The claim `lane` was read with is no longer the lane's pending claim (the owner answered, or it claimed again). */
 	#claimSuperseded(lane: LaneRow): SettleOutcome | undefined {
 		const current = this.#deps.store.getLane(lane.name);
-		if (current?.status === "done-claimed" && current.meta.claim?.claimedAt === lane.meta.claim?.claimedAt) {
+		if (current?.status === "done-claimed" && current.meta.claim?.claimedAt === lane.meta.claim?.claimedAt)
 			return undefined;
-		}
 		return { text: "claim superseded by the owner" };
 	}
 
@@ -326,7 +329,7 @@ export class LaneManager {
 
 	#spawn(lane: string, work: () => Promise<void>): void {
 		const run: Promise<void> = work()
-			.catch((error: unknown) => this.#deps.log.error("lane_background_failed", { lane, error: String(error) }))
+			.catch((error: unknown) => this.#deps.log.error("lane_background_failed", { lane, ...errorFields(error) }))
 			.finally(() => this.#background.delete(run));
 		this.#background.add(run);
 	}
@@ -362,7 +365,7 @@ export class LaneManager {
 		externalPr?: unknown;
 		/** The workflow the starter chose (`workflowChoice`); absent: no keyword line on the first prompt. */
 		workflow?: unknown;
-		/** The owner explicitly accepted a tight host: a capacity refusal passes (the load warning still shows). */
+		/** The owner ordered forcing past a tight host: a refusal passes only on an owner-card confirmation (the load warning still shows). */
 		force?: boolean;
 		/** An open lane of the same conversation, title and path is returned (`reused`) instead of starting another. */
 		reuseOpen?: boolean;
@@ -433,7 +436,29 @@ export class LaneManager {
 			const capacity = startCapacity(this.#deps.hostLoad, disks, this.#deps.hostSessions);
 			const quotaHold = this.#deps.quotaRefusal?.(model?.model);
 			const refusals = quotaHold === undefined ? capacity.refusals : [...capacity.refusals, quotaHold];
-			if (refusals.length > 0 && input.force !== true) {
+			// `force` is the model's claim the owner ordered it: each refusal asks the owner on a card; without an
+			// approver the force is refused, and freeze is re-checked after the card.
+			const forceConfirmed = async (reasons: readonly string[]): Promise<boolean> => {
+				const ask = this.#deps.requestApproval;
+				if (input.force !== true || ask === undefined || input.parentOrigin === undefined) return false;
+				const answer = await ask({
+					channel: input.channel,
+					summary: FORCE_START_SUMMARY,
+					detail: { action: reasons.join("\n"), impact: FORCE_START_IMPACT },
+					origin: {
+						originKey: input.parentOrigin,
+						channel: input.channel,
+						...(input.borrowThread === undefined ? {} : { threadTs: input.borrowThread.threadId }),
+					},
+					// No external abort source: the card still ends on the broker's own timeout.
+					signal: new AbortController().signal,
+				});
+				if (answer !== "approved") return false;
+				const frozenNow = this.#deps.frozen?.();
+				if (frozenNow !== undefined) throw new LaneInputError(frozenMessage(frozenNow));
+				return true;
+			};
+			if (refusals.length > 0 && !(await forceConfirmed(refusals))) {
 				log.warn("lane_start_refused_capacity", { channel: input.channel, repo, refusals: [...refusals] });
 				throw new LaneInputError(`시작 거부: ${refusals.join(", ")}`);
 			}
@@ -648,7 +673,7 @@ export class LaneManager {
 			})
 			.then(() => true)
 			.catch((error: unknown) => {
-				this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
+				this.#deps.log.error("lane_send_failed", { lane: name, kind, ...errorFields(error) });
 				return false;
 			});
 	}
@@ -724,12 +749,9 @@ export class LaneManager {
 		// A closed lane has no turn to stop: only its auto-merge is held; `머지해` and the buttons keep working.
 		if (lane.status === "closed") {
 			const land = lane.meta.land;
-			if (land === undefined || (land.state !== "pending" && land.state !== "blocked")) {
+			if (land === undefined || (land.state !== "pending" && land.state !== "blocked"))
 				return { handled: false, text: "이 레인은 이미 완료(closed)되어 멈출 턴이 없습니다." };
-			}
-			if (this.#landing.has(name)) {
-				return { handled: false, text: "머지가 이미 진행 중이라 보류하지 못했습니다." };
-			}
+			if (this.#landing.has(name)) return { handled: false, text: "머지가 이미 진행 중이라 보류하지 못했습니다." };
 			// An auto-merge that already began and waits for the lane's turn is withdrawn with it: the card asks again.
 			const withdrawn = land.requestedBy === "auto";
 			if (land.autoLandHeld === undefined || withdrawn) {
@@ -786,9 +808,8 @@ export class LaneManager {
 	async resume(name: string, by: "owner-message" | "button" | "attach"): Promise<LaneRequestOutcome> {
 		const { store, log } = this.#deps;
 		const lane = store.getLane(name);
-		if (lane?.status !== "paused") {
+		if (lane?.status !== "paused")
 			return { handled: false, text: `멈춘 레인이 아닙니다 (${lane?.status ?? "레인 없음"}).` };
-		}
 		// A terminal omp writes the session now: a child started beside it would tangle the file.
 		if (lane.meta.attach !== undefined) {
 			return {
@@ -815,9 +836,7 @@ export class LaneManager {
 			const claimedAt = this.#claimStamp(lane);
 			patch.claim = { ...lane.meta.claim, claimedAt };
 			patch.lastClaimedAt = claimedAt;
-		} else if (lane.meta.pausedFrom === "done-claimed") {
-			patch.claim = undefined;
-		}
+		} else if (lane.meta.pausedFrom === "done-claimed") patch.claim = undefined;
 		const resumed = store.transitionLane(name, back, { event: "resumed", detail: by }, patch);
 		log.info("lane_resumed", { lane: name, to: back, by });
 		await this.#sync(resumed, "transition");
@@ -828,9 +847,8 @@ export class LaneManager {
 		// does not need.
 		const frozen = this.#deps.frozen?.() !== undefined;
 		if (frozen) log.warn("lane_send_held_frozen", { lane: name });
-		else if (by !== "attach" && back !== "done-claimed") {
+		else if (by !== "attach" && back !== "done-claimed")
 			this.#send(name, "resume", "[jabbu] 오너가 재개했습니다. 멈추기 전 작업을 이어 하세요.");
-		}
 		if (store.getLane(name)?.status === "paused") {
 			return { handled: true, text: "⚠️ 재개하지 못했습니다: 레인이 여전히 paused입니다." };
 		}
@@ -986,9 +1004,8 @@ export class LaneManager {
 		const lane = store.getLane(name);
 		const choices = lane?.meta.sessionChoices;
 		const file = choices?.files[index];
-		if (lane === undefined || choices === undefined || file === undefined) {
+		if (lane === undefined || choices === undefined || file === undefined)
 			return { handled: false, text: "고를 세션 파일이 없습니다 (이미 골랐거나 재개됨)." };
-		}
 		store.pinSessionFile(lane.originKey, file);
 		store.patchLane(name, { event: "session_picked", detail: file }, { sessionChoices: undefined });
 		log.info("lane_session_picked", { lane: name, file });
@@ -1036,9 +1053,8 @@ export class LaneManager {
 		const model = this.#deps.store.getOrigin(originKey)?.model;
 		if (model !== null && model !== undefined) {
 			try {
-				if (!(await driver.availableModels()).includes(model)) {
+				if (!(await driver.availableModels()).includes(model))
 					return `레인 모델 \`${model}\`이 레인 omp의 모델 목록에 없습니다`;
-				}
 			} catch (error) {
 				return `레인 모델 \`${model}\`을 확인하지 못했습니다: ${cutCodePointSafe(oneLine(String(error)), 200)}`;
 			}
@@ -1254,9 +1270,8 @@ export class LaneManager {
 			this.#settling.delete(name);
 			if (this.#resettle.delete(name)) {
 				const current = store.getLane(name);
-				if (current?.status === "done-claimed" && current.meta.claim?.claimedAt !== claim?.claimedAt) {
+				if (current?.status === "done-claimed" && current.meta.claim?.claimedAt !== claim?.claimedAt)
 					this.#settleInBackground(name, false);
-				}
 			}
 		}
 	}
@@ -1541,9 +1556,7 @@ export class LaneManager {
 		// The owner may have paused or answered, or the lane claimed again, while git ran.
 		if (expected.status === "not-done") {
 			const current = this.#deps.store.getLane(lane.name);
-			if (current?.status !== "not-done") {
-				return { text: `닫을 상태가 아닙니다 (${current?.status ?? "레인 없음"}).` };
-			}
+			if (current?.status !== "not-done") return { text: `닫을 상태가 아닙니다 (${current?.status ?? "레인 없음"}).` };
 			if (current.meta.checks?.head !== sha || failedChecksOf(current).length === 0) {
 				return { text: "그사이 검사 상태가 바뀌어 닫지 않았습니다." };
 			}
@@ -1571,7 +1584,7 @@ export class LaneManager {
 		// The turn that made the claim still delivers its closing report before the child stops.
 		void this.#deps
 			.stopWhenIdle(lane.originKey)
-			.catch((error: unknown) => this.#deps.log.error("lane_stop_failed", { lane: lane.name, error: String(error) }));
+			.catch((error: unknown) => this.#deps.log.error("lane_stop_failed", { lane: lane.name, ...errorFields(error) }));
 		if (lands) this.#spawn(lane.name, () => this.#announce(lane.name));
 		const prefix = held === OWNER_ACCEPTED ? `오너 수락으로 닫았습니다: 커밋 ${sha}.` : `검증 통과: 커밋 ${sha}.`;
 		return {
@@ -2042,9 +2055,8 @@ export class LaneManager {
 			throw new Error(`lane ${name} has nothing to land`);
 		}
 		// Only a closed lane whose landing is still open is landed, whatever the caller read before.
-		if (lane.status !== "closed" || (land.state !== "pending" && land.state !== "pr-open")) {
+		if (lane.status !== "closed" || (land.state !== "pending" && land.state !== "pr-open"))
 			return "이 레인은 머지 대기 상태가 아닙니다.";
-		}
 		const by = land.requestedBy ?? "owner";
 		const policy = this.#deps.autoLandPolicy?.();
 		const matched = policy !== undefined && (await this.#repoMatches(repo, policy.repos));
@@ -2294,7 +2306,7 @@ export class LaneManager {
 			this.#coreRebasing.delete(lane.originKey);
 			await this.#deps
 				.resumePending(lane.originKey)
-				.catch((error: unknown) => log.error("lane_resume_failed", { lane: lane.name, error: String(error) }));
+				.catch((error: unknown) => log.error("lane_resume_failed", { lane: lane.name, ...errorFields(error) }));
 		}
 	}
 
@@ -2369,12 +2381,10 @@ export class LaneManager {
 		const land = lane?.meta.land;
 		if (lane === undefined) return "레인을 찾을 수 없습니다.";
 		if (lane.meta.externalPr === undefined) return "외부 PR 레인이 아닙니다 — `!pr`로 먼저 붙이세요.";
-		if (lane.status !== "closed" || land === undefined || (land.state !== "pending" && land.state !== "blocked")) {
+		if (lane.status !== "closed" || land === undefined || (land.state !== "pending" && land.state !== "blocked"))
 			return `PR을 게시할 상태가 아닙니다 (${land?.state ?? lane.status}).`;
-		}
-		if (lane.meta.pr?.state === "asking" || this.#publishing.has(lane.name)) {
+		if (lane.meta.pr?.state === "asking" || this.#publishing.has(lane.name))
 			return "이미 PR 게시 승인을 기다리고 있습니다.";
-		}
 		if (this.#landing.has(lane.name)) return "다른 처리가 진행 중입니다. 끝난 뒤 다시 시도하세요.";
 		if (land.requestedBy !== undefined) return "머지가 예약돼 있어 PR을 게시할 수 없습니다.";
 		return undefined;
@@ -2649,9 +2659,8 @@ export class LaneManager {
 	async acceptByOwner(name: string): Promise<LaneRequestOutcome> {
 		const { store, log } = this.#deps;
 		const lane = store.getLane(name);
-		if (lane?.status !== "not-done") {
+		if (lane?.status !== "not-done")
 			return { handled: false, text: `닫을 상태가 아닙니다 (${lane?.status ?? "레인 없음"}).` };
-		}
 		const worktree = lane.meta.worktree;
 		if (worktree === undefined) return { handled: false, text: "worktree가 없는 레인입니다." };
 		const checksHead = lane.meta.checks?.head;
@@ -2659,13 +2668,11 @@ export class LaneManager {
 		if (checksHead === undefined || checksHead === "" || failed.length === 0) {
 			return { handled: false, text: "실패한 검사가 없습니다 — 닫을 이유가 검사 실패가 아닙니다." };
 		}
-		if (this.#settling.has(name)) {
+		if (this.#settling.has(name))
 			return { handled: false, text: "레인의 완료 검증이 진행 중입니다. 끝난 뒤 다시 시도해 주세요." };
-		}
 		if (this.#landing.has(name)) return { handled: false, text: "이미 닫기 또는 머지 처리가 진행 중입니다." };
-		if (this.#coreRebasing.has(lane.originKey)) {
+		if (this.#coreRebasing.has(lane.originKey))
 			return { handled: false, text: "코어 rebase가 진행 중입니다. 끝난 뒤 다시 시도해 주세요." };
-		}
 		if (this.#deps.laneBusy?.(lane.originKey) === true) {
 			return { handled: false, text: '레인이 아직 작업 중입니다. 끝난 뒤 다시 "닫아"라고 해 주세요.' };
 		}
@@ -2681,9 +2688,8 @@ export class LaneManager {
 					text: `worktree 상태를 확인하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`,
 				};
 			}
-			if (head.sha !== checksHead) {
+			if (head.sha !== checksHead)
 				return { handled: false, text: "HEAD가 마지막 검사 커밋이 아닙니다 — 레인이 새 커밋을 냈습니다." };
-			}
 			if (!head.clean) {
 				return {
 					handled: false,
@@ -2857,9 +2863,8 @@ export class LaneManager {
 		const { store } = this.#deps;
 		const reservation = store.getLaneReservation(id);
 		if (reservation === undefined) return { handled: false, text: `예약 #${id}을 찾을 수 없습니다.` };
-		if (!store.moveLaneReservation(id, ["waiting", "ready"], "cancelled")) {
+		if (!store.moveLaneReservation(id, ["waiting", "ready"], "cancelled"))
 			return { handled: false, text: `예약 #${id}은 이미 ${STATE_TEXT[reservation.state]} 상태입니다.` };
-		}
 		return { handled: true, text: `✖ 예약 #${id} 취소됨` };
 	}
 
@@ -2944,9 +2949,8 @@ export class LaneManager {
 				// `ready` before the post: a click on the card must find the reservation startable; a failed post undoes it.
 				if (!store.moveLaneReservation(reservation.id, ["waiting"], "ready", { notice: null })) continue;
 				const card = buildReservationReadyMessage(reservation, this.#ownerOfThread(reservation.threadRef));
-				if (!(await this.#postReservation(reservation, card))) {
+				if (!(await this.#postReservation(reservation, card)))
 					store.moveLaneReservation(reservation.id, ["ready"], "waiting");
-				}
 				continue;
 			}
 			const signature = blockerSignature(verdict.blockers);
@@ -3096,9 +3100,8 @@ export class LaneManager {
 				if (this.#settling.has(lane.name)) continue;
 				const claim = lane.meta.claim;
 				const next = this.#nextSettleAt.get(lane.name);
-				if (next !== undefined && (lane.status !== "done-claimed" || claim?.claimedAt !== next.claimedAt)) {
+				if (next !== undefined && (lane.status !== "done-claimed" || claim?.claimedAt !== next.claimedAt))
 					this.#nextSettleAt.delete(lane.name);
-				}
 				// Timed-out checks are run again only a grace after their last run (one 300 s run per tick would stall it).
 				const timedOut = lane.meta.checks?.inconclusive;
 				// Frozen: the deferred verdict waits. A not-done now could not be steered and would never be judged again.
@@ -3137,13 +3140,13 @@ export class LaneManager {
 					await this.#closeIfLandedOutside(lane.name);
 				if (lane.meta.land?.state === "merged-not-pushed") await this.#markPushedOutside(lane.name);
 			} catch (error) {
-				this.#deps.log.error("lane_tick_failed", { lane: lane.name, error: String(error) });
+				this.#deps.log.error("lane_tick_failed", { lane: lane.name, ...errorFields(error) });
 			}
 		}
 		try {
 			if (!frozen) await this.#tickReservations();
 		} catch (error) {
-			this.#deps.log.error("lane_reservation_tick_failed", { error: String(error) });
+			this.#deps.log.error("lane_reservation_tick_failed", { ...errorFields(error) });
 		}
 	}
 
@@ -3157,7 +3160,7 @@ export class LaneManager {
 				this.#deps.log.warn("lane_attach_orphaned", { lane: lane.name, pid: attach.pid });
 				await this.detach(lane.name, { sessionFile: attach.sessionFile, newFiles: [], by: "orphan" });
 			} catch (error) {
-				this.#deps.log.error("lane_attach_orphan_failed", { lane: lane.name, error: String(error) });
+				this.#deps.log.error("lane_attach_orphan_failed", { lane: lane.name, ...errorFields(error) });
 			}
 		}
 	}

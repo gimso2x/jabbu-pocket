@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { errorFields } from "../channel/text";
 import { TOP_LEVEL_TS, threadRefOf, wrapQuoted } from "../core/normalize";
 import type { InboundRecord, MailboxClock } from "../core/types";
 import type { Logger } from "../log";
@@ -96,8 +97,7 @@ export function buildProcedureBlocks(
 				`${head}\n${text}${cut ? `\n…[잘림: 파일 ${size}바이트 중 ${read}바이트만 포함, 합계 ${MAX_PROCEDURE_BYTES / 1024}KiB 제한]` : ""}`,
 			);
 		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			blocks.push(`${head} 읽기 실패: ${reason}`);
+			blocks.push(`${head} 읽기 실패: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	return blocks.join("\n\n");
@@ -190,7 +190,7 @@ export class MonitorScheduler {
 		try {
 			return this.#dispatchReady();
 		} catch (error) {
-			this.#deps.log.error("monitor_kick_failed", { error: String(error) });
+			this.#deps.log.error("monitor_kick_failed", { ...errorFields(error) });
 			return 0;
 		}
 	}
@@ -234,7 +234,7 @@ export class MonitorScheduler {
 					this.#kickScript(monitor, monitor.trigger, now);
 				// A row of a no longer supported kind (`unsupported`) never fires.
 			} catch (error) {
-				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, error: String(error) });
+				this.#deps.log.error("monitor_tick_failed", { monitor: monitor.id, ...errorFields(error) });
 			}
 		}
 		if (skip !== FROZEN_SKIP) this.#heldAt.clear(); // held one-shots are consumed by the first unfrozen pass (#claimAt)
@@ -277,7 +277,7 @@ export class MonitorScheduler {
 		const overLimit = recent.slice(0, recent.length - run.length);
 		for (const slot of tooOld) store.monitors.recordSkippedSlot(monitor.id, slot, "catchup_age");
 		for (const slot of overLimit) store.monitors.recordSkippedSlot(monitor.id, slot, "catchup_limit");
-		for (const slot of run) {
+		for (const slot of run)
 			this.#count(
 				store.monitors.claimSlot({
 					monitorId: monitor.id,
@@ -287,7 +287,6 @@ export class MonitorScheduler {
 				summary,
 				skip,
 			);
-		}
 		// A span with no slot needs no cursor move: the next fire after the old cursor and after `now` is the same.
 		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOldCount + overLimit.length;
@@ -357,7 +356,7 @@ export class MonitorScheduler {
 						result.timedOut ||
 						result.error !== undefined ||
 						result.stderr !== "";
-					if (logIt) {
+					if (logIt)
 						log.info("monitor_script", {
 							monitor: monitor.id,
 							fired: result.fired,
@@ -366,8 +365,6 @@ export class MonitorScheduler {
 							...(result.error === undefined ? {} : { error: result.error }),
 							...(result.stderr === "" ? {} : { tail: result.stderr }),
 						});
-					}
-					const hash = result.fired ? result.outputHash : undefined;
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
@@ -378,15 +375,14 @@ export class MonitorScheduler {
 							: {}),
 						slotAt: now,
 						payload: result.stdout,
-						...(hash === undefined ? {} : { hash }),
+						...(result.fired ? { hash: result.outputHash } : {}),
 						...(suppressReason === undefined ? {} : { suppressReason }),
 					});
-					if (suppressReason !== undefined && claim !== undefined) {
+					if (suppressReason !== undefined && claim !== undefined)
 						log.info("monitor_suppressed", { monitor: monitor.id, reason: suppressReason });
-					}
 					if (claim) this.#dispatchReady();
 				} catch (error) {
-					log.error("monitor_script_failed", { monitor: monitor.id, error: String(error) });
+					log.error("monitor_script_failed", { monitor: monitor.id, ...errorFields(error) });
 				} finally {
 					this.#scriptsRunning.delete(monitor.id);
 				}
@@ -397,7 +393,8 @@ export class MonitorScheduler {
 	/**
 	 * Marks and routes the next event of every monitor that is free. Marking is synchronous, so ticks never
 	 * double-dispatch. A `verbatim` monitor's event settles right here without a turn, which frees its next event, so the
-	 * pass repeats until no verbatim event settled.
+	 * pass repeats until no verbatim event settled. A failure of one event is logged with its monitor and event and
+	 * does not hold back the other events.
 	 */
 	#dispatchReady(): number {
 		let dispatched = 0;
@@ -410,77 +407,82 @@ export class MonitorScheduler {
 
 	#dispatchPass(): { dispatched: number; settledVerbatim: boolean } {
 		const { store, router, clock, log } = this.#deps;
-		let dispatched = 0;
-		let settledVerbatim = false;
+		let dispatched = 0,
+			settledVerbatim = false;
 		const skip = this.#deps.frozen?.() === undefined ? undefined : FROZEN_SKIP;
 		for (const event of store.monitors.dispatchable(clock.now())) {
 			const monitor = store.monitors.getMonitor(event.monitorId);
 			if (!monitor) continue;
-			if (skip !== undefined) {
-				// Held back for good: an event kept queued would fire as a burst the moment the hold is lifted.
-				if (store.monitors.skipEvent(event.eventId, skip)) {
-					log.info("monitor_frozen_skip", {
-						monitor: monitor.id,
-						event: event.eventId,
-					});
-					settledVerbatim = true;
-				}
-				continue;
-			}
-			// No channel and no owner home yet (nobody to post to): the event stays queued for a later tick instead of
-			// running into a report with a broken `:-` thread ref.
-			const destination = monitor.channel ?? store.ownerHome()?.conversationId;
-			if (destination === undefined) {
-				if (!this.#unroutableWarned.has(event.eventId)) {
-					this.#unroutableWarned.add(event.eventId);
-					log.warn("owner_notice_unroutable", { monitor: monitor.id, event: event.eventId, action: "deferred" });
-				}
-				continue;
-			}
-			if (monitor.deliver === "verbatim" && monitor.trigger.kind === "cron" && monitor.trigger.command !== undefined) {
-				if (this.#runCommand(monitor, monitor.trigger.command, monitor.trigger.timeoutMs, event)) dispatched += 1;
-				continue;
-			}
-			if (monitor.deliver === "verbatim") {
-				if (this.#deliverVerbatim(monitor, event)) {
-					dispatched += 1;
-					settledVerbatim = true;
-				}
-				continue;
-			}
-			const inboundId = `monitor:${monitor.id}:${event.eventId}:${event.attempts + 1}`;
-			if (!store.monitors.markDispatched(event.eventId, inboundId)) continue;
-			dispatched += 1;
-			log.info("monitor_dispatch", { monitor: monitor.id, event: event.eventId, attempt: event.attempts + 1 });
-			this.#track(
-				(async () => {
-					// Every fire would otherwise pay the session's whole accumulated context again, and monitor
-					// directives keep their state in files and script output, not in the session: when idle, each
-					// fire starts a fresh session (`/new`'s mechanism). A fire queued behind a running turn stays.
-					await router.newEpochIfIdle(monitorOrigin(monitor.id)).catch((error: unknown) => {
-						log.warn("monitor_epoch_failed", { monitor: monitor.id, error: String(error) });
-					});
-					await router
-						.route({
-							platformMessageId: inboundId,
-							originKey: monitorOrigin(monitor.id),
-							ownerVerified: true,
-							text: buildMonitorPrompt(
-								monitor,
-								event,
-								buildProcedureBlocks(monitor.procedureFiles, {
-									workspaceDir: this.#deps.workspaceDir,
-									scriptsRoot: this.#deps.scriptsRoot,
-								}),
-							),
-							threadRef: threadRefOf(destination, TOP_LEVEL_TS),
-						})
-						.catch((error: unknown) => {
-							log.error("monitor_route_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
-							store.failMonitorEvent(event.eventId, `[turn failed] route_error`);
+			try {
+				if (skip !== undefined) {
+					// Held back for good: an event kept queued would fire as a burst the moment the hold is lifted.
+					if (store.monitors.skipEvent(event.eventId, skip)) {
+						log.info("monitor_frozen_skip", {
+							monitor: monitor.id,
+							event: event.eventId,
 						});
-				})(),
-			);
+						settledVerbatim = true;
+					}
+					continue;
+				}
+				// No channel and no owner home yet (nobody to post to): the event stays queued for a later tick instead of
+				// running into a report with a broken `:-` thread ref.
+				const destination = monitor.channel ?? store.ownerHome()?.conversationId;
+				if (destination === undefined) {
+					if (!this.#unroutableWarned.has(event.eventId)) {
+						this.#unroutableWarned.add(event.eventId);
+						log.warn("owner_notice_unroutable", { monitor: monitor.id, event: event.eventId, action: "deferred" });
+					}
+					continue;
+				}
+				const trigger = monitor.trigger;
+				if (monitor.deliver === "verbatim" && trigger.kind === "cron" && trigger.command !== undefined) {
+					if (this.#runCommand(monitor, trigger.command, trigger.timeoutMs, event)) dispatched += 1;
+					continue;
+				}
+				if (monitor.deliver === "verbatim") {
+					if (this.#deliverVerbatim(monitor, event)) {
+						dispatched += 1;
+						settledVerbatim = true;
+					}
+					continue;
+				}
+				const inboundId = `monitor:${monitor.id}:${event.eventId}:${event.attempts + 1}`;
+				if (!store.monitors.markDispatched(event.eventId, inboundId)) continue;
+				dispatched += 1;
+				log.info("monitor_dispatch", { monitor: monitor.id, event: event.eventId, attempt: event.attempts + 1 });
+				this.#track(
+					(async () => {
+						// Every fire would otherwise pay the session's whole accumulated context again, and monitor
+						// directives keep their state in files and script output, not in the session: when idle, each
+						// fire starts a fresh session (`/new`'s mechanism). A fire queued behind a running turn stays.
+						await router.newEpochIfIdle(monitorOrigin(monitor.id)).catch((error: unknown) => {
+							log.warn("monitor_epoch_failed", { monitor: monitor.id, error: String(error) });
+						});
+						await router
+							.route({
+								platformMessageId: inboundId,
+								originKey: monitorOrigin(monitor.id),
+								ownerVerified: true,
+								text: buildMonitorPrompt(
+									monitor,
+									event,
+									buildProcedureBlocks(monitor.procedureFiles, {
+										workspaceDir: this.#deps.workspaceDir,
+										scriptsRoot: this.#deps.scriptsRoot,
+									}),
+								),
+								threadRef: threadRefOf(destination, TOP_LEVEL_TS),
+							})
+							.catch((error: unknown) => {
+								log.error("monitor_route_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
+								store.failMonitorEvent(event.eventId, `[turn failed] route_error`);
+							});
+					})(),
+				);
+			} catch (error) {
+				log.error("monitor_dispatch_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
+			}
 		}
 		return { dispatched, settledVerbatim };
 	}
@@ -524,9 +526,8 @@ export class MonitorScheduler {
 					}
 					if (result.exitCode === 0 && !result.timedOut && result.error === undefined) {
 						// `{"wakeAgent": false}` as the last line: the check ran and has nothing to say.
-						if (store.deliverMonitorVerbatim(event.eventId, opRef, result.wakeOff ? "" : result.stdout)) {
+						if (store.deliverMonitorVerbatim(event.eventId, opRef, result.wakeOff ? "" : result.stdout))
 							log.info("monitor_verbatim", { monitor: monitor.id, event: event.eventId, attempt, exit: 0 });
-						}
 						return;
 					}
 					log.warn("monitor_command_failed", {
@@ -542,14 +543,14 @@ export class MonitorScheduler {
 					});
 				} catch (error) {
 					// Never rethrown: a rejection here would take the daemon down and rerun the command on every boot.
-					log.error("monitor_command_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
+					log.error("monitor_command_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
 					try {
 						store.failMonitorEvent(event.eventId, `[command failed] ${String(error)}`, { retry: false });
 					} catch (settleError) {
 						log.error("monitor_command_settle_failed", {
 							monitor: monitor.id,
 							event: event.eventId,
-							error: String(settleError),
+							...errorFields(settleError),
 						});
 					}
 				} finally {
@@ -575,10 +576,9 @@ export class MonitorScheduler {
 			log.info("monitor_verbatim", { monitor: monitor.id, event: event.eventId, attempt });
 			return true;
 		} catch (error) {
-			log.error("monitor_verbatim_failed", { monitor: monitor.id, event: event.eventId, error: String(error) });
-			if (store.monitors.markDispatched(event.eventId, opRef)) {
+			log.error("monitor_verbatim_failed", { monitor: monitor.id, event: event.eventId, ...errorFields(error) });
+			if (store.monitors.markDispatched(event.eventId, opRef))
 				store.failMonitorEvent(event.eventId, `[verbatim failed] ${String(error)}`);
-			}
 			return false;
 		}
 	}
