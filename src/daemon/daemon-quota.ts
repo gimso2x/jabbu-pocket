@@ -268,11 +268,12 @@ export class DaemonQuotaGate {
 		this.#ensureLoaded();
 		const now = this.#ctx.clock.now();
 		const lifts = this.#currentLifts(now);
+		const effective = model ?? config.model;
 		if (config.quotaGate.mode !== "warn") {
-			const hold = this.#gate.checkModel(model, now, lifts);
+			const hold = this.#gate.checkModel(effective, now, lifts);
 			if (hold !== undefined) return formatHoldRefusal(hold, config.timezone);
 		}
-		const runtimeHold = this.#recovery.holdForProvider(providerOfModel(model), now, lifts);
+		const runtimeHold = this.#recovery.holdForProvider(providerOfModel(effective), now, lifts);
 		return runtimeHold === undefined ? undefined : this.#recovery.formatOriginHold(runtimeHold, config.timezone);
 	}
 

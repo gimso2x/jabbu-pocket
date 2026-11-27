@@ -205,7 +205,7 @@ export function criterionLine(text: string): string {
  * One acceptance criterion at registration: a malformed `[check: …]` is refused here; the prose before the block is
  * masked; the block is never changed (the sweep re-runs it as written), so one `redact` would change is refused.
  */
-function redactCriterion(text: string, index: number): string {
+export function redactCriterion(text: string, index: number): string {
 	let signals: Signal[];
 	try {
 		assertCheckPlacement(text);

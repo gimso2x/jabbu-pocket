@@ -177,17 +177,12 @@ export async function verifyClaim(
 ): Promise<VerifyResult> {
 	const claimed = checkRepoPath(evidence.repo);
 	if ("problem" in claimed) return { ok: false, reasons: [claimed.problem] };
-	if (!COMMIT_ARG.test(evidence.commit)) {
+	if (!COMMIT_ARG.test(evidence.commit))
 		return { ok: false, reasons: [`commit is not a valid commit id: ${evidence.commit.slice(0, 80)}`] };
-	}
 	const top = await topLevel(laneCwd, git);
 	if (top === undefined) return { ok: false, reasons: [`lane project ${laneCwd} is not inside a git repository`] };
-	if ((await topLevel(claimed.real, git)) !== top) {
-		return {
-			ok: false,
-			reasons: [`repo_mismatch: ${evidence.repo} is not the lane project's repository (${top})`],
-		};
-	}
+	if ((await topLevel(claimed.real, git)) !== top)
+		return { ok: false, reasons: [`repo_mismatch: ${evidence.repo} is not the lane project's repository (${top})`] };
 	const reasons: string[] = [];
 
 	const status = await git(["-C", top, "status", "--porcelain", "--untracked-files=all"]);
@@ -215,23 +210,27 @@ export async function verifyClaim(
 	if (reasons.length > 0) return { ok: false, reasons };
 	const resolved = await git(["-C", top, "rev-parse", `${evidence.commit}^{commit}`]);
 	const sha = resolved.stdout.trim();
-	if (resolved.code !== 0 || !SHA_PATTERN.test(sha)) {
+	if (resolved.code !== 0 || !SHA_PATTERN.test(sha))
 		return { ok: false, reasons: [`cannot resolve commit ${evidence.commit} in ${top}`] };
-	}
 
-	const reachable = await git(["-C", top, "merge-base", "--is-ancestor", sha, "HEAD"]);
+	const head = await git(["-C", top, "rev-parse", "--verify", "HEAD^{commit}"]);
+	const headSha = head.stdout.trim();
+	const reachable = sha === headSha ? { code: 0 } : await git(["-C", top, "merge-base", "--is-ancestor", sha, "HEAD"]);
 	if (reachable.code === 1) reasons.push(`no_new_commit: commit ${sha} is not reachable from HEAD of ${top}`);
 	else if (reachable.code !== 0) reasons.push(`cannot check that commit ${sha} is reachable from HEAD of ${top}`);
-	else if (baseSha !== undefined) {
-		if (sha === baseSha) {
-			reasons.push(`no_new_commit: commit ${sha} is the commit the lane started from; commit your work first`);
-		} else {
-			const reason = await newWorkProblem(git, top, sha, baseSha, baseBranch);
+	else {
+		if (head.code !== 0 || !SHA_PATTERN.test(headSha)) reasons.push(`cannot resolve HEAD in ${top}`);
+		else if (sha !== headSha)
+			reasons.push(`HEAD가 클레임 커밋이 아님: worktree HEAD ${headSha}, 클레임 ${sha} — HEAD로 다시 주장하세요`);
+		if (baseSha !== undefined) {
+			const reason =
+				sha === baseSha
+					? `no_new_commit: commit ${sha} is the commit the lane started from; commit your work first`
+					: await newWorkProblem(git, top, sha, baseSha, baseBranch);
 			if (reason !== undefined) reasons.push(reason);
 		}
 	}
-	if (reasons.length > 0) return { ok: false, reasons };
-	return { ok: true, sha };
+	return reasons.length > 0 ? { ok: false, reasons } : { ok: true, sha };
 }
 
 /** Why `sha` (not `baseSha` itself) is not new work of the lane; `undefined` = it is. */

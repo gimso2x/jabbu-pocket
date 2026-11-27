@@ -1,13 +1,45 @@
+import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
-import { LaneInputError } from "./manager-constants";
+import { cutCodePointSafe } from "../channel/text";
+import { redact } from "../redact";
+import { LaneInputError, MAX_TITLE_CHARS } from "./manager-constants";
+import type { LaneRow } from "./status";
 
 /** Refusal for a `작업:` first line that aimed at `@<절대경로>` with `~` or a relative path (`./`, `../`). */
 const LANE_TRIGGER_FORMAT_TEXT =
 	"레인으로 열지 못했습니다 — 형식은 `작업: <제목> @<절대경로>`입니다 (상대경로·`~`는 쓸 수 없습니다).";
 
+/** Normalizes a lane title and records the full sha256 when `MAX_TITLE_CHARS` truncates it, avoiding `reuseOpen` collisions. */
+export function normalizeLaneTitle(raw: string): { title: string; titleHash?: string } {
+	const rawTitle = redact(raw.replace(/\s+/g, " ").trim());
+	const title = cutCodePointSafe(rawTitle, MAX_TITLE_CHARS);
+	return {
+		title,
+		...(rawTitle.length > title.length ? { titleHash: createHash("sha256").update(rawTitle).digest("hex") } : {}),
+	};
+}
+
+/** Finds an open lane matching the same parent conversation, normalized title, title hash and requested cwd. */
+export function findReusableOpenLane(
+	lanes: readonly LaneRow[],
+	parentOrigin: string,
+	title: string,
+	titleHash: string | undefined,
+	requestedCwd: string,
+): LaneRow | undefined {
+	return lanes.find(
+		(row) =>
+			row.status !== "closed" &&
+			row.meta.parentOrigin === parentOrigin &&
+			row.title === title &&
+			row.meta.titleHash === titleHash &&
+			row.meta.requestedCwd === requestedCwd,
+	);
+}
+
 /** Splits trimmed `text` at line 1 and skips `작업:[ \t]*` to the title start (O(n), no backtracking regex). */
 function laneHeaderLine(text: string): { s: string; titleStart: number; lineEnd: number } | undefined {
-	const s = text.trim();
+	const s = text.replace(/\r\n?/g, "\n").trim();
 	if (!s.startsWith("작업:")) return undefined;
 	const nl = s.indexOf("\n");
 	const lineEnd = nl === -1 ? s.length : nl;

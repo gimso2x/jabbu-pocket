@@ -62,7 +62,6 @@ import {
 	MAX_BRIEF_CHARS,
 	MAX_LANE_EVIDENCE,
 	MAX_MILESTONE_CHARS,
-	MAX_TITLE_CHARS,
 	OVERLAP_REPLY,
 	PAUSED_LANE_REPLY,
 	PR_CUT_BY_RESTART,
@@ -140,6 +139,7 @@ import {
 	buildRebasePrompt,
 	classifyClosedLaneMessage,
 } from "./trigger";
+import { findReusableOpenLane, normalizeLaneTitle } from "./trigger-format";
 import { type ClaimEvidence, defaultGit, resolveBaseSha, type VerifyResult, verifyClaim } from "./verify";
 import { advertisedWorkflow, isUlwWorkflow } from "./workflow";
 import { DEFAULT_LANE_RISK, laneBranchOf, laneIdsOnBranches, nextLaneId, resolveLaneRepo } from "./worktree";
@@ -374,7 +374,7 @@ export class LaneManager {
 			log.warn("lane_refused_frozen", { channel: input.channel });
 			throw new LaneInputError(frozenMessage(frozen));
 		}
-		const title = cutCodePointSafe(redact(input.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
+		const { title, titleHash } = normalizeLaneTitle(input.title);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
 		const { risk, acceptance, scope, requestedTier, tierConfidence, tierReason, externalPrInput, workflow } =
 			parseStartArgs(input, this.#deps.laneModels?.());
@@ -409,15 +409,7 @@ export class LaneManager {
 		}
 		// Both checks run before the first await: a concurrent start of the same key sees the registration.
 		if (input.reuseOpen === true && input.parentOrigin !== undefined) {
-			const open = store
-				.listLanes()
-				.find(
-					(row) =>
-						row.status !== "closed" &&
-						row.meta.parentOrigin === input.parentOrigin &&
-						row.title === title &&
-						row.meta.requestedCwd === cwd,
-				);
+			const open = findReusableOpenLane(store.listLanes(), input.parentOrigin, title, titleHash, cwd);
 			if (open !== undefined) {
 				log.info("lane_start_reused", { lane: open.name, parentOrigin: input.parentOrigin });
 				return {
@@ -428,7 +420,7 @@ export class LaneManager {
 			}
 		}
 		// A start without a conversation (no `parentOrigin`) has nothing to be the same request of: its key is its own.
-		const startKey = `${input.parentOrigin ?? crypto.randomUUID()}\0${title}\0${cwd}`;
+		const startKey = `${input.parentOrigin ?? crypto.randomUUID()}\0${titleHash ?? title}\0${cwd}`;
 		if (this.#startingKeys.has(startKey)) throw new LaneInputError("같은 레인을 시작하는 중입니다");
 		this.#startingKeys.add(startKey);
 		const borrowed = claimBorrowedThread(input, this.#borrowingThreads, this.#deps.store);
@@ -529,6 +521,7 @@ export class LaneManager {
 						steerSeq: 0,
 						baseSha,
 						laneId,
+						...(titleHash === undefined ? {} : { titleHash }),
 						...(input.parentOrigin === undefined ? {} : { parentOrigin: input.parentOrigin }),
 						requestedCwd: cwd,
 						repo,
@@ -2763,7 +2756,7 @@ export class LaneManager {
 			throw new LaneInputError(`after는 선행 레인 이름 1~${RESERVATION_AFTER_MAX}개여야 합니다.`);
 		}
 		if (new Set(names).size !== names.length) throw new LaneInputError("after에 같은 레인이 두 번 들어 있습니다.");
-		const title = cutCodePointSafe(redact(args.title.replace(/\s+/g, " ").trim()), MAX_TITLE_CHARS);
+		const { title } = normalizeLaneTitle(args.title);
 		if (title === "") throw new LaneInputError("작업 제목이 비어 있습니다.");
 		parseStartArgs(args, this.#deps.laneModels?.());
 		if (names.includes(slugify(title))) {
