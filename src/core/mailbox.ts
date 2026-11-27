@@ -1369,6 +1369,15 @@ export class OriginMailbox {
 		if (!origin) throw new OmpDriverError("not_started", `unknown origin ${originKey}`);
 		// Freshness must be read before the child exists: an empty epoch dir means this session is brand-new.
 		this.#freshSession = epochDirIsFresh(origin.sessionDir);
+		if (this.#freshSession) {
+			// A rotation dropped the session pointer after the last turn; a daemon restart before the next turn loses
+			// the in-memory flag, but exchanges of this epoch prove this is a post-rotation session, not a first one.
+			// A fresh dir with no exchanges is still a first session (`/new` starts a new epoch with none).
+			if (this.#rotatedSession || store.listOriginExchanges(originKey, origin.epoch, 1).length > 0) {
+				this.#freshSession = false;
+				this.#rotatedSession = true;
+			}
+		}
 		const expected = sessionToResume(origin);
 		const peerTouched = store.originHasPeerInbound(originKey);
 		const spawnIdentity = this.#idle.identity();

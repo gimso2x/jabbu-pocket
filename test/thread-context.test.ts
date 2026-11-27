@@ -254,4 +254,53 @@ describe("agy conversation rotation", () => {
 		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.666", "그다음 질문")));
 		expect(promptsOf(driverAt(1))[3]).toBe("prompt:그다음 질문");
 	});
+
+	test("a restart between a rotation and the next turn still carries the rotation context", async () => {
+		await turn(router.mailbox(CHANNEL), 0, () => router.route(msg(CHANNEL, REF, "C1:111.222", "스레드 시작 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: CHANNEL }).find((d) => d.threadRef === REF));
+
+		const threadMailbox = router.mailbox(THREAD);
+		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.333", "첫 질문")));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD })[0]);
+		await turn(threadMailbox, 1, () => router.route(msg(THREAD, REF, "C1:111.444", `긴 작업 ${ROTATE}`)));
+		confirmDelivery(store.listDeliveries({ originKey: THREAD })[1]);
+
+		// Daemon restart before the next turn: a new router (and mailbox) over the same store; the in-memory
+		// rotation flag is gone, only the ledger's exchanges of this epoch remain.
+		await router.close();
+		router = new OriginRouter({
+			timezone: "Asia/Seoul",
+			store,
+			clock,
+			sessionsRoot: join(dir, "sessions"),
+			log: createLogger({ sink: () => undefined, clock, redact }),
+			statusProvider: () => "status: ok",
+			driverFactory: (_origin, sessionDir) => {
+				const driver = new FakeOmpDriver({
+					sessionDir,
+					store: new FakeSessionStore(),
+					holdTurns: true,
+					turnUsage: (prompt) => ({
+						calls: 1,
+						input: 1000,
+						cacheRead: 0,
+						output: 10,
+						rotated: prompt.endsWith(ROTATE),
+					}),
+				});
+				drivers.push(driver);
+				return driver;
+			},
+		});
+		const restartedMailbox = router.mailbox(THREAD);
+		await turn(restartedMailbox, 2, () => router.route(msg(THREAD, REF, "C1:111.555", "회전 뒤 질문")));
+		const rotated = promptsOf(driverAt(2))[0] ?? "";
+		expect(rotated.startsWith(`prompt:${ROTATION_CONTEXT_HEADER}\n`)).toBe(true);
+		expect(rotated).toContain("스레드 시작 메시지");
+		expect(rotated).toContain("- 받은 질문(");
+		expect(rotated).toContain(": 첫 질문");
+		expect(rotated).toContain(`: 긴 작업 ${ROTATE}`);
+		expect(rotated).toContain("- 이 세션이 올린 답(");
+		expect(rotated.endsWith("\n\n[현재 요청]\n회전 뒤 질문")).toBe(true);
+	});
 });
