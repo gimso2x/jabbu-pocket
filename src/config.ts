@@ -101,6 +101,9 @@ export function primaryOwnerUserId(channels: ChannelsConfig): string {
 	return owner;
 }
 
+/** `coldResumeRotateTokens` when the key is left out. */
+export const COLD_RESUME_ROTATE_DEFAULT_TOKENS = 150_000;
+
 /** `peerSilenceAlert.minutes` when the key is left out, and the largest value it takes (one day). */
 export const PEER_SILENCE_DEFAULT_MINUTES = 10;
 const PEER_SILENCE_MAX_MINUTES = 1440;
@@ -135,6 +138,7 @@ const ROOT_KEYS = new Set([
 	"maxBundleBytes",
 	"offsite",
 	"idleTimeoutMinutes",
+	"coldResumeRotateTokens",
 	"idleKeepResident",
 	"idStart",
 	"skillReviewTurns",
@@ -226,6 +230,8 @@ export interface JabbuConfig {
 	offsite?: { ssh: string; remoteDir: string; keep?: number };
 	/** Minutes after which an idle omp child becomes a candidate to stop (the session stays); 0 disables. Default 30. */
 	idleTimeoutMinutes?: number;
+	/** A conversation of this many tokens resumed past its cache TTL starts a new session (0: off). Default `COLD_RESUME_ROTATE_DEFAULT_TOKENS`. */
+	coldResumeRotateTokens?: number;
 	/** Keeps idle conversation children resident until 50% context, binary change, or pressure (default true). */
 	idleKeepResident?: boolean;
 	idStart?: number; // first daily [TASK]/lane number: bots sharing a records repo or repo split the day (default 1)
@@ -301,10 +307,7 @@ export interface JabbuConfig {
 	 * (`jabbu_work_start` `model`); a tier left out cannot be picked. `land`: how each repository's lanes land.
 	 */
 	lanes?: { models?: LaneModelTiers; land?: Record<string, LaneLandRepoConfig> };
-	/**
-	 * Post "재시작 중" / "다시 연결됨" / "재시작 취소" notices to recently active conversations around a drain restart.
-	 * Default true.
-	 */
+	/** Post "재시작 중" / "다시 연결됨" / "재시작 취소" notices to recently active conversations; default true. */
 	restartNotice?: boolean;
 	/** Prepend channel-scoped recall of earlier conversation rows to a turn prompt that points at the past. Default true. */
 	recallEnabled?: boolean;
@@ -338,10 +341,7 @@ export interface JabbuConfig {
 		peerHomes?: Array<{ name: string; home: string }>;
 		channelNames?: Record<string, string>;
 	};
-	/**
-	 * `jabbu-pocket apply` (read on every run, never by the daemon). `codeRollback`: what a failed apply whose config rollback
-	 * also failed does with the code — see `CodeRollbackMode`; absent = `DEFAULT_CODE_ROLLBACK`.
-	 */
+	/** `jabbu-pocket apply` (CLI only). `codeRollback`: code fate when a failed apply's config rollback fails too; see `CodeRollbackMode`. */
 	apply?: { codeRollback?: CodeRollbackMode };
 	/**
 	 * `!brief`: the chromium that draws the picture. `chromium` is a name on PATH or an absolute path
@@ -744,6 +744,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	const maxBundleBytes = optionalInt(configPath, root, "maxBundleBytes", 1);
 	const idStart = optionalInt(configPath, root, "idStart", 1, 9_000);
 	const idleTimeoutMinutes = optionalInt(configPath, root, "idleTimeoutMinutes", 0);
+	const coldResumeRotateTokens = optionalInt(configPath, root, "coldResumeRotateTokens", 0);
 	const idleKeepResident = root.idleKeepResident;
 	if (idleKeepResident !== undefined && typeof idleKeepResident !== "boolean") invalid(configPath, "idleKeepResident");
 	const skillReviewTurns = optionalInt(configPath, root, "skillReviewTurns", 0);
@@ -1142,6 +1143,7 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (offsite !== undefined) config.offsite = offsite;
 	const plain = { maxBundleBytes, idleTimeoutMinutes, idleKeepResident, idStart, skillReviewTurns, hostSessionCeiling };
 	for (const [key, value] of Object.entries(plain)) if (value !== undefined) Object.assign(config, { [key]: value });
+	if (coldResumeRotateTokens !== undefined) config.coldResumeRotateTokens = coldResumeRotateTokens;
 	if (ownerSilenceFallbackMinutes !== undefined) config.ownerSilenceFallbackMinutes = ownerSilenceFallbackMinutes;
 	if (peerHopLimit !== undefined) config.peerHopLimit = peerHopLimit as { turns: number; windowMinutes: number };
 	if (peerSilenceAlert !== undefined) config.peerSilenceAlert = peerSilenceAlert;

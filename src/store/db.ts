@@ -34,6 +34,7 @@ import {
 import type { ApprovalDetail, ApprovalInput, AutoChoiceInput, ExpiredApproval } from "../safety/approval";
 import { TaskLedger } from "../tasks/ledger";
 import { type CardAnswerVerdict, insertCardAnswer, judgeCardAnswer } from "./card-answers";
+import { bumpEpoch } from "./db-epoch";
 import {
 	type ApprovalRow,
 	type ApprovalSql,
@@ -521,19 +522,13 @@ export class Store {
 	 * discarded rows are linked to that op, so the command's delivery also finishes their thread status messages.
 	 */
 	newEpoch(originKey: string, sessionDir: string, opRef?: string, sessionFile?: string): OriginRow {
-		this.db.transaction(() => {
-			this.requireOrigin(originKey);
-			this.db
-				.query(
-					"UPDATE origins SET epoch = epoch + 1, session_dir = ?, session_file = ?, updated_at = ? WHERE origin_key = ?",
-				)
-				.run(sessionDir, sessionFile ?? null, this.clock.now(), originKey);
-			this.db
-				.query(
-					"UPDATE inbound SET state = 'discarded', op_ref = COALESCE(?, op_ref) WHERE origin_key = ? AND state = 'pending'",
-				)
-				.run(opRef ?? null, originKey);
-		})();
+		bumpEpoch(this.db, this.clock.now(), originKey, sessionDir, { discard: true, opRef }, sessionFile);
+		return this.requireOrigin(originKey);
+	}
+
+	/** Cold-resume rotation: a new epoch and session dir like `newEpoch`, but the pending inbound rows move to it undiscarded. */
+	rotateEpochKeepPending(originKey: string, sessionDir: string): OriginRow {
+		bumpEpoch(this.db, this.clock.now(), originKey, sessionDir, { discard: false });
 		return this.requireOrigin(originKey);
 	}
 
