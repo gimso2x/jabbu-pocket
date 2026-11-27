@@ -1649,4 +1649,32 @@ describe("inline reply channels (channels.discord.inlineReplyChannels)", () => {
 		expect(inbound.at(-1)?.originKey).toBe(`discord/ch/${CH}/t/${root.id}`);
 		expect(lookups(root.id)).toHaveLength(0);
 	});
+
+	test("recovery reads a thread opened from a marked body root as a server thread, not a DM", async () => {
+		const root = message(`<@${BOT}> 질문`);
+		const cursors = new Map<string, string>([[`dc:${root.id}`, "1"]]);
+		const made = await adapter({
+			...inlineOptions(),
+			recovery: {
+				cursors: {
+					getCursor: (key) => cursors.get(key),
+					setCursor: (key, value) => void cursors.set(key, value),
+					deleteCursor: (key) => void cursors.delete(key),
+				},
+				targets: () => [{ channelId: root.id, dm: false }],
+			},
+		});
+		// After a restart the root is marked again (cached with no server) before its thread, which shares its id.
+		await transport.emitMessage(root);
+		transport.setChannel({ id: root.id, type: 11, parentId: CH, guildId: GUILD });
+		const missed = message(`<@${BOT}> 스레드에서 놓친 말`, { channel_id: root.id, guild_id: undefined });
+		transport.history.set(root.id, [missed]);
+		made.recover();
+		await made.recoveryIdle();
+		expect(inbound.at(-1)).toMatchObject({
+			platformMessageId: `${CH}:${missed.id}`,
+			originKey: `discord/ch/${CH}/t/${root.id}`,
+		});
+		expect(inbound.some((m) => m.originKey.startsWith("discord/dm/"))).toBe(false);
+	});
 });

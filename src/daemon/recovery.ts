@@ -11,6 +11,7 @@ import { entryText, type OmpEntry, type OmpSessionDriver } from "../omp/driver";
 import type { Store } from "../store/db";
 import type { InboundRow } from "../store/db-rows";
 import { taskClosed } from "./daemon-task-resume";
+import { indexLockOf } from "./index-lock";
 import { settleBootToolFreeRows } from "./recovery-tool-free";
 
 export const INTERRUPTED_NOTICE = "[turn failed] interrupted_by_restart — 다시 보내 주세요";
@@ -239,9 +240,7 @@ export async function recoverDispatched(deps: RecoveryDeps): Promise<RecoveryRes
 						: undefined;
 				if (parts === undefined && resumed !== undefined) {
 					const id = `${CONTINUE_ID_PREFIX}${lead.platformMessageId}`;
-					const locks = [...new Set(deps.lockRepos?.(originKey) ?? [])]
-						.map((repo) => join(repo, ".git", "index.lock"))
-						.filter((lock) => existsSync(lock));
+					const locks = [...new Set(deps.lockRepos?.(originKey) ?? [])].map(indexLockOf).filter(existsSync);
 					store.recordContinuation({
 						originKey,
 						opRef,

@@ -17,7 +17,7 @@ const ANTHROPIC_CACHE_TTL_MS = 60 * 60_000;
 
 export type CacheMissReason = "model_switch" | "compaction" | "expired" | "child_restart" | "unexplained";
 
-/** One assistant call as the classifier sees it. */
+/** One assistant call as the classifier sees it (`costCacheWrite`: dollar cost of its cache write, 0 when unknown). */
 export interface CacheCall {
 	at: number;
 	provider: string;
@@ -25,24 +25,20 @@ export interface CacheCall {
 	input: number;
 	cacheRead: number;
 	cacheWrite: number;
-	/** Dollar cost of the call's cache write (`usage.cost.cacheWrite`); 0 when unknown. */
 	costCacheWrite: number;
 }
 
-/** Why a cache could have been dropped since the baseline call. */
+/** Why a cache could have been dropped since the baseline call: a new omp child took the session over / it was compacted. */
 export interface CacheFlags {
-	/** A new omp child took over the session since the baseline call. */
 	childRestarted: boolean;
-	/** The session was compacted since the baseline call. */
 	compacted: boolean;
 }
 
-/** The previous call's reusable prefix. */
+/** The previous call's reusable prefix (`prefix` = `cacheRead + cacheWrite` of that call). */
 export interface CacheBaseline {
 	at: number;
 	provider: string;
 	model: string;
-	/** `cacheRead + cacheWrite` of that call. */
 	prefix: number;
 }
 
@@ -164,12 +160,16 @@ export class CacheMonitor {
 	}
 }
 
-/** Whether a new turn on this baseline starts with a cold cache worth a warning. */
-export function isColdCache(baseline: CacheBaseline | undefined, now: number): boolean {
-	if (baseline === undefined || baseline.prefix < COLD_CACHE_WARN_TOKENS) return false;
+/** Whether a new turn resumes a prefix of `tokens`+ past its provider's cache TTL (TTL unknown: never). */
+export function shouldRotateOnColdResume(baseline: CacheBaseline | undefined, now: number, tokens: number): boolean {
+	if (baseline === undefined || baseline.prefix < tokens) return false;
 	const ttl = cacheTtlMs(baseline.provider);
 	return ttl !== undefined && now - baseline.at > ttl;
 }
+
+/** Whether a new turn on this baseline starts with a cold cache worth a warning. */
+export const isColdCache = (baseline: CacheBaseline | undefined, now: number): boolean =>
+	shouldRotateOnColdResume(baseline, now, COLD_CACHE_WARN_TOKENS);
 
 const kTokens = (tokens: number): string => `${Math.round(tokens / 1000)}k`;
 

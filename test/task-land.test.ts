@@ -229,6 +229,21 @@ describe("landTask through Daemon.autoLand (real git)", () => {
 			expect(tipOf(row)).toBe(old);
 		});
 
+		test("hidden change (--assume-unchanged): refused up front, the edit survives", async () => {
+			const { row } = seed();
+			const old = tipOf(row);
+			git(row.worktree, "update-index", "--assume-unchanged", "a.txt");
+			writeFileSync(join(row.worktree, "a.txt"), "hidden edit\n");
+			expect(git(row.worktree, "status", "--porcelain")).toBe("");
+			await expectHandoff(
+				row,
+				"worktree에 커밋 안 된 변경 1건: a.txt (status가 숨긴 변경)",
+				git(repo, "rev-parse", "main"),
+			);
+			expect(tipOf(row)).toBe(old);
+			expect(readFileSync(join(row.worktree, "a.txt"), "utf8")).toBe("hidden edit\n");
+		});
+
 		test("non-bare origin URL (a path without .git): worktree branch at OLD", async () => {
 			const { row } = seed();
 			const old = tipOf(row);

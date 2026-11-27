@@ -9,10 +9,13 @@ import { basename, dirname } from "node:path";
 import { DiscordChannel } from "../src/discord/channel";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { LaneInputError } from "../src/lanes/manager-constants";
+import type { LaneManagerDeps } from "../src/lanes/manager-types";
 import { buildWorkStartTool } from "../src/lanes/tools";
 import type { CgroupMemory } from "../src/ops/cgroup-memory";
+import type { FreezeState } from "../src/ops/freeze";
 import type { HostLoadReader, StatfsReader } from "../src/ops/host-resources";
 import type { ProcCmdlineReader, SessionCeilingGate } from "../src/ops/host-sessions";
+import type { ApprovalResult } from "../src/safety/approval";
 import { startTask, type TaskDispatchDeps } from "../src/tasks/dispatch";
 import type { TaskHostOps, TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
@@ -21,7 +24,7 @@ import { CHANNEL, makeHome, OWNER, type TestHome } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
 import { makeRepo } from "./helpers/git-fixtures";
-import { type LaneHarness, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
+import { type LaneHarness, type LaneHarnessExtra, laneHarness, removeRepoAndWorktrees } from "./helpers/lane-harness";
 
 const GIB = 1024 ** 3;
 /** 2026-10-26 15:00 KST: the task id of this harness's first [TASK] reads `T-20261026-01`. */
@@ -102,8 +105,15 @@ describe("lane start capacity", () => {
 	test("the owner's explicit force passes the refusal", async () => {
 		const repo = makeRepo(repos);
 		const tight = { value: true };
-		const h = laneHarness(home.dir, { hostLoad: tighteningHost(tight) });
-		const lane = await h.manager.start({ title: "forced lane", cwd: repo, channel: CHANNEL, force: true });
+		// The harness models an owner-confirmed force: the start passes its card.
+		const h = laneHarness(home.dir, { hostLoad: tighteningHost(tight), requestApproval: async () => "approved" });
+		const lane = await h.manager.start({
+			title: "forced lane",
+			cwd: repo,
+			channel: CHANNEL,
+			parentOrigin: "discord/dm/1",
+			force: true,
+		});
 		await h.settle();
 		expect(h.store.getLane(lane.name)?.status).toBe("working");
 		expect(h.logs.some((line) => line.includes("lane_start_forced"))).toBe(true);
@@ -129,7 +139,8 @@ describe("lane start capacity", () => {
 	test("the work-start tool adds the force hint to the refusal and starts on force", async () => {
 		const repo = makeRepo(repos);
 		const tight = { value: true };
-		const h = laneHarness(home.dir, { hostLoad: tighteningHost(tight) });
+		// The force start passes its owner card (see the test above).
+		const h = laneHarness(home.dir, { hostLoad: tighteningHost(tight), requestApproval: async () => "approved" });
 		const tool = buildWorkStartTool(h.manager, CHANNEL, `discord/ch/${CHANNEL}`);
 		const signal = new AbortController().signal;
 		const refused = await tool.execute({ title: "via tool", cwd: repo }, { signal }).catch((e: unknown) => e);
@@ -345,7 +356,11 @@ describe("host-wide omp session ceiling", () => {
 
 	test("a lane start refuses with the session reason and force passes", async () => {
 		const repo = makeRepo(repos);
-		const h = laneHarness(home.dir, { hostSessions: { ceiling: 1, list: oneSession } });
+		const h = laneHarness(home.dir, {
+			hostSessions: { ceiling: 1, list: oneSession },
+			// The force start passes its owner card (see the cgroup test above).
+			requestApproval: async () => "approved",
+		});
 		const refused = await h.manager
 			.start({ title: "session lane", cwd: repo, channel: CHANNEL })
 			.catch((error: unknown) => error);
@@ -355,9 +370,113 @@ describe("host-wide omp session ceiling", () => {
 		expect(siblingWorktrees(repo)).toEqual([]);
 		expect(h.logs.some((line) => line.includes("lane_start_refused_capacity"))).toBe(true);
 
-		const lane = await h.manager.start({ title: "forced session lane", cwd: repo, channel: CHANNEL, force: true });
+		const lane = await h.manager.start({
+			title: "forced session lane",
+			cwd: repo,
+			channel: CHANNEL,
+			parentOrigin: "discord/dm/1",
+			force: true,
+		});
 		await h.settle();
 		expect(h.store.getLane(lane.name)?.status).toBe("working");
+		h.close();
+	});
+});
+
+describe("force:true capacity override asks the owner on a card", () => {
+	type ForceAsk = Parameters<NonNullable<LaneManagerDeps["requestApproval"]>>[0];
+
+	/** A tight-host harness whose force card answers `answer`; `onAsk` runs before the answer lands. */
+	const forceHarness = (
+		answer: ApprovalResult,
+		onAsk?: () => void,
+		extra: LaneHarnessExtra = {},
+	): { h: LaneHarness; asks: ForceAsk[] } => {
+		const tight = { value: true };
+		const asks: ForceAsk[] = [];
+		const h = laneHarness(home.dir, {
+			hostLoad: tighteningHost(tight),
+			...extra,
+			requestApproval: async (request) => {
+				asks.push(request);
+				onAsk?.();
+				return answer;
+			},
+		});
+		return { h, asks };
+	};
+
+	const forcedStart = (h: LaneHarness, repo: string) =>
+		h.manager.start({ title: "forced lane", cwd: repo, channel: CHANNEL, parentOrigin: "discord/dm/1", force: true });
+
+	test("an approved force card starts past a cgroup refusal with the measured numbers", async () => {
+		const repo = makeRepo(repos);
+		const { h, asks } = forceHarness("approved");
+		const lane = await forcedStart(h, repo);
+		await h.settle();
+		expect(h.store.getLane(lane.name)?.status).toBe("working");
+		expect(asks).toHaveLength(1);
+		expect(asks[0]?.channel).toBe(CHANNEL);
+		expect(asks[0]?.summary).toContain("강행");
+		expect(asks[0]?.detail.action).toContain("cgroup v2 high 여유 5.0% (기준 10%)");
+		expect(asks[0]?.origin.originKey).toBe("discord/dm/1");
+		expect(h.logs.some((line) => line.includes("lane_start_forced"))).toBe(true);
+		h.close();
+	});
+
+	test("a denied force card refuses the start and creates nothing", async () => {
+		const repo = makeRepo(repos);
+		const { h, asks } = forceHarness("denied");
+		const refused = await forcedStart(h, repo).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LaneInputError);
+		expect(String((refused as Error).message)).toBe("시작 거부: cgroup v2 high 여유 5.0% (기준 10%)");
+		expect(asks).toHaveLength(1);
+		expect(h.store.listLanes()).toHaveLength(0);
+		expect(siblingWorktrees(repo)).toEqual([]);
+		expect(h.logs.some((line) => line.includes("lane_start_forced"))).toBe(false);
+		h.close();
+	});
+
+	test("force:true with no approver refuses the start", async () => {
+		const repo = makeRepo(repos);
+		const tight = { value: true };
+		const h = laneHarness(home.dir, { hostLoad: tighteningHost(tight) });
+		const refused = await forcedStart(h, repo).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LaneInputError);
+		expect(String((refused as Error).message)).toBe("시작 거부: cgroup v2 high 여유 5.0% (기준 10%)");
+		expect(h.store.listLanes()).toHaveLength(0);
+		expect(siblingWorktrees(repo)).toEqual([]);
+		h.close();
+	});
+
+	test("a free-text reply to the force card is not approval", async () => {
+		const repo = makeRepo(repos);
+		const { h, asks } = forceHarness({ replied: "강행해" });
+		const refused = await forcedStart(h, repo).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LaneInputError);
+		expect(String((refused as Error).message)).toBe("시작 거부: cgroup v2 high 여유 5.0% (기준 10%)");
+		expect(asks).toHaveLength(1);
+		expect(h.store.listLanes()).toHaveLength(0);
+		expect(siblingWorktrees(repo)).toEqual([]);
+		h.close();
+	});
+
+	test("freeze after the card refuses the start", async () => {
+		const repo = makeRepo(repos);
+		let frozen: FreezeState | undefined;
+		const { h, asks } = forceHarness(
+			"approved",
+			() => {
+				frozen = { since: "2026-11-27T00:00:00.000Z", reason: "maintenance", by: "cli" };
+			},
+			{ frozen: () => frozen },
+		);
+		const refused = await forcedStart(h, repo).catch((error: unknown) => error);
+		expect(refused).toBeInstanceOf(LaneInputError);
+		expect(String((refused as Error).message)).toContain("동결 중입니다");
+		expect(asks).toHaveLength(1);
+		expect(h.store.listLanes()).toHaveLength(0);
+		expect(siblingWorktrees(repo)).toEqual([]);
 		h.close();
 	});
 });

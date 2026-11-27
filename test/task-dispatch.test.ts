@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkerAgyConfig } from "../src/config";
+import type { BranchRule, WorkerAgyConfig } from "../src/config";
 import { DiscordChannel } from "../src/discord/channel";
 import type { HerdrBoardConfig } from "../src/dispatch/board";
 import type { ProcessRunner } from "../src/dispatch/omp";
@@ -15,7 +15,13 @@ import type { HostToolDef } from "../src/safety/host-tools";
 import type { HerdrPromptInput } from "../src/store/db-rows";
 import { type TaskJudgement, taskChecksOf } from "../src/tasks/checker";
 import { acceptanceItems, docsDirOf, docsDirUnder, type TaskRisk } from "../src/tasks/docs";
-import type { HostResult, ProgressLag, TaskHostOps, TaskResumeOps } from "../src/tasks/host";
+import {
+	createTaskHostOps,
+	type HostResult,
+	type ProgressLag,
+	type TaskHostOps,
+	type TaskResumeOps,
+} from "../src/tasks/host";
 import { TaskLedger } from "../src/tasks/ledger";
 import { buildAcceptedCard, buildAutoLandCard, buildReachedCard } from "../src/tasks/notify";
 import type { TaskMailboxPort } from "../src/tasks/runtime";
@@ -24,7 +30,7 @@ import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
 import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
 import { ROOMY_STATFS } from "./helpers/disk";
-import { makeRepo } from "./helpers/git-fixtures";
+import { git, makeRepo } from "./helpers/git-fixtures";
 import { fakeMailbox } from "./helpers/local-task";
 
 const NOW = Date.parse("2026-10-26T06:00:00Z");
@@ -50,6 +56,8 @@ interface FakeHost extends TaskHostOps, TaskResumeOps {
 	files: Map<string, string>;
 	existing: Set<string>;
 	calls: string[];
+	/** The `base` each `createWorktree` call asked for. */
+	bases: Array<string | undefined>;
 	failCreate?: string;
 	failCommit?: string;
 	/** A PROGRESS.md read answers this failure. */
@@ -65,6 +73,7 @@ function fakeHost(): FakeHost {
 		files: new Map(),
 		existing: new Set(),
 		calls: [],
+		bases: [],
 		removedRecords: [],
 		lag: { ok: true, value: { progressCommit: "abc1234", codeCommitsSince: 0, progressDirty: false, otherDirty: 0 } },
 		async pathExists(path): Promise<HostResult<boolean>> {
@@ -72,6 +81,7 @@ function fakeHost(): FakeHost {
 		},
 		async createWorktree(input) {
 			host.calls.push(`create ${input.worktree} ${input.branch}`);
+			host.bases.push(input.base);
 			if (host.failCreate !== undefined) return { ok: false, error: host.failCreate };
 			host.existing.add(input.worktree);
 			return { ok: true, value: null };
@@ -160,6 +170,10 @@ function harness(
 		workerOmpArgs?: string[];
 		/** Config `dispatchHosts.wsl.ompArgs`. */
 		wslOmpArgs?: string[];
+		/** Real host ops (a git-backed start) instead of the fake host. */
+		hostOps?: TaskHostOps & TaskResumeOps;
+		/** Config `dispatchHosts.wsl.branchRules`. */
+		wslBranchRules?: BranchRule[];
 		/** The inbound ledger has no [TASK] root text, so context.md takes `task`. */
 		noRoot?: boolean;
 		/** Config `lanes.models` as the daemon holds it: `current` may be swapped between calls (a reload). */
@@ -231,6 +245,7 @@ function harness(
 				ssh: "wsl-ssh",
 				workDir: "/r",
 				...(options.wslOmpArgs === undefined ? {} : { ompArgs: options.wslOmpArgs }),
+				...(options.wslBranchRules === undefined ? {} : { branchRules: options.wslBranchRules }),
 			},
 		}),
 		...(options.workerOmpArgs === undefined ? {} : { workerOmpArgs: options.workerOmpArgs }),
@@ -258,7 +273,7 @@ function harness(
 						rootText: () => (options.noRoot === true ? undefined : "[TASK] L2 로그 회전\n목표: 회전"),
 						channels: registryOf(new DiscordChannel(transport, { ownerUserId: OWNER })),
 						now: () => NOW,
-						hostOps: () => host,
+						hostOps: () => options.hostOps ?? host,
 						...(options.headless === undefined ? {} : { headless: options.headless }),
 						...(options.recordsRepo === undefined ? {} : { recordsRepo: options.recordsRepo }),
 						hostLoad: options.hostLoad ?? IDLE_HOST_LOAD,
@@ -1732,5 +1747,177 @@ describe("force:true capacity override asks the owner on a card", () => {
 		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
 		expect(h.approvals).toHaveLength(1);
 		expect(h.ledger.list()).toEqual([]);
+	});
+});
+
+describe("taskSpec.branch and dispatchHosts.<h>.branchRules", () => {
+	const RULE: BranchRule = {
+		repoPrefix: "/r/",
+		exclude: ["/r/personal"],
+		pattern: "^feature/\\d{6}-[^\\s/]+$",
+		example: "feature/YYYYMM-기능명",
+	};
+	const RISKY = "git push --force origin main";
+	const HANGUL = "feature/202611-배너교체";
+	const rows = (h: Harness) => (h.db.query("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
+
+	test("AC-1: a ruled repository without a branch is refused before the approval card, leaving nothing behind", async () => {
+		const h = harness({ wslBranchRules: [RULE], approval: "approved" });
+		await expect(call(h, { host: "wsl", taskSpec: GOOD_SPEC, task: RISKY })).rejects.toThrow("feature/YYYYMM-기능명");
+		expect(h.approvals).toEqual([]);
+		expect(rows(h)).toBe(0);
+		expect(h.host.calls).toEqual([]);
+		expect([...h.host.files.keys()]).toEqual([]);
+		expect(h.herdr).toEqual([]);
+	});
+
+	test("AC-2: a non-matching branch is refused, a matching one names the row and the worktree branch", async () => {
+		const h = harness({ wslBranchRules: [RULE], approval: "approved" });
+		await expect(call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: "task/x" }, task: RISKY })).rejects.toThrow(
+			"feature/YYYYMM-기능명",
+		);
+		expect(h.approvals).toEqual([]);
+		expect(rows(h)).toBe(0);
+		expect(h.host.calls).toEqual([]);
+
+		expect(await call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: HANGUL }, task: "go" })).toContain(
+			"등록·시작했습니다",
+		);
+		expect(h.ledger.require("T-20261026-01").branch).toBe(HANGUL);
+		expect(h.host.calls[0]).toBe(`create /r/repo-t-20261026-01 ${HANGUL}`);
+	});
+
+	test("AC-3: an unruled repository takes the default, or the given name", async () => {
+		const h = harness({ wslBranchRules: [{ ...RULE, repoPrefix: "/company/" }] });
+		await call(h, { host: "wsl", taskSpec: GOOD_SPEC, task: "go" });
+		expect(h.ledger.require("T-20261026-01").branch).toBe("task/T-20261026-01");
+		await call(h, { host: "wsl", taskSpec: { ...GOOD_SPEC, repo: "/r/other", branch: "my/work" }, task: "go" });
+		expect(h.ledger.require("T-20261026-02").branch).toBe("my/work");
+		const excluded = harness({ wslBranchRules: [RULE] });
+		await call(excluded, { host: "wsl", taskSpec: { ...GOOD_SPEC, repo: "/r/personal" }, task: "go" });
+		expect(excluded.ledger.require("T-20261026-01").branch).toBe("task/T-20261026-01");
+	});
+
+	test("an unsafe branch is refused on a local repository too, and resume takes no branch", async () => {
+		const h = harness();
+		await expect(call(h, { taskSpec: { ...GOOD_SPEC, branch: "a;b" }, task: "go" })).rejects.toThrow("taskSpec.branch");
+		expect(rows(h)).toBe(0);
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		await expect(call(h, { taskSpec: { id: "T-20261026-01", branch: "x" } })).rejects.toThrow();
+	});
+});
+
+describe("taskSpec.base and dispatchHosts.<h>.branchRules[].base", () => {
+	const RULE: BranchRule = {
+		repoPrefix: "/r/",
+		pattern: "^feature/\\d{6}-[^\\s/]+$",
+		example: "feature/YYYYMM-기능명",
+		base: "origin/master",
+	};
+	const BRANCH = "feature/202611-x";
+	const RISKY = "git push --force origin main";
+	const rows = (h: Harness) => (h.db.query("SELECT COUNT(*) AS n FROM tasks").get() as { n: number }).n;
+
+	test("AC-2: taskSpec.base beats the rule's base, the rule beats HEAD", async () => {
+		const ruled = harness({ wslBranchRules: [RULE] });
+		await call(ruled, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: BRANCH, base: "origin/develop" }, task: "go" });
+		await call(ruled, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: BRANCH }, task: "go" });
+		expect(ruled.host.bases).toEqual(["origin/develop", "origin/master"]);
+		const plain = harness({ wslBranchRules: [{ ...RULE, base: undefined }] });
+		await call(plain, { host: "wsl", taskSpec: { ...GOOD_SPEC, branch: BRANCH }, task: "go" });
+		await call(plain, { taskSpec: GOOD_SPEC, task: "go" });
+		await call(plain, { taskSpec: { ...GOOD_SPEC, base: "release/1" }, task: "go" });
+		expect(plain.host.bases).toEqual(["HEAD", "HEAD", "release/1"]);
+	});
+
+	test("AC-2: a resume takes no base", async () => {
+		const h = harness();
+		await call(h, { taskSpec: GOOD_SPEC, task: "go" });
+		await expect(call(h, { taskSpec: { id: "T-20261026-01", base: "origin/master" } })).rejects.toThrow();
+		expect(h.host.bases).toEqual(["HEAD"]);
+	});
+
+	test("AC-4: an unsafe base is refused before the approval card, leaving nothing behind", async () => {
+		for (const host of [undefined, "wsl"]) {
+			const h = harness({ approval: "approved" });
+			const spec = { ...GOOD_SPEC, base: "origin/master;id" };
+			await expect(call(h, { ...(host === undefined ? {} : { host }), taskSpec: spec, task: RISKY })).rejects.toThrow(
+				"taskSpec.base",
+			);
+			expect(h.approvals).toEqual([]);
+			expect(rows(h)).toBe(0);
+			expect(h.host.calls).toEqual([]);
+			expect(h.herdr).toEqual([]);
+		}
+	});
+});
+
+describe("taskSpec.base on a real git repository", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** A bare origin and a clone whose checkout sits on another branch, with a master commit the clone has not fetched. */
+	function world() {
+		const root = mkdtempSync(join(tmpdir(), "jabbu-base-world-"));
+		dirs.push(root);
+		const seed = makeRepo(dirs, "jabbu-base-seed-");
+		git(seed, "branch", "-m", "master");
+		git(root, "clone", "-q", "--bare", seed, "origin.git");
+		const origin = join(root, "origin.git");
+		const clone = join(root, "work");
+		git(root, "clone", "-q", origin, "work");
+		git(clone, "checkout", "-q", "-b", "other");
+		writeFileSync(join(clone, "other.txt"), "other\n");
+		git(clone, "add", "--", "other.txt");
+		git(clone, "commit", "-q", "-m", "other work");
+		const staleMaster = git(clone, "rev-parse", "origin/master");
+		writeFileSync(join(seed, "new.txt"), "new\n");
+		git(seed, "add", "--", "new.txt");
+		git(seed, "commit", "-q", "-m", "new on origin");
+		git(seed, "push", "-q", origin, "master");
+		const latest = git(seed, "rev-parse", "master");
+		const recordsRepo = makeRepo(dirs, "jabbu-base-records-");
+		return { clone, latest, staleMaster, recordsRepo, worktree: `${clone}-t-20261026-01` };
+	}
+	const start = (w: ReturnType<typeof world>, base: string) => {
+		const h = harness({ recordsRepo: w.recordsRepo, hostOps: createTaskHostOps({ recordsRepo: w.recordsRepo }) });
+		return { h, result: call(h, { taskSpec: { ...GOOD_SPEC, repo: w.clone, base }, task: "go" }) };
+	};
+
+	test("AC-3: base origin/master forks the worktree from origin's newest master, untracked, and says so", async () => {
+		const w = world();
+		expect(w.latest).not.toBe(w.staleMaster);
+		expect(git(w.clone, "rev-parse", "HEAD")).not.toBe(w.latest);
+		const { h, result } = start(w, "origin/master");
+		expect(await result).toContain("T-20261026-01 등록·시작했습니다");
+
+		expect(git(w.worktree, "rev-parse", "HEAD")).toBe(w.latest);
+		const row = h.ledger.require("T-20261026-01");
+		expect(row.baseSha).toBe(w.latest);
+		expect(() => git(w.worktree, "rev-parse", "--abbrev-ref", "@{u}")).toThrow();
+
+		const spec = readFileSync(join(row.docsDir, "spec.md"), "utf8");
+		expect(spec).toContain("\nbase: origin/master\n");
+		expect(spec).toContain(`\nbaseSha: ${w.latest}\n`);
+		const line = `기준: origin/master (${w.latest.slice(0, 7)})`;
+		expect(readFileSync(join(row.docsDir, "context.md"), "utf8")).toContain(line);
+		expect(JSON.stringify(h.transport.calls)).toContain(line);
+	});
+
+	test("AC-4: a base that does not exist, or a failing fetch, rolls the registration back", async () => {
+		for (const base of ["origin/nope", "no-such-branch"]) {
+			const w = world();
+			const { h, result } = start(w, base);
+			const text = await result;
+			expect(text, base).toContain("시작 실패");
+			expect(text, base).toContain("등록을 되돌렸습니다");
+			expect(h.ledger.list().length, base).toBe(0);
+			expect(existsSync(w.worktree), base).toBe(false);
+			expect(existsSync(join(w.recordsRepo, "docs", "tasks")), base).toBe(false);
+			expect(git(w.clone, "branch", "--list", "task/*"), base).toBe("");
+			expect(JSON.stringify(h.transport.calls), base).not.toContain("기준:");
+		}
 	});
 });

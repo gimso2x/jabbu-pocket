@@ -398,6 +398,8 @@ describe("LaneManager and startTask integration", () => {
 			laneModels: () => ({ high: "anthropic/claude-opus-5-5:high", low: "zai/glm-5.4" }),
 			quotaRefusal: (model) =>
 				held && providerOfModel(model) === "anthropic" ? "프로바이더 쿼터 보류(anthropic: 5시간 96% 사용)" : undefined,
+			// The harness models an owner-confirmed force: the forced start passes its card.
+			requestApproval: async () => "approved",
 		});
 
 		try {
@@ -435,6 +437,7 @@ describe("LaneManager and startTask integration", () => {
 				title: "forced high lane",
 				cwd: repo,
 				channel: CHANNEL,
+				parentOrigin: "discord/ch/300000000000000001",
 				risk: "L3",
 				force: true,
 			});

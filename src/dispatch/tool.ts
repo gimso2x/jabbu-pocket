@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { DispatchHostConfig, WorkerAgyConfig } from "../config";
-import { LANE_MODEL_TIERS, type LaneModelTier, type LaneModelTiers } from "../model-tiers";
+import type { LaneModelTier, LaneModelTiers } from "../model-tiers";
 import { type FreezeState, frozenMessage } from "../ops/freeze";
 import { redact } from "../redact";
 import type { ApprovalDetail, ApprovalResult } from "../safety/approval";
@@ -8,6 +8,8 @@ import { scanHandoffBrief } from "../safety/handoff-risk";
 import type { HostToolDef } from "../safety/host-tools";
 import { buildFloorsPrompt } from "../safety/prompt";
 import type { HerdrPromptInput } from "../store/db-rows";
+import { resolveTaskBase } from "../tasks/base-ref";
+import { resolveTaskBranch } from "../tasks/branch";
 import {
 	agyOccupant,
 	notePrompt,
@@ -33,6 +35,7 @@ import {
 	runOmpPrint,
 } from "./omp";
 import { secretsCwdProblem } from "./secrets-cwd";
+import { TASK_SPEC_SCHEMA } from "./task-spec-schema";
 
 export interface DispatchToolDeps {
 	originKey: string;
@@ -217,54 +220,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					description:
 						"taskSpec 신규 등록이 `시작 거부: 호스트 여유`(메모리·디스크)나 프로바이더 쿼터 보류로 거부된 뒤 오너가 강행을 명시했을 때만 true. 강행은 오너 승인 카드로 확인하고 카드가 거부·시간 초과되면 시작하지 않는다. 다른 거부 사유나 단순 부하 경고에는 쓰지 않고 사유를 오너에게 그대로 전달한다",
 				},
-				taskSpec: {
-					type: "object",
-					description:
-						"여러 단계·하루 넘는 작업의 [TASK] 상태 문서 등록. 신규: title·risk·goal·acceptance·repo 필수(+scope·exclusions·falsePasses·background·tier·tierReason·tierConfidence·worker). falsePasses는 수락기준을 채워도 실패로 볼 통과 방식(테스트 빼기·실경로 대신 목업 등)으로, spec.md '# 이렇게 통과하면 실패'에 들어가 워커·리뷰·QA가 읽는다. 재개: {id}(기본: 처음 등록한 모델로 뜬다). tier(·tierReason)나 worker를 함께 주면 그 모델로 바꿔 재개하고 인계 브리프(마지막 PROGRESS·이전 워커 화면 80줄·spec 경로)를 새 워커 첫 입력에 넣는다. host가 있으면 그 호스트에, 없으면 로컬에 워크트리를 만든다",
-					properties: {
-						id: { type: "string", description: "재개할 TASKID(T-YYYYMMDD-NN). 이것만 준다" },
-						title: { type: "string" },
-						risk: { type: "string", enum: ["L0", "L1", "L2", "L3", "L4"] },
-						goal: { type: "string" },
-						scope: { type: "array", items: { type: "string" } },
-						exclusions: { type: "array", items: { type: "string" } },
-						falsePasses: { type: "array", items: { type: "string" } },
-						acceptance: {
-							type: "array",
-							items: { type: "string" },
-							description: "수락기준 문구(등록 뒤 바꿀 수 없음)",
-						},
-						repo: { type: "string", description: "대상 호스트의 git 저장소 절대경로" },
-						background: { type: "string" },
-						assumptions: {
-							type: "string",
-							description: "오너 대신 정한 해석 한 줄(접수 카드의 [가정]). 없으면 생략",
-						},
-						tier: {
-							type: "string",
-							enum: [...LANE_MODEL_TIERS],
-							description:
-								"워커 모델 등급(config lanes.models). 생략하면 위험 등급으로 정한다(L0·L1 low, L2 middle, L3 이상 high) — 이유가 있을 때만 준다. high: 설계·디버깅·넓은 변경, middle: 일반 구현, low: 기계적 수선 묶음. L3 이상은 항상 high. 재개에서 주면 그 등급으로 바꿔 재개",
-						},
-						tierReason: {
-							type: "string",
-							description: "그 등급을 고른 이유 한 줄(카드에 보임). 신규 등록과 등급을 바꾸는 재개에서",
-						},
-						tierConfidence: {
-							type: "number",
-							minimum: 0,
-							maximum: 1,
-							description: "그 등급 판정의 확신도 0~1(judge conf가 있을 때). 신규 등록에서만",
-						},
-						worker: {
-							type: "string",
-							enum: ["agy"],
-							description:
-								"agy(gemini, 무료 시범): L0·L1 로컬, 동시 1개. 품질 미검증. 조건 밖이면 omp 등급 워커로 뜬다. 신규 등록과 워커를 바꾸는 재개에서",
-						},
-					},
-					additionalProperties: false,
-				},
+				taskSpec: TASK_SPEC_SCHEMA,
 			},
 			additionalProperties: false,
 		},
@@ -369,6 +325,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 										return true;
 									},
 								}),
+						gateBrief: (brief) => gateWork(brief, signal),
 						log: deps.log,
 					};
 		if (params.taskSpec !== undefined) {
@@ -381,9 +338,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			const repoProblem =
 				input.kind === "resume" ? undefined : secretsCwdProblem(input.spec.repo, host !== undefined, deps.homeDir);
 			if (repoProblem !== undefined) throw new Error(repoProblem);
-			const briefed = task !== undefined && task !== "";
 			if (input.kind === "resume") {
-				const gate = await gateWork(briefed ? task : undefined, signal);
+				const gate = await gateWork(task === "" ? undefined : task, signal);
 				// tier or worker given: the resume runs on that worker (handoff) instead of the registered one.
 				const registered = taskDeps.ledger.get(input.id);
 				const switchTo =
@@ -395,6 +351,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			}
 			// Exclusions and acceptance are forbidding/checking sentences by design; they are not scanned.
 			const { spec } = input;
+			// Before the approval card: a refused branch must not raise one (nothing is reserved yet).
+			resolveTaskBranch(hostEntry?.branchRules, spec.repo, spec.branch);
+			resolveTaskBase(hostEntry?.branchRules, spec.repo, spec.base);
 			const topics = [
 				spec.title,
 				spec.goal,
@@ -402,12 +361,13 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				...(spec.background === undefined ? [] : [spec.background]),
 				...(spec.assumptions === undefined ? [] : [spec.assumptions]),
 			];
-			const gate = await gateWork(briefed ? [task, ...topics].join("\n") : undefined, signal);
+			const gate = await gateWork(task === undefined || task === "" ? undefined : [task, ...topics].join("\n"), signal);
 			const approvedRisk = gate.approved && ["L0", "L1", "L2"].includes(spec.risk) ? "L3" : spec.risk;
 			// Topic keywords put a floor under the class (raise only); `task` is the how, not the topic.
 			const floored = applyRiskFloor(approvedRisk, topics);
-			if (floored.note !== undefined)
+			if (floored.note !== undefined) {
 				deps.log.info("dispatch_risk_floor_raised", { origin: deps.originKey, from: approvedRisk, to: floored.risk });
+			}
 			// The tier follows the final risk (approval and floor applied) and the live `lanes.models` of this call.
 			const tier = resolveWorkerTier(floored.risk, spec, deps.laneModels?.());
 			const agyOptions = {

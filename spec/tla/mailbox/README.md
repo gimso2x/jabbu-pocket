@@ -70,4 +70,4 @@ bun scripts/tla-covered.ts --record # 모델을 다시 본 뒤 covered.blobs를 
 
 ## 덮인 파일 게이트
 
-`covered.blobs`는 모델이 다루는 파일 8개의 `git hash-object` 값이다. `bun run check`의 `bun scripts/tla-covered.ts`가 작업 트리와 대조해, 하나라도 바뀌면 바뀐 파일 이름을 출력하고 실패한다. 바뀐 동작이 모델과 맞는지 다시 보고 `bun scripts/tla-check.ts`로 확인한 뒤 `--record`로 다시 기록한다.
+`covered.blobs`는 `scripts/tla-covered.ts`의 `COVERED` 목록에 있는 파일 10개의 `git hash-object` 값이다. `bun run check`의 `bun scripts/tla-covered.ts`가 작업 트리와 대조해, 하나라도 바뀌면 바뀐 파일 이름을 출력하고 실패한다. 바뀐 동작이 모델과 맞는지 다시 보고 `bun scripts/tla-check.ts`로 확인한 뒤 `--record`로 다시 기록한다.

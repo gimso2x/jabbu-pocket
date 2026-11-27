@@ -175,6 +175,20 @@ export class DiscordChannel implements ChannelPort {
 		}
 	}
 
+	/**
+	 * Whether `id` is a DM or which server it is in; `undefined` on 404. An inline body root is cached as a server
+	 * channel with no server, and a thread opened from it later has the same id: such an entry is read again first.
+	 */
+	async locate(id: string): Promise<{ dm: true } | { dm: false; guildId: string } | undefined> {
+		let info = await this.channelInfo(id, false);
+		if (info !== undefined && info.guildId === undefined && !DM_TYPES.has(info.type)) {
+			this.forget(id);
+			info = await this.channelInfo(id, false);
+		}
+		if (info === undefined) return undefined;
+		return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
+	}
+
 	/** Whether `conversationId` is known to be a DM (learnt from an inbound message or a lookup). */
 	isDirect(conversationId: string): boolean {
 		return DM_TYPES.has(this.#channels.get(conversationId)?.type ?? -1);
