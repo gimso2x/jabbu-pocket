@@ -675,10 +675,8 @@ export class OriginMailbox {
 		const baseline = this.#cache.baseline;
 		const now = clock.now();
 		if (baseline === undefined || baseline === this.#coldWarned || !isColdCache(baseline, now)) return;
-		this.#coldWarned = baseline;
 		const price = this.#cache.writeCostPerToken;
 		const idleMs = now - baseline.at;
-		log.info("cold_cache_warned", { origin: originKey, prefix: baseline.prefix, idleSec: Math.round(idleMs / 1000) });
 		this.#deps.onColdCache?.({
 			originKey,
 			threadRef,
@@ -686,6 +684,8 @@ export class OriginMailbox {
 			idleMs,
 			...(price === undefined ? {} : { estimatedCost: price * baseline.prefix }),
 		});
+		this.#coldWarned = baseline;
+		log.info("cold_cache_warned", { origin: originKey, prefix: baseline.prefix, idleSec: Math.round(idleMs / 1000) });
 	}
 
 	/**
@@ -1123,7 +1123,6 @@ export class OriginMailbox {
 		const driver = await this.#ensureDriver(row.threadRef);
 		// A child started before a peer bot wrote here is kept: it is told once, in front of its next prompt.
 		const peerNotice = !this.#skipPeerNotice && store.originHasPeerInbound(originKey);
-		this.#warnColdCache(row.threadRef);
 		// Only a lane's first prompt has anything to check; every other turn goes on without an extra await.
 		const refusal = this.#freshSession ? this.#deps.launchRefusal?.(driver) : undefined;
 		if (refusal !== undefined && (await this.#refuseLaunch(row, await refusal))) return true;
@@ -1159,6 +1158,11 @@ export class OriginMailbox {
 		this.#eventPersistedAt = this.#lastEventAt;
 		this.#stalled = false;
 		log.info("turn_start", { origin: originKey, epoch: row.epoch, opRef });
+		try {
+			this.#warnColdCache(row.threadRef);
+		} catch (error) {
+			log.warn("cold_cache_warn_failed", { origin: originKey, error: String(error) });
+		}
 		// Reported at once: a turn without tool calls would otherwise never show what is usual.
 		const typical = typicalTurnDuration(store, originKey, log);
 		if (typical !== undefined) {

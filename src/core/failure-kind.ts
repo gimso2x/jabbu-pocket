@@ -27,7 +27,7 @@ const RESET_AT_PATTERN =
 	/resets?\s+at\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?|\d{1,2}:\d{2}(?::\d{2})?)/i;
 
 const RESET_IN_PATTERN =
-	/resets?\s+in\s+(\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)(?:(?:\s*,?\s*and\s+|\s*)\d+(?:\.\d+)?\s*(?:ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days))*)/i;
+	/resets?\s+in\s+(\d{1,6}(?:\.\d{1,6})?\s*(?:ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)(?:(?:\s*,?\s*and\s+|\s*)\d{1,6}(?:\.\d{1,6})?\s*(?:ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)){0,3})/i;
 
 const RESET_HHMM_PATTERN = /(?:^|[\sT])(\d{1,2}:\d{2})(?::\d{2})?/;
 
@@ -36,7 +36,7 @@ export function extractResetAt(reason: string): string | undefined {
 	const atMatch = RESET_AT_PATTERN.exec(reason);
 	if (atMatch?.[1] !== undefined) return atMatch[1];
 	const inMatch = RESET_IN_PATTERN.exec(reason);
-	if (inMatch?.[1] !== undefined) return `${inMatch[1].trim()} 뒤`;
+	if (inMatch?.[1] !== undefined) return `${inMatch[1].trim().slice(0, 40)} 뒤`;
 	return undefined;
 }
 

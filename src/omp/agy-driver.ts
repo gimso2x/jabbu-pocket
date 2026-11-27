@@ -36,7 +36,7 @@ import {
 	shouldSwitchAgyAccount,
 } from "./agy-switch";
 import { AgyToolKeepalive } from "./agy-tool-keepalive";
-import { isTrajectoryLoss, promptReplyEnd } from "./agy-trajectory";
+import { isTrajectoryLoss, promptReplyEnd, withDroppedSteers } from "./agy-trajectory";
 import {
 	type OmpCommand,
 	type OmpCompactResult,
@@ -197,7 +197,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	#cancel(turn: PendingTurn, client: AgyAcpClient): Promise<void> {
 		this.#toolKeepalive.clear();
 		const keepQueued = turn.rateLimit !== undefined && !turn.hadToolCall && this.#options.accounts !== undefined;
-		if (!keepQueued) this.#queued = [];
+		if (!keepQueued) {
+			if (this.#queued.length > 0) turn.droppedSteers = (turn.droppedSteers ?? 0) + this.#queued.length;
+			this.#queued = [];
+		}
 		const reply = turn.promptReplied;
 		turn.cancelling ??= (async () => {
 			try {
@@ -310,11 +313,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const client = this.#client;
 		if (client === undefined) throw new OmpDriverError("rpc_error", "agy child is not running");
 		if (!this.#option("thought_level")?.values.includes(level)) {
-			const model = this.#option("model")?.currentValue ?? "?";
-			throw new OmpDriverError(
-				"rpc_error",
-				`Model not found: thinking ${level} (agy model ${model} does not offer it)`,
-			);
+			const msg = `agy model ${this.#option("model")?.currentValue ?? "?"} does not offer it`;
+			throw new OmpDriverError("rpc_error", `Model not found: thinking ${level} (${msg})`);
 		}
 		await this.#setOption(client, "thought_level", level);
 		this.#userThinking = level;
@@ -761,12 +761,11 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		});
 		// Steered text is answered as part of the same turn: the opRef stays open until that answer arrives.
 		if (succeeded && !turn.abortRequested && this.#queued.length > 0 && this.#client === client) {
-			const queued = this.#queued.join("\n\n");
-			this.#queued = [];
-			this.#sendPrompt(client, turn, queued);
+			this.#sendPrompt(client, turn, this.#queued.splice(0).join("\n\n"));
 			return;
 		}
-		const end = promptReplyEnd({ ...turn, stopReason, failure, dropped: this.#queued.length });
+		const dropped = (turn.droppedSteers ?? 0) + this.#queued.length;
+		const end = promptReplyEnd({ ...turn, stopReason, failure, dropped });
 		if (this.#context !== undefined) turn.usage.contextTokens = this.#context.used;
 		// Before the final: a prompt sent on it must already find the conversation dropped.
 		turn.usage.rotated = this.#rotateIfFull();
@@ -821,11 +820,10 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		if (turn.finished) return;
 		turn.finished = true;
 		turn.promptReplied.resolve();
-		if (this.#turn === turn) {
-			this.#turn = undefined;
-			this.#queued = [];
-		}
-		for (const listener of this.#finalListeners) listener({ ...final, ...usageField(turn) });
+		const dropped = (turn.droppedSteers ?? 0) + (this.#turn === turn ? this.#queued.length : 0);
+		if (this.#turn === turn) [this.#turn, this.#queued] = [undefined, []];
+		const out = final.status === "completed" ? final : withDroppedSteers(final, dropped);
+		for (const listener of this.#finalListeners) listener({ ...out, ...usageField(turn) });
 		turn.settled.resolve();
 	}
 
@@ -836,12 +834,12 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	#rotateIfFull(): boolean {
 		const context = this.#context;
 		if (context === undefined || context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
-		const sessionId = this.#sessionId;
+		const conversationId = this.#sessionId;
 		this.#dropSession(false);
 		this.#retireChild();
 		this.#options.log?.info("agy_conversation_rotated", {
 			origin: this.#options.originKey,
-			conversationId: sessionId,
+			conversationId,
 			contextTokens: context.used,
 			window: context.size,
 		});

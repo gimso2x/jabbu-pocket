@@ -386,7 +386,8 @@ test("abort sends session/cancel: the turn ends aborted, the child lives on and 
 		opRef,
 		status: "aborted",
 		text: "",
-		error: "cancelled",
+		error: "cancelled (steer 1건 미전달)",
+		droppedSteers: 1,
 		usage: { calls: 1, input: 100, cacheRead: 40, output: 7, rotated: false },
 	});
 	expect(await driver.state()).toMatchObject({ idle: true, queuedMessageCount: 0 });

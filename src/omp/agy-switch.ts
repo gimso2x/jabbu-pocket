@@ -74,6 +74,7 @@ export interface PendingTurn extends NoticeScanState {
 	rateLimit?: string;
 	rateLimitDetail?: string;
 	rateLimitResetMs?: number;
+	droppedSteers?: number;
 }
 
 /** Allocates a fresh `PendingTurn` record for a new `prompt()` invocation. */
