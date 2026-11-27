@@ -625,6 +625,26 @@ describe("peer bots", () => {
 		]);
 	});
 
+	test("setChannelPolicy takes guildIds·mentionFreeChannels·requireMention for the next inbound", async () => {
+		const made = await adapter({ guildIds: [OTHER_GUILD] });
+		await transport.emitMessage(message("멘션 없이"));
+		expect(inbound).toHaveLength(0); // the started guildIds drop it before addressing
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [CH], requireMention: true });
+		const root = message("멘션프리");
+		await transport.emitMessage(root);
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리"]); // the guild is taken and the channel mention-free
+		// Both keys back to their strict values: the root and the known thread it opened are no longer addressed.
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [], requireMention: true });
+		await transport.emitMessage(message("멘션 없이 둘"));
+		await transport.emitMessage(message("스레드 안 멘션 없이", { channel_id: root.id }));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리"]);
+		expect(logs.filter((line) => line.includes("reason=not_addressed"))).toHaveLength(2);
+		// requireMention off: the same known thread takes an unmentioned reply again.
+		made.setChannelPolicy({ guildIds: [GUILD], mentionFreeChannels: [], requireMention: false });
+		await transport.emitMessage(message("스레드 안 둘", { channel_id: root.id }));
+		expect(inbound.map((m) => m.text)).toEqual(["멘션프리", "스레드 안 둘"]);
+	});
+
 	test("peer_hop_cap: the first drop alone posts PEER_HOP_NOTICE, as a reply to the root, without a bot mention", async () => {
 		let notice = true;
 		await peerAdapter(() => {
