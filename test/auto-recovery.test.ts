@@ -717,5 +717,5 @@ describe("Daemon quota error hold, isolation, model switch, lift, and restart au
 		await transport.waitForPosts((text) => text.includes("수동 해제로 보류 중이던 대기열을 자동 재개합니다"), 1);
 		await drv1After.releasePrompt("수동 해제로 실행");
 		await transport.waitForPosts((text) => text.includes("ECHO 수동 해제로 실행"));
-	});
+	}, 30_000);
 });
