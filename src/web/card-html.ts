@@ -205,14 +205,13 @@ function renderCardChildHtml(child: CardChild): string {
 				.join("")}</dl>`;
 		case "table": {
 			const align = child.align ?? [];
-			const head = child.headers
-				.map((h, i) => `<th style="text-align:${esc(align[i] ?? "left")}">${esc(h)}</th>`)
-				.join("");
+			const safeAlign = (v: unknown): "left" | "center" | "right" => (v === "center" || v === "right" ? v : "left");
+			const head = child.headers.map((h, i) => `<th style="text-align:${safeAlign(align[i])}">${esc(h)}</th>`).join("");
 			const rows = child.rows
 				.map(
 					(row) =>
 						`<tr>${child.headers
-							.map((_, i) => `<td style="text-align:${esc(align[i] ?? "left")}">${esc(row[i] ?? "")}</td>`)
+							.map((_, i) => `<td style="text-align:${safeAlign(align[i])}">${esc(row[i] ?? "")}</td>`)
 							.join("")}</tr>`,
 				)
 				.join("");
@@ -261,7 +260,15 @@ function renderStructuredCardJson(text: string, cardJson: string): string | unde
 			buttonsNote?: unknown;
 		};
 		if (parsed.kind === "status" || parsed.kind === "conversation") return undefined;
-		const fieldsList = Array.isArray(parsed.fields) ? parsed.fields : [];
+		const fieldsList = Array.isArray(parsed.fields)
+			? parsed.fields.filter(
+					(f): f is { label: string; value: string } =>
+						typeof f === "object" &&
+						f !== null &&
+						typeof (f as { label?: unknown }).label === "string" &&
+						typeof (f as { value?: unknown }).value === "string",
+				)
+			: [];
 		const title =
 			typeof parsed.title === "string" && parsed.title !== ""
 				? `<h4 class="wc-card-title">${esc(parsed.title)}</h4>`

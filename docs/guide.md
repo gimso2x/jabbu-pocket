@@ -22,6 +22,7 @@
 | 승인 | 되돌릴 수 없거나 밖으로 나가는 작업 전 승인 버튼(구조화된 카드, 외부 공개 `🌐` 카드, 영속 장부, escalation 채널과 요청 스레드 사본, 다시 요청 버튼, 카드 스레드 답장) | [승인](#승인) |
 | 질문 카드 | omp의 질문 창(select·confirm·input·editor·`ask`)을 대화 스레드의 버튼·답장 카드로, 마감 시 omp와 같은 기본값 | [질문 카드](#질문-카드) |
 | 페르소나·답변 형식 | `workspace/`의 `soul.md`·`owner.md`·`persona.md`를 세션 시스템 프롬프트에 추가, 답변 형식 규율 | [페르소나와 답변 형식](#페르소나와-답변-형식) |
+| 첫 실행 온보딩 | 새 설치의 첫 대화에서 동의 질문 하나 → 도구별 동의 → 읽기 전용으로 파악 → 오너 관찰지에 요약 초안, 거절하면 다시 묻지 않음 | [첫 실행 온보딩](#첫-실행-온보딩) |
 | 완료 사본 | `✅ 완료`로 시작하는 답을 #log 채널에 사본으로 남김 | [설정](#5-설정-파일-jabbuconfigjson) `channels.discord.logChannelId` |
 | 작업 위임 | `jabbu_dispatch` — 단발(`omp -p`)·장기(데몬 Mailbox 워커)·원격 호스트(herdr), `[TASK]` 상태 문서와 1분 스윕, 머지·추천대로 버튼, 개인 저장소 자동 머지(`taskAutoLand`), 같은 저장소 TASK 파일 겹침 알림 | [작업 위임](#작업-위임) |
 | 작업 레인 | `작업: <제목> @<경로>`로 레인 스레드, 레인마다 전용 worktree·브랜치, 커밋과 `[check: …]` 재실행으로 검증되는 완료, Outcome 카드의 `머지`·`폐기` 버튼, 코어가 하는 ff 머지·push·정리, 개인 저장소 자동 머지(`taskAutoLand`) | [작업 레인](#작업-레인) |
@@ -149,7 +150,7 @@ Discord를 쓰지 않으면 이 절을 건너뜁니다. 나중에 채널을 끊�
 | `recallEnabled` | 아니요 | `false`면 새 턴 프롬프트에 지난 대화 회상을 붙이지 않습니다(기본 `true`). [대화](#대화)의 "지난 대화 회상" 참고 |
 | `costCap` | 아니요 | 비용 상한(omp 정가 환산, 실제 청구액 아님). `{"turnUsd": 20, "dailyUsd": 300}`처럼 양수만 받고 키가 없으면 그 상한은 꺼집니다. `turnUsd`에 닿으면 그 턴의 스레드에 경고를 한 번 올리고(턴은 계속 돎, 모니터 턴은 로그만), 3배를 넘으면 턴을 멈춥니다(창 안 하위 에이전트 비용 포함). `dailyUsd`는 봇 시간대(`timezone`) 하루 합계(하위 에이전트 포함, omp가 턴 도중 죽은 턴도 한 번 포함)로, 넘으면 `cost_cap` 게이트가 열려 오너에게 알립니다(아무것도 멈추지 않음, 자정에 닫힘). `reload`로 바로 반영 |
 | `quotaGate` | 아니요 | 프로바이더별 쿼터 게이트. `{"holdPct": 95, "pollMinutes": 5, "providers": ["anthropic", "zai"]}`(모두 선택, `holdPct` 1~100 기본 95, `pollMinutes` 1~60 기본 5). 설정하면 `omp usage --json`을 주기 조회해 기준치 이상인 프로바이더의 **새 작업 레인·`[TASK]` 시작만** 보류합니다(다른 프로바이더·기존 세션 재개·`force: true`는 통과). 사용량이 내려가거나 초기화 시각이 지나면 자동 해제되며(실패 시 fail-open, `resetsAt` 없으면 최대 5시간), `jabbu-pocket quota lift [provider]`로 수동 해제할 수 있습니다. 대화 턴이 공급자 한도 오류(`429` 등)로 실패해도 해당 프로바이더 대기열을 보류하고 `omp usage --json`으로 실제 여유 회복이 확인되면 자동 재개합니다(`/model-jabbu`로 다른 프로바이더 모델로 바꾸거나 `quota lift`로도 즉시 해제). `reload`로 바로 반영 |
-| `opsPanel` | 아니요 | Discord `#ops` 고정 상태 패널과 호스트 부하 히스테리시스 경보(`{"channelId": "<Discord 채널 ID>", "minRefreshSec": 60, "sustainMinutes": 5, "hysteresisPct": 10, "muteMinutes": 60, "loadPct": 200, "memUsedPct": 90, "cgroupUsedPct": 90}`, `channelId` 필수·`logChannelId` 중복 불가). 지정 채널에 상태 임베드 1개를 핀으로 고정하고 1분 상한으로 제자리 갱신하며(`새로고침`·`전체 한도`·`1시간 음소거` 버튼), CPU 부하·메모리·cgroup 사용률이 `sustainMinutes`(기본 5분) 지속 초과하면 오너 핑 경보를 올렸다가 `hysteresisPct`(기본 10pt) 이상 내려가면 같은 메시지를 `resolved`로 수정합니다. `reload`로 바로 반영 |
+| `opsPanel` | 아니요 | Discord `#ops` 고정 상태 패널과 호스트 부하 히스테리시스 경보(`{"channelId": "<Discord 채널 ID>", "minRefreshSec": 60, "sustainMinutes": 5, "hysteresisPct": 10, "muteMinutes": 60, "loadPct": 200, "memUsedPct": 90, "cgroupUsedPct": 90}`, `channelId` 필수·`logChannelId` 중복 불가). 지정 채널에 상태 임베드 1개를 핀으로 고정하고 1분 상한으로 제자리 갱신하며(`새로고침`·`전체 한도`·`1시간 음소거` 버튼). 패널에는 호스트 부하·세션·게이트 외에 `🛠️ 모니터`(실패 중인 모니터와 횟수), `📮 최근`(최근 경보·해소 3건), `🔋 사용량`(공급자별로 가장 많이 쓴 한도, 15분 캐시) 칸이 있고, 핀이 권한 부족으로 실패하면 1시간마다 다시 시도합니다. CPU 부하·메모리·cgroup 사용률이 `sustainMinutes`(기본 5분) 지속 초과하면 오너 핑 경보를 올렸다가 `hysteresisPct`(기본 10pt) 이상 내려가면 같은 메시지를 `resolved`로 수정합니다. `reload`로 바로 반영 |
 | `wikiNotes` | 아니요 | 위키 세션 노트 통합 `{"client": "<위키 클라이언트 루트>", "agentDir": "<omp agent dir>", "repos": ["/절대경로/저장소", …]}`. `client`는 `integrations/omp/omp-wiki-session-note.py`를 담은 위키 클라이언트 루트이고, `agentDir`(생략하면 `~/.omp/agent`)의 `wiki-outbox/`에서 세션 노트를 가져가며, `repos`가 있으면 그 저장소(같은 git 공통 디렉터리라 워크트리도 포함) 작업의 노트만 쓰고, 없거나 비어 있으면 모든 저장소의 노트를 씁니다. 노트는 세 가지입니다: [TASK]가 `done`이 될 때, 작업 레인이 착지할 때, 그리고 대화 턴 노트 — 대화 턴(레인·[TASK] 스레드 제외)이 만든 커밋을 모아 채널 스레드는 하루치를 그날이 지난 뒤 한 장으로, DM이나 스레드 없는 턴은 턴마다 다음 정리(약 1분 간격) 때 한 장으로 씁니다. 대화 턴의 커밋은 턴 앞뒤로 `repos`(비어 있으면 `taskAutoLand.repos`) 저장소의 HEAD만 읽어 압니다(그 밖의 저장소에서 만든 대화 커밋은 노트에 들어가지 않음). `"turns": false`면 대화 턴 노트만 끄고(새 행을 모으지 않고 모아 둔 행도 쓰지 않음) [TASK]·레인 노트는 그대로 씁니다. `reload`로 바로 반영 |
 | `hostTools` | 아니요 | `{"extraForbiddenPaths": ["~/my-private", "/srv/keys"]}`. `discord_send_file`·웹 업로드가 기본 금지 목록에 더해 올리지 않을 경로(`~/…` 또는 절대경로, 문자열 배열). `reload`로 바로 반영. [보안 메모](#보안-메모) 참고 |
 | `dashboard` | 아니요 | `{"port": 7331, "bind": "127.0.0.1", "herdrWebUrl": "https://herdr.example.com/"}`. `jabbu-pocket dashboard` 현황판의 포트·주소입니다(플래그 `--port`·`--bind`가 우선하며 포트의 기본값은 없음 — `--port`·`dashboard.port` 어느 쪽도 없으면 dashboard가 실행을 거부합니다. [현황판](#현황판) 참고). `bind`는 `127.0.0.1`(기본)·`::1`만 허용하고 그 밖의 값이나 범위(1~65535) 밖 포트는 `config_invalid field=dashboard.…`입니다. `allowedHosts`(선택, 호스트 이름 문자열 배열, 포트·스킴 없이 예: `["jabbu.example.com"]`)는 `localhost`·`127.0.0.1`·`::1` 말고 현황판이 `Host` 헤더로 받아 줄 이름입니다. 터널이 공개 이름을 그대로 넘기면 여기 넣어야 하고, 목록 밖 `Host`는 421입니다(시작 때만 읽음). `usageLimits`(선택, `{omp?: [[argv…]…], agy?: [argv…], agyAccount?: [argv…], agyAccountsDir?: "/절대경로"}`)는 모델 한도 칩의 명령입니다(없으면 칩도 명령 실행도 없음, [현황판](#현황판) 참고). `peerHomes`(선택, `[{"name": "<한 단어, ':'·공백·20자 초과·중복 불가>", "home": "/절대경로"}]`)는 같은 호스트의 다른 설치본이며 현황판이 그 모니터를 읽기 전용으로 함께 보입니다. `channelNames`(선택, `{"<채널 ID>": "<표시 이름>"}` 매핑 객체, 비어 있지 않은 키와 공백이 아닌 40자 이하 문자열 값)는 현황판에서 채널 ID 대신 표시할 이름이며, 어기면 `config_invalid field=dashboard.channelNames`이고 시작 때만 읽습니다. `herdrWebUrl`(선택, http(s) 주소)은 에이전트 보드 카드의 "herdr에서 답하기" 링크가 여는 herdr-web-ui 주소이며, 없으면 링크를 그리지 않습니다. `opsStatus`(선택, `{"command": ["ops-status", "--json"], "url": "https://hub.example.com/"}`)는 시스템 화면 "호스트 점검" 카드와 `!brief` 한 줄의 원천입니다. `command`는 빈 문자열 없는 문자열 배열(1개 이상), `url`(선택)은 http(s) 주소이고, 어긋나거나 모르는 키는 `config_invalid field=dashboard.opsStatus.<키>`입니다. 없으면 카드도 명령 실행도 없습니다. [현황판](#현황판)의 호스트 점검 참고 |
@@ -319,11 +320,22 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 
   모니터 세션에서는 머리말에 "모니터 지시가 정한 답 형식(`NO_REPORT`·`[SILENT]`)이 이 지침보다 우선한다"가 붙습니다. 작업 레인·스킬 리뷰 세션에는 셋 다 붙지 않습니다. 상한을 넘는 부분은 잘립니다. 파일이 없는 것은 정상이지만, 있는데 읽을 수 없으면(권한·디렉터리 등) 그 파일만 빼고 시작하고 경로와 함께 `persona_unreadable`을 로그에 남깁니다.
 - 세 파일을 고쳐도 캐시가 살아 있는 대화는 깨지 않습니다. 시스템 프롬프트가 한 글자라도 바뀌면 이어 가는 대화 전체를 프롬프트 캐시에 다시 써야 하므로, 대화(오리진의 epoch)마다 붙인 안전 바닥글의 고정 부분과 세 파일 내용을 세션 디렉터리의 `pinned-owner-docs.txt`(권한 0600)에 고정해 두고 같은 epoch의 다음 자식(재시작·유휴 해제 뒤)도 그 내용을 씁니다. 고친 내용은 그 대화의 마지막 모델 호출이 공급자 캐시 수명(Anthropic 1시간)보다 오래됐을 때, `!new`으로 새 epoch를 열었을 때, 처음 띄울 때부터 들어갑니다. 마지막 호출 시각은 omp 세션 파일 끝에서 읽으므로, 알 수 없으면(세션 파일 없음, 캐시 수명을 모르는 공급자, agy 드라이버) 고정하지 않고 매번 새로 읽습니다. 고정본이 깨졌거나 읽을 수 없으면 새로 읽은 내용으로 띄우고 `pinned_owner_docs_unusable`을 로그에 남깁니다. 그래서 배포로 바닥글 문구가 바뀌어도 캐시가 살아 있는 대화에는 최대 캐시 수명만큼 늦게 들어갑니다. 바닥글 가운데 대화마다 바뀌는 줄(피어 봇 목록·피어 글로 줄어든 도구 안내·레인 채널 없음 안내·자동 후속 줄)은 고정하지 않고 `## 이 대화 / This conversation` 아래 맨 뒤에 매번 새로 붙이므로, 그 줄이 바뀌어도 앞부분의 캐시는 그대로 삽니다. 작업 레인·스킬 리뷰 세션은 고정본 없이 바닥글을 매번 새로 만듭니다. 이 파일은 데몬 프로세스 메모리에만 있는 임의 키로 서명(HMAC)해 두므로, 자식이 파일을 바꾸고 해시를 다시 적어도 다음 스폰은 그 내용을 쓰지 않고 새로 만듭니다(데몬을 재시작하면 키가 바뀌어 각 대화의 첫 스폰은 파일을 새로 씁니다). 잔여 위험: `kernel.yama.ptrace_scope=0`인 호스트에서는 같은 UID의 자식이 데몬 메모리를 읽을 수 있어 이 보호가 약해지고, 자식이 지금 턴 안에서 바로 하는 행동은 이 장치의 범위가 아닙니다.
-- 자식을 띄울 때마다 `omp_spawn_prompt` 로그 한 줄이 남습니다: `origin`, `epoch`, `floors_static`(바닥글에서 런타임에 바뀌는 줄을 뺀 부분), `floors_dynamic`(그 줄 가운데 들어간 것의 이름: `peerTouched`·`noLaneChannel`·`peers`·`resume`), `owner_docs`(세 파일 부분), `pinned`(고정본을 썼는지; 고정본을 써도 두 해시는 실제로 붙인 글에서 셉니다), `prompt`(붙인 전체). 해시는 sha256 앞 16자이고 원문은 남기지 않습니다. 재시작 뒤 캐시 미스(`cache_miss reason=child_restart`)가 jabbu-pocket 쪽 변경 때문인지 omp 쪽(스킬 목록·RULES·확장) 때문인지는 같은 오리진의 앞뒤 줄을 비교해 가립니다.
+- 자식을 띄울 때마다 `omp_spawn_prompt` 로그 한 줄이 남습니다: `origin`, `epoch`, `floors_static`(바닥글에서 런타임에 바뀌는 줄을 뺀 부분), `floors_dynamic`(그 줄 가운데 들어간 것의 이름: `peerTouched`·`noLaneChannel`·`peers`·`onboarding`·`resume`), `owner_docs`(세 파일 부분), `pinned`(고정본을 썼는지; 고정본을 써도 두 해시는 실제로 붙인 글에서 셉니다), `prompt`(붙인 전체). 해시는 sha256 앞 16자이고 원문은 남기지 않습니다. 재시작 뒤 캐시 미스(`cache_miss reason=child_restart`)가 jabbu-pocket 쪽 변경 때문인지 omp 쪽(스킬 목록·RULES·확장) 때문인지는 같은 오리진의 앞뒤 줄을 비교해 가립니다.
 - `owner.md`는 오너만 있는 채널에 그대로 보여도 괜찮은 내용만 씁니다. 피어 봇이 들어온 세션에도 실리므로, 다른 봇이나 인용 글이 그 내용을 채널에 옮기게 할 수 있습니다.
 - 대화 세션(`discord/*`: DM·채널·스레드)에는 답변 형식 규율이 실립니다: 첫 줄은 결론 한 문장, 길이는 질문 무게에 맞추고 끝난 일은 `바뀐 것`·`확인한 것`·`남은 것`만, 결정 요청은 `질문`·`추천`·`영향` 세 줄, herdr 위임 접수는 `맡았습니다`·`진행 보기`·`[목표]`·`[가정]`, 위임 결과는 `워커가 한 일`·`내가 한 일`·`오너가 할 일`(없으면 '없음'), 링크는 끝에 라벨 줄과 원본 URL 줄로 한 번. 모니터·작업 레인·스킬 리뷰 세션에는 실리지 않습니다(답 모양을 기계가 읽음).
 - 모니터 도구 안내는 오너 DM 세션(Discord)에만 실립니다.
 - 대화 세션에는 구조·흐름·비교를 글 대신 mermaid·SVG·HTML 파일로 만들어 `discord_send_file`로 올리라는 권고가 실립니다. 모니터 세션에는 실리지 않습니다.
+
+### 첫 실행 온보딩
+
+새로 설치해 `<jabbu 홈>/workspace/owner.md`(오너 관찰지)가 없거나 공백뿐인 봇은 첫 대화에서 온보딩을 합니다. 관찰지에 내용이 있는 기존 봇은 아무것도 바뀌지 않습니다.
+
+- **흐름**: 봇이 먼저 인사하고 `jabbu_onboarding` `start`를 부른 뒤, 왜 읽는지 밝힌 동의 질문 하나를 일반 답장으로 묻습니다(질문 카드 `ask`는 쓰지 않습니다 — 마감 자동 선택이 동의가 되면 안 되기 때문입니다). 오너가 글로 답하기 전에는 아무것도 읽지 않습니다. "아니오"는 저장되고, 오너가 먼저 꺼내기 전에는 다시 묻지 않습니다. "예"면 도구(메일·캘린더 등)마다 일반 답장으로 따로 묻고 `tool`로 기록하며, 끝나면 `finish`가 요약(2,000자 이하)을 관찰지 끝의 `## 온보딩 요약 (YYYY-MM-DD)` 절로 덧붙입니다(파일이 없으면 0600으로 만들고, 덧붙인 결과가 16KB를 넘거나 관찰지가 심링크·일반 파일이 아니면 거부하며 상태는 진행 중으로 남습니다).
+- **오너 글 증거**: `consent`·`tool`의 `message`는 온보딩을 연 뒤 그 대화에서 오너가 실제로 보낸 글 원문이어야 합니다. 피어 봇 글, 지어낸 문구, 질문 카드의 시간 초과 자동 선택은 받지 않습니다. 이미 끝났거나 관찰지가 있는 봇에서 다시 열려면 `start`에 `reopen: true`와 오너의 최근 글 원문 `message`가 필요합니다(모델이 혼자 시작할 수 없습니다).
+- **읽기 전용**: 진행 중에는 데몬이 `jabbu_dispatch`·`jabbu_work_start`·`jabbu_board_post`·`jabbu_monitor_add`·`jabbu_monitor_remove`·`discord_send_file`(웹 대화는 `web_send_file`) 호출을 거부하고(`host_tool_denied_onboarding` 로그) 호출마다 상태를 다시 읽습니다. 오너에게 가는 일반 답장, `jabbu_onboarding`, 승인·질문 카드는 막지 않습니다. 상태 값이 깨졌으면 진행 중으로 보고(`onboarding_state_unreadable` 경고) 이 도구들을 거부하고 상태를 덮어쓰지 않습니다.
+- **한계**: omp 내장 도구(bash·edit 등)는 데몬이 막을 수 없어 프롬프트 줄(`onboarding` 동적 줄)로만 읽기 전용을 지시합니다.
+- **대상**: omp 에이전트의 대화 세션(DM·채널·스레드)만. `agent: "agy"` 봇, 작업 레인·모니터·`[TASK]` 세션, 피어 봇 글이 들어온 대화에는 줄도 도구도 없습니다.
+- **상태와 명령**: 상태는 원장의 `onboarding` cursor(JSON)에 있어 재시작·압축에도 남습니다. `jabbu-pocket onboarding`은 상태를 보여 주고, `jabbu-pocket onboarding --reset`은 상태를 처음(`new`, 강제 첫 실행)으로 되돌려 관찰지가 있어도 다음 대화에서 다시 시작하게 합니다(깨진 상태의 유일한 복구 수단).
 
 ### 피어 봇
 
@@ -338,7 +350,7 @@ omp가 오너에게 묻는 창(select·confirm·input·editor·`ask`)을 띄우�
 - **작업 레인**: 레인 스레드의 피어 글은 행을 만들기 전에 버립니다(`peer_in_lane_thread`).
 - **홉 상한**: 같은 스레드에서 `windowMinutes` 안의 피어 글이 `turns`를 넘으면 버리고(`peer_hop_cap`) 그 스레드에 "피어 대화 상한에 닿았습니다. 이어 가려면 오너가 말해 주세요."를 한 번만 올립니다(다른 봇 멘션 없음). 오너 메시지가 들어오면 그 스레드의 카운트가 초기화됩니다. 상한은 봇마다 따로 세므로 두 봇이 맞서면 최악의 경우 스레드당 `windowMinutes`마다 봇마다 `turns`턴입니다.
 - **주소 규칙(오너 글)**: 채널에서 오너가 피어 봇만 멘션하고 이 봇은 멘션하지 않으면 이 봇에게 온 글이 아니라 `not_addressed`로 버립니다. 둘 다 멘션하면 받습니다.
-- **재시작 없이 반영**: `peerHopLimit`는 `jabbu-pocket reload`로 다음 메시지부터 바뀝니다(`channels.discord.*`는 재시작해야 반영됩니다). 목록에서 뺀 봇의 지난 피어 글이 만든 "권한 없음" 표시는 장부에 남아 그 스레드에서 계속 적용됩니다.
+- **재시작 없이 반영**: `peerHopLimit`는 `jabbu-pocket reload`로 다음 메시지부터 바뀝니다(`channels.discord`에서는 `guildIds`·`mentionFreeChannels`·`requireMention`만 재시작 없이 반영되고, 그 밖 키와 목록 자체는 재시작해야 반영됩니다). 목록에서 뺀 봇의 지난 피어 글이 만든 "권한 없음" 표시는 장부에 남아 그 스레드에서 계속 적용됩니다.
 - **백필 동작**: [놓친 메시지 백필](#놓친-메시지-백필)은 허용된 피어 봇의 멘션 글도 복구하지만, 분할 답장 대기(8초)는 건너뛰고 각 글을 바로 기록합니다.
 - **설정**: 목록은 `channels.discord.peerBots`(snowflake, 재시작 필요)에 두고, 상한은 같은 `peerHopLimit`을 씁니다. 피어 봇이 프롬프트에 `이 대화의 피어 봇: <name> = <멘션>` 줄로 들어갑니다. 설정은 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket)을 봅니다.
 
@@ -372,18 +384,18 @@ omp 에이전트와의 차이:
 
 Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다 (`init --platform discord`, [설치 3절](#3-홈과-설정-만들기-init)). 데몬 알림(턴 실패·게이트 등)은 오너의 가장 최근 1:1 대화로 가고 `!home`으로 바꿀 수 있습니다. 봇 만들기·토큰·초대·문제 해결은 [Discord 봇 만들기](discord.md)에 있습니다.
 
-- **켜기**: `config.json`의 `channels.discord`에 아래 키를 넣고 재시작합니다(`channels`는 `reload`로 반영되지 않음). 토큰 파일이 없으면 `secret_missing`, 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
+- **켜기**: `config.json`의 `channels.discord`에 아래 키를 넣고 재시작합니다(`channels`는 `reload`로 반영되지 않지만 `guildIds`·`mentionFreeChannels`·`requireMention`은 예외로 바로 반영됩니다). 토큰 파일이 없으면 `secret_missing`, 0600이 아니면 `secret_permissions`로 기동하지 않습니다.
 
   | `channels.discord` 키 | 뜻 |
   | --- | --- |
   | `ownerUserId` | 오너의 Discord 사용자 ID(숫자 17~20자리, 필수). 이 사용자의 글만 받습니다 |
   | `botTokenFile` | 봇 토큰 파일, 홈 기준 상대경로(필수, 예: `secrets/discord-bot-token`) |
   | `applicationId` | Application ID(필수) |
-  | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버) |
-  | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택) |
+  | `guildIds` | 받을 서버 ID 목록(선택, 없으면 봇이 들어간 모든 서버). `reload`로 바로 반영 |
+  | `mentionFreeChannels` | 멘션 없이도 답할 채널 ID 목록(선택). `reload`로 바로 반영 |
   | `peerBots` | 피어 봇 목록(선택): `[{"userId": "<snowflake>", "name": "<1~32자>"}]`. 이 봇을 멘션한 그 봇의 서버 채널 글을 요청으로 받습니다(오너 id는 안 됨, 재시작 필요). [피어 봇](#피어-봇)과 [Discord 안내 7절](discord.md#7-피어-봇두-번째-jabbu-pocket) 참고 |
   | `inlineReplyChannels` | 스레드 없이 채널 본문에 답장으로 답할 서버 채널 ID 목록(선택). `이건 따로 빼줘` 같은 요청이면 스레드를 엽니다. `logChannelId`와 같으면 `config_invalid`. 자세한 동작은 [Discord](discord.md) |
-  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다 |
+  | `requireMention` | 서버 채널에서 멘션만 받음(선택, 기본 false). `mentionFreeChannels`의 채널과 그 채널에서 이 봇이 아는 스레드는 예외로 멘션 없이 받습니다. `reload`로 바로 반영 |
   | `laneChannelId` | Discord DM에서 요청한 작업 레인을 열 서버 텍스트 채널 ID(선택). 없으면 DM에서는 레인을 열지 않고 그 이유를 답합니다(서버 채널·스레드에서 요청한 레인은 그 채널에 열림) |
   | `logChannelId` | Discord #log 장부로 쓸 서버 텍스트 채널 ID(선택). Discord 대화·레인의 `✅ 완료` 답 사본이 올라가고, 이 채널과 그 스레드의 글은 턴이 되지 않습니다. `escalationChannelId`·`laneChannelId`·`mentionFreeChannels`와 같으면 `config_invalid` |
   | `escalationChannelId` | Discord 요청의 승인 카드를 받을 서버 텍스트 채널 ID(선택). 없으면 요청한 대화에 카드가 뜹니다 |
@@ -841,8 +853,8 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 
 `bun src/main.ts reload`나 `kill -HUP <데몬 pid>`를 보내면 실행 중인 데몬이 `config.json`을 다시 읽습니다. 결과는 `config_reloaded changed=… restart_required=… cli=…` 한 줄로 CLI 출력과 로그에 남습니다.
 
-- **바로 반영(`changed`)**: `skillReviewTurns`, `idStart`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `hostTools`, `wikiNotes`, `costCap`, `quotaGate`, `opsPanel`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
-- **재시작 필요(`restart_required`)**: `channels`, `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
+- **바로 반영(`changed`)**: `skillReviewTurns`, `idStart`, `dispatchHosts`, `workerOmpArgs`, `workerAgy`, `herdrBoard`, `taskAutoLand`, `lanes`, `restartNotice`, `recallEnabled`, `peerHopLimit`, `peerSilenceAlert`, `hostTools`, `wikiNotes`, `costCap`, `quotaGate`, `opsPanel`, `briefing`, `candidates`, `dashboard`(`!brief`가 읽는 `opsStatus`만; 현황판 서비스의 포트·주소는 서비스 재시작 필요), `channels.discord.guildIds`·`channels.discord.mentionFreeChannels`·`channels.discord.requireMention`(그 밖 `channels` 값은 재시작 필요). 다음 메시지·승인 카드·답·스윕부터 새 값을 씁니다. `dispatchHosts`·`workerOmpArgs`·`herdrBoard`는 이미 떠 있는 omp 자식의 도구에는 들어가지 않고 다음에 뜨는 자식부터 적용됩니다(스윕 알림의 보드 링크는 바로 반영).
+- **재시작 필요(`restart_required`)**: `channels`(위 세 Discord 접속 정책 키는 제외), `ompExecutable`, `ompProfile`, `ompConfigOverlay`, `workspaceDir`, `timezone`, `model`, `thinking`, `idleTimeoutMinutes`, `idleKeepResident`, `agent`, `agyExecutable`, `herdr`(도구 스키마와 `[TASK]` 스윕을 시작 때 정함), `offsite`(데몬은 `offsite_age` 게이트를 둘지 판단하는 데만 읽고, 복제는 CLI가 실행할 때마다 config를 다시 읽습니다). 바뀐 것을 알려 주기만 하고 적용하지 않습니다.
 - **CLI 전용(`cli`)**: `sessionRetentionDays`, `maxBundleBytes`는 `gc`·`backup`이 실행할 때마다 직접 읽습니다. 데몬은 `maxBundleBytes`를 첫 기동 백업(`boot_backup`)에서만 기동 시점의 값으로 쓰므로, 바꾼 값은 다음 `backup` 실행부터 적용되고 데몬의 첫 기동 백업에는 재시작 뒤에야 반영됩니다. `apply`는 `jabbu-pocket apply`가 실행할 때마다 읽습니다.
 - 파일이 없거나 JSON·검증 오류가 있으면 아무것도 바꾸지 않고 `config_reload_failed`를 남기며, `reload`는 1로 끝납니다.
 

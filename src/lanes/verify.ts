@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { killTree } from "../core/terminate-tree";
 import { buildChildEnv } from "../omp/env";
 import { hiddenChanges } from "./hidden-changes";
 
@@ -71,11 +72,7 @@ export const gitRunner =
 			group = proc.pid;
 			const timedOut = Promise.withResolvers<never>();
 			timer = setTimeout(() => {
-				try {
-					process.kill(-proc.pid, "SIGKILL");
-				} catch {
-					proc.kill("SIGKILL");
-				}
+				killTree(proc.pid, "SIGKILL");
 				for (const reader of [out, err]) reader.cancel().catch(() => undefined);
 				timedOut.reject(new Error(`git timed out after ${timeoutMs}ms`));
 			}, timeoutMs);
@@ -87,11 +84,7 @@ export const gitRunner =
 			return { code, stdout, stderr };
 		} catch (error) {
 			if (error instanceof GitOutputCapError) {
-				try {
-					if (group !== undefined) process.kill(-group, "SIGKILL");
-				} catch {
-					// already gone
-				}
+				if (group !== undefined) killTree(group, "SIGKILL");
 				throw error;
 			}
 			throw new VerifyUnavailableError(error instanceof Error ? error.message : String(error));

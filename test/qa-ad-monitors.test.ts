@@ -82,7 +82,7 @@ describe("qa-ad #5 & #6: export failed count and resilient stale cleanup", () =>
 		expect(cli.stderr).toContain("monitors export: warning:");
 	});
 
-	test.skipIf(isRoot)(
+	test.skipIf(isRoot /* root ignores permission bits, so the 0o400 file can be written (qa-ad #5) */)(
 		"#5: partial write failure counts written vs failed and keeps failed target out of stale deletion",
 		async () => {
 			const h = home("qa-ad-5p-");
