@@ -69,6 +69,12 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 		["AKIA", "TESTTESTTEST0000"],
 		["AIza", `Sy${"T".repeat(31)}-0`],
 		["glpat-", "TEST_TEST_TEST_TEST_0"],
+		// minimum lengths of the npm_ and sk_/rk_ rules are heuristic matching thresholds, not provider-verified lengths
+		["npm_", `TEST${"0".repeat(32)}`],
+		["sk_live_", `TEST${"0".repeat(20)}`],
+		["rk_live_", `TEST${"0".repeat(20)}`],
+		["sk_test_", `TEST${"0".repeat(20)}`],
+		["rk_test_", `TEST${"0".repeat(20)}`],
 		["https://hooks.slack.com/services/", "T00000000/B00000000/TESTTESTTESTTESTTESTTEST"],
 		["https://discord.com/api/webhooks/", `123456789012345678/${"T".repeat(68)}`],
 		["https://discordapp.com/api/webhooks/", `123456789012345678/${"t".repeat(68)}`],
@@ -94,6 +100,19 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 	test("lookalikes survive: a public key, AKIA in a word, a webhook docs URL", () => {
 		const text =
 			"-----BEGIN PUBLIC KEY----- AKIAX https://discord.com/api/webhooks docs https://hooks.slack.com/ glpat-x";
+		expect(redact(text)).toBe(text);
+	});
+
+	test("npm and Stripe lookalikes survive: npm env names, short bodies, a longer word holding the prefix, sk_ without live/test", () => {
+		const text =
+			"npm_config_registry npm_package_name npm_short sk_live_short rk_test_abc xnpm_" +
+			"0".repeat(32) +
+			" my_sk_live_" +
+			"0".repeat(20) +
+			" sk_prod_" +
+			"0".repeat(20) +
+			" pk_live_" +
+			"0".repeat(20);
 		expect(redact(text)).toBe(text);
 	});
 });

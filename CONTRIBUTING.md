@@ -9,7 +9,7 @@
 ```sh
 bun install
 bun test          # 0 fail이어야 합니다(실제 omp E2E는 기본으로 건너뜁니다)
-bun run check     # biome + tsc
+bun run check     # biome check → tsc → test-sleeps → check-loc → check-layers → tla-covered
 ```
 
 실제 omp를 띄우는 E2E는 `JABBU_E2E_OMP=1 bun test`로 돌리며, 모델 호출 비용이 듭니다.

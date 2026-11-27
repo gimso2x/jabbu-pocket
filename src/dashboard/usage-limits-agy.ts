@@ -1,8 +1,21 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchEnv, type ProcessRunner } from "../dispatch/omp";
 import { redact } from "../redact";
+import { protectedDirs } from "../safety/forbidden-paths";
+import { isInside } from "../safety/inside";
 import type { PeerInstall } from "./peers";
 import { cleanError } from "./section-cache";
 import type { Section } from "./snapshot";
@@ -217,13 +230,33 @@ export async function collectAgyAccounts(
 	return { ...(resolvedActive === undefined ? {} : { account: resolvedActive }), accounts };
 }
 
-function expandOverlayPath(raw: string): string | undefined {
+const currentHome = (): string => process.env.HOME || homedir();
+
+function expandOverlayPath(raw: string, userHome = currentHome()): string | undefined {
 	if (raw.includes("secrets")) return undefined;
-	const resolved = raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+	const resolved = raw === "~" ? userHome : raw.startsWith("~/") ? join(userHome, raw.slice(2)) : raw;
 	return resolved.startsWith("/") && !resolved.includes("secrets") ? resolved : undefined;
 }
 
-/** Reads `agyAccounts.statePath` (`{ current, blocked }`) across primary and peer homes; rejects `secrets` paths. */
+const UNSAFE_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function safeOverlayFile(raw: string, homeDir: string, userHome = currentHome()): string | undefined {
+	const statePath = expandOverlayPath(raw, userHome);
+	if (statePath === undefined) return undefined;
+	let realPath: string;
+	try {
+		const stat = lstatSync(statePath);
+		if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
+		realPath = realpathSync(statePath);
+	} catch {
+		return undefined;
+	}
+	if (realPath.includes("secrets")) return undefined;
+	if (protectedDirs(homeDir, userHome).some((dir) => isInside(realPath, dir))) return undefined;
+	return realPath;
+}
+
+/** Reads `agyAccounts.statePath` (`{ current, blocked }`) across primary and peer homes; rejects symlinks & protected paths. */
 export function readAgyBlockedOverlay(
 	homeDir: string,
 	peers: readonly Pick<PeerInstall, "home">[],
@@ -240,8 +273,8 @@ export function readAgyBlockedOverlay(
 			continue;
 		}
 		if (typeof stateRaw !== "string" || stateRaw.trim() === "") continue;
-		const statePath = expandOverlayPath(stateRaw.trim());
-		if (statePath === undefined || !existsSync(statePath)) continue;
+		const statePath = safeOverlayFile(stateRaw.trim(), dir);
+		if (statePath === undefined) continue;
 		try {
 			const state = JSON.parse(readFileSync(statePath, "utf8")) as unknown;
 			if (typeof state !== "object" || state === null || Array.isArray(state)) continue;
@@ -251,8 +284,10 @@ export function readAgyBlockedOverlay(
 			}
 			if (typeof blocked === "object" && blocked !== null && !Array.isArray(blocked)) {
 				for (const [acct, until] of Object.entries(blocked)) {
+					if (UNSAFE_OBJECT_KEYS.has(acct)) continue;
 					if (typeof until === "number" && Number.isFinite(until) && until > now) {
-						overlay.blocked[acct] = Math.max(overlay.blocked[acct] ?? 0, until);
+						const prev = Object.hasOwn(overlay.blocked, acct) ? (overlay.blocked[acct] ?? 0) : 0;
+						overlay.blocked[acct] = Math.max(prev, until);
 					}
 				}
 			}
@@ -274,7 +309,7 @@ export function applyAgyBlockedOverlay<
 		if (source.name !== "Antigravity" || source.accounts === undefined) return source;
 		const hasCurrent = overlay.current !== undefined && source.accounts.some((a) => a.name === overlay.current);
 		const accounts = source.accounts.map((acct): UsageAccount => {
-			const rawUntil = overlay.blocked[acct.name];
+			const rawUntil = Object.hasOwn(overlay.blocked, acct.name) ? overlay.blocked[acct.name] : undefined;
 			const until = rawUntil !== undefined && rawUntil > now ? rawUntil : undefined;
 			const active = hasCurrent ? acct.name === overlay.current : acct.active;
 			const { active: _oldActive, blockedUntil: _oldBlk, ...rest } = acct;

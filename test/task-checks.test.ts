@@ -840,7 +840,7 @@ describe("diff integrity of the task branch", () => {
 				"-export function rotate() {",
 			].join("\n");
 			const run: ProcessRunner = async (cmd) => {
-				if (cmd.includes("diff")) return { code: 0, stdout: removal, timedOut: false };
+				if (cmd.includes("'diff'")) return { code: 0, stdout: removal, timedOut: false };
 				if (cmd.at(-2) === "cat") {
 					const text = remoteFiles[cmd.at(-1) ?? ""];
 					return text === undefined

@@ -1,11 +1,15 @@
 import { redact } from "../redact";
 import type { BoardCard } from "./board";
 
-/** herdr-web-ui gets this long to answer a conversation or plan read. */
+/** herdr-web-ui gets this long to answer; only paging query params are forwarded. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
-/** Paging parameters herdr-web-ui's conversation endpoint takes; nothing else is passed on. */
 const CONVERSATION_QUERY = ["before", "since", "from"] as const;
-const HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+const HEADERS = {
+	"content-type": "application/json; charset=utf-8",
+	"cache-control": "no-store",
+	"x-content-type-options": "nosniff",
+	"referrer-policy": "no-referrer",
+};
 
 export type PaneKind = "conversation" | "plan";
 
@@ -31,11 +35,7 @@ function maskedBody(body: string): string {
 	return masked === JSON.stringify(parsed) ? body : masked;
 }
 
-/**
- * Read-only GET of herdr-web-ui's conversation or plan of one card on the board: `/api/pane/<kind>` for the web UI's
- * own machine, `/api/machines/<id>/pane/<kind>` otherwise, both ids encoded. 2xx and 409 pass through with their
- * status; any other answer is 502 `upstream`, no answer (or none in 10 s) 502 `herdr_unreachable`.
- */
+/** Read-only GET proxy to herdr-web-ui's pane conversation/plan (2xx/409 pass through masked, others 502). */
 export async function proxyPaneGet(
 	kind: PaneKind,
 	origin: string,
