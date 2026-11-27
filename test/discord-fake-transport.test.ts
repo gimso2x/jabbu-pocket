@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Glob } from "bun";
@@ -131,6 +131,39 @@ describe("FakeDiscordTransport contract", () => {
 		expect(page.map((m) => m.id)).toEqual(["100"]);
 		const rest = await fake.listMessages({ channelId: CHANNEL, after: "100" });
 		expect(rest.map((m) => m.id)).toEqual(["1000"]);
+	});
+
+	test("a transient 503 is retried with the real default budget and the download lands", async () => {
+		const fake = new FakeDiscordTransport();
+		const dir = mkdtempSync(join(tmpdir(), "discord-download-retry-"));
+		try {
+			const url = "https://cdn.discordapp.com/attachments/1/2/x.png";
+			const destPath = join(dir, "x.png");
+			fake.downloads.set(url, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]));
+			fake.downloadStatuses.set(url, [503]);
+			await fake.downloadAttachment({ url, destPath, maxBytes: 1024 });
+			expect(existsSync(destPath)).toBe(true);
+			expect(fake.downloadRequests.filter((request) => request.url === url)).toHaveLength(2);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("three 503s spend the retry budget and fail definitively", async () => {
+		const fake = new FakeDiscordTransport();
+		const dir = mkdtempSync(join(tmpdir(), "discord-download-retry-"));
+		try {
+			const url = "https://cdn.discordapp.com/attachments/1/2/x.png";
+			const destPath = join(dir, "x.png");
+			fake.downloads.set(url, new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+			fake.downloadStatuses.set(url, [503, 503, 503]);
+			await expect(fake.downloadAttachment({ url, destPath, maxBytes: 1024 })).rejects.toThrow(
+				"attachment_download_failed:http_503",
+			);
+			expect(fake.downloadRequests.filter((request) => request.url === url)).toHaveLength(3);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("emitMessage and emitInteraction reach the handlers registered at start", async () => {
