@@ -271,11 +271,7 @@ export class DiscordAdapter implements ChannelAdapter {
 						targets: () => recovery.targets(),
 						maxPages: recovery.maxPages,
 						ready: async () => (await this.#ready) !== undefined,
-						locate: async (channelId) => {
-							const info = await this.#port.channelInfo(channelId, false);
-							if (info === undefined) return undefined;
-							return info.guildId === undefined ? { dm: true } : { dm: false, guildId: info.guildId };
-						},
+						locate: (channelId) => this.#port.locate(channelId),
 						preparePage: (msgs) =>
 							mergeBackfillPeerParts(msgs, this.#botUserId, new Set(this.#peerBots.map((p) => p.userId))),
 						ingest: async (event) => {

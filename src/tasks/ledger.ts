@@ -15,23 +15,13 @@ import {
 	worktreePathOf,
 } from "./docs";
 import { migrateTaskSchema, type TaskLandRecord, writeTx } from "./ledger-schema";
+import { BOT_TRANSITIONS, HUMAN_ONLY } from "./ledger-transitions";
 import type { SignalCheck } from "./signals";
 
 export const TASK_STATUSES = ["working", "blocked", "review", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 /** `core-land`: the core's own landing of a reached local task (`landTask`), which may only close a task in review. */
 export type TaskActor = "bot" | "human" | "core-land";
-
-/** Statuses only a human `close` (or, `review → done` alone, the core landing) can reach; a closed task never moves again. */
-const HUMAN_ONLY: readonly TaskStatus[] = ["done", "cancelled"];
-/** What the bot paths (tool, sweep) may do: working ⇄ blocked, working → review, review → working (resume). */
-const BOT_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
-	working: ["blocked", "review"],
-	blocked: ["working"],
-	review: ["working"],
-	done: [],
-	cancelled: [],
-};
 
 export class TaskTransitionError extends Error {
 	constructor(message: string) {
@@ -113,6 +103,8 @@ export interface NewTask {
 	/** The worker tier fixed for the task's life (resume and restart included); absent → all three stay null. */
 	worker?: { tier: LaneModelTier; tierReason: string; model: string | null; tierConfidence?: number };
 	runtime?: TaskRow["runtime"]; // absent = herdr
+	/** The worker branch; absent = `task/<TASKID>` (`branchOf`). */
+	branch?: string;
 }
 
 /** One append-only line of a task's status history; the registration line has `fromStatus: null`. */
@@ -330,7 +322,7 @@ export class TaskLedger {
 					input.host,
 					input.repo,
 					worktreePathOf(input.repo, taskId),
-					branchOf(taskId),
+					input.branch ?? branchOf(taskId),
 					agentNameOf(taskId),
 					JSON.stringify(input.acceptance),
 					now,

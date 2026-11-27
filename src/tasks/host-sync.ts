@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { type ProcessRunner, remoteShellQuote } from "../dispatch/omp";
 import { githubRepoOfUrl } from "../lanes/pr";
 import { redactThenClip } from "../redact";
+import { branchProblem } from "./branch";
 import { TASK_PATH_PATTERN } from "./docs";
 import { sshCommand } from "./host";
 
@@ -17,7 +18,6 @@ const GIT_TIMEOUT_MS = 60_000;
 const SSH_FAILURE = 255;
 const LINE_MAX = 200;
 const REMOTE_NAME = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-const BRANCH_CHARS = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 /** What git says of a worktree or branch that is gone already: for this call that is the wanted state. */
 const ALREADY_GONE = /is not a working tree|not found|No such file or directory|does not exist/i;
 /** A shell that could not even start git (`git: command not found`, exit 127) says nothing about the worktree or branch. */
@@ -36,13 +36,6 @@ interface RemoteResult {
 }
 
 const safePath = (path: string): boolean => TASK_PATH_PATTERN.test(path) && !path.includes("..");
-
-/** A branch name that reaches git: plain characters, no `..`, `//`, empty or `.lock` part, no trailing `/`. */
-function safeBranch(branch: string): boolean {
-	if (!BRANCH_CHARS.test(branch) || branch.includes("..") || branch.includes("//") || branch.endsWith("/"))
-		return false;
-	return branch.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock") && !part.endsWith("."));
-}
 
 /** One command on the host: every word single-quoted for the remote shell, stderr folded into the output. */
 async function remote(run: ProcessRunner, ssh: string, argv: string[]): Promise<RemoteResult> {
@@ -127,7 +120,7 @@ export async function removeRemoteWorktree(
 	input: { repo: string; worktree: string; branch: string },
 ): Promise<string | undefined> {
 	const { repo, worktree, branch } = input;
-	if (!safePath(repo) || !safePath(worktree) || !safeBranch(branch))
+	if (!safePath(repo) || !safePath(worktree) || branchProblem(branch) !== undefined)
 		return `원격 정리 거절: 위험한 경로·브랜치 이름(${repo} ${worktree} ${branch})`;
 	const ignored = await remote(run, sshTarget, ["git", "-C", worktree, ...IGNORED_LIST_ARGS]);
 	if (ignored.down) return unreachable(ignored);
@@ -183,7 +176,7 @@ export async function syncRemoteBase(
 	input: RemoteBaseSync,
 ): Promise<string | undefined> {
 	const { host, repo, baseBranch, remote: name, expectedSlug } = input;
-	if (!safePath(repo) || !safeBranch(baseBranch) || !REMOTE_NAME.test(name)) {
+	if (!safePath(repo) || branchProblem(baseBranch) !== undefined || !REMOTE_NAME.test(name)) {
 		return `merged-not-synced: 원격 ${host} 갱신 거절 — 위험한 저장소·브랜치·원격 이름`;
 	}
 	const note = (why: string) => `merged-not-synced: 원격 ${host} ${repo} 갱신 필요 — ${why}`;

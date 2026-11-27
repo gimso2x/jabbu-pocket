@@ -949,6 +949,32 @@ describe("host tools", () => {
 		expect(checkUploadable(file, deps)).toBe(file);
 	});
 
+	test("checkUploadable: a glued word is no key at any alignment of the carry cut; a real key is refused at all of them", () => {
+		const deps = { homeDir, workspaceDir, userHome };
+		const file = join(workspaceDir, "cut-edge.txt");
+		const filler = (length: number) => "w".repeat(length);
+		const after = " ".repeat(UPLOAD_SCAN_CHUNK_BYTES + 100);
+		const cut = UPLOAD_SCAN_CHUNK_BYTES - UPLOAD_SCAN_CARRY_CHARS; // the first character the carry keeps
+		const keys = [
+			`AKIA${"ABCD1234EFGH5678"}`,
+			`AIza${"A1b2C3d4E5".repeat(4).slice(0, 35)}`,
+			`sk-${"A1b2C3d4E5".repeat(3)}`,
+		];
+		for (const key of keys) {
+			for (const at of [cut - 1, cut, cut + 1]) {
+				// `x` before the key: a longer word, not a key, wherever the cut falls (also on the key's first character).
+				writeFileSync(file, `${filler(at - 1)}x${key}${after}`);
+				expect(checkUploadable(file, deps)).toBe(file);
+				// A space before it: a key, wherever the cut falls.
+				writeFileSync(file, `${filler(at - 1)} ${key}${after}`);
+				expect(() => checkUploadable(file, deps)).toThrow(/token-like secret/);
+			}
+			// The cut falls inside the key.
+			writeFileSync(file, `${filler(UPLOAD_SCAN_CHUNK_BYTES - 8 - 1)} ${key}${after}`);
+			expect(() => checkUploadable(file, deps)).toThrow(/token-like secret/);
+		}
+	});
+
 	describe("checkUploadable: short `sk-` runs in binary data are not keys", () => {
 		const padding = "\u0001".repeat(3 * 1024 * 1024 + 1);
 		const short = [`\u0000sk-a\u0000`, `\u0000sk-${"b".repeat(19)}\u0000`];
