@@ -505,23 +505,15 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 	/** The bar's 디스코드에서 답하기 link follows the open conversation, on every tab. */
 	function syncReplyLink() {
 		const thread = threadOpen() ? threadOf(open.id) : undefined;
-		const links = [
-			[
-				"detail-discord",
-				thread && snapshot ? discordThreadHref(snapshot.discordGuild, thread.originKey, thread.threadRef) : "",
-			],
-		];
-		for (const [id, href] of links) {
-			const link = document.getElementById(id);
-			if (!link) continue;
-			link.hidden = href === "";
-			if (href !== "") link.setAttribute("href", href);
-			// Only the Discord link leaves for another site (a new tab).
-			if (href !== "" && id === "detail-discord") {
-				link.setAttribute("target", "_blank");
-				link.setAttribute("rel", "noopener noreferrer");
-			}
-		}
+		const link = document.getElementById("detail-discord");
+		if (!link) return;
+		const href = thread && snapshot ? discordThreadHref(snapshot.discordGuild, thread.originKey, thread.threadRef) : "";
+		link.hidden = href === "";
+		if (href === "") return;
+		link.setAttribute("href", href);
+		// Only the Discord link leaves for another site (a new tab).
+		link.setAttribute("target", "_blank");
+		link.setAttribute("rel", "noopener noreferrer");
 	}
 	/** The bar's context title shows the open conversation or card title while on non-head tabs. */
 	function syncBarTitle() {
@@ -597,6 +589,11 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		if (!response.ok) throw new Error("HTTP " + response.status);
 		return response.json();
 	}
+	/** A failed read shows one fixed Korean line; the raw failure goes to the console, never the screen. */
+	function failedLine(error, line) {
+		console.error(error);
+		return line;
+	}
 	async function loadConversation(mode) {
 		const mine = generation;
 		const ticket = ++loadTicket;
@@ -627,7 +624,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			else if (mode === "first" || nearEnd) detail.scrollTop = detail.scrollHeight;
 		} catch (error) {
 			if (mine !== generation) return;
-			const failed = "대화를 읽지 못했어요 (" + (error && error.message ? error.message : String(error)) + ")";
+			const failed = failedLine(error, "대화를 읽지 못했어요. 다시 시도해 주세요");
 			if (mode !== "refresh") note(conv, failed);
 			else if (liveKept) {
 				liveFail = failed;
@@ -752,7 +749,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			if (html === "") note(plan, "이 패널에는 plan이 없어요");
 			else plan.innerHTML = html;
 		} catch (error) {
-			if (mine === generation) note(plan, "plan을 읽지 못했어요 (" + (error && error.message ? error.message : String(error)) + ")");
+			if (mine === generation) note(plan, failedLine(error, "plan을 읽지 못했어요. 다시 시도해 주세요"));
 		}
 	}
 	/** Reads the open monitor's instruction, procedure files and runs (\`api/monitor/detail\`) into its panel. */
@@ -762,9 +759,9 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 		try {
 			const response = await fetch("api/monitor/detail?" + new URLSearchParams({ id: id }).toString(), { cache: "no-store" });
 			body = await response.json();
-			if (!response.ok && !(body && body.error)) body = { error: "HTTP " + response.status };
+			if (!response.ok && !(body && body.error)) body = { error: "연결에 실패했습니다. 다시 시도해 주세요." };
 		} catch (error) {
-			body = { error: error && error.message ? error.message : String(error) };
+			body = { error: failedLine(error, "연결에 실패했습니다. 다시 시도해 주세요.") };
 		}
 		if (mine !== generation) return;
 		monitorHtml = renderMonitorDetail(body);
@@ -782,9 +779,9 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			query.set(kind, id.slice(at + 1));
 			const response = await fetch("api/diff?" + query.toString(), { cache: "no-store" });
 			body = await response.json();
-			if (!response.ok && !(body && body.error)) body = { error: "HTTP " + response.status };
+			if (!response.ok && !(body && body.error)) body = { error: "연결에 실패했습니다. 다시 시도해 주세요." };
 		} catch (error) {
-			body = { error: error && error.message ? error.message : String(error) };
+			body = { error: failedLine(error, "연결에 실패했습니다. 다시 시도해 주세요.") };
 		}
 		if (mine !== generation) return;
 		diffHtml = renderDiffDetail(id, body);
@@ -1418,7 +1415,7 @@ export const BOOT_CLIENT = `${TASK_WORK_CLIENT}${CLIENT_UI_HELPERS}${UX_CLIENT}f
 			stale.hidden = true;
 			updateTabSignal();
 		} catch (error) {
-			stale.textContent = "갱신 실패: " + (error && error.message ? error.message : String(error)) + " · 15초 뒤 다시 시도해요";
+			stale.textContent = failedLine(error, "갱신에 실패했습니다 · 15초 뒤 다시 시도해요");
 			stale.hidden = false;
 			updateTabSignal(true);
 		}

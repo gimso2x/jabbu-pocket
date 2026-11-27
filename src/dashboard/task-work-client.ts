@@ -116,7 +116,8 @@ const taskWork = (() => {
 			w.conv = renderConversation(Array.isArray(body.turns) ? { turns: w.turns, cursor: w.cursor } : body, "omp", renderMarkdown, Date.now());
 		} catch (error) {
 			if (work !== w) return;
-			w.conv = '<p class="block-note">대화를 읽지 못했어요 (' + esc(error && error.message ? error.message : String(error)) + ")</p>";
+			console.error(error);
+			w.conv = '<p class="block-note">대화를 읽지 못했어요. 다시 시도해 주세요.</p>';
 		}
 		w.convSeq += 1;
 		paint();
@@ -152,12 +153,13 @@ const taskWork = (() => {
 			status = response.status;
 			answer = await response.json().catch(() => ({}));
 		} catch (error) {
-			answer = { error: error && error.message ? error.message : String(error) };
+			console.error(error);
+			answer = { error: "연결에 실패했습니다. 다시 시도해 주세요." };
 		}
 		if (work !== w) return;
 		w.busy = false;
 		if (status === 401 || status === 403 || (status === 404 && answer.error === "web_disabled")) w.writable = false;
-		w.note = answer.text || answer.error || "HTTP " + status;
+		w.note = answer.text || answer.error || "연결에 실패했습니다. 다시 시도해 주세요.";
 		if (status === 200 && action === "followup") w.draft = "";
 		if (status === 200 && typeof answer.paused === "boolean" && lastHtml) {
 			known = { id: w.id, paused: answer.paused, at: Date.now() };
