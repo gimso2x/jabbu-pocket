@@ -1547,14 +1547,6 @@ export class OriginMailbox {
 				...base,
 				parts: ["⏸ 이 턴은 오너 멈춤 요청으로 중단됐습니다(레인 일시정지). 재개는 오너만 합니다."],
 			});
-		} else if ((final.error ?? "").startsWith(COST_CAP_STOP_PREFIX)) {
-			// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
-			const rawReason = final.error ?? final.status;
-			this.#logTurnFailed(rawReason);
-			store.recordTurnFailure({
-				...base,
-				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
-			});
 		} else {
 			const rawReason = final.error ?? final.status;
 			this.#logTurnFailed(rawReason);
@@ -1562,8 +1554,11 @@ export class OriginMailbox {
 				...base,
 				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
 			});
-			this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
-			await this.#noteTurnFailure(turn.threadRef, rawReason);
+			// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
+			if (!rawReason.startsWith(COST_CAP_STOP_PREFIX)) {
+				this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
+				await this.#noteTurnFailure(turn.threadRef, rawReason);
+			}
 		}
 		const error = final.error ?? (final.status === "completed" ? undefined : final.status);
 		this.#deps.onTurnSettled?.({
@@ -1651,14 +1646,8 @@ export class OriginMailbox {
 		const { store, originKey, log } = this.#deps;
 		const threadRef = row.threadRef;
 		const opRef = `${command.kind}:${row.platformMessageId}`;
-		if (command.kind === "new") {
-			await this.#newEpoch(opRef, threadRef);
-			return;
-		}
-		if (command.kind === "stop") {
-			await this.#stopTurn(row, opRef);
-			return;
-		}
+		if (command.kind === "new") return this.#newEpoch(opRef, threadRef);
+		if (command.kind === "stop") return this.#stopTurn(row, opRef);
 		// Mark first so a failing command can never leave its text pending for a later prompt.
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		if (command.arg === "" && this.#deps.commandPicker !== undefined && isPickerCommand(command.kind)) {
