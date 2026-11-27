@@ -222,24 +222,29 @@ describe("monitors: dispatch failure", () => {
 		clock.advance(MINUTE);
 		const mark = store.monitors.markDispatched.bind(store.monitors);
 		let threw = false;
+		let threwEvent = 0;
 		store.monitors.markDispatched = (eventId, inboundId) => {
 			if (!threw) {
 				threw = true;
+				threwEvent = eventId;
 				throw new Error("ledger boom");
 			}
 			return mark(eventId, inboundId);
 		};
 		const summary = await run();
+		// Which of the two monitors the pass reaches first is the ledger's order, not the test's: assert on the event
+		// that actually threw instead of assuming `first`.
+		const failed = store.monitors.getEvent(threwEvent);
+		const other = failed?.monitorId === first.id ? second : first;
 		expect(summary.dispatched).toBe(1);
 		expect(logged("monitor_dispatch_failed")).toHaveLength(1);
-		expect(logged("monitor_dispatch_failed")[0]).toContain(`monitor=${first.id}`);
-		expect(logged("monitor_dispatch_failed")[0]).toContain(
-			`event=${store.monitors.listEvents({ monitorId: first.id })[0]?.eventId}`,
-		);
+		expect(logged("monitor_dispatch_failed")[0]).toContain(`monitor=${failed?.monitorId}`);
+		// `event` is a reserved log key (the line's own `event=<kind>`) and the formatter prefixes it as `f_event`.
+		expect(logged("monitor_dispatch_failed")[0]).toContain(`f_event=${threwEvent}`);
 		expect(logged("monitor_dispatch")).toHaveLength(1);
-		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${second.id}`);
+		expect(logged("monitor_dispatch")[0]).toContain(`monitor=${other.id}`);
 		// The failed event was never marked, so it stays admitted for the next tick.
-		expect(store.monitors.listEvents({ monitorId: first.id })[0]?.stage).toBe("admitted");
+		expect(store.monitors.getEvent(threwEvent)?.stage).toBe("admitted");
 	});
 });
 
