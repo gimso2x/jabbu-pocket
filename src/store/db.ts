@@ -1823,6 +1823,14 @@ export class Store {
 		return listAmbiguousDeliveries(this.db);
 	}
 
+	/** Whether an earlier delivery for this thread is held (`failed_ambiguous`). */
+	hasHeldDelivery(threadRef: string, beforeDeliveryId: number): boolean {
+		const held = this.db
+			.query("SELECT 1 FROM deliveries WHERE thread_ref = ? AND delivery_id < ? AND state = 'failed_ambiguous' LIMIT 1")
+			.get(threadRef, beforeDeliveryId);
+		return held !== null;
+	}
+
 	/**
 	 * `ack` closes a held row as arrived; `resend` puts it back in the queue now with the duplicate-warning header and
 	 * keeps `sentParts`/`replyTs`, so the resend posts only what never went out. Anything else throws `invalid_transition`.

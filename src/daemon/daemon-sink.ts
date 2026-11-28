@@ -327,12 +327,11 @@ export class DaemonInbound {
 		try {
 			const opRef = `${kind}:${row.platformMessageId}`;
 			startedStore(this.#ctx).markDispatched(row.platformMessageId, { opRef, entryCursor: null });
-			const reply = await answer();
 			startedStore(this.#ctx).recordAnswer({
 				originKey: row.originKey,
 				opRef,
 				threadRef: row.threadRef,
-				parts: [reply],
+				parts: [await answer()],
 			});
 		} catch (error) {
 			this.#settleFailed(failedAs, row, error);
@@ -659,6 +658,7 @@ export function deliverySources(
 	return (platform: ChatPlatform): DeliverySource => ({
 		claimDue: () => store.claimDue(undefined, platform).map(itemOf),
 		takeExpired: () => store.takeExpired(platform).map(itemOf),
+		hasHeld: (threadRef, beforeDeliveryId) => store.hasHeldDelivery(threadRef, beforeDeliveryId),
 		confirm: (deliveryId) => {
 			crash("after_post_before_confirm");
 			store.confirmDelivery(deliveryId);
