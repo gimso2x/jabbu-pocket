@@ -26,6 +26,7 @@ export interface ActionButton {
 
 export interface OutboundMessage {
 	text: string;
+	idempotencyKey?: string | undefined; // `delivery:<id>:<part>`: a storing platform dedups a repost on it.
 	/** Buttons under the text. `[]` on an edit removes the buttons an earlier version had. */
 	buttons?: readonly ActionButton[];
 	/** Select menus under/over the text. `[]` on an edit removes menus an earlier version had. */
@@ -74,6 +75,5 @@ export const mentionToken = (userId: string): string => `{{mention:${userId}}}`;
 
 const MENTION_TOKEN = /\{\{mention:([^{}\s]+)\}\}/g;
 
-export function renderMentions(text: string, port: Pick<ChannelPort, "mentionUser">): string {
-	return text.replace(MENTION_TOKEN, (_, userId: string) => port.mentionUser(userId));
-}
+export const renderMentions = (text: string, port: Pick<ChannelPort, "mentionUser">): string =>
+	text.replace(MENTION_TOKEN, (_, userId: string) => port.mentionUser(userId));
