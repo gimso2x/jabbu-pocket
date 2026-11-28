@@ -109,6 +109,42 @@ describe("dispatch tool (qa-j)", () => {
 		await expect(tool.execute({ mode: "simple", name: "w", task: "x" }, SIGNAL)).rejects.toThrow("simple 모드");
 	});
 
+	// round 16 (dispatch F2): taskSpec is a worker argument, so mode=simple with one is refused instead of
+	// silently starting/resuming a worker while claiming a one-shot print; nothing runs.
+	test("mode simple with a taskSpec is refused", async () => {
+		const runs: string[][] = [];
+		const { tasks } = localTask();
+		const tool = toolWith(
+			async (cmd) => {
+				runs.push(cmd);
+				return { code: 0, stdout: "{}", timedOut: false };
+			},
+			{ herdr: {}, tasks },
+		);
+		await expect(
+			tool.execute({ mode: "simple", taskSpec: { id: "T-20261112-99" }, task: "hi" }, SIGNAL),
+		).rejects.toThrow("simple 모드");
+		expect(runs).toEqual([]);
+	});
+
+	// round 16 (dispatch F3): a cwd on a taskSpec resume was silently ignored (the local worker dir comes from
+	// the registered row), so it is refused like name; nothing runs.
+	test("a taskSpec resume with a cwd is refused", async () => {
+		const runs: string[][] = [];
+		const { row, tasks } = localTask();
+		const tool = toolWith(
+			async (cmd) => {
+				runs.push(cmd);
+				return { code: 0, stdout: "{}", timedOut: false };
+			},
+			{ herdr: {}, tasks },
+		);
+		await expect(
+			tool.execute({ taskSpec: { id: row.taskId }, cwd: "/tmp/elsewhere", task: "hi" }, SIGNAL),
+		).rejects.toThrow("taskSpec에는");
+		expect(runs).toEqual([]);
+	});
+
 	// qa-j n111: a failed `omp -p` does not read as a finished run.
 	test("simple mode marks a non-zero exit in the result", async () => {
 		const tool = toolWith(async () => ({ code: 2, stdout: "partial answer", timedOut: false }));

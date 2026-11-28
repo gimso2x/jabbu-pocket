@@ -171,7 +171,7 @@ function fenced(body: string): string {
 	return `${fence}text\n${body}\n${fence}`;
 }
 
-export type TraceInputsResult = { ok: true; markdown: string } | { ok: false; message: string };
+export type TraceInputsResult = { ok: true; markdown: string } | { ok: false; message: string; usage?: boolean };
 
 const ERRORS: Record<TraceError, string> = {
 	no_database: "no jabbu.db in the home",
@@ -201,7 +201,7 @@ export function renderTraceInputs(
 	if (main.calls.length === 0) return { ok: false, message: "the turn has no model call yet" };
 	const callNo = call ?? main.calls.length;
 	if (!Number.isInteger(callNo) || callNo < 1 || callNo > main.calls.length) {
-		return { ok: false, message: `--call must be 1..${main.calls.length}` };
+		return { ok: false, message: `--call must be 1..${main.calls.length}`, usage: true };
 	}
 	const target = main.calls[callNo - 1] as (typeof main.calls)[number];
 	const subs = readSubAgents(source.file.replace(/\.jsonl$/, ""), window, 1);
@@ -282,9 +282,9 @@ function workerBrief(id: string, start: number, brief: WorkerBrief | undefined):
 		: { name: id, start, text: maskText(brief.text), partial: false };
 }
 
-const usage = (message: string): number => {
-	process.stderr.write(`trace-inputs: ${message}\n${TRACE_INPUTS_USAGE}`);
-	return 2;
+const fail = (message: string, code: 1 | 2 = 2): number => {
+	process.stderr.write(`trace-inputs: ${message}\n${code === 2 ? TRACE_INPUTS_USAGE : ""}`);
+	return code;
 };
 
 /** `jabbu-pocket trace-inputs`: writes the md (masked once more as a whole) and prints its path. */
@@ -300,8 +300,8 @@ export function traceInputsCommand(
 		options: { call: { type: "string" }, out: { type: "string" } },
 	});
 	const [id, ...extra] = positionals;
-	if (id === undefined || !/^\d+$/.test(id) || extra.length > 0) return usage("one <inboundId> (digits) is required");
-	if (values.call !== undefined && !/^\d+$/.test(values.call)) return usage("--call must be a whole number");
+	if (id === undefined || !/^\d+$/.test(id) || extra.length > 0) return fail("one <inboundId> (digits) is required");
+	if (values.call !== undefined && !/^\d+$/.test(values.call)) return fail("--call must be a whole number");
 	const where = { userHome: env.HOME ?? homedir(), sessionsRoot: join(sourceAgentDir(env), "sessions") };
 	const result = renderTraceInputs(
 		homeDir,
@@ -310,7 +310,7 @@ export function traceInputsCommand(
 		Date.now(),
 		where,
 	);
-	if (!result.ok) return usage(result.message);
+	if (!result.ok) return fail(result.message, result.usage === true ? 2 : 1);
 	const target =
 		values.out === undefined
 			? join(resolve(loadConfig(homeDir, { checkTokens: false }).workspaceDir), "traces", `${id}.md`)

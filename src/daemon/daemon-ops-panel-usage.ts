@@ -60,6 +60,26 @@ function usageForPanel(collection: UsageCollection): OpsUsageInput {
 					failure ??= source.error;
 					continue;
 				}
+				if (source.accounts !== undefined) {
+					// A multi-account provider runs on its best unblocked account (the pool promotes the
+					// next account when the active one is exhausted), so the line shows the best account's
+					// most-used window; the primary's exhaustion alone must not make the provider look dead.
+					let best: { used: number; label: string; resetsAt: number | undefined } | undefined;
+					for (const account of source.accounts) {
+						if (!account.ok) continue;
+						let worst: { used: number; label: string; resetsAt: number | undefined } | undefined;
+						for (const row of account.rows) {
+							const used = 100 - row.remainingPct;
+							if (worst === undefined || used > worst.used)
+								worst = { used, label: row.windowLabel, resetsAt: row.resetsAt };
+						}
+						if (worst !== undefined && (best === undefined || worst.used < best.used)) best = worst;
+					}
+					if (best !== undefined) {
+						offer(source.name, best.label, best.used, best.resetsAt);
+						continue;
+					}
+				}
 				for (const row of source.rows) offer(source.name, row.windowLabel, 100 - row.remainingPct, row.resetsAt);
 			}
 		}
