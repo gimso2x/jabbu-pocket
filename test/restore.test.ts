@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	chmodSync,
+	copyFileSync,
 	existsSync,
 	linkSync,
 	mkdirSync,
@@ -18,6 +19,7 @@ import { restoreCommand } from "../src/cli/restore";
 import { acquireLock } from "../src/daemon/lock";
 import { runBackup } from "../src/ops/backup";
 import { RestoreError, runRestore } from "../src/ops/restore";
+import { migrationCheckError, verifyRestoreCopy } from "../src/ops/restore-verify";
 import { openStore } from "../src/store/db";
 import { readSchemaVersion, SCHEMA_VERSION } from "../src/store/schema-version";
 
@@ -323,6 +325,29 @@ describe("runRestore", () => {
 		const result = await runRestore({ homeDir: home, source: file, yes: true, probeDaemon: noDaemon });
 		expect(result.plan.moves).toEqual([]);
 		expect(markerOf(join(home, "jabbu.db"))).toBe("good");
+	});
+});
+
+describe("verifyRestoreCopy scratch location and disk-full reporting (F6)", () => {
+	test("the migration check scratches next to the install copy, not in os.tmpdir()", () => {
+		seed("good");
+		const copy = join(home, "jabbu.db.copy");
+		copyFileSync(join(home, "jabbu.db"), copy);
+		const saved = process.env.TMPDIR;
+		process.env.TMPDIR = join(home, "no-such-tmpdir");
+		try {
+			verifyRestoreCopy(copy, "Asia/Seoul");
+		} finally {
+			if (saved === undefined) delete process.env.TMPDIR;
+			else process.env.TMPDIR = saved;
+		}
+	});
+
+	test("a disk-full migration check reports disk_full, not migration_failed", () => {
+		const full = migrationCheckError(Object.assign(new Error("No space left on device"), { code: "ENOSPC" }));
+		expect(full.code).toBe("disk_full");
+		expect(full.message).toContain("disk space");
+		expect(migrationCheckError(new Error("boom")).code).toBe("migration_failed");
 	});
 });
 
