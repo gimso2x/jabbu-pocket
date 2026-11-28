@@ -224,6 +224,27 @@ describe("TASK resume on another worker tier", () => {
 		expect(h.ledger.isPaused(h.ledger.require(TASK_ID))).toBe(false);
 	});
 
+	test("a failed resume of a blocked task keeps the owner hold; a task that moved to review meanwhile fails cleanly", async () => {
+		const blocked = setup();
+		await blocked.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		blocked.ledger.transition(TASK_ID, "blocked", "bot", "막힘");
+		blocked.ledger.pauseTask(TASK_ID);
+		blocked.failPrompt.value = true;
+		const failedBlocked = await blocked.call({ taskSpec: { id: TASK_ID }, task: "이어서" });
+		expect(failedBlocked).toContain("재개 실패");
+		expect(blocked.ledger.require(TASK_ID).status).toBe("blocked");
+		expect(blocked.ledger.isPaused(blocked.ledger.require(TASK_ID))).toBe(true);
+
+		const moved = setup();
+		await moved.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		moved.ledger.pauseTask(TASK_ID);
+		moved.ledger.transition(TASK_ID, "review", "bot", "outcome reached");
+		moved.failPrompt.value = true;
+		const failedMoved = await moved.call({ taskSpec: { id: TASK_ID }, task: "이어서" });
+		expect(failedMoved).toContain("재개 실패");
+		expect(moved.ledger.require(TASK_ID).status).toBe("review");
+	});
+
 	test("tierConfidence and unknown keys on a resume are refused before anything runs", async () => {
 		const h = setup();
 		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
