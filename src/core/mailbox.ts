@@ -330,7 +330,7 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Reports a running turn that has emitted no omp event for `STALL_MS`. Synchronous and clock-driven, so the daemon
+	 * Reports a running turn that has emitted no omp event for `STALL_MS`, and re-reads its sub-agent transcripts so a quiet turn whose sub-agent is spending still gets judged against the turn cap. Synchronous and clock-driven, so the daemon
 	 * sweep and fake-clock tests both call it; returns whether a new stall just began. Never while a host tool runs
 	 * (the child waits on jabbu, not its model) and never during a `tailWaiting` wait (that wait is expected).
 	 * Stalls of one turn merge: the first logs `stall_alert` and shows the stalled text; later ones log `stall_repeat`
@@ -369,6 +369,7 @@ export class OriginMailbox {
 			onStall?.({ originKey, threadRef: turn.threadRef, stalled: false, silentMs });
 		}
 		this.#judgeStall(turn, now);
+		refreshSubAgentCost(this.#host, turn);
 		return began;
 	}
 
@@ -579,9 +580,7 @@ export class OriginMailbox {
 		if (event.type === "message_end") this.#observeCache(event.message);
 		if (event.type === "message_end" && turn) this.#accrueTurnCost(turn, event.message);
 		// A `task` result is where sub-agent spend lands: re-read before the turn goes on, so the cap sees it.
-		if (event.type === "tool_execution_end" && event.toolName === "task" && turn) {
-			refreshSubAgentCost(this.#host, turn);
-		}
+		if (event.type === "tool_execution_end" && event.toolName === "task" && turn) refreshSubAgentCost(this.#host, turn);
 		if (turn && (event.type === "tool_execution_start" || event.type === "tool_execution_end")) {
 			this.#observeTool(turn, event);
 		}

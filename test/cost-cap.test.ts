@@ -353,6 +353,28 @@ describe("AC-3: sub-agent cost in the turn total", () => {
 		expect(bodies()[0]).toContain("이번 턴 $3.20");
 	});
 
+	test("a turn whose sub-agent spends while the child is quiet is stopped by the sweep", async () => {
+		costCap = { turnUsd: 1 };
+		clock.t = Date.parse("2026-11-10T12:00:00Z");
+		const turnStart = clock.now();
+		router = buildRouter({ sessionFile: sessionWithSubAgent("sub-quiet", [usageLine(turnStart + 2_000, 3)]) });
+		const driver = await startTurn("조용히 하위를 돌리는 턴");
+		const settled = Promise.withResolvers<void>();
+		const off = driver.onFinal(() => {
+			off();
+			settled.resolve();
+		});
+		clock.advance(5_000);
+		// No omp event at all: the sub-agent works while the child is silent, so only the sweep can judge.
+		expect(router.sweepStalls()).toBe(0);
+		await settled.promise;
+		await router.mailbox(ORIGIN).sweepIdle();
+		expect(driver.calls).toContain("abort");
+		expect(bodies()).toHaveLength(1);
+		expect(bodies()[0]).toContain("비용 상한 $1.00의 3배를 넘어 턴을 멈췄습니다");
+		expect(bodies()[0]).toContain("이번 턴 $3.00");
+	});
+
 	test("a wedged turn still charges in-window sub-agent spend from the cached session file", async () => {
 		costCap = { turnUsd: 10 };
 		clock.t = Date.parse("2026-11-10T12:00:00Z");
