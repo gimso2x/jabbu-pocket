@@ -236,6 +236,21 @@ describe("DiscordRest", () => {
 		expect(server.seen).toHaveLength(2);
 	});
 
+	test("a 429 with no retry_after anywhere doubles the route's last wait, capped at 60 s", async () => {
+		let clock = 0;
+		const fetchImpl = (async () => new Response("slow down", { status: 429 })) as unknown as typeof fetch;
+		const client = new DiscordRest({ token: TOKEN, baseUrl: "http://discord.invalid", fetchImpl, now: () => clock });
+		const waits: number[] = [];
+		for (let i = 0; i < 8; i++) {
+			const error = await caught(client.createMessage({ channelId: CHANNEL, content: "x" }));
+			expect(error).toBeInstanceOf(DiscordRateLimitedError);
+			const wait = (error as DiscordRateLimitedError).retryAfterMs;
+			waits.push(wait);
+			clock += wait;
+		}
+		expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
+	});
+
 	test("400/401/403/404 are definitive and never retried; 500 is ambiguous", async () => {
 		let status = 400;
 		server = startServer(() => Response.json({ message: "nope", code: 50001 }, { status }));

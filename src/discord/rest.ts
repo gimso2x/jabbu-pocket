@@ -59,10 +59,7 @@ function routeKey(method: string, path: string): string {
 
 function checkContent(content: string | undefined): void {
 	if (content !== undefined && content.length > MESSAGE_CONTENT_LIMIT)
-		throw new DiscordCallError(
-			"definitive",
-			`discord content too long: ${content.length} > ${MESSAGE_CONTENT_LIMIT} characters`,
-		);
+		throw new DiscordCallError("definitive", `discord content too long: ${content.length} > ${MESSAGE_CONTENT_LIMIT}`);
 }
 
 /** A delivery nonce goes out together with `enforce_nonce`, so Discord drops a repost of the same part. */
@@ -95,6 +92,7 @@ export class DiscordRest {
 	readonly #timeoutMs: number;
 	/** Route key → epoch ms when its spent bucket resets. */
 	readonly #blocked = new Map<string, number>();
+	readonly #nextWait = new Map<string, { ms: number; at: number }>();
 	#globalUntil = 0;
 
 	constructor(options: DiscordRestOptions) {
@@ -150,14 +148,18 @@ export class DiscordRest {
 		const text = await res.text().catch(() => "");
 		let parsed: unknown;
 		try {
-			parsed = text === "" ? undefined : JSON.parse(text);
+			parsed = JSON.parse(text);
 		} catch {
 			parsed = undefined;
 		}
 		const fields = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Record<string, unknown>;
 
 		if (res.status === 429) {
-			const retryAfterMs = secondsToMs(fields.retry_after) ?? secondsToMs(res.headers.get("retry-after")) ?? 1_000;
+			// A 429 with no retry_after anywhere (a non-API limiter): double the route's last wait, capped at 60 s.
+			for (const [waitKey, wait] of this.#nextWait) if (now - wait.at > 60_000) this.#nextWait.delete(waitKey);
+			const fallback = this.#nextWait.get(key)?.ms ?? 1_000;
+			const retryAfterMs = secondsToMs(fields.retry_after) ?? secondsToMs(res.headers.get("retry-after")) ?? fallback;
+			this.#nextWait.set(key, { ms: Math.min(Math.max(retryAfterMs * 2, 1_000), 60_000), at: now });
 			const global =
 				fields.global === true ||
 				res.headers.get("x-ratelimit-global") === "true" ||
@@ -304,16 +306,14 @@ export class DiscordRest {
 			throw new DiscordCallError("definitive", `discord upload too large: ${size} bytes > 25 MiB`);
 		const filename = args.filename ?? basename(args.filePath);
 		const form = new FormData();
-		form.append(
-			"payload_json",
-			JSON.stringify({
-				...(args.content === undefined ? {} : { content: args.content }),
-				attachments: [{ id: 0, filename }],
-				...reference(args.messageReference),
-				...mentions(args.allowedMentions),
-				...nonce(args.nonce),
-			}),
-		);
+		const payloadJson = JSON.stringify({
+			...(args.content === undefined ? {} : { content: args.content }),
+			attachments: [{ id: 0, filename }],
+			...reference(args.messageReference),
+			...mentions(args.allowedMentions),
+			...nonce(args.nonce),
+		});
+		form.append("payload_json", payloadJson);
 		form.append("files[0]", Bun.file(args.filePath), filename);
 		const body = await this.#request("POST", `/channels/${args.channelId}/messages`, { form });
 		return { id: messageId(body, "upload") };
