@@ -29,6 +29,8 @@ const JWKS_TTL_MS = 10 * 60_000;
 const JWKS_FORCE_COOLDOWN_MS = 10_000;
 const CLOCK_SKEW_SEC = 60;
 const CSRF_COOKIE_NAME = "jabbu_csrf";
+/** A CSRF token stays usable this long after it is minted; older tokens are rejected and replaced. */
+const CSRF_MAX_AGE_SEC = 24 * 60 * 60;
 const CSRF_TOKEN_PATTERN = /^([0-9a-f]{32})\.([0-9a-f]{64})$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
 
@@ -227,19 +229,32 @@ function signCsrfNonce(nonce: string, secret: Buffer): string {
 	return `${nonce}.${createHmac("sha256", secret).update(nonce).digest("hex")}`;
 }
 
-function validCsrfToken(token: string | undefined, secret: Buffer): boolean {
+/**
+ * Mints a CSRF nonce whose first 8 hex digits are the issued-at second, so the token carries its own expiry
+ * while keeping the established 32-hex-char nonce shape.
+ */
+function mintCsrfNonce(nowMs: number): string {
+	return `${Math.floor(nowMs / 1000).toString(16).padStart(8, "0")}${randomBytes(12).toString("hex")}`;
+}
+
+function validCsrfToken(token: string | undefined, secret: Buffer, nowMs: number): boolean {
 	if (token === undefined) return false;
 	const match = CSRF_TOKEN_PATTERN.exec(token);
 	if (match?.[1] === undefined) return false;
-	return constantTimeEquals(token, signCsrfNonce(match[1], secret));
+	if (!constantTimeEquals(token, signCsrfNonce(match[1], secret))) return false;
+	const issued = Number.parseInt(match[1].slice(0, 8), 16);
+	if (!Number.isFinite(issued)) return false;
+	const nowSec = Math.floor(nowMs / 1000);
+	return issued <= nowSec + CLOCK_SKEW_SEC && nowSec - issued <= CSRF_MAX_AGE_SEC;
 }
 
 /** Issues (or reuses) an HMAC-signed CSRF token and formats its `HttpOnly; Secure; SameSite=Strict` cookie. */
 export function issueCsrfCookie(request: Request, state: WebAuthState): { token: string; cookie: string } {
 	const existing = readCookie(request, CSRF_COOKIE_NAME);
-	const token = validCsrfToken(existing, state.csrfSecret)
+	const nowMs = (state.config.now ?? Date.now)();
+	const token = validCsrfToken(existing, state.csrfSecret, nowMs)
 		? (existing as string)
-		: signCsrfNonce(randomBytes(16).toString("hex"), state.csrfSecret);
+		: signCsrfNonce(mintCsrfNonce(nowMs), state.csrfSecret);
 	return {
 		token,
 		cookie: `${CSRF_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict`,
@@ -253,7 +268,8 @@ export function verifyWebCsrf(request: Request, state: WebAuthState): { ok: true
 	}
 	const cookieToken = readCookie(request, CSRF_COOKIE_NAME);
 	const headerToken = request.headers.get("x-jabbu-csrf")?.trim();
-	if (!validCsrfToken(cookieToken, state.csrfSecret) || headerToken === undefined) {
+	const nowMs = (state.config.now ?? Date.now)();
+	if (!validCsrfToken(cookieToken, state.csrfSecret, nowMs) || headerToken === undefined) {
 		return { ok: false, error: "csrf_mismatch" };
 	}
 	return constantTimeEquals(cookieToken as string, headerToken) ? { ok: true } : { ok: false, error: "csrf_mismatch" };

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startDashboardServer } from "../src/dashboard/server";
 import type { DashboardSnapshot } from "../src/dashboard/snapshot";
+import { createWebAuthState, issueCsrfCookie, verifyWebCsrf } from "../src/web/auth";
 import type { WebDashboardOptions } from "../src/web/routes";
 
 type Jwk = webcrypto.JsonWebKey & { kid?: string; use?: string; alg?: string };
@@ -368,5 +369,41 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 		});
 		expect(newRes.status).toBe(200);
 		expect(daemonCalls).toEqual([{ op: "web_new", title: "합법 새 대화" }]);
+	});
+
+	test("CSRF tokens carry an issued-at and expire after 24 h", async () => {
+		let nowMs = 1_700_000_000_000;
+		const state = createWebAuthState({
+			ownerEmails: [OWNER_EMAIL],
+			accessTeamDomain: TEAM_DOMAIN,
+			accessAud: AUD,
+			localTokenPath: "unused",
+			now: () => nowMs,
+			csrfSecret: CSRF_SECRET,
+		});
+		const { token } = issueCsrfCookie(new Request("http://x/"), state);
+		expect(token).toMatch(/^[0-9a-f]{32}\.[0-9a-f]{64}$/);
+		const post = () =>
+			verifyWebCsrf(
+				new Request("http://x/api/web/new", {
+					method: "POST",
+					headers: {
+						"sec-fetch-site": "same-origin",
+						cookie: `jabbu_csrf=${token}`,
+						"x-jabbu-csrf": token,
+					},
+				}),
+				state,
+			);
+		expect(post()).toEqual({ ok: true });
+		// Reused while still fresh, and still valid at exactly 24 h.
+		const again = new Request("http://x/", { headers: { cookie: `jabbu_csrf=${token}` } });
+		expect(issueCsrfCookie(again, state).token).toBe(token);
+		nowMs += 24 * 60 * 60 * 1000;
+		expect(post()).toEqual({ ok: true });
+		// One second past the window it no longer verifies, and issue mints a fresh token instead.
+		nowMs += 1000;
+		expect(post()).toEqual({ ok: false, error: "csrf_mismatch" });
+		expect(issueCsrfCookie(again, state).token).not.toBe(token);
 	});
 });
