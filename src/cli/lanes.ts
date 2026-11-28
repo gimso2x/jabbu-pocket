@@ -252,11 +252,8 @@ function follow(
 		const data = Buffer.concat([pending, readRange(file, offset, size)]);
 		offset = size;
 		const cut = data.lastIndexOf(0x0a);
-		if (cut === -1) {
-			pending = data;
-			return;
-		}
-		pending = data.subarray(cut + 1);
+		pending = cut === -1 ? data : data.subarray(cut + 1);
+		if (cut === -1) return;
 		for (const line of linesOf(data.subarray(0, cut).toString("utf8"), timezone)) write(line);
 	};
 	const { promise, resolve } = Promise.withResolvers<void>();
@@ -423,6 +420,7 @@ async function attachCommand(args: string[], homeDir: string, deps: LanesDeps): 
 	}
 	write(`handed lane ${lane} back${newFiles.length > 0 ? ` (new session files: ${newFiles.join(", ")})` : ""}`);
 	if (typeof back.text === "string") write(back.text);
+	if (code > 0) error(`lanes attach: omp exited ${code}`);
 	return code === 0 ? 0 : 1;
 }
 
