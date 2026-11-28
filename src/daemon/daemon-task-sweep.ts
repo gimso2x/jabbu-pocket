@@ -16,7 +16,7 @@ import { recordsTicker, taskHostOf } from "../tasks/records";
 import { TaskSweeper } from "../tasks/sweeper";
 import { autoLandPolicy, type DaemonContext } from "./daemon-context";
 import type { DaemonStore } from "./daemon-store";
-import { herdrOptionsOf, ledgerOf, taskRuntimeOf } from "./daemon-task-resume";
+import { herdrOptionsOf, ledgerOf, SWEEP_HERDR_TIMEOUT_MS, taskRuntimeOf } from "./daemon-task-resume";
 
 /** What the [TASK] sweep needs from the daemon beyond its context. */
 export interface TaskSweepDeps {
@@ -83,7 +83,7 @@ export function createTaskSweep(
 		retryPrLand: (row) => deps.retryPrLand(row),
 		landsViaPr: (row) => landsViaPr(ctx.options.config, row),
 		remind: async (row, text) => {
-			const sent = await taskRuntimeOf(ctx, row).prompt(row, text);
+			const sent = await taskRuntimeOf(ctx, row, SWEEP_HERDR_TIMEOUT_MS).prompt(row, text);
 			if (sent.ok || sent.unconfirmed === true) {
 				notePrompt(
 					{ recordPrompt: (input) => store.recordHerdrPrompt(input), log },
@@ -92,8 +92,8 @@ export function createTaskSweep(
 			}
 			return sent;
 		},
-		agentStatus: (row) => taskRuntimeOf(ctx, row).status(row),
-		readAgent: (row) => taskRuntimeOf(ctx, row).read(row),
+		agentStatus: (row) => taskRuntimeOf(ctx, row, SWEEP_HERDR_TIMEOUT_MS).status(row),
+		readAgent: (row) => taskRuntimeOf(ctx, row, SWEEP_HERDR_TIMEOUT_MS).read(row),
 		lastAnswer: async (row, sessionPath) => {
 			if (row.host === null) {
 				const found = readLastAssistant(sessionPath);
@@ -107,7 +107,7 @@ export function createTaskSweep(
 		},
 		boardLink: async (row) => {
 			if (ctx.options.config.herdrBoard === undefined || row.runtime === "headless") return undefined;
-			const pane = await herdrAgentPane(row.agent, herdrOptionsOf(ctx, row));
+			const pane = await herdrAgentPane(row.agent, herdrOptionsOf(ctx, row, SWEEP_HERDR_TIMEOUT_MS));
 			return boardCardLink(ctx.options.config.herdrBoard, row.host, pane, {
 				onError: (error) => log.warn("task_board_link_failed", { task: row.taskId, error }),
 			});

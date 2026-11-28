@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { previewLine } from "../src/core/preview-line";
 import { Daemon } from "../src/daemon/daemon";
+import { SWEEP_HERDR_TIMEOUT_MS } from "../src/daemon/daemon-task-resume";
 import { DiscordChannel } from "../src/discord/channel";
 import { type HerdrAgentStatusResult, realProcessRunner, setLocalHerdrBin } from "../src/dispatch/omp";
 import { createLogger } from "../src/log";
@@ -1867,8 +1868,9 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 	let transport: WaitingDiscordTransport;
 	let daemon: Daemon;
 	let worktreeRoot: string;
-	/** Every argv the daemon handed to herdr, and the agents its fake `agent list` reports (idle). */
+	/** Every argv the daemon handed to herdr (and its timeout), and the agents its fake `agent list` reports (idle). */
 	let herdrCalls: string[][];
+	let herdrTimeouts: Array<number | undefined>;
 	let herdrAgents: string[];
 	/** Added to the real time the daemon sees: moves a test past the staleness thresholds. */
 	let skew = 0;
@@ -1880,12 +1882,14 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		transport = new WaitingDiscordTransport();
 		worktreeRoot = mkdtempSync(join(tmpdir(), "jabbu-task-wt-"));
 		herdrCalls = [];
+		herdrTimeouts = [];
 		herdrAgents = [];
 		const sessions = new FakeSessionStore();
 		daemon = new Daemon({
 			...daemonTestOptions(),
-			herdrRun: async (cmd) => {
+			herdrRun: async (cmd, opts) => {
 				herdrCalls.push(cmd);
+				herdrTimeouts.push(opts.timeoutMs);
 				const agents = herdrAgents.map((name) => ({ name, pane_id: `p-${name}`, agent_status: "idle" }));
 				return { code: 0, stdout: JSON.stringify({ result: { agents } }), timedOut: false };
 			},
@@ -1994,6 +1998,16 @@ describe("daemon: sweep, IPC and CLI on a real local worktree", () => {
 		const count = transport.calls.length;
 		await daemon.sweepTasks();
 		expect(transport.calls).toHaveLength(count);
+	});
+
+	test("the sweep bounds its herdr calls at 20s (a wedged herdr stalls one row, not the sweep)", async () => {
+		registerWithDocs(false);
+		const before = herdrTimeouts.length;
+		await daemon.sweepTasks();
+		const during = herdrTimeouts.slice(before);
+		expect(during.length).toBeGreaterThan(0);
+		expect(during.every((timeoutMs) => timeoutMs === SWEEP_HERDR_TIMEOUT_MS)).toBe(true);
+		expect(SWEEP_HERDR_TIMEOUT_MS).toBe(20_000);
 	});
 
 	test("with herdrBoard.url the daemon's Outcome card links the dashboard diff view of the task", async () => {

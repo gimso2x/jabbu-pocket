@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { runCli } from "../src/cli/index";
 import { loadConfig } from "../src/config";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
-import { herdrOptionsOf } from "../src/daemon/daemon-task-resume";
+import { herdrOptionsOf, taskRuntimeOf } from "../src/daemon/daemon-task-resume";
 import { checkOmpRuntimeSync } from "../src/omp/runtime-check";
 import { freezePath, writeFreeze } from "../src/ops/freeze";
 import { gcSessions } from "../src/ops/gc";
@@ -87,6 +87,24 @@ describe("qa-ac config·cli·ops·prompt 수정", () => {
 		} finally {
 			rmSync(home.dir, { recursive: true, force: true });
 		}
+	});
+
+	test("taskRuntimeOf passes an explicit herdr timeout through to the runner", async () => {
+		const timeouts: Array<number | undefined> = [];
+		const run = async (_cmd: string[], opts: { timeoutMs?: number }) => {
+			timeouts.push(opts.timeoutMs);
+			return { code: 0, stdout: JSON.stringify({ result: { agents: [] } }), timedOut: false };
+		};
+		const ctx = {
+			options: { config: { workspaceDir: "/tmp", dispatchHosts: {} }, herdrRun: run },
+		} as unknown as Parameters<typeof taskRuntimeOf>[0];
+		const row = { taskId: "T-1", host: null, agent: "t-1", runtime: "herdr" } as unknown as Parameters<
+			typeof taskRuntimeOf
+		>[1];
+		await expect(taskRuntimeOf(ctx, row, 20_000).status(row)).resolves.toEqual({ ok: true, status: "gone" });
+		expect(timeouts).toEqual([20_000]);
+		await taskRuntimeOf(ctx, row).status(row);
+		expect(timeouts).toEqual([20_000, 120_000]); // no explicit timeout: herdrRun's own 120s default
 	});
 
 	test("#2: sessionRetentionDays와 candidates 정수 옵션에 상한(100_000)을 적용한다", () => {
