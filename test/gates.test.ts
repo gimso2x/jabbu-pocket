@@ -1152,6 +1152,22 @@ describe("herdr_unreachable (herdr-health stamp)", () => {
 		answers.push({ code: 0, stdout: "status: stopped\n", timedOut: false });
 		expect((await restarted.check()).fails).toBe(1);
 	});
+
+	test("a stale pre-outage streak is not continued after a restart: one fresh failure starts at 1", async () => {
+		stamp(HERDR_HEALTH_STALE_MS + 1_000, 2); // fails=2 from before a >15min outage
+		const answers: RunProcessResult[] = [];
+		const run: ProcessRunner = async (_cmd, opts) => {
+			expect(opts.timeoutMs).toBe(10_000);
+			return answers.shift() ?? { code: 0, stdout: "", timedOut: false };
+		};
+		const down: RunProcessResult = { code: 1, stdout: "", stderr: "server not running\n", timedOut: false };
+		const restarted = new HerdrHealthProbe({ homeDir: home, bin: "/opt/herdr", run, now: () => now });
+		answers.push(down, down);
+		expect((await restarted.check()).fails).toBe(1);
+		expect(herdrGate()?.state).toBe("closed");
+		expect((await restarted.check()).fails).toBe(2);
+		expect(herdrGate()?.state).toBe("closed");
+	});
 });
 
 describe("gateOptionsFromConfig: the sweep, /status, `jabbu-pocket status` and the dashboard judge the same gates", () => {
