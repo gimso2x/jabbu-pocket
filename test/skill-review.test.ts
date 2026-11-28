@@ -120,6 +120,19 @@ describe("extractProposals", () => {
 		expect(extractProposals('[{"name":"ok","description":"","content":"c"}]')).toEqual([]);
 	});
 
+	test("a first JSON candidate with no valid proposal does not shadow a later valid one", () => {
+		const bad = JSON.stringify([{ action: "create", name: "leak", description: "d", content: "c" }]);
+		expect(extractProposals(`${bad}\n${PROPOSAL_JSON}`).map((p) => p.name)).toEqual(["release-checklist"]);
+		expect(extractProposals(`\`\`\`json\n${bad}\n${PROPOSAL_JSON}\n\`\`\``).map((p) => p.name)).toEqual([
+			"release-checklist",
+		]);
+		// A wrapper object first, then a valid array: the wrapper is skipped, not unwrapped.
+		expect(
+			extractProposals(`${JSON.stringify({ proposals: [JSON.parse(bad)[0]] })}\n${PROPOSAL_JSON}`).map((p) => p.name),
+		).toEqual(["release-checklist"]);
+		expect(extractProposals(bad)).toEqual([]);
+	});
+
 	test("adoption gate: a proposal without session evidence or with unpaired checks is dropped", () => {
 		const base = { action: "create", name: "gated", description: "d", content: "c" };
 		const check = { situation: "s", expect: "e" };
