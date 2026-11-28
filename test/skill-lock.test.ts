@@ -78,6 +78,55 @@ describe("skill-lock integrity and risk scan", () => {
 		expect(verified.warnings).toEqual([]);
 	});
 
+	test("a lockfile inside the skills dir round-trips clean, via API and CLI", () => {
+		writeSkill("alpha", { "SKILL.md": "v1\n" });
+		const insideLock = join(skillsDir, "skills.lock.json");
+		writeSkillLock(skillsDir, insideLock);
+		expect(verifySkillLock(skillsDir, insideLock).ok).toBe(true);
+		// A second lock (the first lockfile now exists in the tree) still verifies clean.
+		writeSkillLock(skillsDir, insideLock);
+		const verified = verifySkillLock(skillsDir, insideLock);
+		expect(verified.ok).toBe(true);
+		expect(verified.added).toEqual([]);
+		expect(verified.modified).toEqual([]);
+
+		const locked = captureOutput(() => skillsCommand(["lock", "--dir", skillsDir, "--file", insideLock], {}));
+		expect(locked.code).toBe(0);
+		const ok = captureOutput(() => skillsCommand(["verify", "--dir", skillsDir, "--file", insideLock], {}));
+		expect(ok.code).toBe(0);
+		expect(ok.stdout).toContain("skill_verify ok=true");
+	});
+
+	test("a lockfile recorded for another root is refused instead of verifying clean", () => {
+		writeSkill("alpha", { "SKILL.md": "v1\n" });
+		writeSkillLock(skillsDir, lockPath);
+		// A second tree with byte-identical content: the same files and hashes, a different root.
+		const otherDir = join(dir, "other-skills", "alpha");
+		mkdirSync(otherDir, { recursive: true });
+		writeFileSync(join(otherDir, "SKILL.md"), "v1\n");
+		expect(() => verifySkillLock(join(dir, "other-skills"), lockPath)).toThrow("lockfile root");
+		// The lock still verifies against the tree it was recorded for.
+		expect(verifySkillLock(skillsDir, lockPath).ok).toBe(true);
+	});
+
+	test("files over 64 KiB are still scanned on their head; content past the cap is the documented residual", () => {
+		const filler = "filler line\n".repeat(6000); // ~72 KiB
+		writeSkill("big-head", { "SKILL.md": `safe line\nrm -rf /\n${filler}` });
+		writeSkill("big-tail", { "SKILL.md": `${filler}rm -rf /\n` });
+		writeSkillLock(skillsDir, lockPath);
+
+		const verified = verifySkillLock(skillsDir, lockPath);
+		expect(verified.ok).toBe(true);
+		// The danger on line 2 of a >64 KiB file is now reported; the one past the 64 KiB cap is not.
+		expect(verified.warnings.map((w) => [w.path, w.rule])).toEqual([["big-head/SKILL.md", "rm_rf_absolute"]]);
+
+		// And --strict now fails on the head danger instead of passing a dangerous skill.
+		const env = { JABBU_HOME: homeDir, JABBU_TEST_HOOKS: "1", JABBU_SKILLS_DIR: skillsDir };
+		const strict = captureOutput(() => skillsCommand(["verify", "--strict", "--json"], env));
+		expect(strict.code).toBe(1);
+		expect((JSON.parse(strict.stdout) as SkillVerifyResult).warnings).toHaveLength(1);
+	});
+
 	test("detects added, modified, and removed skill files", () => {
 		writeSkill("alpha", { "SKILL.md": "v1\n" });
 		writeSkill("beta", { "SKILL.md": "v1\n" });

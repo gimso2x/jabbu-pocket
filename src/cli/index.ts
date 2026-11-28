@@ -7,6 +7,7 @@ import { callDaemon, callDaemonWhenUp, IpcNoResponse } from "../daemon/ipc";
 import { runDaemon } from "../daemon/run";
 import { frozenField, readStatusFromDb, renderStatusText, type StatusReport } from "../daemon/status";
 import { readVersion } from "../daemon/tools";
+import type { RunProcessResult } from "../dispatch/omp";
 import { dispatchEnv, herdrSshArgv, type ProcessRunner, realProcessRunner } from "../dispatch/omp";
 import { isRecord } from "../omp/type-guards";
 import { readConfigText } from "../ops/apply";
@@ -112,6 +113,9 @@ function gcCommand(args: string[], homeDir: string): number {
 
 const firstLine = (text: string | undefined): string => escapeControl(text?.trim().split("\n")[0]?.trim() ?? "");
 
+const failReason = (result: RunProcessResult): string =>
+	result.timedOut ? "timed out" : firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
+
 /**
  * Reach check per `dispatchHosts` entry, run together: one `ok`/`fail <ssh's first stderr line>` line each, in config
  * order, each followed by that host's herdr omp integration line.
@@ -131,9 +135,7 @@ async function checkDispatchHosts(config: JabbuConfig, run: ProcessRunner): Prom
 			const integrationLine = `${integration.ok ? "ok" : "fail"} herdr omp integration on ${name}: ${integration.detail}`;
 			if (result.code === 0 && !result.timedOut)
 				return [`ok dispatch host ${name}: ssh ${escapeControl(host.ssh)}`, integrationLine];
-			const reason = result.timedOut
-				? "timed out"
-				: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
+			const reason = failReason(result);
 			return [`fail dispatch host ${name}: ${reason} (warning only)`, integrationLine];
 		}),
 	);
@@ -149,9 +151,7 @@ async function checkHerdrIntegration(cmd: string[], run: ProcessRunner): Promise
 	const result = await run(cmd, { timeoutMs: DISPATCH_HOST_CHECK_MS, env: dispatchEnv(process.env) });
 	const fix = "— herdr integration install omp (warning only)";
 	if (result.code !== 0 || result.timedOut) {
-		const reason = result.timedOut
-			? "timed out"
-			: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
+		const reason = failReason(result);
 		return { ok: false, detail: `integration status failed: ${reason} ${fix}` };
 	}
 	const omp = result.stdout
@@ -166,14 +166,11 @@ async function checkHerdrIntegration(cmd: string[], run: ProcessRunner): Promise
 /** Local herdr (config `herdr` on): `<bin> --version` must answer; the line carries its first output line or why not. */
 async function checkLocalHerdr(herdr: { bin?: string }, run: ProcessRunner): Promise<{ ok: boolean; line: string }> {
 	const bin = herdr.bin ?? "herdr";
-	const safeBin = escapeControl(bin);
 	const result = await run([bin, "--version"], { timeoutMs: DISPATCH_HOST_CHECK_MS, env: dispatchEnv(process.env) });
 	if (result.code === 0 && !result.timedOut)
-		return { ok: true, line: `ok herdr: ${safeBin} ${firstLine(result.stdout)}`.trim() };
-	const reason = result.timedOut
-		? "timed out"
-		: firstLine(result.stderr) || firstLine(result.stdout) || `exit ${result.code}`;
-	return { ok: false, line: `fail herdr: ${safeBin} ${reason}` };
+		return { ok: true, line: `ok herdr: ${escapeControl(bin)} ${firstLine(result.stdout)}`.trim() };
+	const reason = failReason(result);
+	return { ok: false, line: `fail herdr: ${escapeControl(bin)} ${reason}` };
 }
 
 /** `jabbu-pocket doctor`: runs doctor checks, local/remote herdr status, and dispatchHost reachability (host lines warn only). */
@@ -423,8 +420,7 @@ async function injectCommand(args: string[], homeDir: string): Promise<number> {
 		process.stdout.write(`${JSON.stringify({ nonce: response.nonce, threadRef: response.threadRef })}\n`);
 		return 0;
 	}
-	const reason =
-		typeof response === "object" && response !== null && "error" in response ? String(response.error) : "unknown";
+	const reason = isRecord(response) && "error" in response ? String(response.error) : "unknown";
 	process.stderr.write(`inject failed: ${reason}\n`);
 	return 1;
 }
@@ -475,8 +471,8 @@ function versionCommand(): number {
 /** Entry point of `jabbu`; resolves with the process exit code. */
 export async function runCli(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
 	const [command, ...rest] = argv;
-	const homeDir = resolve(defaultHomeDir(env));
 	try {
+		const homeDir = resolve(defaultHomeDir(env));
 		// `daemon`, `doctor` and `reload` take no arguments: refuse any stray one here, so
 		// `daemon --help` cannot boot the daemon and `doctor --json` cannot run unchecked.
 		if (["daemon", "doctor", "reload"].includes(command ?? "") && rest.length > 0)
@@ -546,6 +542,11 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 		// node:util parseArgs (unknown option, missing value, `--days -1`): an argument mistake, so a usage error.
 		if (isParseArgsError(error)) {
 			process.stderr.write(`${command}: ${joinLines(error.message)} (jabbu-pocket --help)\n`);
+			return 2;
+		}
+		// A relative JABBU_HOME names a different home per cwd: a usage error, like a bad flag.
+		if (error instanceof ConfigError && error.code === "home_relative") {
+			process.stderr.write(`${command}: ${error.message}\n`);
 			return 2;
 		}
 		process.stderr.write(`${command}: ${error instanceof ConfigError ? error.message : String(error)}\n`);

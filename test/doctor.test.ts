@@ -237,6 +237,22 @@ describe("doctor: agy accounts", () => {
 	});
 });
 
+describe("doctor: config warnings", () => {
+	test("an unknown key is one warn line per warning and never changes the exit code", async () => {
+		const clean: string[] = [];
+		const before = await runDoctor(home.dir, (line) => clean.push(line), undefined, OFFLINE_DOCTOR);
+		expect(clean.filter((line) => line.startsWith("warn config:"))).toEqual([]);
+		const configPath = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		config.bogusKey = true;
+		writeFileSync(configPath, JSON.stringify(config));
+		const warned: string[] = [];
+		const code = await runDoctor(home.dir, (line) => warned.push(line), undefined, OFFLINE_DOCTOR);
+		expect(code).toBe(before);
+		expect(warned).toContain("warn config: bogusKey (unknown_key)");
+	});
+});
+
 describe("doctor: discord", () => {
 	test("on: token mode, the bot user and the gateway each give one ok discord line; the token never shows", async () => {
 		const config: JabbuConfig = home.config;

@@ -212,6 +212,9 @@ export async function runDoctor(
 		if (config === undefined) report(false, "config", failure instanceof ConfigError ? failure.message : "unreadable");
 	}
 	if (config) {
+		// Warnings are probable mistakes (an unknown key, an ignored key): doctor is the owner's way to validate a
+		// config edit, so each gets a line here; a warning never counts as a failed check.
+		for (const warning of config.warnings ?? []) warn("config", `${warning.field} (${warning.reason})`);
 		try {
 			accessSync(config.ompExecutable, constants.X_OK);
 			const version = await readVersion([config.ompExecutable, "--version"]);
