@@ -374,6 +374,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		noteDroppedSteers(this.#options, "agy.acp.stop_steers_dropped", turn, this.#queued);
 		this.#turn = undefined;
 		this.#queued = [];
+		// A launch in flight holds #respawning until its timeouts run out: end the launching child first.
+		if (this.#launching !== undefined) await this.#endClient(this.#launching, STOP_GRACE_MS);
 		await this.#respawning;
 		const client = this.#client;
 		this.#stopping = true;
@@ -483,7 +485,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const options = this.#options;
 		const picked = selectLaunchAccount(options, this.#now());
 		this.#account = picked.account;
-		const appDataDir = picked.appDataDir;
 		this.#entries = [];
 		this.#tools.clear();
 		this.#configOptions = [];
@@ -500,7 +501,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				env,
 				log: options.log,
 				originKey: options.originKey,
-				...(appDataDir === undefined ? {} : { appDataDir }),
+				...(picked.appDataDir === undefined ? {} : { appDataDir: picked.appDataDir }),
 			},
 			{
 				onNotification: (method, params) => {
@@ -515,6 +516,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const timeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS;
 		try {
 			const init = await client.request("initialize", { protocolVersion: 1, clientCapabilities: {} }, timeoutMs);
+			this.#requireStarted();
 			this.#imageInput = recordOf(recordOf(init.agentCapabilities)?.promptCapabilities)?.image === true;
 			const accountMismatch = resume !== undefined && verifyAccount && resumeAccount !== this.#account?.name;
 			if (accountMismatch) {
@@ -526,6 +528,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				});
 			}
 			await this.#openConversation(client, accountMismatch ? undefined : resume);
+			this.#requireStarted();
 			options.log?.info("agy.acp.started", {
 				origin: options.originKey,
 				pid: client.pid,
@@ -602,8 +605,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			{ sessionId: this.#sessionId, configId, value },
 			this.#options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
 		);
-		const options = configOptionsOf(result.configOptions);
-		if (options !== undefined) this.#configOptions = options;
+		this.#configOptions = configOptionsOf(result.configOptions) ?? this.#configOptions;
 		const current = this.#option(configId)?.currentValue;
 		if (current !== value)
 			throw new OmpDriverError("rpc_error", `agy did not apply ${configId}=${value} (now ${current ?? "unset"})`);
@@ -664,8 +666,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				return;
 			}
 			case "config_option_update": {
-				const options = configOptionsOf(update.configOptions);
-				if (options !== undefined) this.#configOptions = options;
+				this.#configOptions = configOptionsOf(update.configOptions) ?? this.#configOptions;
 				return;
 			}
 			// The `-p` driver emitted no thinking either.
