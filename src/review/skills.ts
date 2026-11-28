@@ -5,7 +5,13 @@ import { join } from "node:path";
 import type { Logger } from "../log";
 import type { OmpFinal, OmpSessionDriver } from "../omp/driver";
 import { redact } from "../redact";
-import { assertSafeSkillPath, stageTempPath, writeAtomicNoFollow, writeExclusiveNoFollow } from "./skill-io";
+import {
+	assertSafeSkillPath,
+	stageTempPath,
+	withSkillLock,
+	writeAtomicNoFollow,
+	writeExclusiveNoFollow,
+} from "./skill-io";
 
 export interface SkillCheck {
 	/** A case where the skill should — or should not — fire, stated so a later session can replay it. */
@@ -156,13 +162,9 @@ function validProposals(list: unknown[]): SkillProposal[] {
 		const checks: SkillCheck[] = [];
 		let checksOk = true;
 		for (const rawCheck of rawChecks) {
-			if (typeof rawCheck !== "object" || rawCheck === null) {
-				checksOk = false;
-				break;
-			}
 			const check = rawCheck as Record<string, unknown>;
-			const situation = typeof check.situation === "string" ? check.situation.trim() : "";
-			const expect = typeof check.expect === "string" ? check.expect.trim() : "";
+			const situation = typeof check?.situation === "string" ? check.situation.trim() : "";
+			const expect = typeof check?.expect === "string" ? check.expect.trim() : "";
 			if (situation === "" || expect === "" || situation.length > MAX_CHECK_TEXT || expect.length > MAX_CHECK_TEXT) {
 				checksOk = false;
 				break;
@@ -216,11 +218,10 @@ function renderAdoptionChecks(proposal: SkillProposal): string {
 	const lines = ["", "## 채택 검증", ""];
 	lines.push(
 		`설치 뒤 아래 짝을 실제 대화에서 한 번씩 돌려 확인한다. 어긋나면 \`jabbu-pocket skills rollback ${proposal.name}\`.`,
+		"",
 	);
-	lines.push("");
 	for (const check of proposal.checks) lines.push(`- ${check.situation} → ${check.expect}`);
-	lines.push("- 이 스킬을 만든 모델과 다른 경로(예: GLM 크론 모니터)에서 쓸 때는 그 모델에서 다시 확인한 뒤 쓴다.");
-	lines.push("");
+	lines.push("- 이 스킬을 만든 모델과 다른 경로(예: GLM 크론 모니터)에서 쓸 때는 그 모델에서 다시 확인한 뒤 쓴다.", "");
 	return lines.join("\n");
 }
 
@@ -279,11 +280,10 @@ export async function runSkillReview(
 	}
 
 	const paths = deps.savePending(proposals);
-	const lines = proposals.map((p) => {
-		const evidence =
-			p.evidence.length <= 120 ? p.evidence : `${p.evidence.slice(0, 119).replace(/[\ud800-\udbff]$/, "")}…`;
-		return `- ${p.name} (${p.action === "patch" ? "patch · 기존 스킬 덮어씀" : p.action}): ${p.description}\n  근거: ${evidence} · 검증 ${p.checks.length}짝(설치 본문 '채택 검증' 절에 기록)`;
-	});
+	const lines = proposals.map(
+		(p) =>
+			`- ${p.name} (${p.action === "patch" ? "patch · 기존 스킬 덮어씀" : p.action}): ${p.description}\n  근거: ${p.evidence.length <= 120 ? p.evidence : `${p.evidence.slice(0, 119).replace(/[\ud800-\udbff]$/, "")}…`} · 검증 ${p.checks.length}짝(설치 본문 '채택 검증' 절에 기록)`,
+	);
 	const verdict = await deps.requestApproval(
 		`📝 스킬 제안 ${proposals.length}건 — 승인하면 ${proposals.map((p) => p.name).join(", ")}를 설치합니다.\n${lines.join("\n")}`,
 	);
@@ -321,14 +321,10 @@ function digestMessage(line: string, perMessage: number): { role: string; text: 
 		const content = entry.message?.content;
 		let text = "";
 		if (typeof content === "string") text = content;
-		else if (Array.isArray(content)) {
-			for (const part of content) {
-				if (typeof part === "object" && part !== null && "text" in part) {
-					const value = part.text;
-					if (typeof value === "string") text += value;
-				}
-			}
-		}
+		else if (Array.isArray(content))
+			for (const part of content)
+				if (typeof part === "object" && part !== null && "text" in part && typeof part.text === "string")
+					text += part.text;
 		text = text.trim();
 		if (text === "") return undefined;
 		// Cut by UTF-16 units but never leave half of a surrogate pair at the cut.
@@ -484,17 +480,19 @@ export function backupSkillRevision(dir: string, now: number): string | undefine
  * path (`undefined` on a first install); throws when the action does not match what is on disk.
  */
 export function installSkill(dir: string, proposal: SkillProposal, now: number): string | undefined {
-	const current = join(dir, "SKILL.md");
-	assertSafeSkillPath(dir, "install", { requireDir: true });
-	assertSafeSkillPath(join(dir, SKILL_REVISIONS_DIR), "install", { requireDir: true });
-	const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
-	if (proposal.action === "create" && exists)
-		throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
-	if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);
-	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const revision = backupSkillRevision(dir, now);
-	writeAtomicNoFollow(current, renderSkillFile(proposal), 0o600);
-	return revision;
+	return withSkillLock(dir, () => {
+		const current = join(dir, "SKILL.md");
+		assertSafeSkillPath(dir, "install", { requireDir: true });
+		assertSafeSkillPath(join(dir, SKILL_REVISIONS_DIR), "install", { requireDir: true });
+		const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
+		if (proposal.action === "create" && exists)
+			throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
+		if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		const revision = backupSkillRevision(dir, now);
+		writeAtomicNoFollow(current, renderSkillFile(proposal), 0o600);
+		return revision;
+	});
 }
 
 /** `<stamp>.md` or `<stamp>-<n>.md` (a second revision in the same millisecond) as `[stamp, n]`. */
@@ -524,38 +522,40 @@ export function listSkillRevisions(dir: string): string[] {
  * revision slot, so running it again restores it — an approved patch is always reversible in both directions.
  */
 export function rollbackSkill(dir: string): string {
-	const current = join(dir, "SKILL.md");
-	const revisions = join(dir, SKILL_REVISIONS_DIR);
-	assertSafeSkillPath(dir, "rollback", { requireDir: true });
-	if (!assertSafeSkillPath(current, "rollback", { requireFile: true, checkHardLink: true }))
-		throw new Error(`skill not installed: ${dir}`);
-	assertSafeSkillPath(revisions, "rollback", { requireDir: true });
-	const newest = listSkillRevisions(dir)[0];
-	if (newest === undefined) throw new Error(`no saved revision for ${dir}`);
-	assertSafeSkillPath(newest, "rollback", { requireFile: true, checkHardLink: true });
-	const outgoing = readFileSync(current);
-	const previous = readFileSync(newest);
-	const currentMode = lstatSync(current).mode & 0o777;
-	const slotMode = lstatSync(newest).mode & 0o777;
-	// Random exclusive temp files prevent pre-planted symlinks or concurrent writes from redirecting I/O outside `dir`.
-	const stagedSlot = stageTempPath(newest, "rollback-tmp");
-	const stagedCurrent = stageTempPath(current, "rollback-tmp");
-	try {
-		writeExclusiveNoFollow(stagedSlot, outgoing, slotMode);
-		writeExclusiveNoFollow(stagedCurrent, previous, currentMode);
-		renameSync(stagedSlot, newest);
-	} catch (error) {
-		rmSync(stagedSlot, { force: true });
-		rmSync(stagedCurrent, { force: true });
-		throw error;
-	}
-	try {
-		renameSync(stagedCurrent, current);
-	} catch (error) {
-		// The slot already holds today's content: put the old revision back atomically so nothing is lost.
-		writeAtomicNoFollow(newest, previous, slotMode);
-		rmSync(stagedCurrent, { force: true });
-		throw error;
-	}
-	return newest;
+	return withSkillLock(dir, () => {
+		const current = join(dir, "SKILL.md");
+		const revisions = join(dir, SKILL_REVISIONS_DIR);
+		assertSafeSkillPath(dir, "rollback", { requireDir: true });
+		if (!assertSafeSkillPath(current, "rollback", { requireFile: true, checkHardLink: true }))
+			throw new Error(`skill not installed: ${dir}`);
+		assertSafeSkillPath(revisions, "rollback", { requireDir: true });
+		const newest = listSkillRevisions(dir)[0];
+		if (newest === undefined) throw new Error(`no saved revision for ${dir}`);
+		assertSafeSkillPath(newest, "rollback", { requireFile: true, checkHardLink: true });
+		const outgoing = readFileSync(current);
+		const previous = readFileSync(newest);
+		const currentMode = lstatSync(current).mode & 0o777;
+		const slotMode = lstatSync(newest).mode & 0o777;
+		// Random exclusive temp files prevent pre-planted symlinks or concurrent writes from redirecting I/O outside `dir`.
+		const stagedSlot = stageTempPath(newest, "rollback-tmp");
+		const stagedCurrent = stageTempPath(current, "rollback-tmp");
+		try {
+			writeExclusiveNoFollow(stagedSlot, outgoing, slotMode);
+			writeExclusiveNoFollow(stagedCurrent, previous, currentMode);
+			renameSync(stagedSlot, newest);
+		} catch (error) {
+			rmSync(stagedSlot, { force: true });
+			rmSync(stagedCurrent, { force: true });
+			throw error;
+		}
+		try {
+			renameSync(stagedCurrent, current);
+		} catch (error) {
+			// The slot already holds today's content: put the old revision back atomically so nothing is lost.
+			writeAtomicNoFollow(newest, previous, slotMode);
+			rmSync(stagedCurrent, { force: true });
+			throw error;
+		}
+		return newest;
+	});
 }

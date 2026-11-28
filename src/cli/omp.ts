@@ -12,7 +12,6 @@ import {
 	readlinkSync,
 	realpathSync,
 	rmSync,
-	type Stats,
 	statSync,
 	symlinkSync,
 	writeFileSync,
@@ -28,6 +27,7 @@ import type { OmpFinal } from "../omp/driver";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
 import { RpcOmpDriver } from "../omp/rpc-driver";
 import { checkOmpRuntime, type OmpRuntimeProblem } from "../omp/runtime-check";
+import { withSkillLock } from "../review/skill-io";
 
 export const OMP_USAGE = `  omp trial [--executable <abs>] trial-run the omp named by --executable (default: config ompExecutable) with the bot's env (runtime check, one RPC
                                  turn, one omp -p; the answer must contain OK); exit 0 when all three pass, else the failed
@@ -199,13 +199,8 @@ interface SyncContext {
 	result: SyncResult;
 }
 
-function lstatOrUndefined(path: string): Stats | undefined {
-	return lstatSync(path, { throwIfNoEntry: false });
-}
-
 function sameFile(a: string, b: string): boolean {
-	const sa = statSync(a);
-	const sb = statSync(b);
+	const [sa, sb] = [statSync(a), statSync(b)];
 	return (sa.mode & 0o777) === (sb.mode & 0o777) && sa.size === sb.size && readFileSync(a).equals(readFileSync(b));
 }
 
@@ -220,8 +215,8 @@ function remove(path: string, rel: string, ctx: SyncContext): void {
  * A broken source link is skipped with a warning and leaves the profile's entry alone.
  */
 function mirror(src: string, dst: string, rel: string, ctx: SyncContext): void {
-	const s = lstatOrUndefined(src);
-	const d = lstatOrUndefined(dst);
+	const s = lstatSync(src, { throwIfNoEntry: false });
+	const d = lstatSync(dst, { throwIfNoEntry: false });
 	if (s === undefined) {
 		if (d !== undefined) remove(dst, rel, ctx);
 		return;
@@ -344,13 +339,16 @@ function syncManagedSkills(source: string, target: string, init: boolean, ctx: S
 		const src = join(srcRoot, name);
 		const dst = join(dstRoot, name);
 		const rel = `managed-skills/${name}`;
-		if (lstatOrUndefined(dst) === undefined || init) {
-			mirror(src, dst, rel, ctx);
-			continue;
-		}
-		const srcSkill = join(src, "SKILL.md");
-		const dstSkill = join(dst, "SKILL.md");
-		if (sha256(srcSkill) !== sha256(dstSkill) && mtimeOf(srcSkill) > mtimeOf(dstSkill)) mirror(src, dst, rel, ctx);
+		// The check-and-mirror of one skill runs under its per-skill lock — the same lock install/rollback take —
+		// so a sync cannot interleave with an install of the same skill. A dry run writes nothing, so it takes no lock.
+		const run = () => {
+			if (lstatSync(dst, { throwIfNoEntry: false }) === undefined || init) return mirror(src, dst, rel, ctx);
+			const srcSkill = join(src, "SKILL.md");
+			const dstSkill = join(dst, "SKILL.md");
+			if (sha256(srcSkill) !== sha256(dstSkill) && mtimeOf(srcSkill) > mtimeOf(dstSkill)) mirror(src, dst, rel, ctx);
+		};
+		if (ctx.dryRun) run();
+		else withSkillLock(dst, run);
 	}
 }
 
@@ -358,7 +356,7 @@ function syncManagedSkills(source: string, target: string, init: boolean, ctx: S
  * Brings the profile agent dir `target` in line with the owner's agent dir `source` (see `OMP_USAGE`). `dryRun` only
  * lists what would change. Sessions, caches, history, models.db and backups are never touched.
  */
-function syncProfile(input: {
+export function syncProfile(input: {
 	source: string;
 	target: string;
 	/** Whose `~/.omp/agent` the absolute config.yml paths name; default two levels above `source`. */
@@ -382,11 +380,11 @@ function syncProfile(input: {
 	const srcConfig = join(source, "config.yml");
 	const dstConfig = join(target, "config.yml");
 	if (!existsSync(srcConfig)) {
-		if (lstatOrUndefined(dstConfig) !== undefined) remove(dstConfig, "config.yml", ctx);
+		if (lstatSync(dstConfig, { throwIfNoEntry: false }) !== undefined) remove(dstConfig, "config.yml", ctx);
 	} else {
 		const userHome = input.userHome ?? resolve(source, "..", "..");
 		const text = rewriteAgentPaths(readFileSync(srcConfig, "utf8"), source, target, userHome);
-		const d = lstatOrUndefined(dstConfig);
+		const d = lstatSync(dstConfig, { throwIfNoEntry: false });
 		if (!(d?.isFile() === true && readFileSync(dstConfig, "utf8") === text)) {
 			ctx.result.changed.push("copied config.yml (agent paths rewritten)");
 			if (!ctx.dryRun) {
@@ -399,7 +397,7 @@ function syncProfile(input: {
 	for (const name of SYNC_LOGIN_LINKS) {
 		const link = join(target, name);
 		const want = join(source, name);
-		const d = lstatOrUndefined(link);
+		const d = lstatSync(link, { throwIfNoEntry: false });
 		if (d?.isSymbolicLink() && readLink(link) === want) continue;
 		ctx.result.changed.push(`linked ${name} -> ${want}`);
 		if (ctx.dryRun) continue;
