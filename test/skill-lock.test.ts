@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { skillsCommand } from "../src/cli/skills";
+import { withSkillLock } from "../src/review/skill-io";
 import { readSkillLock, type SkillVerifyResult, verifySkillLock, writeSkillLock } from "../src/review/skill-lock";
+import { installSkill, skillDirOf } from "../src/review/skills";
 import { runCliCapture } from "./helpers/daemon-process";
 
 let dir: string;
@@ -76,6 +78,24 @@ describe("skill-lock integrity and risk scan", () => {
 		expect(verified.removed).toEqual([]);
 		expect(verified.symlinks).toEqual([]);
 		expect(verified.warnings).toEqual([]);
+	});
+
+	test("the per-skill lock lives outside the hashed tree", () => {
+		const home = join(dir, "fake-home");
+		const skill = skillDirOf("alpha", home);
+		installSkill(
+			skill,
+			{ action: "create", name: "alpha", description: "d", content: "body", evidence: "e", checks: [] },
+			1_700_000_000_000,
+		);
+		const root = join(home, ".omp", "agent", "managed-skills");
+		// A lock held by another writer must not leak into the hashed tree: scan while it is held.
+		withSkillLock(skill, () => {
+			expect(Object.keys(writeSkillLock(root, lockPath).files)).toEqual(["alpha/SKILL.md"]);
+		});
+		const verified = verifySkillLock(root, lockPath);
+		expect(verified.ok).toBe(true);
+		expect(Object.keys(readSkillLock(lockPath).files)).toEqual(["alpha/SKILL.md"]);
 	});
 
 	test("a lockfile inside the skills dir round-trips clean, via API and CLI", () => {

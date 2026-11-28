@@ -1,5 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fchmodSync, lstatSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
+import {
+	closeSync,
+	constants,
+	fchmodSync,
+	lstatSync,
+	mkdirSync,
+	openSync,
+	renameSync,
+	rmSync,
+	writeSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { acquireLock } from "../daemon/lock";
 
 export interface SafeSkillPathOpts {
 	requireFile?: boolean;
@@ -56,4 +68,28 @@ export function writeAtomicNoFollow(target: string, data: string | Buffer, mode:
 /** Unpredictable temp file path next to `target`. */
 export function stageTempPath(target: string, tag: string): string {
 	return `${target}.${randomUUID()}.${tag}`;
+}
+
+/**
+ * The inter-process lock for one skill (`<agent>/.skill-locks/<name>.lock`): next to the skills root, outside the
+ * hashed tree, so the lock file itself never shows up in `skills lock` / `verify`.
+ */
+export function skillLockPath(dir: string): string {
+	return join(dirname(dirname(dir)), ".skill-locks", `${basename(dir)}.lock`);
+}
+
+/**
+ * Runs `fn` holding the skill's inter-process lock (the daemon's `acquireLock`: exclusive create, stale-holder
+ * reclaim). The check-backup-write span of an install/rollback and a sync mirror of one skill cannot interleave with
+ * another writer of the same skill. Throws `LockHeldError` when another process holds it.
+ */
+export function withSkillLock<T>(dir: string, fn: () => T): T {
+	const path = skillLockPath(dir);
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	const lock = acquireLock(path);
+	try {
+		return fn();
+	} finally {
+		lock.release();
+	}
 }

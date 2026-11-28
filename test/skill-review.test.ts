@@ -17,6 +17,7 @@ import type { OmpFinal, OmpSessionDriver } from "../src/omp/driver";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { writeFreeze } from "../src/ops/freeze";
 import { redact } from "../src/redact";
+import { withSkillLock } from "../src/review/skill-io";
 import {
 	backupSkillRevision,
 	buildSkillReviewPrompt,
@@ -487,6 +488,28 @@ describe("skill revisions (install safety net)", () => {
 				.map((p) => readFileSync(p, "utf8"))
 				.sort(),
 		).toEqual(["v1", "v2"]);
+	});
+
+	test("install and rollback refuse while another writer holds the skill lock", () => {
+		const path = skillDir();
+		writeFileSync(join(path, "SKILL.md"), "v1", { mode: 0o600 });
+		const patch: SkillProposal = {
+			action: "patch",
+			name: "release-checklist",
+			description: "d",
+			content: "v2",
+			evidence: "e",
+			checks: [],
+		};
+		expect(() => withSkillLock(path, () => installSkill(path, patch, 1_700_000_000_000))).toThrow("already_running");
+		expect(readFileSync(join(path, "SKILL.md"), "utf8")).toBe("v1");
+		expect(backupSkillRevision(path, 1_700_000_500_000)).toBeDefined();
+		writeFileSync(join(path, "SKILL.md"), "v2", { mode: 0o600 });
+		expect(() => withSkillLock(path, () => rollbackSkill(path))).toThrow("already_running");
+		expect(readFileSync(join(path, "SKILL.md"), "utf8")).toBe("v2");
+		// The lock is released after each call: a plain rollback works.
+		rollbackSkill(path);
+		expect(readFileSync(join(path, "SKILL.md"), "utf8")).toBe("v1");
 	});
 
 	test("installing a skill named revisions is refused", () => {

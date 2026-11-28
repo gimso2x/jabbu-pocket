@@ -22,6 +22,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { withSkillLock } from "../review/skill-io";
 import { backupSkillRevision, SKILL_REVISIONS_DIR } from "../review/skills";
 
 /** `<home>/omp/last-sync`: when `omp sync` last ran. */
@@ -236,17 +237,21 @@ function syncManagedSkills(source: string, target: string, init: boolean, ctx: S
 		const src = join(srcRoot, name);
 		const dst = join(dstRoot, name);
 		const rel = `managed-skills/${name}`;
-		if (lstatOrUndefined(dst) === undefined) {
-			mirrorSkill(src, dst, rel, ctx, false);
-			continue;
-		}
-		const srcSkill = join(src, "SKILL.md");
-		const dstSkill = join(dst, "SKILL.md");
-		const differ = sha256(srcSkill) !== sha256(dstSkill);
-		if (init || (differ && mtimeOf(srcSkill) > mtimeOf(dstSkill))) {
-			mirrorSkill(src, dst, rel, ctx, differ);
-			continue;
-		}
+		// The check-and-mirror of one skill runs under its per-skill lock — the same lock install/rollback take —
+		// so a sync cannot interleave with an install of the same skill. A dry run writes nothing, so it takes no lock.
+		let differ = false;
+		const run = (): void => {
+			if (lstatOrUndefined(dst) === undefined) {
+				mirrorSkill(src, dst, rel, ctx, false);
+				return;
+			}
+			const srcSkill = join(src, "SKILL.md");
+			const dstSkill = join(dst, "SKILL.md");
+			differ = sha256(srcSkill) !== sha256(dstSkill);
+			if (init || (differ && mtimeOf(srcSkill) > mtimeOf(dstSkill))) mirrorSkill(src, dst, rel, ctx, differ);
+		};
+		if (ctx.dryRun) run();
+		else withSkillLock(dst, run);
 		if (differ)
 			ctx.result.warnings.push(
 				`${rel}: owner's SKILL.md differs but is not newer than the profile copy; profile version kept (omp sync --init to force)`,

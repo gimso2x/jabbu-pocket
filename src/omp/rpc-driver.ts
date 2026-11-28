@@ -140,6 +140,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	readonly #admitted = new Set<string>();
 	/** Ends of prompts whose `prompt()` has not resolved yet, delivered on admission so onFinal never precedes it. */
 	readonly #early = new Map<string, () => void>();
+	/** Prompts in flight: only while one runs may an end be buffered in #early (a late frame after a rejection is dropped). */
+	#prompting = 0;
 	/** opRefs whose final is being read: a steer in that window would start an orphan omp run. */
 	readonly #finalizing = new Set<string>();
 	/** Last leafId this driver saw from a `leafId()` read; seed for the delta read in `leafIdViaCursor`. */
@@ -289,13 +291,14 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const opRefs = [...this.#admitted];
 		this.#options.log?.warn("omp_stream_protocol_error", { error: error.message, prompts: opRefs.length });
 		this.#admitted.clear();
+		this.#early.clear();
 		for (const opRef of opRefs) {
 			const final: OmpFinal = { opRef, status: "error", text: "", error: `omp stream broken: ${error.message}` };
 			for (const listener of this.#finalListeners) listener(final);
 		}
-		void this.stop().catch((stopError: unknown) => {
-			this.#options.log?.warn("omp_stop_failed", { error: String(stopError) });
-		});
+		void this.stop().catch((stopError: unknown) =>
+			this.#options.log?.warn("omp_stop_failed", { error: String(stopError) }),
+		);
 	}
 
 	#onPromptResult(frame: PromptResultFrame): void {
@@ -305,7 +308,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			// Only a turn still open may wait on a tail: a late or repeated frame of a settled one would fill the single
 			// slot and end the next turn at once. A frame ahead of `prompt()`'s admission waits for it like `#endTurn`.
 			if (this.#admitted.has(id)) this.#beginTail(id);
-			else {
+			else if (this.#prompting > 0) {
 				this.#options.log?.warn("prompt_result_unadmitted", { opRef: id });
 				this.#early.set(id, () => this.#beginTail(id));
 			}
@@ -318,7 +321,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	#endTurn(opRef: string, end: TurnEnd): void {
 		const deliver = () => void this.#finalize(opRef, end);
 		if (this.#admitted.has(opRef)) deliver();
-		else this.#early.set(opRef, deliver);
+		else if (this.#prompting > 0) this.#early.set(opRef, deliver);
 	}
 
 	/**
@@ -424,7 +427,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			for (const listener of this.#finalListeners) listener({ opRef: id, status: "completed", text: output });
 		};
 		if (this.#admitted.has(id)) deliver();
-		else this.#early.set(id, deliver);
+		else if (this.#prompting > 0) this.#early.set(id, deliver);
 	}
 
 	async #finalize(opRef: string, frame: TurnEnd): Promise<void> {
@@ -465,12 +468,18 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	async prompt(text: string): Promise<string> {
-		const opRef = await this.#call((client) => client.prompt(text));
-		this.#admitted.add(opRef);
-		const early = this.#early.get(opRef);
-		this.#early.delete(opRef);
-		early?.();
-		return opRef;
+		this.#prompting += 1;
+		try {
+			const opRef = await this.#call((client) => client.prompt(text));
+			this.#admitted.add(opRef);
+			const early = this.#early.get(opRef);
+			this.#early.delete(opRef);
+			early?.();
+			return opRef;
+		} finally {
+			this.#prompting -= 1;
+			this.#early.clear(); // Never admitted, or a stale entry for an ended turn: no admission will ever consume it.
+		}
 	}
 
 	steer = async (text: string): Promise<void> => {
