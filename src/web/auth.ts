@@ -234,7 +234,9 @@ function signCsrfNonce(nonce: string, secret: Buffer): string {
  * while keeping the established 32-hex-char nonce shape.
  */
 function mintCsrfNonce(nowMs: number): string {
-	return `${Math.floor(nowMs / 1000).toString(16).padStart(8, "0")}${randomBytes(12).toString("hex")}`;
+	return `${Math.floor(nowMs / 1000)
+		.toString(16)
+		.padStart(8, "0")}${randomBytes(12).toString("hex")}`;
 }
 
 function validCsrfToken(token: string | undefined, secret: Buffer, nowMs: number): boolean {
