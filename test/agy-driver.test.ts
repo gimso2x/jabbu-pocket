@@ -1480,6 +1480,47 @@ test("account pool: all accounts exhausted reports soonest reset and blocks next
 	await driver.stop();
 });
 
+test("account pool: all accounts blocked does not drop the live session; it resumes after reset", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const { harness, pool, log } = makePoolHarness("acct1 agy/gemini-pro-orchestrator-neon\n", ["acct1"], clock);
+	const driver = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: { FAKE_AGY_ECHO_DIR: "1" },
+	});
+	await driver.start();
+	const first = nextFinal(driver);
+	await driver.prompt("hello");
+	expect(await first).toMatchObject({ status: "completed", text: "REPLY1:[antigravity-cli-acct-acct1] hello" });
+	const sessionId = (await driver.state()).sessionId;
+	expect(sessionId).not.toBe("");
+	const pid = driver.pid;
+
+	// Another origin's quota event blocks the shared account while this origin sits idle with a live child.
+	pool.markExhausted("acct1", clock.t + 3_600_000);
+	expect(pool.isBlocked("acct1", clock.t)).toBe(true);
+	const err = await driver.prompt("too soon").catch((e: unknown) => e);
+	expect(err).toBeInstanceOf(OmpDriverError);
+	expect((err as Error).message).toContain("모든 계정 한도 소진");
+	// The failed prompt leaves the session, pointer and child intact: the block is temporary, the drop was permanent.
+	expect((await driver.state()).sessionId).toBe(sessionId);
+	expect(existsSync(join(harness.sessionDir, "agy-conversation.json"))).toBe(true);
+	expect(pointerOf(harness)).toBe(sessionId);
+	expect(driver.pid).toBe(pid);
+	expect(spawns(harness)).toHaveLength(1);
+
+	// After the reset the same session resumes on the same child, with no respawn.
+	pool.clearBlocked("acct1", clock.t);
+	const second = nextFinal(driver);
+	await driver.prompt("after reset");
+	expect(await second).toMatchObject({ status: "completed", text: "REPLY2:[antigravity-cli-acct-acct1] after reset" });
+	expect((await driver.state()).sessionId).toBe(sessionId);
+	expect(spawns(harness)).toHaveLength(1);
+	await driver.stop();
+});
+
 test("account pool: unreadable or empty order fails the start instead of falling back to the default account", async () => {
 	const clock = { t: 1_795_500_000_000 };
 	const harness = makeHarness();

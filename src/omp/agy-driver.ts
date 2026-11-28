@@ -428,13 +428,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		if (accounts !== undefined) {
 			const now = this.#now();
 			const wanted = accounts.selectAvailable(now);
-			if (wanted === null) {
-				if (this.#client || readAgyPointer(this.#pointerPath) !== undefined) {
-					this.#dropSession(true);
-					this.#retireChild();
-				}
-				throw allAccountsExhaustedError(accounts, now, this.#options.timezone);
-			}
+			if (wanted === null) throw allAccountsExhaustedError(accounts, now, this.#options.timezone);
 			if (this.#client && shouldSwitchAgyAccount(this.#account, wanted, accounts, now)) {
 				this.#dropSession(true);
 				return this.#spawn(undefined, "account switch");
