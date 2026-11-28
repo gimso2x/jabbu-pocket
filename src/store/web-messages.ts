@@ -19,8 +19,11 @@ export const WEB_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS web_messages (
 );
 CREATE INDEX IF NOT EXISTS web_messages_conv_id ON web_messages(conversation, id);
 CREATE INDEX IF NOT EXISTS web_messages_conv_thread_id ON web_messages(conversation, thread, id);
-CREATE INDEX IF NOT EXISTS web_messages_created ON web_messages(created_at);
-CREATE UNIQUE INDEX IF NOT EXISTS web_messages_delivery_key ON web_messages(delivery_key);`;
+CREATE INDEX IF NOT EXISTS web_messages_created ON web_messages(created_at);`;
+
+/** Created by `migrate`, not `SCHEMA`: a pre-`delivery_key` ledger has no such column when `SCHEMA` runs. */
+export const WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL =
+	"CREATE UNIQUE INDEX IF NOT EXISTS web_messages_delivery_key ON web_messages(delivery_key)";
 
 export type WebMessageRole = "owner" | "assistant" | "status" | "approval" | "choice" | "system";
 

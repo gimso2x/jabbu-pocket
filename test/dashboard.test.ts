@@ -471,6 +471,38 @@ describe("dashboard snapshot", () => {
 		});
 	});
 
+	test("a herdr pane never takes the id of a closed TASK that reused its agent name", async () => {
+		const db = new Database(dbPath, { strict: true });
+		// The closed row keeps the agent's oldest rowid: without the open-only
+		// filter the pane below would read its id.
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at, closed_at)
+			 VALUES ('T-20261103-02', 'closed reuse', 'L2', 'discord/dm/200000000000000001', '300000000000000001:T-20261103-02',
+			 NULL, '/srv/work/repo', '/srv/work/repo-t-20261103-02', 'task/t-20261103-02', 't-20261104-01', 'done',
+			 '[]', ?, ?, ?)`,
+			[NOW - 2 * 3_600_000, NOW - 2 * 3_600_000, NOW - 24 * 3_600_000],
+		);
+		db.run("DELETE FROM tasks WHERE task_id = 'T-20261104-01'");
+		db.run(
+			`INSERT INTO tasks (task_id, title, risk, origin_key, thread_ref, host, repo, worktree, branch, agent, status,
+				acceptance_json, created_at, updated_at, closed_at)
+			 VALUES ('T-20261104-01', 'xoxb-TEST-0 title', 'L2', 'discord/dm/200000000000000001', '300000000000000001:T-20261104-01',
+			 NULL, '/srv/work/repo', ?, 'task/t-20261104-01', 't-20261104-01', 'working',
+			 '[]', ?, ?, NULL)`,
+			[WORKTREE, NOW - 3_600_000, NOW - 3_600_000],
+		);
+		db.close();
+
+		const snapshot = await buildSnapshot(deps());
+		if (!snapshot.herdr.ok) throw new Error(snapshot.herdr.error);
+		const hosts = Object.fromEntries(snapshot.herdr.hosts.map((host) => [host.host, host]));
+		if (hosts.local?.ok !== true) throw new Error("local host failed");
+		expect(hosts.local.agents.find((agent) => agent.name === "t-20261104-01")).toMatchObject({
+			taskId: "T-20261104-01",
+		});
+	});
+
 	test("AC-7: message bodies past the request line, approval replies, monitor payloads and instruction tails never reach the JSON", async () => {
 		const json = JSON.stringify(await buildSnapshot(deps()));
 		for (const secret of [

@@ -1456,7 +1456,7 @@ export class OriginMailbox {
 			origin: originKey,
 			failures: this.#consecFailures,
 			modelHealed,
-			reason: headTailReason(reason.replace(/\s+/g, " ")),
+			reason: headTailReason(redact(reason).replace(/\s+/g, " ")),
 		});
 		onEscalate?.({ originKey, threadRef, failures: this.#consecFailures, reason, modelHealed });
 	}

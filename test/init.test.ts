@@ -237,6 +237,16 @@ describe("jabbu-pocket init", () => {
 		}
 	});
 
+	test("a relative --omp exits 2 and creates nothing", () => {
+		const home = freshHome();
+		for (const omp of ["./omp", "omp", "bin/omp"]) {
+			const run = init(["--owner", OWNER, "--app-id", APP, "--omp", omp], home);
+			expect(run.code).toBe(2);
+			expect(run.err).toContain("--omp must be an absolute path");
+			expect(existsSync(home)).toBe(false);
+		}
+	});
+
 	test("--help prints the usage and exits 0", () => {
 		const home = freshHome();
 		const run = init(["--help"], home);

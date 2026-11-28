@@ -404,6 +404,23 @@ describe("lane attach / detach through the daemon", () => {
 		expect(d.store.getOrigin(lane.originKey)?.sessionFile).toBe(file);
 	});
 
+	test("CLI: omp exiting non-zero still hands the lane back, but says so and exits 1", async () => {
+		alivePids.add(process.pid);
+		const d = await startDaemon();
+		const { lane } = await runningLane(d, "cli-attach-fail");
+		const out: string[] = [];
+		const code = await lanesCommand(["attach", lane.name], home.dir, {
+			write: (line) => out.push(line),
+			error: (line) => out.push(`ERR ${line}`),
+			ompCommand: ["false"],
+		});
+		expect(code).toBe(1);
+		expect(out).toContain(`handed lane ${lane.name} back`);
+		expect(out).toContain("ERR lanes attach: omp exited 1");
+		expect(d.store.getLane(lane.name)?.status).toBe("working");
+		expect(d.store.getLane(lane.name)?.meta.attach).toBeUndefined();
+	});
+
 	test("CLI: a new session file omp created is sent as newFiles and keeps the lane paused for the owner's pick", async () => {
 		alivePids.add(process.pid);
 		const d = await startDaemon();

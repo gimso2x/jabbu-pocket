@@ -104,6 +104,16 @@ describe("CLI commands without a daemon", () => {
 		expect(run.stderr).not.toContain("daemon not reachable");
 	});
 
+	test("--version and version print the package version and exit 0", async () => {
+		for (const command of ["--version", "version"]) {
+			const run = await runCliCapture(home.dir, [command]);
+			expect(run.code).toBe(0);
+			expect(run.stdout).toMatch(/^jabbu-pocket \d+\.\d+\.\d+\n$/);
+			expect(run.stderr).toBe("");
+		}
+		expect((await runCliCapture(home.dir, ["--version", "extra"])).code).toBe(2);
+	});
+
 	test("daemon, doctor, reload and --help refuse stray arguments (exit 2, one line)", async () => {
 		// A home with no config.json: without the guard `daemon` would fail on the config (exit 1).
 		const bare = mkdtempSync(join(tmpdir(), "jabbu-cli-bare-"));
@@ -277,6 +287,16 @@ describe("tasks CLI reads (qa-l low B)", () => {
 		const monitorShown = await runCliCapture(home.dir, ["monitors", "show", "nosuch", "extra"]);
 		expect(monitorShown.code, monitorShown.stderr).toBe(2);
 		expect(monitorShown.stderr).toContain("too many arguments");
+	});
+
+	test("tasks flags belong to their subcommand: --as only for close, --json only for list", async () => {
+		const id = registerTask("flag-target");
+		expect((await runCliCapture(home.dir, ["tasks", "list", "--as", "done"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "show", id, "--as", "done"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "close", id, "--json"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "list", "--json"])).code).toBe(0);
+		const closed = await runCliCapture(home.dir, ["tasks", "close", id, "--as", "done"]);
+		expect(closed.code, closed.stderr).toBe(0);
 	});
 
 	// qa-l #44: a ledger from before task_transitions existed shows its task with an empty history.
