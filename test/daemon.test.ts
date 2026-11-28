@@ -154,7 +154,7 @@ describe("startup recovery wiring", () => {
 		expect(transport.posts((text) => text.includes(INTERRUPTED_NOTICE))).toHaveLength(1);
 	});
 
-	test("rule (3): inflight and failed_ambiguous deliveries are sent again with the redelivery header", async () => {
+	test("rule (3): an inflight delivery is sent again with the redelivery header; a held one stays held (round 14 F2)", async () => {
 		const seed = openBotStore(join(home.dir, "jabbu.db"), clock, "Asia/Seoul");
 		seed.ensureOrigin(ORIGIN, "sess/e1");
 		for (const [n, op] of [
@@ -174,11 +174,18 @@ describe("startup recovery wiring", () => {
 		seed.close(); // the inflight one stays inflight, as if the process died after claiming it
 
 		const transport = new WaitingDiscordTransport();
-		await newDaemon(transport).start();
-		await transport.waitForPosts((text) => text.startsWith(REDELIVERED_PREFIX), 2);
+		const daemon = newDaemon(transport);
+		await daemon.start();
+		// Only the inflight row is recovered and re-sent: a held row is sticky (transitions.ts, architecture.md I4)
+		// and only the owner's ack/resend moves it, so a restart must not silently requeue it.
+		await transport.waitForPosts((text) => text.startsWith(REDELIVERED_PREFIX), 1);
 		const bodies = transport.posts((text) => text.startsWith(REDELIVERED_PREFIX)).map((call) => call.content ?? "");
 		expect(bodies.some((text) => text.includes("body-inflight-op"))).toBe(true);
-		expect(bodies.some((text) => text.includes("body-ambiguous-op"))).toBe(true);
+		expect(bodies.some((text) => text.includes("body-ambiguous-op"))).toBe(false);
+		expect(daemon.store.getDelivery(ambiguous.deliveryId)).toMatchObject({
+			state: "failed_ambiguous",
+			redelivered: false,
+		});
 	});
 });
 
@@ -494,6 +501,41 @@ describe("single-instance lock", () => {
 			lock.release();
 		}
 		expect(written.join("")).toContain("already_running");
+	});
+});
+
+describe("omp missing at boot", () => {
+	/** Runs `runDaemon` with stderr captured; returns its exit code and everything it wrote. */
+	async function runCaptured(config: TestHome["config"]): Promise<{ code: number; output: string }> {
+		const written: string[] = [];
+		const original = process.stderr.write;
+		process.stderr.write = ((chunk: string | Uint8Array) => {
+			written.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			return { code: await runDaemon(config, {}), output: written.join("") };
+		} finally {
+			process.stderr.write = original;
+		}
+	}
+
+	test("runDaemon refuses with exit 1 and never reports ready when omp is missing", async () => {
+		const { code, output } = await runCaptured({ ...home.config, ompExecutable: join(home.dir, "no-such-omp") });
+		expect(code).toBe(1);
+		expect(output).toContain("omp_executable_missing");
+		expect(output).not.toContain("daemon_ready");
+		expect(existsSync(join(home.dir, "jabbu.lock"))).toBe(false);
+	});
+
+	test("runDaemon refuses with exit 1 when omp prints garbage instead of a version", async () => {
+		const badOmp = join(home.dir, "bad-omp");
+		writeFileSync(badOmp, '#!/bin/sh\necho "not omp"\n', { mode: 0o755 });
+		const { code, output } = await runCaptured({ ...home.config, ompExecutable: badOmp });
+		expect(code).toBe(1);
+		expect(output).toContain("omp_executable_missing");
+		expect(output).not.toContain("daemon_ready");
+		expect(existsSync(join(home.dir, "jabbu.lock"))).toBe(false);
 	});
 });
 

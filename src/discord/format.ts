@@ -1,10 +1,9 @@
-// Text for Discord: core text written as Slack mrkdwn becomes Discord markdown (`mrkdwnToDiscord`), and a delivery body
-// becomes Discord messages of at most 2000 characters (`renderDiscordParts`); cards and copy blocks split in `messages.ts`.
-import { chunkText, escapeMrkdwn, inlineSpans, REDELIVERED_PREFIX } from "../channel/text";
+// Text for Discord: core text written as Slack mrkdwn becomes Discord markdown (`mrkdwnToDiscord`); a delivery body
+// becomes Discord messages of at most 2000 characters (see `parts.ts`), cards and copy blocks split in `messages.ts`.
+import { escapeMrkdwn } from "../channel/text";
 import { outsideCode } from "./code-spans";
-import { renderStackedTables } from "./table";
-import { MESSAGE_CONTENT_LIMIT } from "./transport";
 
+export { renderDiscordParts } from "./parts";
 export { outsideCode };
 
 const BARE_SPECIAL_MENTIONS = new Set(["here", "channel", "everyone"]);
@@ -86,23 +85,4 @@ export function mrkdwnToDiscord(text: string): string {
  */
 export function escapeDiscordMarkdown(text: string): string {
 	return escapeMrkdwn(text.replace(/[\\*_`~|>()[\]]/g, "\\$&").replace(/(^|\n)( {0,3})(#)/g, "$1$2\\$3"));
-}
-
-/**
- * One delivery body as Discord messages: GFM tables rendered as stacked Markdown for mobile readability and split into
- * parts of at most 2000 characters with code fences closed in each part and surrogate pairs kept whole.
- */
-export function renderDiscordParts(body: string, redelivered: boolean, footer?: string): string[] {
-	const prefix = redelivered ? `${REDELIVERED_PREFIX}\n` : "";
-	const suffix = footer === undefined ? "" : `\n_${footer}_`;
-	const parts = chunkPlain(body, MESSAGE_CONTENT_LIMIT - prefix.length - suffix.length);
-	return parts.map((part, i) => `${i === 0 ? prefix : ""}${part}${i === parts.length - 1 ? suffix : ""}`);
-}
-
-/** Plain text in parts of at most `limit`: stacked tables kept whole when they fit, fences closed in each part. */
-export function chunkPlain(body: string, limit: number): string[] {
-	const { text, spans } = renderStackedTables(body);
-	// A stacked table longer than one message splits on `\n\n` row boundaries; inline spans inside it stay whole.
-	const whole = [...spans, ...inlineSpans(text)].filter(([start, end]) => end - start <= limit);
-	return chunkText(text, limit, whole);
 }

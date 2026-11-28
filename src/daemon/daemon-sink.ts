@@ -1,11 +1,12 @@
 import { randomBytes } from "node:crypto";
+import { errorFields } from "../channel/text";
 import type { CoreSink, DeliveryItem, DeliverySource } from "../channel/types";
 import { type JabbuConfig, primaryOwnerUserId } from "../config";
 import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
-import { borrowedStartReply, borrowThreadOf, chatStartReply } from "../lanes/borrow-thread";
+import { borrowThreadOf, chatStartReplyFor } from "../lanes/borrow-thread";
 import { type LaneAction, parseLaneActionId } from "../lanes/card";
 import { classifyLaneControl } from "../lanes/control";
 import type { LaneManager } from "../lanes/manager";
@@ -46,7 +47,7 @@ import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { withControlSource } from "./daemon-task-web";
 import { type LaneTriggerLine, laneInbound, laneTriggerLine } from "./lane-sibling";
 import { isSideOpRef } from "./restart";
-import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
+import { inlineBorrowThreadRef, laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
 /** What the core sink needs beyond the daemon context: the boot's ledger and the state other daemon parts share. */
 export interface CoreSinkDeps {
@@ -279,23 +280,23 @@ export class DaemonInbound {
 				const platform = parseChatOrigin(row.originKey)?.platform;
 				if (platform === "web") throw new LaneInputError(WEB_LANE_REFUSED);
 				if (channel === undefined && platform === "discord") throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
-				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
+				const lanes = this.#lanes;
+				if (!lanes || channel === undefined) throw new Error("lanes unavailable");
 				assertNoSpacedPath(trigger.cwd, trigger.brief);
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
-				const lane = await this.#lanes.start({
+				const lane = await lanes.start({
 					...trigger,
 					...(called === undefined ? {} : { brief: called.brief, workflow: called.choice }),
 					channel,
 					parentOrigin: row.originKey,
 					reuseOpen: true,
-					...borrowThreadOf(row.originKey),
+					...borrowThreadOf(row.originKey, inlineBorrowThreadRef(this.#ctx, row.originKey, row.threadRef)),
 				});
-				if (lane.meta.borrowedThread === true) return borrowedStartReply(lane, lane.reused === true ? "↪ " : "🔄 ");
-				return chatStartReply(lane, await this.#lanes.threadLink(lane));
+				return chatStartReplyFor(lane, row.threadRef, () => lanes.threadLink(lane));
 			} catch (error) {
 				if (error instanceof LaneInputError) return `⚠️ 작업 레인을 시작하지 못했습니다: ${error.message}`;
-				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, error: String(error) });
+				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, ...errorFields(error) });
 				return "⚠️ 작업 레인을 시작하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -370,7 +371,7 @@ export class DaemonInbound {
 				}
 				return (command.kind === "land" ? await lanes.requestLand(name, "owner") : await lanes.discard(name)).text;
 			} catch (error) {
-				this.#ctx.log.error("lane_command_failed", { lane: name, command: command.kind, error: String(error) });
+				this.#ctx.log.error("lane_command_failed", { lane: name, command: command.kind, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -390,7 +391,7 @@ export class DaemonInbound {
 					control === "pause" ? await lanes.pause(name, "owner-message") : await lanes.resume(name, "owner-message")
 				).text;
 			} catch (error) {
-				this.#ctx.log.error("lane_control_failed", { lane: name, control, error: String(error) });
+				this.#ctx.log.error("lane_control_failed", { lane: name, control, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -416,7 +417,7 @@ export class DaemonInbound {
 					? `이 스레드에 활성 TASK가 여럿입니다(${active.map((task) => task.taskId).join(", ")}) — 아무것도 ${control === "pause" ? "멈추지" : "재개하지"} 않았습니다. \`jabbu-pocket tasks ${control} <id>\`로 하나를 고르세요.`
 					: (await this.controlTask(only.taskId, control)).text;
 			} catch (error) {
-				this.#ctx.log.error("task_control_failed", { thread: row.threadRef, control, error: String(error) });
+				this.#ctx.log.error("task_control_failed", { thread: row.threadRef, control, ...errorFields(error) });
 				return "⚠️ 처리하지 못했습니다. 로그를 확인하세요.";
 			}
 		});
@@ -428,7 +429,7 @@ export class DaemonInbound {
 	 * interrupted notice for a turn that never ran.
 	 */
 	#settleFailed(kind: string, row: InboundRow, error: unknown): void {
-		this.#ctx.log.error("lane_settle_failed", { kind, id: row.platformMessageId, error: String(error) });
+		this.#ctx.log.error("lane_settle_failed", { kind, id: row.platformMessageId, ...errorFields(error) });
 		try {
 			if (startedStore(this.#ctx).getInbound(row.platformMessageId)?.state === "dispatched") {
 				startedStore(this.#ctx).discard(row.platformMessageId);
@@ -437,7 +438,7 @@ export class DaemonInbound {
 			this.#ctx.log.error("lane_settle_discard_failed", {
 				kind,
 				id: row.platformMessageId,
-				error: String(discardError),
+				...errorFields(discardError),
 			});
 		}
 	}
@@ -592,8 +593,7 @@ export class DaemonInbound {
 				reservation: action.id,
 			},
 		);
-		const state = store.getLaneReservation(action.id)?.state;
-		const standing = state === "waiting" || state === "ready";
+		const standing = ["waiting", "ready"].includes(store.getLaneReservation(action.id)?.state ?? "");
 		const port = channel === undefined ? undefined : this.#ctx.channels.forConversation(channel)?.port;
 		if (!standing && port !== undefined && channel !== undefined && messageTs !== undefined) {
 			await port

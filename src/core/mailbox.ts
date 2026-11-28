@@ -1,9 +1,11 @@
 import { join } from "node:path";
+import { errorFields } from "../channel/text";
 import { isTaskOrigin } from "../lanes/status";
 import { MONITOR_ORIGIN_PREFIX } from "../monitors/ledger";
 import { alreadySent, closingAnswer, interimOf, NO_ANSWER, turnAnswerParts } from "../omp/answers";
 import {
 	OmpDriverError,
+	type OmpEntry,
 	type OmpEvent,
 	type OmpExitInfo,
 	type OmpFinal,
@@ -17,6 +19,7 @@ import {
 	CACHE_MISS_NOTIFY_MS,
 	CACHE_MISS_NOTIFY_TOKENS,
 	type CacheBaseline,
+	type CacheCall,
 	CacheMonitor,
 	cacheCallOf,
 } from "../ops/cache-monitor";
@@ -104,7 +107,7 @@ import { parseChatOrigin } from "./origin-key";
 import { buildRecallBlock } from "./recall";
 import { epochDirIsFresh } from "./sessions";
 import { stuckCancelReason, stuckSteerText } from "./stuck";
-import { tryCloseToolFreeFromFile } from "./tool-free-recovery";
+import { readLastAssistantEntry, tryCloseToolFreeFromFile } from "./tool-free-recovery";
 import {
 	composeTurnPrompt,
 	EVENT_PERSIST_MS,
@@ -139,6 +142,26 @@ export type {
 	TurnSettledInfo,
 } from "./mailbox-types";
 export { isAutonomousRow, isProviderLimit, openOriginSession, sessionToResume } from "./mailbox-types";
+
+/** `cacheCallOf` for a session entry, or `undefined` when it carries no usable call. */
+function seedCallOf(entry: OmpEntry | undefined): CacheCall | undefined {
+	const stamp = entry?.timestamp;
+	const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
+	return Number.isNaN(at) ? undefined : cacheCallOf(entry?.message, at);
+}
+
+/** Head + tail of a long failure reason, with an explicit marker for the dropped middle: the head names the failing
+ * call, the tail carries the cause. Short text passes through unchanged; the 8 KiB log-line cap (`src/log.ts`) is
+ * the bound, so callers do not slice further. Classification still uses the full text (`classifyReason`). */
+const REASON_HEAD_CHARS = 1000;
+const REASON_TAIL_CHARS = 1000;
+
+function headTailReason(text: string): string {
+	const chars = [...text];
+	if (chars.length <= REASON_HEAD_CHARS + REASON_TAIL_CHARS) return text;
+	const dropped = chars.length - REASON_HEAD_CHARS - REASON_TAIL_CHARS;
+	return `${chars.slice(0, REASON_HEAD_CHARS).join("")}…[truncated ${dropped} chars]…${chars.slice(-REASON_TAIL_CHARS).join("")}`;
+}
 
 /** Serial actor per origin: processes inbound messages, driver finals, and exits on one promise chain. */
 export class OriginMailbox {
@@ -309,32 +332,30 @@ export class OriginMailbox {
 		if (!turn || this.#hostToolsRunning > 0 || turn.tailWaiting) return false;
 		const { originKey, log, onStall, clock } = this.#deps;
 		const now = clock.now();
+		const silentMs = now - this.#lastEventAt;
 		let began = false;
-		if (!this.#stalled) {
-			const silentMs = now - this.#lastEventAt;
-			if (silentMs >= STALL_MS) {
-				this.#stalled = true;
-				began = true;
-				turn.stallCount += 1;
-				if (turn.stallCount === 1) log.warn("stall_alert", { origin: originKey, silentMs, opRef: turn.opRef });
-				else {
-					log.info("stall_repeat", {
-						origin: originKey,
-						silentMs,
-						opRef: turn.opRef,
-						count: turn.stallCount,
-						totalSilentMs: turn.stallSilentMs + silentMs,
-					});
-				}
-				if (!turn.stallShown) {
-					turn.stallShown = true;
-					onStall?.({ originKey, threadRef: turn.threadRef, stalled: true, silentMs });
-				}
-			} else if (turn.stallShown && now - turn.stallClearedAt >= STALL_RELEASE_MS) {
-				turn.stallShown = false;
-				log.info("stall_released", { origin: originKey, opRef: turn.opRef, count: turn.stallCount });
-				onStall?.({ originKey, threadRef: turn.threadRef, stalled: false, silentMs });
+		if (!this.#stalled && silentMs >= STALL_MS) {
+			this.#stalled = true;
+			began = true;
+			turn.stallCount += 1;
+			if (turn.stallCount === 1) log.warn("stall_alert", { origin: originKey, silentMs, opRef: turn.opRef });
+			else {
+				log.info("stall_repeat", {
+					origin: originKey,
+					silentMs,
+					opRef: turn.opRef,
+					count: turn.stallCount,
+					totalSilentMs: turn.stallSilentMs + silentMs,
+				});
 			}
+			if (!turn.stallShown) {
+				turn.stallShown = true;
+				onStall?.({ originKey, threadRef: turn.threadRef, stalled: true, silentMs });
+			}
+		} else if (!this.#stalled && turn.stallShown && now - turn.stallClearedAt >= STALL_RELEASE_MS) {
+			turn.stallShown = false;
+			log.info("stall_released", { origin: originKey, opRef: turn.opRef, count: turn.stallCount });
+			onStall?.({ originKey, threadRef: turn.threadRef, stalled: false, silentMs });
 		}
 		this.#judgeStall(turn, now);
 		return began;
@@ -367,63 +388,44 @@ export class OriginMailbox {
 	}
 
 	/**
-	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed through the normal failure
-	 * path (`recordTurnFailure` → monitor event failed with retry/backoff). The child is stopped afterwards — it was
-	 * wedged, and a monitor's next fire starts a fresh session anyway. A real `aborted` final that wins the race settles
-	 * the turn first; this then does nothing.
+	 * Aborts the turn's child and settles the turn as failed with `error` through the normal failure path
+	 * (`recordTurnFailure` → monitor event failed with retry/backoff); a final that settled the turn first wins, this
+	 * then does nothing. `stopFirst` stops the child before the drain; an abort that failed may leave it running, so
+	 * that also stops it, before an answer could arrive after the failure notice. `warnEvent` names a refused abort.
 	 */
-	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+	async #abortTurnWith(turn: ActiveTurn, error: string, stopFirst: boolean, warnEvent: string): Promise<void> {
 		const driver = this.#driver;
 		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		try {
-			await driver.abort();
-		} catch (error) {
-			log.warn("stall_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
-		}
-		if (this.#turn !== turn || this.#driver !== driver) return;
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: `stall_abort silent=${minutes(totalSilentMs)}`,
-			},
-			true,
-		);
-	}
-
-	/**
-	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: …`) through the
-	 * normal failure path. The child is kept — not wedged, its session holds the conversation — unless the abort itself
-	 * failed: then it is stopped before the drain. A final that settled the turn first wins; this then does nothing.
-	 */
-	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
-		const driver = this.#driver;
-		if (!driver || this.#turn !== turn) return;
-		const { originKey, log } = this.#deps;
-		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
-		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
 		let abortFailed = false;
 		try {
 			await driver.abort();
-		} catch (error) {
+		} catch (abortError) {
 			abortFailed = true;
-			log.warn("stuck_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
+			this.#deps.log.warn(warnEvent, { origin: this.#deps.originKey, opRef: turn.opRef, error: String(abortError) });
 		}
 		if (this.#turn !== turn || this.#driver !== driver) return;
-		// An abort that failed may leave the child running: stop it, so no answer arrives after the failure notice.
-		await this.#onFinal(
-			driver,
-			{
-				opRef: turn.opRef,
-				status: "aborted",
-				text: "",
-				error: stuckCancelReason(toolName, count),
-			},
-			abortFailed,
-		);
+		await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error }, stopFirst || abortFailed);
+	}
+
+	/**
+	 * Monitor turn that stayed silent too long: abort the child and settle the turn as failed. The child is stopped
+	 * afterwards — it was wedged, and a monitor's next fire starts a fresh session anyway.
+	 */
+	async #abortStalled(turn: ActiveTurn, totalSilentMs: number): Promise<void> {
+		await this.#abortTurnWith(turn, `stall_abort silent=${minutes(totalSilentMs)}`, true, "stall_abort_failed");
+	}
+
+	/**
+	 * Turn caught in a tool repeat loop: abort the child and settle the turn as failed (`stuck-loop: ...`). The child is
+	 * kept — not wedged, its session holds the conversation — unless the abort itself failed: then it is stopped
+	 * before the drain.
+	 */
+	async #abortStuck(turn: ActiveTurn, toolName: string, count: number): Promise<void> {
+		if (!this.#driver || this.#turn !== turn) return;
+		const { originKey, log } = this.#deps;
+		log.warn("stuck_loop_cancel", { origin: originKey, opRef: turn.opRef, tool: toolName, count });
+		this.#deps.onStuckLoop?.({ originKey, threadRef: turn.threadRef, opRef: turn.opRef, toolName, count });
+		await this.#abortTurnWith(turn, stuckCancelReason(toolName, count), false, "stuck_abort_failed");
 	}
 
 	/**
@@ -520,7 +522,7 @@ export class OriginMailbox {
 			return true;
 		turn.providerLimitSeen = true;
 		const attempt = typeof event.attempt === "number" ? event.attempt : 0;
-		log.warn("provider_limit_hit", { origin: originKey, attempt, error: redact(errorMessage).slice(0, 200) });
+		log.warn("provider_limit_hit", { origin: originKey, attempt, error: redact(headTailReason(errorMessage)) });
 		this.#deps.onProviderLimit?.({ originKey, threadRef: turn.threadRef, attempt, maxAttempts, errorMessage });
 		return true;
 	}
@@ -553,35 +555,34 @@ export class OriginMailbox {
 	}
 
 	#onDriverEvent(event: OmpEvent): void {
-		this.#turn?.live.feed(event);
+		const turn = this.#turn;
+		turn?.live.feed(event);
 		if (this.#onRetryEvent(event)) return;
 		const waiting = event.type === TAIL_WAIT_START_EVENT;
-		const tailTurn = this.#turn;
-		if (tailTurn !== undefined && tailTurn.opRef === event.opRef && (waiting || event.type === TAIL_WAIT_END_EVENT)) {
-			tailTurn.tailWaiting = waiting;
+		if (turn !== undefined && turn.opRef === event.opRef && (waiting || event.type === TAIL_WAIT_END_EVENT)) {
+			turn.tailWaiting = waiting;
 			// A nudge after the wait must not count the silence from before it.
-			if (!waiting) tailTurn.stallClearedAt = this.#deps.clock.now();
+			if (!waiting) turn.stallClearedAt = this.#deps.clock.now();
 		}
 		if (event.type === "auto_compaction_end") this.#cache.markCompacted();
 		if (event.type === "message_end") this.#observeCache(event.message);
-		if (event.type === "message_end" && this.#turn) this.#accrueTurnCost(this.#turn, event.message);
+		if (event.type === "message_end" && turn) this.#accrueTurnCost(turn, event.message);
 		// A `task` result is where sub-agent spend lands: re-read before the turn goes on, so the cap sees it.
-		if (event.type === "tool_execution_end" && event.toolName === "task" && this.#turn) {
-			refreshSubAgentCost(this.#host, this.#turn);
+		if (event.type === "tool_execution_end" && event.toolName === "task" && turn) {
+			refreshSubAgentCost(this.#host, turn);
 		}
-		if (this.#turn && (event.type === "tool_execution_start" || event.type === "tool_execution_end")) {
-			this.#observeTool(this.#turn, event);
+		if (turn && (event.type === "tool_execution_start" || event.type === "tool_execution_end")) {
+			this.#observeTool(turn, event);
 		}
-		if (this.#turn) this.#sendInterimOf(this.#turn, event);
+		if (turn) this.#sendInterimOf(turn, event);
 		if (event.type === "tool_execution_start") {
 			const tool = typeof event.toolName === "string" ? event.toolName : undefined;
 			this.#deps.log.info("tool_start", { origin: this.#deps.originKey, tool });
 			// Held (a paused lane) and no turn of ours: a queued message omp started on its own — work while paused.
-			if (tool !== undefined && this.#turn === undefined && this.#deps.isHeld?.()) {
+			if (tool !== undefined && turn === undefined && this.#deps.isHeld?.()) {
 				this.#deps.onHeldWork?.({ originKey: this.#deps.originKey });
 				return;
 			}
-			const turn = this.#turn;
 			if (tool !== undefined && turn) {
 				turn.progress.tools += 1;
 				turn.progress.recentTools = [
@@ -596,25 +597,24 @@ export class OriginMailbox {
 				this.#reportProgress(turn);
 			}
 		}
-		if (event.type === "tool_execution_end" && typeof event.toolCallId === "string" && this.#turn) {
-			const entry = this.#turn.progress.recentTools.find((tool) => tool.callId === event.toolCallId);
+		if (event.type === "tool_execution_end" && typeof event.toolCallId === "string" && turn) {
+			const entry = turn.progress.recentTools.find((tool) => tool.callId === event.toolCallId);
 			if (entry !== undefined) {
 				entry.state = event.isError === true ? "error" : "ok";
 				entry.endedAt = this.#deps.clock.now();
-				this.#reportProgress(this.#turn);
+				this.#reportProgress(turn);
 			}
 		}
-		if (event.type === "tool_execution_end" && event.toolName === "todo" && event.isError !== true && this.#turn) {
+		if (event.type === "tool_execution_end" && event.toolName === "todo" && event.isError !== true && turn) {
 			const todo = todoProgress(event.result);
 			if (todo !== undefined) {
-				this.#turn.progress.todo = todo;
-				this.#reportProgress(this.#turn);
+				turn.progress.todo = todo;
+				this.#reportProgress(turn);
 			}
 		}
 		const now = this.#deps.clock.now();
 		const silentMs = now - this.#lastEventAt;
 		this.#lastEventAt = now;
-		const turn = this.#turn;
 		if (turn && now - this.#eventPersistedAt >= EVENT_PERSIST_MS) {
 			this.#eventPersistedAt = now;
 			this.#deps.store.touchDispatched(this.#deps.originKey, turn.opRef);
@@ -666,13 +666,14 @@ export class OriginMailbox {
 	}
 
 	/** Seeds an empty cache baseline from the session's last assistant entry (a new mailbox after a daemon restart). */
-	async #seedCache(driver: OmpSessionDriver): Promise<void> {
+	async #seedCache(driver: OmpSessionDriver, sessionFile?: string): Promise<void> {
 		if (this.#cache.baseline !== undefined) return;
 		try {
-			const last = (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
-			const stamp = last?.timestamp;
-			const at = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
-			const call = Number.isNaN(at) ? undefined : cacheCallOf(last?.message, at);
+			// The session file's tail holds the same last assistant entry the full history would give, without the transfer.
+			const tail = sessionFile === undefined ? undefined : readLastAssistantEntry(sessionFile);
+			const last =
+				tail ?? (await driver.entriesSince()).entries.findLast((entry) => entry.message?.role === "assistant");
+			const call = seedCallOf(last);
 			if (call !== undefined) this.#cache.seed(call);
 		} catch (error) {
 			this.#deps.log.warn("cache_seed_failed", { origin: this.#deps.originKey, error: String(error) });
@@ -692,9 +693,8 @@ export class OriginMailbox {
 		if (!flushes.includes(event.type)) return;
 		const pending = turn.pendingAnswer;
 		turn.pendingAnswer = undefined;
-		if (pending !== undefined && this.#recordInterim(turn, pending)) {
+		if (pending !== undefined && this.#recordInterim(turn, pending))
 			turn.lastInterimDeliveredAt = this.#deps.clock.now();
-		}
 		if (event.type !== "message_end") return;
 		const interim = interimOf(event.message);
 		if (interim?.kind === "answer") turn.pendingAnswer = interim.text;
@@ -784,7 +784,7 @@ export class OriginMailbox {
 	/** Events from the driver have nobody to reject to: errors are logged, never dropped silently. */
 	#background(event: string, task: () => Promise<void>): void {
 		this.#serial(task).catch((error: unknown) => {
-			this.#deps.log.error(event, { origin: this.#deps.originKey, error: String(error) });
+			this.#deps.log.error(event, { origin: this.#deps.originKey, ...errorFields(error) });
 		});
 	}
 
@@ -805,11 +805,8 @@ export class OriginMailbox {
 			return;
 		}
 		const command = parseCommand(record.text);
-		if (command?.kind === "restart") {
-			// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
-			await this.#runCommand(row, command);
-			return;
-		}
+		// Before the drain and attach deferrals: a held `!restart` would run again in the next process.
+		if (command?.kind === "restart") return this.#runCommand(row, command);
 		if (this.#deps.isDraining?.()) {
 			log.info("drain_deferred", { origin: originKey, id: record.platformMessageId });
 			return;
@@ -967,11 +964,9 @@ export class OriginMailbox {
 				this.#turn !== turn || this.#driver !== driver ? "settled" : turn.finalArrived ? "final" : undefined;
 			// Before the steer nothing was sent, so a throw or an ended turn leaves the row pending (safe to retry). From
 			// the steer on the child may have read it: such a row is parked as `uncertain` and never prompted again.
-			let late: "settled" | "final" | undefined;
 			let entryCursor: string | null;
 			try {
 				entryCursor = await driver.leafId();
-				late = ended();
 			} catch (error) {
 				log.warn("steer_failed", {
 					origin: originKey,
@@ -981,6 +976,7 @@ export class OriginMailbox {
 				});
 				return false;
 			}
+			const late = ended();
 			if (late !== undefined) {
 				log.info("steer_turn_ended", { origin: originKey, id: row.platformMessageId, opRef: turn.opRef, late });
 				return late === "settled" ? this.#dispatch(row, text) : false;
@@ -1043,8 +1039,8 @@ export class OriginMailbox {
 		}
 		const rawReason = failureSign(failure);
 		const code = failure instanceof OmpDriverError ? failure.code : "dispatch_error";
-		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, error: String(failure) });
-		this.#logTurnFailed(rawReason);
+		log.error("dispatch_failed", { origin: originKey, id: row.platformMessageId, code, ...errorFields(failure) });
+		this.#logTurnFailed(rawReason, undefined, failure);
 		const opRef = `failed:${row.platformMessageId}`;
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		const peer = turnPeerOf(row);
@@ -1189,7 +1185,7 @@ export class OriginMailbox {
 		try {
 			await onLaunchRefused?.(reason);
 		} catch (error) {
-			log.error("launch_refused_failed", { origin: originKey, error: String(error) });
+			log.error("launch_refused_failed", { origin: originKey, ...errorFields(error) });
 		}
 		return true;
 	}
@@ -1276,14 +1272,11 @@ export class OriginMailbox {
 
 	/** `block` with the injection warning in front when the bot-authored lines it shows (`answers`) carry one. */
 	#withInjectionWarning(block: string, answers: readonly string[], where: string): string {
+		const { originKey, log } = this.#deps;
 		const findings = scanForInjection(answers.join("\n"), where);
 		const warning = injectionWarning(findings);
 		if (warning === null) return block;
-		this.#deps.log.info("injection_flagged", {
-			origin: this.#deps.originKey,
-			where,
-			kinds: findings.map((f) => f.kind),
-		});
+		log.info("injection_flagged", { origin: originKey, where, kinds: findings.map((f) => f.kind) });
 		return `${warning}\n${block}`;
 	}
 
@@ -1413,7 +1406,7 @@ export class OriginMailbox {
 			defaultModel: this.#deps.defaultModel,
 			log,
 		});
-		await this.#seedCache(driver);
+		await this.#seedCache(driver, expected);
 		this.#cache.markChildRestart();
 		this.#unsubscribe = [
 			driver.onFinal((final) => {
@@ -1459,18 +1452,16 @@ export class OriginMailbox {
 			origin: originKey,
 			failures: this.#consecFailures,
 			modelHealed,
-			reason: reason.replace(/\s+/g, " ").slice(0, 160),
+			reason: headTailReason(reason.replace(/\s+/g, " ")),
 		});
 		onEscalate?.({ originKey, threadRef, failures: this.#consecFailures, reason, modelHealed });
 	}
 
 	#turnModel(): string | undefined {
-		const origin = this.#deps.store.getOrigin(this.#deps.originKey);
-		const configured =
-			origin === undefined
-				? undefined
-				: (effectiveOriginSettings(this.#deps.store, this.#deps.originKey, origin).model ?? undefined);
-		return this.#activeModel ?? configured ?? this.#deps.defaultModel;
+		const { store, originKey, defaultModel } = this.#deps;
+		const origin = store.getOrigin(originKey);
+		const configured = origin === undefined ? undefined : effectiveOriginSettings(store, originKey, origin).model;
+		return this.#activeModel ?? configured ?? defaultModel;
 	}
 
 	#noteQuotaErrorIfLimit(threadRef: string, rawReason: string, model = this.#turnModel()): void {
@@ -1493,9 +1484,7 @@ export class OriginMailbox {
 		const model = this.#turnModel();
 		for (const row of uncertain) {
 			const proof = tryCloseToolFreeFromFile(store, log, row, sessionFile, "post_turn");
-			if (proof?.failureKind === "provider_limit") {
-				this.#noteQuotaErrorIfLimit(row.threadRef, proof.reason, model);
-			}
+			if (proof?.failureKind === "provider_limit") this.#noteQuotaErrorIfLimit(row.threadRef, proof.reason, model);
 		}
 	}
 
@@ -1585,9 +1574,8 @@ export class OriginMailbox {
 		finalText: string,
 	): Promise<{ body: string; whole: string }> {
 		const { store, originKey, log } = this.#deps;
-		if (originKey.startsWith(MONITOR_ORIGIN_PREFIX)) {
+		if (originKey.startsWith(MONITOR_ORIGIN_PREFIX))
 			return { body: finalText === "" ? NO_ANSWER : finalText, whole: finalText };
-		}
 		let parts: string[] = [];
 		try {
 			parts = turnAnswerParts((await driver.entriesSince(turn.entryCursor ?? undefined)).entries);
@@ -1606,7 +1594,7 @@ export class OriginMailbox {
 			origin: originKey,
 			code: info.code,
 			expected: info.expected,
-			...(info.stderr === "" ? {} : { stderr: redact(info.stderr.slice(-300)) }),
+			...(info.stderr === "" ? {} : { stderr: redact(headTailReason(info.stderr)) }),
 		});
 		const turn = this.#turn;
 		this.#turn = undefined;
@@ -1618,8 +1606,8 @@ export class OriginMailbox {
 			const codeReason = `omp_exited code=${info.code ?? "null"}`;
 			const stderrTail = info.stderr.trim();
 			const classifyReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail}`;
-			const logReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail.slice(-300)}`;
-			this.#logTurnFailed(logReason, classifyReason);
+			// Full text: #logTurnFailed keeps the head + tail — a pre-cut copy would miscount the dropped chars.
+			this.#logTurnFailed(classifyReason);
 			store.recordTurnFailure({
 				originKey,
 				opRef: turn.opRef,
@@ -1633,12 +1621,13 @@ export class OriginMailbox {
 		await this.#drain();
 	}
 
-	#logTurnFailed(rawReason: string, classifyReason = rawReason): void {
+	#logTurnFailed(rawReason: string, classifyReason = rawReason, error?: unknown): void {
 		const { kind } = classifyFailure(classifyReason);
 		this.#deps.log.error("turn_failed", {
 			origin: this.#deps.originKey,
 			kind,
-			reason: redact(rawReason).slice(0, 300),
+			reason: redact(headTailReason(rawReason)),
+			...(error === undefined ? {} : errorFields(error)),
 		});
 	}
 
@@ -1684,7 +1673,7 @@ export class OriginMailbox {
 			text = await commandReply(this.#host, command, opRef, threadRef);
 		} catch (error) {
 			const reason = error instanceof OmpDriverError ? error.message : String(error);
-			log.error("command_failed", { origin: originKey, command: command.kind, error: reason });
+			log.error("command_failed", { origin: originKey, command: command.kind, ...errorFields(error) });
 			const notice = NO_MODEL_SIGN.test(reason) ? NO_MODEL_NOTICE : failedNotice(`${command.kind}: ${reason}`);
 			store.recordTurnFailure({ originKey, opRef, threadRef, notice });
 			return;
@@ -1784,10 +1773,9 @@ export class OriginMailbox {
 			}
 		}
 		answer(OWNER_STOPPED_TEXT);
-		if (settles) {
-			const final: OmpFinal = { opRef: turn.opRef, status: "aborted", text: "", error: OWNER_STOP_ERROR };
-			await this.#onFinal(driver, final, stopChild);
-		}
+		if (!settles) return;
+		const final: OmpFinal = { opRef: turn.opRef, status: "aborted", text: "", error: OWNER_STOP_ERROR };
+		await this.#onFinal(driver, final, stopChild);
 	}
 
 	/** Aborts running turn, charges spent cost, stops child, bumps epoch (discarding pending rows), and resets cache. */

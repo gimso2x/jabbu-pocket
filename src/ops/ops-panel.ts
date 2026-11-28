@@ -341,7 +341,7 @@ export function formatFullLimitsText(input: FullLimitsTextInput): string {
 			}
 		}
 	} else if (input.ompUsage !== undefined) {
-		lines.push(formatLimits(input.ompUsage), "");
+		lines.push(formatLimits(input.ompUsage, input.timezone), "");
 	} else if (input.ompError !== undefined) {
 		lines.push(`• OMP 한도 조회 실패: ${input.ompError}`, "");
 	} else {

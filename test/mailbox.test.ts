@@ -2039,6 +2039,51 @@ describe("mailbox: steered messages from another thread get a pointer notice", (
 		await untilFinal(mailbox, driver, () => driver.release());
 		expect(notices()).toEqual([]);
 	});
+
+	test("steered messages of a Discord channel-body origin (inlineReplyChannels) get no pointer notice", async () => {
+		const CH_ID = "300000000000000001";
+		const CH_ORIGIN = `discord/ch/${CH_ID}`;
+		const CH_LEAD = `${CH_ID}:700000000000000001`;
+		const CH_OTHER = `${CH_ID}:700000000000000002`;
+		driverOptions = { holdTurns: true, respond: () => "통합 답변" };
+		const mailbox = router.mailbox(CH_ORIGIN);
+		const lead = msg("lead", { originKey: CH_ORIGIN, threadRef: CH_LEAD });
+		const other = msg("also this", { originKey: CH_ORIGIN, threadRef: CH_OTHER });
+		await router.route(lead);
+		await router.route(other);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(driver.calls).toContain("steer:also this");
+		const opRef = store.getInbound(lead.platformMessageId)?.opRef ?? "missing";
+		await untilFinal(mailbox, driver, () => driver.release());
+		expect(store.listDeliveries({ originKey: CH_ORIGIN }).map((d) => [d.threadRef, d.body])).toEqual([
+			[CH_LEAD, "통합 답변"],
+		]);
+		expect(store.getInbound(lead.platformMessageId)?.state).toBe("answered");
+		expect(store.getInbound(other.platformMessageId)?.state).toBe("answered");
+		expect(store.threadsOfOp(CH_ORIGIN, opRef)).toEqual([CH_LEAD, CH_OTHER]);
+	});
+
+	test("a failed turn on a Discord channel-body origin (inlineReplyChannels) also posts no pointer notice", async () => {
+		const CH_ID = "300000000000000001";
+		const CH_ORIGIN = `discord/ch/${CH_ID}`;
+		const CH_LEAD = `${CH_ID}:700000000000000001`;
+		const CH_OTHER = `${CH_ID}:700000000000000002`;
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(CH_ORIGIN);
+		const lead = msg("lead", { originKey: CH_ORIGIN, threadRef: CH_LEAD });
+		const other = msg("also this", { originKey: CH_ORIGIN, threadRef: CH_OTHER });
+		await router.route(lead);
+		await router.route(other);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(driver.calls).toContain("steer:also this");
+		await untilFinal(mailbox, driver, () => driver.abort());
+		const deliveries = store.listDeliveries({ originKey: CH_ORIGIN });
+		expect(deliveries).toHaveLength(1);
+		expect(deliveries[0]?.threadRef).toBe(CH_LEAD);
+		expect(deliveries[0]?.body.startsWith("[turn failed]")).toBe(true);
+		expect(store.getInbound(lead.platformMessageId)?.state).toBe("failed_notified");
+		expect(store.getInbound(other.platformMessageId)?.state).toBe("failed_notified");
+	});
 });
 
 describe("mailbox: idle stop per origin kind", () => {
@@ -3999,7 +4044,7 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		}
 	});
 
-	test("dispatch failure keeps code prefix, classifies from raw error, and logs redacted turn_failed up to 300 chars", async () => {
+	test("dispatch failure keeps code prefix, classifies from raw error, and logs redacted turn_failed with the full tail", async () => {
 		const raw = `401 invalid api key token=xoxb-TEST-secret ${"x".repeat(350)}`;
 		driverOptions = { startError: new OmpDriverError("rpc_error", raw) };
 		await router.route(msg("hi"));
@@ -4015,7 +4060,25 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		expect(logLine).not.toContain("xoxb-TEST-secret");
 		expect(logLine).toContain("[REDACTED]");
 		const reasonMatch = /reason="([^"]*)"/.exec(logLine ?? "");
-		expect(reasonMatch?.[1]?.length).toBe(300);
+		expect(reasonMatch?.[1]).toContain("x".repeat(350));
+		expect(reasonMatch?.[1]).not.toContain("[truncated");
+	});
+
+	test("dispatch failure with a long reason logs its head and tail with a truncation marker", async () => {
+		const head = `HEAD ${"a".repeat(1200)}`;
+		const tail = `${"b".repeat(1200)} TAIL`;
+		const raw = `${head}${"m".repeat(1500)}${tail}`;
+		driverOptions = { startError: new OmpDriverError("rpc_error", raw) };
+		await router.route(msg("hi"));
+
+		const logLine = logLines.find((line) => line.includes("event=turn_failed"));
+		expect(logLine).toBeDefined();
+		expect(logLine).toContain("kind=unknown");
+		const reasonMatch = /reason="([^"]*)"/.exec(logLine ?? "");
+		const reason = reasonMatch?.[1] ?? "";
+		expect(reason.startsWith(`HEAD ${"a".repeat(995)}`)).toBe(true);
+		expect(reason.endsWith(`${"b".repeat(995)} TAIL`)).toBe(true);
+		expect(reason).toContain(`[truncated ${raw.length - 2000} chars]`);
 	});
 
 	test("omp exit keeps omp_exited code prefix, classifies from stderr tail, and logs turn_failed", async () => {
@@ -4033,6 +4096,27 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		expect(logLine).toBeDefined();
 		expect(logLine).toContain("kind=provider_limit");
 		expect(logLine).toContain("omp_exited code=1");
+	});
+
+	test("omp exit with long stderr logs its head and tail with a truncation marker", async () => {
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(ORIGIN);
+		await router.route(msg("crash test"));
+		const driver = drivers.at(-1) as SteerFailingDriver;
+		const stderr = `ERR-HEAD ${"c".repeat(1200)}${"d".repeat(1500)}${"e".repeat(1200)} ERR-TAIL`;
+		driver.crashWith(1, stderr);
+		await mailbox.sweepIdle();
+
+		const exitLine = logLines.find((line) => line.includes("event=omp_exit"));
+		expect(exitLine).toBeDefined();
+		expect(exitLine).toContain("ERR-HEAD");
+		expect(exitLine).toContain("ERR-TAIL");
+		expect(exitLine).toContain(`[truncated ${stderr.length - 2000} chars]`);
+		const failedLine = logLines.find((line) => line.includes("event=turn_failed"));
+		expect(failedLine).toBeDefined();
+		expect(failedLine).toContain("omp_exited code=1");
+		expect(failedLine).toContain("ERR-TAIL");
+		expect(failedLine).toContain(`[truncated ${`omp_exited code=1: ${stderr}`.length - 2000} chars]`);
 	});
 
 	test("peer failure mention stays unchanged even for provider_limit/auth/context_overflow", async () => {
