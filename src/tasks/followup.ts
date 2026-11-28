@@ -9,7 +9,7 @@ type TaskFollowupSource = "tool" | "web";
 
 /** What {@link followupTask} needs: the ledger, the row's runtime, the handoff gate and the prompt record. */
 interface TaskFollowupDeps {
-	ledger: Pick<TaskLedger, "get" | "isPaused" | "unpauseTask">;
+	ledger: Pick<TaskLedger, "get" | "isPaused" | "unpauseTask" | "pauseTask">;
 	runtime: (row: TaskRow) => TaskRuntime;
 	/** The handoff risk scan of the text (`jabbu_dispatch`'s `gateWork`); throws to refuse, `suffix` ends the answer. */
 	gate: (text: string) => Promise<{ suffix: string }>;
@@ -41,7 +41,7 @@ export async function followupTask(
 	const existing = await runtime.exists(row);
 	if (!existing.ok) return { ok: false, text: `전달 실패: ${existing.error}` };
 	if (!existing.exists) throw new Error(`${name} 워커가 없습니다. taskSpec:{id:"${row.taskId}"}로 재개하세요`);
-	releaseHold(deps.ledger, row);
+	const fail = releaseHold(deps.ledger, row);
 	const follow = await runtime.prompt(row, input.text);
 	const check = `진행 확인: jabbu_dispatch {mode:"worker", name:"${name}"}`;
 	const web = input.source === "web";
@@ -62,7 +62,7 @@ export async function followupTask(
 			text: `전달은 했지만 작업 시작이 확인되지 않았습니다(${follow.error?.replace("agent prompt unconfirmed: ", "")}). ${check}${gate.suffix}`,
 		};
 	}
-	if (!follow.ok) return { ok: false, text: `전달 실패: ${follow.error ?? "unknown"}` };
+	if (!follow.ok) return { ok: false, text: fail(`전달 실패: ${follow.error ?? "unknown"}`) };
 	deps.log.info("dispatch_prompted", { agent: name, ...source });
 	return { ok: true, text: `후속 지시를 ${name}에 전달했습니다. ${check}${gate.suffix}` };
 }

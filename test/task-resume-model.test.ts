@@ -39,6 +39,8 @@ function setup(approve?: ApprovalResult) {
 	const herdr: string[][] = [];
 	const agents = new Set<string>();
 	const failStart = { value: false };
+	/** A `--wait` follow-up prompt fails (herdr down): a live-agent resume/follow-up fails on it. */
+	const failPrompt = { value: false };
 	const screen = Array.from({ length: 120 }, (_, i) => `screen-line-${i + 1}`).join("\n");
 	const host = {
 		async pathExists(path: string): Promise<HostResult<boolean>> {
@@ -96,6 +98,9 @@ function setup(approve?: ApprovalResult) {
 			if (failStart.value) return { code: 1, stdout: "boom", timedOut: false };
 			agents.add(cmd[3] as string);
 		}
+		if (cmd[1] === "agent" && cmd[2] === "prompt" && cmd.includes("--wait") && failPrompt.value) {
+			return { code: 1, stdout: "", stderr: "agent prompt failed: boom", timedOut: false };
+		}
 		return ok();
 	};
 	const tool = buildDispatchTool({
@@ -121,7 +126,7 @@ function setup(approve?: ApprovalResult) {
 		},
 	});
 	const call = (params: Record<string, unknown>) => tool.execute(params, { signal: new AbortController().signal });
-	return { ledger, files, existing, herdr, agents, failStart, call, screen };
+	return { ledger, files, existing, herdr, agents, failStart, failPrompt, call, screen };
 }
 
 const startsOf = (herdr: string[][]) => herdr.filter((c) => c[1] === "agent" && c[2] === "start");
@@ -179,6 +184,44 @@ describe("TASK resume on another worker tier", () => {
 		const out = await h.call({ taskSpec: { id: TASK_ID, tier: "high" } });
 		expect(out).toContain("재개 실패");
 		expect(h.ledger.require(TASK_ID)).toMatchObject({ tier: "middle", workerModel: SONNET });
+	});
+
+	test("a failed resume keeps the owner hold: the task stays paused, not silently unpaused", async () => {
+		const switched = setup();
+		await switched.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		switched.ledger.pauseTask(TASK_ID);
+		switched.failStart.value = true;
+		const failed = await switched.call({ taskSpec: { id: TASK_ID, tier: "high" } });
+		expect(failed).toContain("재개 실패");
+		expect(switched.ledger.isPaused(switched.ledger.require(TASK_ID))).toBe(true);
+
+		const prompted = setup();
+		await prompted.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		prompted.ledger.pauseTask(TASK_ID);
+		prompted.failPrompt.value = true;
+		const failedPrompt = await prompted.call({ taskSpec: { id: TASK_ID }, task: "이어서" });
+		expect(failedPrompt).toContain("재개 실패");
+		expect(prompted.ledger.isPaused(prompted.ledger.require(TASK_ID))).toBe(true);
+
+		prompted.failPrompt.value = false;
+		const ok = await prompted.call({ taskSpec: { id: TASK_ID }, task: "이어서" });
+		expect(ok).toContain("살아 있는 에이전트에 재개 프롬프트를 보냈습니다");
+		expect(prompted.ledger.isPaused(prompted.ledger.require(TASK_ID))).toBe(false);
+	});
+
+	test("a failed follow-up keeps the owner hold", async () => {
+		const h = setup();
+		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		h.ledger.pauseTask(TASK_ID);
+		h.failPrompt.value = true;
+		const out = await h.call({ mode: "worker", name: "t-20261121-01", task: "다음 단계" });
+		expect(out).toContain("전달 실패");
+		expect(h.ledger.isPaused(h.ledger.require(TASK_ID))).toBe(true);
+
+		h.failPrompt.value = false;
+		const ok = await h.call({ mode: "worker", name: "t-20261121-01", task: "다음 단계" });
+		expect(ok).toContain("후속 지시를 t-20261121-01에 전달했습니다");
+		expect(h.ledger.isPaused(h.ledger.require(TASK_ID))).toBe(false);
 	});
 
 	test("tierConfidence and unknown keys on a resume are refused before anything runs", async () => {
