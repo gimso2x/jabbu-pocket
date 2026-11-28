@@ -2288,6 +2288,25 @@ describe("TaskSweeper: file overlap between active tasks of one repository", () 
 		expect(r.reminders).toHaveLength(2);
 	});
 
+	test("AC-4: a failed overlap post is retried on the next sweep, not lost with the notice", async () => {
+		const r = overlapRig();
+		r.paths.set(r.a.taskId, ["src/daemon/daemon.ts"]);
+		r.paths.set(r.b.taskId, ["src/daemon/daemon.ts"]);
+		r.transport.failNext.createMessage = [new Error("discord down"), new Error("discord down")];
+		// The fake records the call it then fails, so attempts (not posts) are counted.
+		const attempts = () => threadPosts(r).filter((p) => p.text.startsWith("⚠️ 파일 겹침")).length;
+		await r.sweeper.sweep();
+		expect(attempts()).toBe(2);
+		const noticed = (row: TaskRow) =>
+			Object.keys(r.ledger.require(row.taskId).notices).some((key) => key.startsWith("overlap:"));
+		expect(noticed(r.a)).toBe(false);
+		expect(noticed(r.b)).toBe(false);
+		await r.sweeper.sweep();
+		expect(attempts()).toBe(4);
+		expect(noticed(r.a)).toBe(true);
+		expect(noticed(r.b)).toBe(true);
+	});
+
 	test("AC-4: more than five shared paths are cut to five plus a count", async () => {
 		const r = overlapRig();
 		const shared = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts", "g.ts"];
