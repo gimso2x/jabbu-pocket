@@ -75,6 +75,32 @@ describe("wikiNotes config", () => {
 		}
 	});
 
+	test("a wedged git fails the load within the rev-parse bound instead of hanging boot", () => {
+		const repo = makeRepo(repoDirs);
+		const fakeBin = mkdtempSync(join(tmpdir(), "jabbu-fake-git-"));
+		writeFileSync(join(fakeBin, "git"), "#!/bin/sh\nsleep 60\n");
+		chmodSync(join(fakeBin, "git"), 0o755);
+		write({ wikiNotes: { client: "/c", repos: [repo] } });
+		const origPath = process.env.PATH ?? "";
+		const started = Date.now();
+		try {
+			process.env.PATH = `${fakeBin}:${origPath}`;
+			let error: unknown;
+			try {
+				loadConfig(home);
+			} catch (e) {
+				error = e;
+			}
+			expect(error).toBeInstanceOf(ConfigError);
+			expect((error as ConfigError).message).toContain("field=wikiNotes.repos");
+			// The 10 s spawn bound, not the fake git's 60 s sleep, ends the call.
+			expect(Date.now() - started).toBeLessThan(20_000);
+		} finally {
+			process.env.PATH = origPath;
+			rmSync(fakeBin, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	test("AC-4: a reload turns the notes on and off (wikiNotes is a live field)", () => {
 		expect(LIVE_FIELDS).toContain("wikiNotes");
 		write({});
