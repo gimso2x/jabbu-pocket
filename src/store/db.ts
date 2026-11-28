@@ -973,9 +973,13 @@ export class Store {
 	/**
 	 * Other threads of a chat turn's still-dispatched rows: messages steered into a turn another thread started. Read
 	 * before the rows close, so a replayed answer (rows already answered) finds none and notifies nothing twice.
+	 * Discord channel-body origins (`discord/ch/<C>`, e.g. `inlineReplyChannels`) answer in the same channel body, so
+	 * differing `thread_ref`s are inline replies in one channel rather than separate threads and get no pointer.
 	 */
 	private steeredThreads(input: { originKey: string; opRef: string; threadRef: string }): string[] {
 		if (chatPlatformOf(input.originKey) === undefined) return [];
+		const origin = parseChatOrigin(input.originKey);
+		if (origin?.platform === "discord" && origin.kind === "ch" && origin.threadId === undefined) return [];
 		const rows = this.db
 			.query(
 				"SELECT DISTINCT thread_ref FROM inbound WHERE origin_key = ? AND op_ref = ? AND state = 'dispatched' AND thread_ref != ? ORDER BY thread_ref",
@@ -2134,17 +2138,13 @@ export class Store {
 			}
 		}
 		const columns = this.db.query("PRAGMA table_info(inbound)").all() as Array<{ name: string }>;
-		if (!columns.some((column) => column.name === "thread_ref")) {
-			this.db.run("ALTER TABLE inbound ADD COLUMN thread_ref TEXT");
-		}
-		if (!columns.some((column) => column.name === "last_event_at")) {
-			this.db.run("ALTER TABLE inbound ADD COLUMN last_event_at INTEGER");
-		}
-		if (!columns.some((column) => column.name === "peer_user_id")) {
-			this.db.run("ALTER TABLE inbound ADD COLUMN peer_user_id TEXT");
-		}
-		if (!columns.some((column) => column.name === "injected")) {
-			this.db.run("ALTER TABLE inbound ADD COLUMN injected INTEGER NOT NULL DEFAULT 0");
+		for (const [column, ddl] of [
+			["thread_ref", "TEXT"],
+			["last_event_at", "INTEGER"],
+			["peer_user_id", "TEXT"],
+			["injected", "INTEGER NOT NULL DEFAULT 0"],
+		]) {
+			if (!columns.some((c) => c.name === column)) this.db.run(`ALTER TABLE inbound ADD COLUMN ${column} ${ddl}`);
 		}
 		const deliveryColumns = this.db.query("PRAGMA table_info(deliveries)").all() as Array<{ name: string }>;
 		if (!deliveryColumns.some((column) => column.name === "sent_parts")) {

@@ -2039,6 +2039,51 @@ describe("mailbox: steered messages from another thread get a pointer notice", (
 		await untilFinal(mailbox, driver, () => driver.release());
 		expect(notices()).toEqual([]);
 	});
+
+	test("steered messages of a Discord channel-body origin (inlineReplyChannels) get no pointer notice", async () => {
+		const CH_ID = "300000000000000001";
+		const CH_ORIGIN = `discord/ch/${CH_ID}`;
+		const CH_LEAD = `${CH_ID}:700000000000000001`;
+		const CH_OTHER = `${CH_ID}:700000000000000002`;
+		driverOptions = { holdTurns: true, respond: () => "통합 답변" };
+		const mailbox = router.mailbox(CH_ORIGIN);
+		const lead = msg("lead", { originKey: CH_ORIGIN, threadRef: CH_LEAD });
+		const other = msg("also this", { originKey: CH_ORIGIN, threadRef: CH_OTHER });
+		await router.route(lead);
+		await router.route(other);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(driver.calls).toContain("steer:also this");
+		const opRef = store.getInbound(lead.platformMessageId)?.opRef ?? "missing";
+		await untilFinal(mailbox, driver, () => driver.release());
+		expect(store.listDeliveries({ originKey: CH_ORIGIN }).map((d) => [d.threadRef, d.body])).toEqual([
+			[CH_LEAD, "통합 답변"],
+		]);
+		expect(store.getInbound(lead.platformMessageId)?.state).toBe("answered");
+		expect(store.getInbound(other.platformMessageId)?.state).toBe("answered");
+		expect(store.threadsOfOp(CH_ORIGIN, opRef)).toEqual([CH_LEAD, CH_OTHER]);
+	});
+
+	test("a failed turn on a Discord channel-body origin (inlineReplyChannels) also posts no pointer notice", async () => {
+		const CH_ID = "300000000000000001";
+		const CH_ORIGIN = `discord/ch/${CH_ID}`;
+		const CH_LEAD = `${CH_ID}:700000000000000001`;
+		const CH_OTHER = `${CH_ID}:700000000000000002`;
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(CH_ORIGIN);
+		const lead = msg("lead", { originKey: CH_ORIGIN, threadRef: CH_LEAD });
+		const other = msg("also this", { originKey: CH_ORIGIN, threadRef: CH_OTHER });
+		await router.route(lead);
+		await router.route(other);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(driver.calls).toContain("steer:also this");
+		await untilFinal(mailbox, driver, () => driver.abort());
+		const deliveries = store.listDeliveries({ originKey: CH_ORIGIN });
+		expect(deliveries).toHaveLength(1);
+		expect(deliveries[0]?.threadRef).toBe(CH_LEAD);
+		expect(deliveries[0]?.body.startsWith("[turn failed]")).toBe(true);
+		expect(store.getInbound(lead.platformMessageId)?.state).toBe("failed_notified");
+		expect(store.getInbound(other.platformMessageId)?.state).toBe("failed_notified");
+	});
 });
 
 describe("mailbox: idle stop per origin kind", () => {
