@@ -3,6 +3,7 @@
 // second request while a capture runs answered at once, the origin's normal messages still starting turns during a
 // capture (the render never holds the serial chain), and `!brief` answering while a turn runs.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
 import type { UploadFileArgs } from "../src/discord/transport";
@@ -201,6 +202,8 @@ describe("AC-4: !brief", () => {
 		expect(upload?.channelId).toBe(OWNER_DM);
 		expect(upload?.filePath).toContain(join("media", "briefing"));
 		expect(upload?.content).toContain("주의");
+		// The render file is only needed until the upload completes: a successful upload deletes it.
+		expect(existsSync(upload?.filePath ?? "")).toBe(false);
 		// Only the injected marker was posted as text: the image is the answer, no extra line.
 		expect(transport.posts().filter((post) => !(post.content ?? "").startsWith("🧪 inject"))).toHaveLength(0);
 		const row = d.store.listInbound({ originKey: ORIGIN })[0];
