@@ -44,9 +44,8 @@ function hasDefault(field: FormField): boolean {
 }
 
 /**
- * Buttons of the card, drawn once so a click's index means the same button for the card's whole life: yes/no for a lone
- * checkbox, one per option for a single choice of at most `MAX_CHOICE_BUTTONS` options while the card stays within
- * `MAX_CARD_BUTTONS`. Everything else is answered by reply.
+ * Buttons of the card, drawn once so a click's index means the same button for its whole life; everything else is
+ * answered by reply.
  */
 function formButtons(model: FormModel): FormButton[] {
 	const many = model.fields.length > 1;
@@ -71,9 +70,8 @@ function formButtons(model: FormModel): FormButton[] {
 
 /** What an answer reads as on the card. */
 function answerLabel(field: FormField, answer: FormAnswer): string {
-	if ("text" in answer) {
+	if ("text" in answer)
 		return answer.text.trim() === "" ? "(빈 답)" : cutCodePointSafe(answer.text.replace(/\s+/g, " "), 60);
-	}
 	if (field.kind !== "choice") return "(빈 답)";
 	if (isToggle(field)) return answer.checked.length > 0 ? "예" : "아니오";
 	const labels = answer.checked.map((option) => labelOf(field, option));
@@ -96,9 +94,8 @@ function fieldBlock(field: FormField, index: number, buttoned: boolean, warning:
 		lines.push(`${buttoned ? "버튼을 누르거나 " : ""}예/아니오로 답해 주세요${recommend}${skip}`);
 	} else {
 		const live = liveOptions(field);
-		for (const [n, option] of live.entries()) {
+		for (const [n, option] of live.entries())
 			lines.push(`${n + 1}. ${labelOf(field, option)}${field.options[option]?.checked ? " (추천)" : ""}`);
-		}
 		const how = isArrayChoice(field)
 			? "번호를 쉼표로 답장해 주세요(예: 1,3), 없음은 0"
 			: `${buttoned ? "버튼을 누르거나 " : ""}번호로 답장해 주세요`;
@@ -179,11 +176,9 @@ function firstProblem(model: FormModel, answers: ReadonlyArray<FormAnswer | unde
 }
 
 /**
- * Asks an omp 19.1 `ask` form on one choice card and answers `{ data }` (the shape omp's `parseFormDialogResponse`
- * takes). A click answers its field; a reply answers the first open one. An answer breaking the field's submit rules
- * is not taken: the card shows a `⚠️` line and asks that field again. At the deadline an untouched card answers
- * `cancelled+timedOut` (omp submits the form's defaults itself); a partly answered one fills the rest with the form's
- * defaults, unless a required field would stay empty.
+ * Asks an omp 19.1 `ask` form on one choice card and answers `{ data }` (omp's `parseFormDialogResponse` shape). A
+ * click answers its field; a reply the first open one; a rule-breaking answer is re-asked with a `⚠️` line; at the
+ * deadline the rest is filled with defaults unless a required field would stay empty.
  */
 export async function answerForm(
 	broker: ApprovalBroker,
