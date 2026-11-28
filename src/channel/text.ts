@@ -184,6 +184,7 @@ export function formatFooter(outcome: "done" | "failed", elapsedMs: number, tool
 
 /** A thrown value as one log field: its message, or the value itself when it is not an Error. */
 export const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+export { errorFields } from "./error-fields";
 
 /** Collapses control characters, line separators and bidi overrides so untrusted text cannot start a new prompt line. */
 export const oneLine = (text: string, max: number): string =>
@@ -260,9 +261,8 @@ export function splitRowCells(line: string): string[] {
 	let trimmed = line.trim();
 	if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
 	if (trimmed.endsWith("|") && !trimmed.endsWith("\\|")) trimmed = trimmed.slice(0, -1);
-	const cells = scanRowCells(trimmed, true);
 	// An unclosed backtick run opens no span (GFM: the pipe still separates): split the row plainly.
-	return cells ?? scanRowCells(trimmed, false) ?? [];
+	return scanRowCells(trimmed, true) ?? scanRowCells(trimmed, false) ?? [];
 }
 
 /** Cells of a row with pipes outside backtick runs splitting it; undefined when a run is still open at the end. */

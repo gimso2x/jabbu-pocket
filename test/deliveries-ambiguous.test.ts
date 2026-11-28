@@ -153,7 +153,7 @@ describe("transitions: the owner's manual way out of a held row", () => {
 		// Only an owner event moves it: a repeated failure report is not one either (the send is inflight only once).
 		expect(store.markAmbiguous(id, "again").state).toBe("failed_ambiguous");
 		expect(row(id)?.state).toBe("failed_ambiguous");
-		// A reopen (boot recovery) only re-queues rows younger than the freshness window.
+		// A reopen never moves a held row: only the owner's ack/resend does, at any age.
 		store.close();
 		store = openStore({ timezone: "Asia/Seoul", path: dbPath, clock, redact });
 		expect(row(id)?.state).toBe("failed_ambiguous");
@@ -405,9 +405,7 @@ describe("held rows in the ledger another process reads", () => {
 describe("the daemon holds and notices (real pump, real adapter)", () => {
 	const BOOT_ID = "kernel-boot-id";
 
-	async function startDaemon(transport: WaitingDiscordTransport): Promise<Daemon> {
-		const home: TestHome = makeHome("jabbu-deliveries-daemon-");
-		homes.push(home);
+	async function startDaemonOn(home: TestHome, transport: WaitingDiscordTransport): Promise<Daemon> {
 		const sessions = new FakeSessionStore();
 		const daemon = new Daemon({
 			...daemonTestOptions(),
@@ -421,6 +419,12 @@ describe("the daemon holds and notices (real pump, real adapter)", () => {
 		daemons.push(daemon);
 		await daemon.start();
 		return daemon;
+	}
+
+	async function startDaemon(transport: WaitingDiscordTransport): Promise<Daemon> {
+		const home: TestHome = makeHome("jabbu-deliveries-daemon-");
+		homes.push(home);
+		return startDaemonOn(home, transport);
 	}
 
 	test("an ambiguous send is held with its sent parts and gets exactly one owner notice, then no more", async () => {
@@ -458,5 +462,39 @@ describe("the daemon holds and notices (real pump, real adapter)", () => {
 		expect(transport.posts((text) => text === "답")).toHaveLength(1);
 		await daemon.pump();
 		expect(transport.posts((text) => text === "답")).toHaveLength(1);
+	});
+
+	test("a restart never requeues a held row: boot leaves it failed_ambiguous for the owner (round 14 F2)", async () => {
+		const home: TestHome = makeHome("jabbu-deliveries-daemon-");
+		homes.push(home);
+		const first = await startDaemonOn(home, new WaitingDiscordTransport());
+		const origin = `discord/dm/${OWNER_DM}`;
+		first.store.ensureOrigin(origin, "sess/held-restart");
+		const answer = only(
+			first.store.recordAnswer({
+				originKey: origin,
+				opRef: "op-held-restart",
+				threadRef: `${OWNER_DM}:700000000000000001`,
+				parts: ["붙잡힌 답"],
+			}),
+		);
+		first.store.claimDue();
+		first.store.markAmbiguous(answer.deliveryId, "socket hang up");
+		first.store.noticeAmbiguous(answer.deliveryId, OWNER);
+		expect(first.store.getDelivery(answer.deliveryId)).toMatchObject({ state: "failed_ambiguous" });
+		await first.stop();
+
+		// A restart (a VM replacement) must not silently requeue the held row: the owner deliberately left it held
+		// (it may already be on Discord) and only `ack`/`resend` moves it.
+		const secondTransport = new WaitingDiscordTransport();
+		const second = await startDaemonOn(home, secondTransport);
+		expect(second.store.getDelivery(answer.deliveryId)).toMatchObject({
+			state: "failed_ambiguous",
+			redelivered: false,
+		});
+		await second.pump();
+		expect(second.store.getDelivery(answer.deliveryId)?.state).toBe("failed_ambiguous");
+		expect(secondTransport.posts((text) => text === "붙잡힌 답")).toHaveLength(0);
+		await second.stop();
 	});
 });

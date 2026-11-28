@@ -255,4 +255,9 @@ export const UX_STYLE = `
 .active-ctx.is-warn .meter i { background: var(--c-warning-tint-text); }
 .active-ctx.is-danger .meter i { background: var(--c-danger); }
 .ctx-ratio { flex: none; font-size: var(--fs-caption); font-weight: 600; color: var(--c-text-2); white-space: nowrap; }
+.ch-strip { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--sp-2); }
+.card-channel.is-live-ch { border-left: 3px solid var(--c-brand-text); }
+.card-channel.is-attn-ch { border-left: 3px solid var(--c-warning-tint-text); }
+.ch-recent { font-size: var(--fs-caption); color: var(--c-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 `;

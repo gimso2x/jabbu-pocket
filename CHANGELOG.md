@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- `[TASK]`(#204): TASK 카드에 취소 버튼과 2단계 확인 흐름을 추가합니다.
+- 보안·운영(#203): 위임 위험 검사(`handoff-risk`)가 `$'...'` ANSI-C 쿼팅·인용 분할(`r""m`·`s'ec'rets`)·이스케이프(`\/etc`·`\--hard`) 셸 표기 우회를 환원해 차단합니다. `quotaGate.mode`(`"hold"`·`"warn"`) 경보 전용 모드를 더하고, 설치된 스킬의 SHA-256 락파일 생성·검증과 위험 패턴 스캔 CLI(`jabbu-pocket skills lock|verify`)를 추가합니다.
+- Discord(#202): 코드블록 밖 마크다운 표를 모바일 가독성에 맞춰 행별 stacked Markdown으로 변환하고, `!model`·`!thinking`·`!fast`·`!usage-reset`에 드롭다운(SelectMenu) 피커를 추가합니다.
+- 코어·쿼터 복구(#201): 세션 저널로 도구 호출 전 실패가 증명된 턴은 재전송 없이 안전 종료하고, 공급자 한도 오류로 보류된 대화방 대기열은 `omp usage --json`으로 실제 여유 회복이 확인되면 자동 해제합니다.
+- 현황판(#189·#193·#200): 피어 설치본(`dashboard.peerHomes`)·`agy acp` 상세 대화/실시간 보기·채널 표시 이름(`dashboard.channelNames`)과 운영 로그·DB 기반 피어 관측 UI/UX를 개선합니다.
+- 운영(#199): Discord `#ops` 고정 상태 패널과 호스트 CPU·메모리·cgroup 부하 히스테리시스 경보(`opsPanel`)를 추가합니다.
+- 쿼터 게이트(#190): 프로바이더별 쿼터 게이트(`quotaGate`)와 `jabbu-pocket quota status|lift|clear` CLI를 추가합니다.
 - `monitors`: 장부가 아직 없는 홈에서 읽기(`list`·`show`·`update`·`remove`·`test`·`export`, `apply --dry-run`)가 장부 파일을 만들지 않고 빈 장부로 답합니다. 예전에는 `monitors list` 한 번이 모니터 표만 있는 `jabbu.db`를 남겨 `gates`·`status`가 `ledger_unreadable` 게이트를 열고 `deliveries list`가 `no such table: deliveries`로 실패했습니다. `add`와 실제 `apply`는 그대로 만듭니다(`tasks`가 이미 따르던 규칙).
 - `deliveries`: `deliveries list`·`ack`·`resend`가 장부가 반쯤 만들어진 홈(모니터 표만 있는 `jabbu.db`, 예: `monitors add`만 실행한 새 설치)에서 SQLite 원문 오류 `no such table: deliveries` 대신 `jabbu.db`에 아직 전달 표가 없다는 한 줄과 `run the daemon once` 안내로 답합니다(종료 코드 1, `jabbu.db`가 아예 없는 경우와 같은 태도). 데몬을 한 번 띄우면 그 첫 열기가 표를 만들어 같은 명령이 정상으로 답합니다.
 - 보안: 앞 64KiB를 넘어 끝까지 검사하지 못한 위임 지시문을 `advisory`(그대로 내보냄)에서 `high_risk`(오너 승인 필요)로 올립니다. 예전에는 `task` 상한(100,000바이트)까지의 지시문 가운데 64KiB를 넘는 부분이 검사되지 않은 채 사람 없이 실행될 수 있었습니다. 승인 카드에는 검사하지 못한 범위를 적고, 규칙 목록에 `truncated`가 붙습니다.

@@ -18,3 +18,14 @@ export function testFatal(env: Record<string, string | undefined>): void {
 export function testStartStall(env: Record<string, string | undefined>): void {
 	if (env.JABBU_TEST_HOOKS === "1" && env.JABBU_TEST_START_STALL === "1") for (;;);
 }
+
+/**
+ * `JABBU_TEST_START_DELAY_MS=<ms>`: awaits <ms> before `daemon.start()` runs, so a signal can land after the
+ * handlers are installed but before the daemon boots (the start then refuses: see `Daemon.start()`'s stopped
+ * check). Read only when `JABBU_TEST_HOOKS=1`.
+ */
+export async function testStartDelayMs(env: Record<string, string | undefined>): Promise<void> {
+	if (env.JABBU_TEST_HOOKS !== "1") return;
+	const ms = Number(env.JABBU_TEST_START_DELAY_MS);
+	if (Number.isFinite(ms) && ms > 0) await Bun.sleep(ms);
+}

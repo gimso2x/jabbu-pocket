@@ -30,9 +30,10 @@ export const DELIVERY_OVERDUE_MS = 10 * 60_000;
 /** A lane that has not progressed for a day needs attention. */
 export const LANE_STUCK_MS = 24 * 60 * 60_000;
 /**
- * A held (`failed_ambiguous`) delivery older than the boot requeue window (`FRESHNESS_MS`) can no longer be rescued by
- * a restart, so only the owner's `jabbu-pocket deliveries ack|resend` clears it — past this it gates. It is that window on
- * purpose: the same constant decides what `requeueAmbiguous` brings back, so the gate cannot drift from it.
+ * A held (`failed_ambiguous`) delivery older than the freshness window (`FRESHNESS_MS`) is stuck: nothing rescues it
+ * automatically — no restart requeues it, and past this age even the owner's `resend` is refused, so only `ack`
+ * clears it. Past this it gates. It is that window on purpose: the same constant bounds the owner's resend, so the
+ * gate cannot drift from it.
  */
 export const AMBIGUOUS_STUCK_MS = FRESHNESS_MS;
 /** Only fresh, unrecovered monitor failures gate; an old `failed_no_retry` already notified once and must not alarm forever. */

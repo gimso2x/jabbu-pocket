@@ -14,7 +14,6 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import type { JabbuConfig } from "../config";
-import { parseChatOrigin } from "../core/origin-key";
 import { previewLine } from "../core/preview-line";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { pidAlive } from "../daemon/lock";
@@ -26,14 +25,7 @@ import {
 	type StatusReport,
 } from "../daemon/status";
 import { boardCardLink } from "../dispatch/board";
-import {
-	type HerdrAgentStatus,
-	herdrAgentStatus,
-	herdrSshArgv,
-	type ProcessRunner,
-	type RunProcessResult,
-} from "../dispatch/omp";
-import { type FlowTransition, type TaskStage, taskFlowStatus, taskStage } from "../flow/task-flow";
+import { herdrAgentStatus, herdrSshArgv, type ProcessRunner, type RunProcessResult } from "../dispatch/omp";
 import { heavyRunPaths, readHeavyRunStates } from "../heavy-run";
 import { type MonitorRow, type MonitorSql, monitorOrigin, nextFireOf, toMonitor } from "../monitors/ledger";
 import type { MonitorDeliver, MonitorOverlap } from "../monitors/spec";
@@ -45,19 +37,15 @@ import type { FreezeState } from "../ops/freeze";
 import { collectGates, type Gate, type GateState, type GatesOptions, gateOptionsFromConfig } from "../ops/gates";
 import { OFFSITE_STAMP_FILE } from "../ops/offsite";
 import { redact } from "../redact";
-import { laneDurationSamples, TURN_SAMPLE_LIMIT, TURN_SAMPLE_WINDOW_MS } from "../store/lane-duration";
-import { type TypicalDuration, typicalDuration } from "../store/turn-duration";
-import type { TaskRisk } from "../tasks/docs";
 import { evaluateTask } from "../tasks/evaluate";
 import type { TaskHostOps } from "../tasks/host";
-import { type ReadTask, readTaskSql, type TaskRow, type TaskSql, type TaskStatus } from "../tasks/ledger";
+import { type ReadTask, readTaskSql, type TaskRow, type TaskSql } from "../tasks/ledger";
 import { headlessStatusFromLedger } from "../tasks/runtime";
 import { formatLocal, localIso } from "../time";
 import { approvalTitle } from "./approval-title";
 import { type BoardPromptRef, type BoardState, type BoardSummary, type BoardTaskRef, summarizeBoard } from "./board";
 import { withContextLoad } from "./context-load";
 import { type CostLedgerInfo, readCostLedger } from "./cost-ledger";
-import { discordThreadHref } from "./detail";
 import { type OverlapView, readEditOverlaps } from "./edit-overlap";
 import { type HostChecksInfo, readHostChecks } from "./host-checks";
 import { type HostMetricsInfo, readHostMetrics } from "./host-metrics";
@@ -68,14 +56,24 @@ import {
 	readPeerAlerts,
 	readPeerHealth,
 } from "./peer-health";
+import {
+	baseTask,
+	buildFlowsSection,
+	buildLanesSection,
+	makeDurationOf,
+	originLabel,
+	readPeerTasks,
+	withTimeout,
+} from "./peer-work";
 import type { PeerInstall } from "./peers";
 import { createSessionModelReader } from "./session-model";
 import { isStatusResponse, sharedFetch } from "./snapshot-fetch";
-import { type TaskRuntimeField, withoutTaskThreads } from "./task-work-client";
-import { type TaskTurnFields, taskTurnFields } from "./turn";
+import { withoutTaskThreads } from "./task-work-client";
+import { taskTurnFields } from "./turn";
 import { buildTurnsSection, type PeerTurnError, rows, type ThreadInfo, type TurnInfo } from "./turn-board";
 import { readUsageLimits, type UsageLimitsInfo } from "./usage-limits";
 import { withAgyBlockedOverlay } from "./usage-limits-agy";
+import type { FlowChainInfo, HerdrState, LaneInfo, TaskInfo } from "./work-types";
 
 /** A snapshot is reused this long: IPC, herdr, ssh and git are not asked again inside it. */
 export const SNAPSHOT_TTL_MS = 10_000;
@@ -127,99 +125,9 @@ export interface DaemonInfo {
 	hostSessions?: StatusReport["hostSessions"];
 }
 
+export { taskDurationSamples } from "./peer-work";
 export type { PeerTurnError, ThreadInfo, TurnInfo, TurnKind, TurnWaitReason } from "./turn-board";
-
-type HerdrState = { ok: true; status: HerdrAgentStatus } | { ok: false; error: string };
-
-export interface TaskInfo extends TaskTurnFields, TaskRuntimeField {
-	taskId: string;
-	title: string;
-	risk: TaskRisk;
-	status: TaskStatus;
-	/** `local` = the bot's own machine, otherwise the `dispatchHosts` name. */
-	host: string;
-	agent: string;
-	branch: string;
-	open: boolean;
-	updatedAt: string;
-	closedAt?: string;
-	acChecked?: number;
-	acTotal: number;
-	stepsDone?: number;
-	stepsTotal?: number;
-	progress?: { status: string; updated: string; current: string; blockedReason: string };
-	/** Registered acceptance items with their spec.md checkbox; open TASKs whose documents were judged. */
-	acceptance?: Array<{ id: string; text: string; checked: boolean }>;
-	/** PROGRESS.md steps; open TASKs whose documents were judged. */
-	steps?: Array<{ id: string; text: string; done: boolean }>;
-	herdr?: HerdrState;
-	/** herdr board card of the task's pane (the board root when the card cannot be resolved). */
-	link?: string;
-	overlap?: string; // the first 겹침 hint ({@link OverlapView}) of the TASK worker's session
-	error?: string; // why the task documents could not be judged, and/or which JSON column of the row is damaged (`… 손상`)
-	/** Registration to first review of past TASKs ({@link taskDurationSamples}); `working` TASKs with enough samples only. */
-	typical?: TypicalDuration;
-	elapsedMs?: number; // since registration; set together with `typical`
-}
-
-/** Threads in the flow view: a TASK registered in this window, or any open TASK. */
-export const FLOW_WINDOW_MS = 7 * 86_400_000;
-const FLOW_NOW_MSG_CHARS = 70;
-
-/** One TASK box of a flow, built from the flow's own row (not cut to the snapshot's closed-TASK limit). */
-export interface FlowStepInfo {
-	taskId: string;
-	title: string;
-	status: TaskStatus;
-	risk: TaskRisk;
-	host: string;
-	branch: string;
-	createdAt: string;
-	closedAt?: string;
-	acTotal: number;
-	stage: TaskStage;
-	typical?: TypicalDuration; // as on {@link TaskInfo}: `working` TASKs with enough samples only
-	elapsedMs?: number;
-}
-
-/** One request thread: its request line and its TASKs in registration order. */
-export interface FlowChainInfo {
-	threadRef: string;
-	originKey: string;
-	/** `DM`, `채널 <C> 스레드`, … of the origin key. */
-	place: string | null;
-	/** The thread's first inbound as one masked line, or `(원문 없음)`. */
-	title: string;
-	requestedAt: string | null;
-	/** Newest TASK `updated_at`. */
-	updatedAt: string;
-	done: number;
-	total: number;
-	/** The TASK to look at next: the first blocked open one, else the earliest open one; null when all are closed. */
-	here: string | null;
-	now: string;
-	tasks: FlowStepInfo[];
-	/** The request thread on Discord ({@link discordThreadHref}); "" when it is not a Discord thread with a link. */
-	discordHref: string;
-}
-
-export interface LaneInfo {
-	name: string;
-	/** The lane session's origin: a conversation of the turn board with this key is the lane's. */
-	originKey: string;
-	title: string;
-	status: string;
-	cwd: string;
-	updatedAt: string;
-	/** Inputs of the lane's session parked as `uncertain` (they may have been read): the owner decides with `/queue`. */
-	uncertainCount: number;
-	/** Open-to-close of past lanes ({@link laneDurationSamples}); `working` lanes with enough samples only. */
-	typical?: TypicalDuration;
-	/** Since the lane opened; set together with `typical`. */
-	elapsedMs?: number;
-	/** The file the latest milestone report named as evidence and its sha256 (the lane row's tooltip); absent when none. */
-	evidence?: { file: string; sha256: string };
-}
+export type { FlowChainInfo, LaneInfo, TaskInfo } from "./work-types";
 
 export interface HerdrAgentInfo {
 	name: string;
@@ -844,12 +752,6 @@ async function section<T>(build: () => T | Promise<T>): Promise<Section<T>> {
 	}
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-	const { promise: timeout, reject } = Promise.withResolvers<never>();
-	const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
-	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
 /** The stored card sections, masked again; null when absent, unparsable or empty. */
 function approvalDetail(json: string | null): ApprovalInfo["detail"] {
 	if (json === null) return null;
@@ -867,21 +769,6 @@ function approvalDetail(json: string | null): ApprovalInfo["detail"] {
 		if (typeof value === "string" && value.trim() !== "") detail[key] = redact(value);
 	}
 	return Object.keys(detail).length === 0 ? null : detail;
-}
-
-/**
- * Registration to first `working → review` move (ms) of every TASK that made one in the last 30 days (by that move),
- * newest move first, at most 200: the window and cap of chat turn samples. TASKs never sent to review are not samples.
- */
-export function taskDurationSamples(db: Database, now: number): number[] {
-	return rows<{ ms: number }>(
-		db,
-		`SELECT MIN(tr.at) - t.created_at AS ms FROM task_transitions tr JOIN tasks t ON t.task_id = tr.task_id
-		WHERE tr.from_status = 'working' AND tr.to_status = 'review'
-		GROUP BY tr.task_id HAVING MIN(tr.at) >= ? ORDER BY MIN(tr.at) DESC LIMIT ?`,
-		now - TURN_SAMPLE_WINDOW_MS,
-		TURN_SAMPLE_LIMIT,
-	).map((row) => row.ms);
 }
 
 /** The approvals settled since `now − APPROVAL_STATS_DAYS` (by `decided_at`, else `created_at`), by outcome. */
@@ -906,18 +793,6 @@ function approvalStats(db: Database, now: number): ApprovalStats {
 	}
 	stats.medianAnswerMs = median(answers);
 	return stats;
-}
-
-/** `DM` for any platform's owner DM; a channel by its id, named after its platform when that is Discord (a removed `slack/` row keeps its plain label). */
-function originLabel(originKey: string | null, channelNames?: Record<string, string>): string | null {
-	if (originKey === null) return null;
-	const ref = parseChatOrigin(originKey);
-	if (ref?.kind === "dm") return ref.platform === "web" ? "웹 대화" : "DM";
-	const channel = /^(slack|discord)\/ch\/([^/]+)(\/t\/[^/]+)?$/.exec(originKey);
-	if (channel === null) return originKey;
-	const named = channel[2] ? channelNames?.[channel[2]] : undefined;
-	const head = named ?? `${channel[1] === "discord" ? "Discord " : ""}채널 ${channel[2]}`;
-	return `${head} ${channel[3] === undefined ? "메인" : "스레드"}`;
 }
 
 /** Identical commands inside one snapshot share one process (one `herdr agent list` per host). */
@@ -1591,14 +1466,8 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			return boardCardLink(board, row.host, paneId, { fetch: machinesFetch });
 		};
 
-		let taskTypical: { value: TypicalDuration | undefined } | undefined;
 		/** `typical` and `elapsedMs` of a `working` TASK; neither for another status or under 10 samples. */
-		const durationOf = (row: TaskRow): { typical?: TypicalDuration; elapsedMs?: number } => {
-			if (row.status !== "working") return {};
-			taskTypical ??= { value: typicalDuration(taskDurationSamples(needDb(), now)) };
-			const typical = taskTypical.value;
-			return typical === undefined ? {} : { typical, elapsedMs: Math.max(0, now - row.createdAt) };
-		};
+		const durationOf = makeDurationOf(() => needDb(), now);
 
 		const describeOpen = async ({ row, broken }: ReadTask): Promise<TaskInfo> => {
 			const info: TaskInfo = { ...baseTask({ row, broken }, timezone), ...durationOf(row) };
@@ -1644,131 +1513,43 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 				now - CLOSED_TASK_DAYS * 86_400_000,
 				CLOSED_TASK_LIMIT,
 			).map(readTaskSql);
-			return {
-				items: [...(await Promise.all(open.map(describeOpen))), ...closed.map((read) => baseTask(read, timezone))],
-			};
+			const [ownOpen, peerTasks] = await Promise.all([
+				Promise.all(open.map(describeOpen)),
+				readPeerTasks(deps.peers ?? [], {
+					now,
+					timezone,
+					closedDays: CLOSED_TASK_DAYS,
+					closedLimit: CLOSED_TASK_LIMIT,
+					evalTimeoutMs: TASK_EVAL_TIMEOUT_MS,
+					localHostOps: () => deps.hostOps(null),
+					message,
+				}),
+			]);
+			const allClosed = [...closed.map((read) => baseTask(read, timezone)), ...peerTasks.closed]
+				.sort((a, b) => Date.parse(b.closedAt ?? b.updatedAt) - Date.parse(a.closedAt ?? a.updatedAt))
+				.slice(0, CLOSED_TASK_LIMIT);
+			return { items: [...ownOpen, ...peerTasks.open, ...allClosed] };
 		});
 
-		const flows = section(() => {
-			const handle = needDb();
-			const since = now - FLOW_WINDOW_MS;
-			const scope =
-				"thread_ref IN (SELECT thread_ref FROM tasks WHERE created_at >= ? OR status IN ('working','blocked','review'))";
-			const read = rows<TaskSql>(handle, `SELECT * FROM tasks WHERE ${scope} ORDER BY created_at, task_id`, since).map(
-				(r) => readTaskSql(r).row,
-			);
-			const transitions = rows<FlowTransition>(
-				handle,
-				`SELECT task_id AS taskId, from_status AS fromStatus, to_status AS toStatus, actor, reason, at
-				FROM task_transitions WHERE task_id IN (SELECT task_id FROM tasks WHERE ${scope}) ORDER BY transition_id`,
-				since,
-			);
-			// The spec review node shows when Discord has a peer bot (`channels.discord.peerBots`).
-			const peerReview = (config?.channels?.discord?.peerBots?.length ?? 0) > 0;
-			const statuses = taskFlowStatus(read, transitions, peerReview);
-			const threads = new Map<string, TaskRow[]>();
-			for (const row of read) threads.set(row.threadRef, [...(threads.get(row.threadRef) ?? []), row]);
-			const chains = [...threads].map(([threadRef, list]) => {
-				const steps = list.map((row): FlowStepInfo => {
-					const stage = taskStage(row, statuses, timezone);
-					return {
-						taskId: row.taskId,
-						title: redact(row.title),
-						status: row.status,
-						risk: row.risk,
-						host: row.host ?? "local",
-						branch: row.branch,
-						createdAt: iso(row.createdAt),
-						...(row.closedAt === null ? {} : { closedAt: iso(row.closedAt) }),
-						acTotal: row.acceptance.length,
-						stage: { ...stage, msg: redact(stage.msg) },
-						...durationOf(row),
-					};
-				});
-				const open = list.filter((row) => row.status !== "done" && row.status !== "cancelled");
-				const here = open.find((row) => row.status === "blocked") ?? open[0];
-				const updatedAt = Math.max(...list.map((row) => row.updatedAt));
-				let line: string;
-				if (here === undefined) {
-					const closedAt = Math.max(...list.map((row) => row.closedAt ?? row.updatedAt));
-					line = `모두 끝남 · 마지막 close ${iso(closedAt).slice(5, 16).replace("T", " ")}`;
-				} else {
-					const stage = steps.find((step) => step.taskId === here.taskId)?.stage;
-					const msg = Array.from((stage?.msg ?? "").replace(/\s+/g, " ").trim());
-					const cut =
-						msg.length > FLOW_NOW_MSG_CHARS ? `${msg.slice(0, FLOW_NOW_MSG_CHARS - 1).join("")}…` : msg.join("");
-					line = `${here.taskId} ${stage?.label ?? ""}${cut === "" ? "" : ` · ${cut}`}${
-						open.length > 1 ? ` · 외 열림 ${open.length - 1}` : ""
-					}`;
-				}
-				const request = rows<{ text_ref: string; created_at: number }>(
-					handle,
-					"SELECT text_ref, created_at FROM inbound WHERE thread_ref = ? ORDER BY inbound_id LIMIT 1",
-					threadRef,
-				)[0];
-				// Link markup in the stored text: `<url|label>` reads as the label, `<url>` as host/path.
-				const text = request?.text_ref
-					.replace(/<(https?:[^|>]+)\|([^>]+)>/g, "$2")
-					.replace(/<https?:\/\/([^>]+)>/g, "$1");
-				const originKey = list[0]?.originKey ?? "";
-				const info: FlowChainInfo = {
-					threadRef,
-					originKey,
-					place: originLabel(originKey, config?.dashboard?.channelNames),
-					title: text === undefined ? "(원문 없음)" : previewLine(text, list[0]?.title),
-					requestedAt: request === undefined ? null : iso(request.created_at),
-					updatedAt: iso(updatedAt),
-					done: list.filter((row) => row.status === "done").length,
-					total: list.length,
-					here: here?.taskId ?? null,
-					now: line,
-					tasks: steps,
-					discordHref: discordThreadHref(discordGuild, originKey, threadRef),
-				};
-				return { open: open.length > 0, updatedAt, info };
-			});
-			chains.sort((a, b) => Number(b.open) - Number(a.open) || b.updatedAt - a.updatedAt);
-			return { items: chains.map((chain) => chain.info) };
-		});
+		const flows = section(() =>
+			buildFlowsSection(needDb(), {
+				now,
+				timezone,
+				iso,
+				peerReview: (config?.channels?.discord?.peerBots?.length ?? 0) > 0,
+				...(config?.dashboard?.channelNames === undefined ? {} : { channelNames: config.dashboard.channelNames }),
+				discordGuild,
+				...(deps.peers === undefined ? {} : { peers: deps.peers }),
+			}),
+		);
 
-		const lanes = section(() => {
-			const laneTypical = typicalDuration(laneDurationSamples(needDb(), now));
-			return {
-				items: rows<{
-					name: string;
-					origin_key: string;
-					title: string;
-					status: string;
-					cwd: string;
-					created_at: number;
-					updated_at: number;
-					uncertain_count: number;
-					evidence_file: string | null;
-					evidence_sha256: string | null;
-				}>(
-					needDb(),
-					`SELECT name, origin_key, title, status, cwd, created_at, updated_at,
-					CASE WHEN json_valid(meta) THEN json_extract(meta, '$.milestoneEvidence.file') END AS evidence_file,
-					CASE WHEN json_valid(meta) THEN json_extract(meta, '$.milestoneEvidence.sha256') END AS evidence_sha256,
-					(SELECT COUNT(*) FROM inbound WHERE inbound.origin_key = lanes.origin_key AND inbound.state = 'uncertain') AS uncertain_count
-					FROM lanes WHERE status != 'closed' ORDER BY updated_at DESC`,
-				).map((r) => ({
-					name: r.name,
-					originKey: r.origin_key,
-					title: redact(r.title),
-					status: r.status,
-					cwd: r.cwd,
-					updatedAt: iso(r.updated_at),
-					uncertainCount: r.uncertain_count,
-					...(r.evidence_file === null || r.evidence_sha256 === null
-						? {}
-						: { evidence: { file: redact(r.evidence_file), sha256: r.evidence_sha256 } }),
-					...(laneTypical === undefined || r.status !== "working"
-						? {}
-						: { typical: laneTypical, elapsedMs: Math.max(0, now - r.created_at) }),
-				})),
-			};
-		});
+		const lanes = section(() =>
+			buildLanesSection(needDb(), {
+				now,
+				iso,
+				...(deps.peers === undefined ? {} : { peers: deps.peers }),
+			}),
+		);
 
 		const herdr = section(async () => {
 			const live = deps.board?.();
@@ -2059,27 +1840,7 @@ export function readBoardPrompts(homeDir: string): BoardPromptRef[] {
 	}
 }
 
-function baseTask({ row, broken }: ReadTask, timezone: string): TaskInfo {
-	const open = row.status !== "done" && row.status !== "cancelled";
-	return {
-		taskId: row.taskId,
-		title: redact(row.title),
-		risk: row.risk,
-		status: row.status,
-		host: row.host ?? "local",
-		agent: row.agent,
-		runtime: row.runtime,
-		branch: row.branch,
-		open,
-		updatedAt: localIso(row.updatedAt, timezone),
-		...(row.closedAt === null ? {} : { closedAt: localIso(row.closedAt, timezone) }),
-		acTotal: row.acceptance.length,
-		...(broken.length === 0 ? {} : { error: `${broken.join("·")} 손상` }),
-	};
-}
-
-/**
- * The snapshot behind every request: reused for `ttlMs` after it was built, and requests that arrive while one is
+/** The snapshot behind every request: reused for `ttlMs` after it was built, and requests that arrive while one is
  * being built wait for that same build. A failed build is not kept, and neither is one still running after
  * `buildTimeoutMs`: its waiters are rejected and the next request starts a new build.
  */

@@ -201,6 +201,56 @@ describe("AC-4: which origins borrow", () => {
 	});
 });
 
+describe("AC-4b: inline-reply channel roots open and borrow a thread on the owner message", () => {
+	test("opens a thread on the owner message, skips 🔄 root, reuses with link from another message, and siblings later", async () => {
+		h = harness();
+		const MSG = "300000000000000889";
+		const MSG2 = "300000000000000890";
+		let currentRef: string | undefined = `${CHANNEL}:${MSG}`;
+		const tool = buildWorkStartTool(h.manager, CHANNEL, `discord/ch/${CHANNEL}`, () => currentRef);
+		const reply = String(await tool.execute({ title: "inline-lane", cwd: repo }, { signal }));
+		await h.settle();
+		expect(roots()).toEqual([]);
+		expect(threadsOpened()).toEqual([
+			{ method: "startThread", channelId: CHANNEL, messageId: MSG, name: "inline-lane", id: MSG },
+		]);
+		const lane = h.store.getLaneByThread(`${CHANNEL}:${MSG}`);
+		expect(lane?.meta.borrowedThread).toBe(true);
+		expect(lane?.meta.renderedRoot).toBeUndefined();
+		const status = creates((call) => (call.content ?? "").startsWith("⏳ inline-lane"));
+		expect(status.map((call) => call.channelId)).toEqual([MSG]);
+		expect(reply).toContain(`이 스레드에서 레인 \`${lane?.name}\`을 시작했습니다`);
+		expect(reply).not.toContain("https://");
+
+		// Reusing the same lane from another inline message must include its link, not claim "this thread".
+		currentRef = `${CHANNEL}:${MSG2}`;
+		const reusedReply = String(await tool.execute({ title: "inline-lane", cwd: repo }, { signal }));
+		expect(h.store.listLanes()).toHaveLength(1);
+		expect(threadsOpened()).toHaveLength(1);
+		expect(reusedReply).toContain("already open for this request");
+		expect(reusedReply).toContain(`https://discord.com/channels/${GUILD}/${MSG}/${MSG}`);
+
+		// Starting a second distinct lane from MSG opens a sibling 🔄 thread.
+		currentRef = `${CHANNEL}:${MSG}`;
+		const siblingReply = String(await tool.execute({ title: "second-inline", cwd: repo }, { signal }));
+		await h.settle();
+		expect(roots().map((call) => call.content)).toEqual(["🔄 second-inline"]);
+		expect(threadsOpened()).toHaveLength(2);
+		const second = h.store.listLanes().find((candidate) => candidate.title === "second-inline");
+		expect(second?.meta.borrowedThread).toBeUndefined();
+		expect(siblingReply).toContain("https://");
+	});
+
+	test("a top-level threadRef (<channel>:-) opens a 🔄 thread instead of borrowing", async () => {
+		h = harness();
+		const tool = buildWorkStartTool(h.manager, CHANNEL, `discord/ch/${CHANNEL}`, () => `${CHANNEL}:-`);
+		await tool.execute({ title: "top-level", cwd: repo }, { signal });
+		await h.settle();
+		expect(roots().map((call) => call.content)).toEqual(["🔄 top-level"]);
+		expect(h.store.listLanes()[0]?.meta.borrowedThread).toBeUndefined();
+	});
+});
+
 describe("AC-5: drawing and failing a borrowed lane", () => {
 	test("#sync edits only the status, never the thread's first message", async () => {
 		h = harness();

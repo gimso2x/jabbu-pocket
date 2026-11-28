@@ -28,7 +28,8 @@ import { createInterface } from "node:readline";
  * - "@lost": the prompt fails like agy's lost trajectory; "@lostload" only on a session opened by `session/load`.
  * - FAKE_AGY_HOLD_NEW=1: `session/new` answers only on `session/cancel` or SIGUSR1.
  * - "@refuse": replies `stopReason: "refusal"`. "@die": exits 3 mid-turn. "@longline": writes a 2MiB line with no newline, then holds the prompt (the client's line cap must end it). "@full" / "@half": `usage_update` used
- *   800 / 500 of size 1000 before the reply (otherwise 100).
+ *   800 / 500 of size 1000 before the reply (otherwise 100). "@no-usage": the reply still carries usage, but no
+ *   `usage_update` arrives, so the driver cannot judge rotation.
  * - anything else: answers `REPLY<n>:<last line of the prompt>` in two chunks (n = prompts of this process).
  */
 
@@ -103,7 +104,7 @@ function prompt(id: unknown, text: string): void {
 	const used = text.includes("@full") ? 800 : text.includes("@half") ? 500 : 100;
 	const finish = (answer: string, stopReason = "end_turn"): void => {
 		if (answer !== "") update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: answer } });
-		update({ sessionUpdate: "usage_update", used, size: 1000 });
+		if (!text.includes("@no-usage")) update({ sessionUpdate: "usage_update", used, size: 1000 });
 		reply(id, stopReason);
 	};
 	update({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "hmm" } });

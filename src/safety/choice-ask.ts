@@ -101,18 +101,26 @@ export function askText(
 	return win.text;
 }
 
+/** Multi-select candidates: comma-separated segments first, so a label may contain spaces; whitespace parts only when no comma segment names an option. */
+function multiParts(text: string, labels: readonly string[]): string[] {
+	const segments = text.split(/\s*,\s*/).filter((part) => part !== "");
+	if (segments.some((part) => optionOf(labels, part) !== undefined)) return segments;
+	return text.split(/\s+/).filter((part) => part !== "");
+}
+
 /** A text answer to one `ask` question: option numbers/labels, else free text (`customInput`); undefined when the reply is blank and answers nothing. */
 function textAnswer(question: OmpAskQuestion, text: string): AskAnswer | undefined {
 	const labels = question.options.map((option) => option.label);
 	const trimmed = text.trim();
 	if (trimmed === "") return undefined;
 	if (question.multi === true) {
-		const parts = trimmed.split(/[,\s]+/).filter((part) => part !== "");
+		const parts = multiParts(trimmed, labels);
 		const picked = parts.map((part) => optionOf(labels, part));
-		if (parts.length > 0 && picked.every((index) => index !== undefined)) {
-			return { selectedOptions: [...new Set(picked.map((index) => labels[index as number] as string))] };
-		}
-		return { selectedOptions: [], customInput: trimmed };
+		const matched = picked.flatMap((index) => (index === undefined ? [] : [labels[index] as string]));
+		if (matched.length === 0) return { selectedOptions: [], customInput: trimmed };
+		const rest = parts.filter((_part, i) => picked[i] === undefined).join(", ");
+		const selectedOptions = [...new Set(matched)];
+		return rest === "" ? { selectedOptions } : { selectedOptions, customInput: rest };
 	}
 	const index = optionOf(labels, trimmed);
 	return index === undefined
