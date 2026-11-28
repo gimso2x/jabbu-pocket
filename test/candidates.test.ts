@@ -267,6 +267,21 @@ describe("approval flow", () => {
 		expect(existsSync(h.deps.experimentsPath)).toBe(false);
 		expect(fold(ledger(h))[0]?.status).toBe("proposed");
 	});
+
+	test("approval flow: a card request that throws writes failed, so the candidate is due again at once", async () => {
+		const h = harness(seenDays("a", 3), { mode: "card" }, () => {
+			throw new Error("broker post failed");
+		});
+		expect(await runCandidateProposals(h.deps, OPEN)).toEqual(["a"]);
+		expect(
+			ledger(h)
+				.slice(3)
+				.map((e) => e.event),
+		).toEqual(["proposed", "failed"]);
+		expect(fold(ledger(h))[0]?.status).toBe("open");
+		// No snooze: the owner never saw a card, so the next pass raises it again right away.
+		expect(due(ledger(h))).toEqual(["a"]);
+	});
 });
 
 describe("gate", () => {
