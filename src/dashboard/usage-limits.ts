@@ -1,5 +1,7 @@
 import type { ProcessRunner } from "../dispatch/omp";
 import { isRecord } from "../omp/type-guards";
+import type { UsageLimit } from "../omp/usage-json";
+import { usedPercentOfLimit } from "../ops/quota-gate";
 import { redact } from "../redact";
 import { cleanError, sectionCache } from "./section-cache";
 import type { Section } from "./snapshot";
@@ -166,9 +168,10 @@ export function parseOmp(value: unknown): UsageRow[] | string {
 			const window = limit.window;
 			if (!isRecord(window) || typeof window.id !== "string") return `${at}.window.id`;
 			const amount = limit.amount;
-			if (!isRecord(amount) || typeof amount.usedFraction !== "number" || !Number.isFinite(amount.usedFraction)) {
-				return `${at}.amount.usedFraction`;
-			}
+			const usedPct = isRecord(amount)
+				? usedPercentOfLimit({ label: limit.label, amount: amount as UsageLimit["amount"] })
+				: undefined;
+			if (usedPct === undefined) return `${at}.amount`;
 			if (window.resetsAt !== undefined && (typeof window.resetsAt !== "number" || !Number.isFinite(window.resetsAt))) {
 				return `${at}.window.resetsAt`;
 			}
@@ -176,7 +179,7 @@ export function parseOmp(value: unknown): UsageRow[] | string {
 				label: limit.label,
 				window: window.id === "5h" ? "5h" : WEEKLY_IDS[window.id] === true ? "weekly" : "other",
 				windowLabel: typeof window.label === "string" ? window.label : window.id,
-				remainingPct: clampPct(Math.round((1 - amount.usedFraction) * 100)),
+				remainingPct: clampPct(Math.round(100 - usedPct)),
 				...(typeof window.resetsAt === "number" ? { resetsAt: window.resetsAt } : {}),
 			});
 		}
