@@ -12,16 +12,16 @@ const DISCORD_TOKEN_SHAPE = "(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{23,28}\\.[A-Za-z0-9
 /** Entra (Azure AD) client secret: 3 chars, a digit, `Q~`, then 31–34 chars. */
 const ENTRA_SECRET_SHAPE = "(?<![A-Za-z0-9_~.-])[A-Za-z0-9_~.]{3}[0-9]Q~[A-Za-z0-9_~.-]{31,34}";
 
-/** A PEM private key (`RSA`, `EC`, `OPENSSH`, `ENCRYPTED`, bare), BEGIN through END; the body stops at a next BEGIN, so repeated markers stay linear. */
+/** A PEM private key (`RSA`, `EC`, `OPENSSH`, `ENCRYPTED`, bare), BEGIN through END; the body stops at a next BEGIN, so repeated markers stay linear. A BEGIN with base64 lines but no END (a key cut off by a log cap or a paste) masks the same way, stopping at the first non-base64 line. */
 const PEM_PRIVATE_KEY_SHAPE =
-	"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:(?!-----BEGIN )[\\s\\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----";
+	"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:(?!-----BEGIN )[\\s\\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:\\r?\\n[A-Za-z0-9+/]{16,}={0,2})+";
 
 /**
  * Cloud and forge keys: AWS key id, Google API key, GitLab `glpat-`, npm `npm_` (GitHub's 2021 token format) and Stripe
- * `sk_`/`rk_` + `live_`/`test_`, each at an alphanumeric edge so a longer word holding the prefix survives.
+ * `sk_`/`rk_` + `live_`/`test_`, Hugging Face `hf_`, SendGrid `SG.`, Groq `gsk_`, DigitalOcean `dop_v1_`, xAI `xai-`, each at an alphanumeric edge so a longer word holding the prefix survives.
  */
 const CLOUD_KEY_SHAPES =
-	"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])|(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}|(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{30,}|(?<![A-Za-z0-9_])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}";
+	"(?<![A-Za-z0-9])AKIA[0-9A-Z]{16}(?![A-Za-z0-9])|(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}|(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{30,}|(?<![A-Za-z0-9_])[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{20,}|(?<![A-Za-z0-9])SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])|(?<![A-Za-z0-9_])gsk_[A-Za-z0-9]{20,}|(?<![A-Za-z0-9_])dop_v1_[0-9a-f]{32,}|(?<![A-Za-z0-9])xai-[A-Za-z0-9]{20,}";
 
 /** Incoming webhook URLs, whose path is the credential: Slack (`hooks.slack.com/...`) and Discord (`/api/webhooks/<id>/<token>`). */
 const WEBHOOK_URL_SHAPES =
@@ -209,12 +209,12 @@ function maskWrappedShapes(text: string): string {
 }
 
 /**
- * OAuth bearer credentials: a JWT (Entra access tokens, so also any `Authorization: Bearer eyJ…` header),
- * and the value of a credential-named field in JSON or a form body. Chat masking only: the upload check keeps `secretShapes`.
+ * OAuth bearer credentials: a JWT (Entra access tokens, so also any `Authorization: Bearer eyJ…` header), and the
+ * value of a credential-named field in JSON, a form body or an `Authorization` header (a `Basic` base64 user:password, or a non-JWT `Bearer` token — the scheme word goes with the value, the header name stays). Chat masking only: the upload check keeps `secretShapes`.
  */
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 const TOKEN_FIELD_PATTERN =
-	/(["']?\b(?:(?:access|refresh|id)_token|client[_-]?secret|api[_-]?key|password|passwd|secret)["']?\s*[:=]\s*["']?)[^"'&\s,}]{16,}/gi;
+	/(["']?\b(?:(?:access|refresh|id)_token|client[_-]?secret|api[_-]?key|password|passwd|secret|authorization)["']?\s*[:=]\s*["']?)(?:(?:Basic|Bearer)\s+)?[^"'&\s,}]{16,}/gi;
 
 /**
  * A password in a URL's userinfo (`https://user:pass@host`: only the password is masked, up to the last `@` of the
