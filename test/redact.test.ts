@@ -311,7 +311,7 @@ describe("redactThenClip", () => {
 
 describe("redact on a long unbroken run", () => {
 	test("a long run of scheme-like characters is masked in linear time and a real URL password still is", () => {
-		// Before the scheme was length-bounded, every word boundary in the run rescanned the rest of it: ~21 s at 400 KB.
+		// Before the scheme match was anchored at the start of its run, every word boundary in the run rescanned the rest of it: ~21 s at 400 KB.
 		const run = "a-".repeat(200_000);
 		const start = performance.now();
 		expect(redact(run)).toBe(run);
@@ -320,5 +320,14 @@ describe("redact on a long unbroken run", () => {
 		expect(redact(`${run} https://deploy:${password}@git.example.com/o/r.git`)).toBe(
 			`${run} https://deploy:${REDACTED}@git.example.com/o/r.git`,
 		);
+	});
+
+	test("a URL scheme of any length (RFC 3986 sets no limit) keeps its password masked", () => {
+		for (const length of [63, 64, 65, 200]) {
+			const scheme = `s${"a".repeat(length - 1)}`;
+			expect(redact(`${scheme}://deploy:hunter2pass@host.example/x`)).toBe(
+				`${scheme}://deploy:${REDACTED}@host.example/x`,
+			);
+		}
 	});
 });
