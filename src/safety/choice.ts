@@ -58,8 +58,13 @@ async function answerSelect(
 			buttons: asButtons ? heads : [],
 			fallback: "취소",
 			timeoutMs: deadlineOf(request),
-			acceptsText: (reply: string) =>
-				other === undefined ? (optionOf(options, reply) ?? optionOf(heads, reply)) !== undefined : reply.trim() !== "",
+			acceptsText: (reply: string) => {
+				const trimmed = reply.trim();
+				// A bare number naming no option is a mistyped pick, not Other free text.
+				const named = optionOf(options, trimmed) ?? optionOf(heads, trimmed);
+				if (/^\d+$/.test(trimmed) && named === undefined) return false;
+				return other === undefined ? named !== undefined : trimmed !== "";
+			},
 			rejectHint: OPTION_ONLY_HINT,
 		},
 		{ signal },

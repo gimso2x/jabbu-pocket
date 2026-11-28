@@ -1,3 +1,4 @@
+import { isChannelMainOrigin } from "./channel-meta";
 import type { HostMetricsInfo } from "./host-metrics";
 import { resetIn, usageLevel } from "./load-view";
 import type { DashboardSnapshot, Section } from "./snapshot";
@@ -254,8 +255,11 @@ export function renderActiveCards(
 	const runningJobs = s.jobs.ok ? s.jobs.items.filter((j) => j.state === "running" && j.health !== "dead") : [];
 	const total = threads.length + runningJobs.length;
 	if (total === 0) return { count: 0, html: "" };
+	const laneByOrigin = new Map((s.lanes.ok ? s.lanes.items : []).map((l) => [l.originKey, l]));
 	const placeOf = (key: string): string => {
+		const lane = laneByOrigin.get(key);
 		const raw = key.replace(/^[^/:]+:/, "");
+		if (raw.startsWith("jabbu/work/")) return lane?.repo ? `레인 · ${lane.repo}` : "레인";
 		if (raw.startsWith("web/")) return "웹";
 		if (/^[a-z]+\/dm\//.test(raw)) return "DM";
 		const ch = /^(?:slack|discord)\/ch\/([^/]+)/.exec(raw);
@@ -264,6 +268,8 @@ export function renderActiveCards(
 	};
 	const cards = [
 		...threads.map((t) => {
+			const lane = laneByOrigin.get(t.originKey);
+			const cardTitle = isChannelMainOrigin(t.originKey) ? t.latest.preview || t.title : lane ? lane.title : t.title;
 			const place = placeOf(t.originKey);
 			const modelChip = t.model
 				? `<span class="badge model-chip">${esc(
@@ -282,7 +288,7 @@ export function renderActiveCards(
 								const tone = pct >= 90 ? " is-danger" : pct >= 80 ? " is-warn" : "";
 								return `<div class="active-ctx${tone}"><span class="meter" role="img" aria-label="컨텍스트 ${pct}%"><i style="width:${pct}%"></i></span><span class="ctx-ratio">${esc(fmtContextRatio(ctx))} (${pct}%)</span></div>`;
 							})();
-			return `<a class="active-card" href="?view=turns&amp;item=${esc(encodeURIComponent(t.originKey))}"><div class="active-head"><span class="badges">${badge(t.install ?? "본체", "")}${place === "" ? "" : badge(place, "")}${modelChip}</span><span class="active-age">${badge("작업 중", "is-info")}<span class="card-time">${esc(dur(t.latest.ageMs))}</span></span></div><p class="active-title">${esc(t.title)}</p>${ctxHtml}</a>`;
+			return `<a class="active-card" href="?view=turns&amp;item=${esc(encodeURIComponent(t.originKey))}"><div class="active-head"><span class="badges">${badge(t.install ?? "본체", "")}${place === "" ? "" : badge(place, "")}${modelChip}</span><span class="active-age">${badge("작업 중", "is-info")}<span class="card-time">${esc(dur(t.latest.ageMs))}</span></span></div><p class="active-title">${esc(cardTitle)}</p>${ctxHtml}</a>`;
 		}),
 		...runningJobs.map((j) => {
 			const tail = j.percent !== undefined ? `${j.percent}%` : dur(j.ageMs);

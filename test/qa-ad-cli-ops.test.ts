@@ -20,7 +20,7 @@ import { runCli } from "../src/cli/index";
 import { initCommand } from "../src/cli/init";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
 import { checkDiscord, runDoctor } from "../src/daemon/doctor";
-import { checkOmpVersion } from "../src/daemon/run";
+import { checkOmpVersion } from "../src/daemon/omp-boot";
 import { createLogger } from "../src/log";
 import { chain } from "../src/ops/cgroup-fs";
 import { sampleCgroupMemory } from "../src/ops/cgroup-memory";
@@ -142,7 +142,7 @@ describe("qa-ad CLI & ops fixes", () => {
 
 		// FIFO at omp-version: never hangs (bounded child test).
 		expect(Bun.spawnSync(["mkfifo", recorded]).exitCode).toBe(0);
-		const runMod = JSON.stringify(join(import.meta.dir, "..", "src", "daemon", "run.ts"));
+		const runMod = JSON.stringify(join(import.meta.dir, "..", "src", "daemon", "omp-boot.ts"));
 		const logMod = JSON.stringify(join(import.meta.dir, "..", "src", "log.ts"));
 		const redactMod = JSON.stringify(join(import.meta.dir, "..", "src", "redact.ts"));
 		const bounded = await runBounded(
@@ -299,7 +299,8 @@ esac
 		const real = gcSessions({ homeDir: home.dir, retentionDays: 30, now: NOW });
 		expect(real.threadOriginsRemoved).toHaveLength(totalExpired);
 		expect(real.ledgerRemoved.inboundOrphans).toBe(totalExpired);
-	});
+		// WSL2 in CI took 15.4 s here (>500 chunked origins, real gc twice); locally the same test finishes in ~2 s.
+	}, 60_000);
 
 	test.skipIf(isRoot /* root ignores permission bits, so the 0o000 dir gives no EACCES (qa-ad #12) */)(
 		"#12: 0o000 EACCES session directories are skipped (never deleted in pass 2) while the rest of gc succeeds",

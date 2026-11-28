@@ -47,11 +47,9 @@ const GLOBAL_EXEMPT = /^\/(interactions|webhooks)\//;
 function routeKey(method: string, path: string): string {
 	const parts = (path.split("?")[0] ?? "").split("/");
 	const normalized = parts.map((segment, i) => {
-		const parent = parts[i - 1] ?? "";
-		const grandparent = parts[i - 2] ?? "";
-		if (MAJOR_PARENTS[parent] === true) return segment;
-		if (grandparent === "webhooks" || grandparent === "interactions") return segment;
-		if (parent === "reactions") return ":emoji";
+		if (MAJOR_PARENTS[parts[i - 1] ?? ""] === true) return segment;
+		if (parts[i - 2] === "webhooks" || parts[i - 2] === "interactions") return segment;
+		if (parts[i - 1] === "reactions") return ":emoji";
 		return /^[0-9]+$/.test(segment) ? ":id" : segment;
 	});
 	return `${method} ${normalized.join("/")}`;
@@ -59,10 +57,7 @@ function routeKey(method: string, path: string): string {
 
 function checkContent(content: string | undefined): void {
 	if (content !== undefined && content.length > MESSAGE_CONTENT_LIMIT)
-		throw new DiscordCallError(
-			"definitive",
-			`discord content too long: ${content.length} > ${MESSAGE_CONTENT_LIMIT} characters`,
-		);
+		throw new DiscordCallError("definitive", `discord content too long: ${content.length} > ${MESSAGE_CONTENT_LIMIT}`);
 }
 
 /** A delivery nonce goes out together with `enforce_nonce`, so Discord drops a repost of the same part. */
@@ -95,6 +90,7 @@ export class DiscordRest {
 	readonly #timeoutMs: number;
 	/** Route key → epoch ms when its spent bucket resets. */
 	readonly #blocked = new Map<string, number>();
+	readonly #nextWait = new Map<string, { ms: number; at: number }>();
 	#globalUntil = 0;
 
 	constructor(options: DiscordRestOptions) {
@@ -116,9 +112,15 @@ export class DiscordRest {
 		return until;
 	}
 
+	blockedCount(): number {
+		return this.#blocked.size;
+	}
+
 	async #request(method: string, path: string, body?: RequestBody): Promise<unknown> {
 		const key = routeKey(method, path);
 		const now = this.#now();
+		// Per-interaction keys never repeat: drop entries whose reset has passed, or they pile up.
+		for (const [blockedKey, reset] of this.#blocked) if (reset <= now) this.#blocked.delete(blockedKey);
 		const globalUntil = GLOBAL_EXEMPT.test(path) ? 0 : this.#globalUntil;
 		const until = Math.max(globalUntil, this.#blocked.get(key) ?? 0);
 		if (until > now) throw new DiscordRateLimitedError(until - now, globalUntil > now);
@@ -128,9 +130,7 @@ export class DiscordRest {
 		if (body !== undefined && "json" in body) {
 			headers["content-type"] = "application/json";
 			payload = JSON.stringify(body.json);
-		} else if (body !== undefined) {
-			payload = body.form;
-		}
+		} else if (body !== undefined) payload = body.form;
 		let res: Response;
 		try {
 			res = await this.#fetch(`${this.#baseUrl}${path}`, {
@@ -150,14 +150,18 @@ export class DiscordRest {
 		const text = await res.text().catch(() => "");
 		let parsed: unknown;
 		try {
-			parsed = text === "" ? undefined : JSON.parse(text);
+			parsed = JSON.parse(text);
 		} catch {
 			parsed = undefined;
 		}
 		const fields = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Record<string, unknown>;
 
 		if (res.status === 429) {
-			const retryAfterMs = secondsToMs(fields.retry_after) ?? secondsToMs(res.headers.get("retry-after")) ?? 1_000;
+			// A 429 with no retry_after anywhere (a non-API limiter): double the route's last wait, capped at 60 s.
+			for (const [waitKey, wait] of this.#nextWait) if (now - wait.at > 60_000) this.#nextWait.delete(waitKey);
+			const fallback = this.#nextWait.get(key)?.ms ?? 1_000;
+			const retryAfterMs = secondsToMs(fields.retry_after) ?? secondsToMs(res.headers.get("retry-after")) ?? fallback;
+			this.#nextWait.set(key, { ms: Math.min(Math.max(retryAfterMs * 2, 1_000), 60_000), at: now });
 			const global =
 				fields.global === true ||
 				res.headers.get("x-ratelimit-global") === "true" ||
@@ -170,8 +174,6 @@ export class DiscordRest {
 
 		const resetAfter = secondsToMs(res.headers.get("x-ratelimit-reset-after"));
 		if (res.headers.get("x-ratelimit-remaining") === "0" && resetAfter !== undefined) {
-			// Per-interaction keys never repeat: drop expired entries so they do not pile up.
-			for (const [other, reset] of this.#blocked) if (reset <= now) this.#blocked.delete(other);
 			this.#blocked.set(key, this.#now() + resetAfter);
 		} else if ((this.#blocked.get(key) ?? 0) <= now) {
 			// Only an expired block goes: a response that was in flight when a 429 set one must not lift it.
@@ -304,16 +306,14 @@ export class DiscordRest {
 			throw new DiscordCallError("definitive", `discord upload too large: ${size} bytes > 25 MiB`);
 		const filename = args.filename ?? basename(args.filePath);
 		const form = new FormData();
-		form.append(
-			"payload_json",
-			JSON.stringify({
-				...(args.content === undefined ? {} : { content: args.content }),
-				attachments: [{ id: 0, filename }],
-				...reference(args.messageReference),
-				...mentions(args.allowedMentions),
-				...nonce(args.nonce),
-			}),
-		);
+		const payloadJson = JSON.stringify({
+			...(args.content === undefined ? {} : { content: args.content }),
+			attachments: [{ id: 0, filename }],
+			...reference(args.messageReference),
+			...mentions(args.allowedMentions),
+			...nonce(args.nonce),
+		});
+		form.append("payload_json", payloadJson);
 		form.append("files[0]", Bun.file(args.filePath), filename);
 		const body = await this.#request("POST", `/channels/${args.channelId}/messages`, { form });
 		return { id: messageId(body, "upload") };

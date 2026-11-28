@@ -156,7 +156,12 @@ describe("doctor: omp --version probe env", () => {
 		);
 		expect(line).toContain("omp 9.9.9");
 		expect(secretNamesIn(dump)).toEqual([]);
-		for (const value of Object.values(FAKE_SECRETS)) expect(readFileSync(dump, "utf8")).not.toContain(value);
+		// Compare whole env values, not substrings: a secret value must never appear as an env value, but
+		// an unrelated variable (e.g. GITHUB_HEAD_REF=...-fake-...) may legitimately contain it as a substring.
+		const dumpedValues = readFileSync(dump, "utf8")
+			.split("\n")
+			.map((entry) => entry.slice(entry.indexOf("=") + 1));
+		for (const value of Object.values(FAKE_SECRETS)) expect(dumpedValues).not.toContain(value);
 	});
 });
 

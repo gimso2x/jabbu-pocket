@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type ActionButton, type MessageRef, renderMentions } from "../channel/port";
-import { cutCodePointSafe, escapeMrkdwn, formatElapsed } from "../channel/text";
+import { cutCodePointSafe, errorFields, escapeMrkdwn, formatElapsed } from "../channel/text";
 import { sessionToResume } from "../core/mailbox";
 import { parseThreadRef, platformOfThreadRef, threadRefOf } from "../core/normalize";
 import { pidAlive } from "../daemon/lock";
@@ -24,7 +24,7 @@ import { CHECK_TIMEOUT_MS, type SignalCheck } from "../tasks/signals";
 import { resolveWorkerTier } from "../tasks/worker-tier";
 import { localDay } from "../time";
 import { changedFilesSince, fileSize, headOf, sessionDelta } from "./attach";
-import { claimBorrowedThread, failBorrowedStatus } from "./borrow-thread";
+import { type BorrowThreadRequest, claimBorrowedThread, failBorrowedStatus, openLaneThread } from "./borrow-thread";
 import { buildLaneOutcomeCard, type LaneCardView, laneSessionActionId } from "./card";
 import { computeLaneChanges } from "./changes";
 import { laneCost } from "./cost";
@@ -299,7 +299,7 @@ export class LaneManager {
 					this.#nextSettleAt.set(name, { claimedAt, at: clock.now() + CLAIM_GRACE_MS });
 				}
 			})
-			.catch((error: unknown) => log.error("lane_tick_failed", { lane: name, error: String(error) }))
+			.catch((error: unknown) => log.error("lane_tick_failed", { lane: name, ...errorFields(error) }))
 			.finally(() => this.#settlesInBackground.delete(run));
 		this.#settlesInBackground.add(run);
 	}
@@ -329,7 +329,7 @@ export class LaneManager {
 
 	#spawn(lane: string, work: () => Promise<void>): void {
 		const run: Promise<void> = work()
-			.catch((error: unknown) => this.#deps.log.error("lane_background_failed", { lane, error: String(error) }))
+			.catch((error: unknown) => this.#deps.log.error("lane_background_failed", { lane, ...errorFields(error) }))
 			.finally(() => this.#background.delete(run));
 		this.#background.add(run);
 	}
@@ -370,7 +370,7 @@ export class LaneManager {
 		/** An open lane of the same conversation, title and path is returned (`reused`) instead of starting another. */
 		reuseOpen?: boolean;
 		/** `parentOrigin`'s own thread, borrowed instead of opening a sibling when free (`claimBorrowedThread`). */
-		borrowThread?: { threadId: string };
+		borrowThread?: BorrowThreadRequest;
 	}): Promise<LaneRow & { startNote?: string; reused?: boolean }> {
 		const { store, channels, clock, log } = this.#deps;
 		const frozen = this.#deps.frozen?.();
@@ -506,19 +506,18 @@ export class LaneManager {
 				// An untracked sub directory of the repository is not in the worktree; an empty one changes no git status.
 				mkdirSync(laneCwd, { recursive: true });
 				const port = channels.portFor(input.channel);
-				// A borrowed thread is the conversation itself: no root, no new thread; its first message is the owner's.
-				let threadId: string;
-				if (borrowed !== undefined) threadId = borrowed.threadId;
-				else {
-					const root = await port.post({ conversationId: input.channel }, { text: `🔄 ${shown}` });
-					rootRef = { platform: port.platform, conversationId: input.channel, messageId: root.messageId };
-					// Discord: the lane thread is started from the root (its id is the root's), so the status goes inside it.
-					if (port.openThread !== undefined) {
-						await port.openThread(rootRef, title);
+				// A borrowed thread is the conversation itself (or the owner's inline root with a new thread opened on it).
+				const threadId = await openLaneThread(
+					port,
+					{ channel: input.channel, title, shown },
+					borrowed,
+					(ref) => {
+						rootRef = ref;
+					},
+					() => {
 						threadOpened = true;
-					}
-					threadId = root.messageId;
-				}
+					},
+				);
 				// No await between picking the name and reserving it (like the lane id above).
 				const name = this.#uniqueName(slugify(title));
 				this.#reservedNames.add(name);
@@ -673,7 +672,7 @@ export class LaneManager {
 			})
 			.then(() => true)
 			.catch((error: unknown) => {
-				this.#deps.log.error("lane_send_failed", { lane: name, kind, error: String(error) });
+				this.#deps.log.error("lane_send_failed", { lane: name, kind, ...errorFields(error) });
 				return false;
 			});
 	}
@@ -1584,7 +1583,7 @@ export class LaneManager {
 		// The turn that made the claim still delivers its closing report before the child stops.
 		void this.#deps
 			.stopWhenIdle(lane.originKey)
-			.catch((error: unknown) => this.#deps.log.error("lane_stop_failed", { lane: lane.name, error: String(error) }));
+			.catch((error: unknown) => this.#deps.log.error("lane_stop_failed", { lane: lane.name, ...errorFields(error) }));
 		if (lands) this.#spawn(lane.name, () => this.#announce(lane.name));
 		const prefix = held === OWNER_ACCEPTED ? `오너 수락으로 닫았습니다: 커밋 ${sha}.` : `검증 통과: 커밋 ${sha}.`;
 		return {
@@ -2306,7 +2305,7 @@ export class LaneManager {
 			this.#coreRebasing.delete(lane.originKey);
 			await this.#deps
 				.resumePending(lane.originKey)
-				.catch((error: unknown) => log.error("lane_resume_failed", { lane: lane.name, error: String(error) }));
+				.catch((error: unknown) => log.error("lane_resume_failed", { lane: lane.name, ...errorFields(error) }));
 		}
 	}
 
@@ -3140,13 +3139,13 @@ export class LaneManager {
 					await this.#closeIfLandedOutside(lane.name);
 				if (lane.meta.land?.state === "merged-not-pushed") await this.#markPushedOutside(lane.name);
 			} catch (error) {
-				this.#deps.log.error("lane_tick_failed", { lane: lane.name, error: String(error) });
+				this.#deps.log.error("lane_tick_failed", { lane: lane.name, ...errorFields(error) });
 			}
 		}
 		try {
 			if (!frozen) await this.#tickReservations();
 		} catch (error) {
-			this.#deps.log.error("lane_reservation_tick_failed", { error: String(error) });
+			this.#deps.log.error("lane_reservation_tick_failed", { ...errorFields(error) });
 		}
 	}
 
@@ -3160,7 +3159,7 @@ export class LaneManager {
 				this.#deps.log.warn("lane_attach_orphaned", { lane: lane.name, pid: attach.pid });
 				await this.detach(lane.name, { sessionFile: attach.sessionFile, newFiles: [], by: "orphan" });
 			} catch (error) {
-				this.#deps.log.error("lane_attach_orphan_failed", { lane: lane.name, error: String(error) });
+				this.#deps.log.error("lane_attach_orphan_failed", { lane: lane.name, ...errorFields(error) });
 			}
 		}
 	}
