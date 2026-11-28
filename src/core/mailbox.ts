@@ -281,13 +281,18 @@ export class OriginMailbox {
 			const driver = this.#driver;
 			if (driver !== undefined) {
 				const turn = this.#turn;
+				// An abort that failed may leave the run going: stop the child before the drain, like
+				// `#abortTurnWith` does, so the next turn never starts on the wedged child.
+				let abortFailed = false;
 				try {
 					await driver.abort();
 				} catch (error) {
+					abortFailed = true;
 					log.warn("pause_abort_failed", { origin: originKey, opRef: turn?.opRef, error: String(error) });
 				}
 				if (turn !== undefined && this.#turn === turn && this.#driver === driver) {
-					await this.#onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: "lane_paused" });
+					const final: OmpFinal = { opRef: turn.opRef, status: "aborted", text: "", error: "lane_paused" };
+					await this.#onFinal(driver, final, abortFailed);
 				}
 			}
 			const settled = this.#driver === undefined || (await this.#driver.state()).settled !== false;
