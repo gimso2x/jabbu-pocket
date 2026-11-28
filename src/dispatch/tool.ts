@@ -506,10 +506,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			signal,
 		});
 		deps.log.info("dispatch_simple_done", { ok: result.ok, code: result.code });
-		// A timeout already carries its own suffix; any other non-zero end must not read as a finished run.
-		const reason = result.timedOut ? "" : (result.failure?.slice(`종료 코드 ${result.code ?? "없음"}: `.length) ?? "");
-		const failed =
-			result.ok || result.timedOut ? "" : `\n\n[실패: omp -p exit ${result.code ?? "없음"} — 위 출력은 일부일 수 있음]`;
+		const code = result.code ?? "없음"; // a timeout carries its own suffix; any other non-zero end is a failure
+		const reason = result.timedOut ? "" : (result.failure?.slice(`종료 코드 ${code}: `.length) ?? "");
+		const failed = result.ok || result.timedOut ? "" : `\n\n[실패: omp -p exit ${code} — 위 출력은 일부일 수 있음]`;
 		return redact(result.output) + failed + (reason === "" ? "" : `\n사유: ${reason}`) + gate.suffix;
 	}
 }
