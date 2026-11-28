@@ -60,9 +60,10 @@ export function holderAlive(
 	isAlive: (pid: number) => boolean = pidAlive,
 	thisBoot: string = currentBootId(),
 	recordedStartedAt?: number,
+	startedAt?: (pid: number) => number | undefined, // process-start probe (default: the real `/proc` read)
 ): boolean {
 	if (bootId !== undefined && bootId !== thisBoot) return false;
-	return isAlive(pid) && (recordedStartedAt === undefined || startedAtMatches(pid, recordedStartedAt));
+	return isAlive(pid) && (recordedStartedAt === undefined || startedAtMatches(pid, recordedStartedAt, startedAt));
 }
 
 function readLock(path: string): LockInfo | undefined {

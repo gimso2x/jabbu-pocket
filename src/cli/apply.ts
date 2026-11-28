@@ -6,6 +6,7 @@ import { runDoctor } from "../daemon/doctor";
 import { readSweepHeartbeat } from "../daemon/heartbeat";
 import { callDaemon } from "../daemon/ipc";
 import { pidAlive } from "../daemon/lock";
+import { processStartedAt } from "../daemon/proc-start";
 import {
 	type ApplyDeps,
 	type ApplyOptions,
@@ -267,6 +268,7 @@ export function homeDeps(homeDir: string, unit: string, pathEnv: string, guard?:
 		heartbeat: () => readSweepHeartbeat(homeDir),
 		pid: process.pid,
 		isAlive: pidAlive,
+		processStartedAt,
 		isExecutable: isExecutableFile,
 		log: (line) => process.stderr.write(`${line}\n`),
 	};

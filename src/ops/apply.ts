@@ -159,6 +159,8 @@ export interface ApplyDeps {
 	 * whose recorded boot id is not this boot's.
 	 */
 	isAlive: (pid: number) => boolean;
+	/** Start time of a process (ms), for the apply lock's recorded start check; absent: the real `/proc` read. */
+	processStartedAt?: (pid: number) => number | undefined;
 	isExecutable: (path: string) => boolean;
 	log: (line: string) => void;
 	/**

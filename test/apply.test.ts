@@ -1522,11 +1522,29 @@ describe("runApply apply lock (one apply per home)", () => {
 		expect(parseApplyLock(readFileSync(lockPath(), "utf8"))).toEqual(direct);
 	});
 
+	test("a lock whose pid was reused after it was written is taken over, not waited for (F3)", async () => {
+		const text = `${JSON.stringify({ pid: 777, stamp: OTHER, startedAt: new Date(T0).toISOString() })}\n`;
+		writeFileSync(lockPath(), text, { mode: 0o600 });
+		const world = makeWorld();
+		// The process at pid 777 now started an hour after the lock was written: it is not the holder.
+		const { exitCode, receipt } = await runApply(
+			base,
+			makeDeps(world, { isAlive: () => true, processStartedAt: () => T0 + 3_600_000 }),
+		);
+		expect(exitCode).toBe(0);
+		expect(receipt.steps[0]).toMatchObject({ name: "wait_apply", ok: true });
+		expect(receipt.steps[0]?.detail).toBe(`stale lock ${OTHER} taken over`);
+		expect(world.clock).toBe(T0); // never slept
+		expect(restartCommands(world)).toHaveLength(1);
+		expect(existsSync(lockPath())).toBe(false);
+	});
+
 	test("a live lock past the limit fails with no drain and leaves the other lock as it was", async () => {
 		const text = `${JSON.stringify({ pid: 777, stamp: OTHER, startedAt: new Date(T0).toISOString() })}\n`;
 		writeFileSync(lockPath(), text, { mode: 0o600 });
 		const world = makeWorld();
-		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		// The holder really started when the lock was written: the pid is its own, so it is waited for.
+		const { exitCode, receipt } = await runApply(base, makeDeps(world, { processStartedAt: () => T0 }));
 		expect(exitCode).toBe(1);
 		expect(receipt.status).toBe("failed");
 		expect(receipt.steps).toHaveLength(1);
@@ -1544,7 +1562,10 @@ describe("runApply apply lock (one apply per home)", () => {
 		const text = `${JSON.stringify({ pid: 777, stamp: OTHER, startedAt: new Date(T0).toISOString() })}\n`;
 		writeFileSync(lockPath(), text, { mode: 0o600 });
 		const world = makeWorld();
-		const { exitCode, receipt } = await runApply({ ...base, peerOf: "20261125-101634" }, makeDeps(world));
+		const { exitCode, receipt } = await runApply(
+			{ ...base, peerOf: "20261125-101634" },
+			makeDeps(world, { processStartedAt: () => T0 }),
+		);
 		expect(exitCode).toBe(0);
 		expect(receipt.status).toBe("skipped");
 		expect(receipt.steps).toHaveLength(1);
