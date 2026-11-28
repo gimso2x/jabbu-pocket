@@ -90,7 +90,7 @@ export function optionalInt(
 	return value;
 }
 
-/** An optional argument list: an array of non-empty strings (copied), else `field` is invalid. */
+/** An optional argument list: an array of non-empty strings without a NUL byte (copied), else `field` is invalid. */
 export function optionalArgList(
 	configPath: string,
 	obj: Record<string, unknown>,
@@ -99,7 +99,10 @@ export function optionalArgList(
 ): string[] | undefined {
 	const value = obj[key];
 	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || arg.trim() === "")) {
+	if (
+		!Array.isArray(value) ||
+		value.some((arg) => typeof arg !== "string" || arg.trim() === "" || arg.includes("\0"))
+	) {
 		invalid(configPath, field);
 	}
 	return [...(value as string[])];
