@@ -292,6 +292,38 @@ describe("delegated workers in the turn trace", () => {
 		);
 	});
 
+	test("a blocked TASK and a paused lane read as 막힘/멈춤, not 실패, and stay out of the 실패 count", () => {
+		seed("answered", 20_000);
+		writeWorker(addTask("T-BLOCKED", 2000, { status: "blocked" }), "zai/glm-5.3", [[3000, 5000]]);
+		writeWorker(addLane("lane-p", 4000, { parent: ORIGIN, status: "paused" }), "anthropic/sonnet", [[5000, 8000]]);
+		const trace = traceOf();
+		const workers = (trace.root.children ?? []).filter((span) => span.kind === "subagent");
+		expect(workers.map((span) => [span.id, span.status])).toEqual([
+			["T-BLOCKED", "blocked"],
+			["L-lane-p", "paused"],
+		]);
+		const state: TraceViewState = { now: NOW, fold: {}, focus: null, open: null, title: "t" };
+		const flow = renderFlow(trace, state);
+		expect(flow).toContain("막힘 <b>1</b>");
+		expect(flow).toContain("멈춤 <b>1</b>");
+		expect(flow).not.toContain("실패 <b>1</b>");
+		const waterfall = renderTrace(trace, state);
+		expect(waterfall).toContain("막힘");
+		expect(waterfall).toContain("멈춤");
+		const blocked = byId(trace, "T-BLOCKED");
+		const paused = byId(trace, "L-lane-p");
+		if (blocked === undefined || paused === undefined) throw new Error("workers missing");
+		for (const [span, word] of [
+			[blocked, "막힘"],
+			[paused, "멈춤"],
+		] as const) {
+			const doing = flowDoing(span);
+			expect(doing).toContain(word);
+			expect(doing).not.toContain("끝남");
+			expect(doing).not.toContain("실패");
+		}
+	});
+
 	test("only this turn's workers: another window, another origin, a lane without or with another parentOrigin stay out; a followup-only TASK joins with starts at or after 0", () => {
 		seed("answered", 20_000);
 		addTask("T-BEFORE", -5000, { closed: -1000 });
@@ -856,6 +888,8 @@ describe("flow view", () => {
 				["진행 중", "1"],
 				["끝남", "1"],
 				["실패", "1"],
+				["멈춤", "0"],
+				["막힘", "0"],
 				["승인 대기", "1"],
 			]);
 		});
@@ -866,7 +900,7 @@ describe("flow view", () => {
 			const html = renderFlow(empty, view());
 			expect(html).toContain("이 턴은 맡긴 워커가 없어요");
 			expect(html).not.toContain("is-approvals");
-			expect((html.match(/is-zero/g) ?? []).length).toBe(4);
+			expect((html.match(/is-zero/g) ?? []).length).toBe(6);
 		});
 
 		test("a card's data-sig holds while the markup holds and changes with it", () => {
