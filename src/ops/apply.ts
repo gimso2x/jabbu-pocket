@@ -289,6 +289,7 @@ export interface ApplyReceipt {
 	doctor: { code: number; failed: string[] } | undefined;
 	report: { origin: string; thread: string | undefined; ok: boolean; detail: string } | undefined;
 	receiptPath: string;
+	receiptWriteFailed?: string; // the receipt file could not be written; the outcome still stands
 }
 
 export interface ApplyOutcome {
@@ -687,10 +688,16 @@ async function applyUnderLock(
 		return result.ok;
 	};
 
+	// A receipt that cannot be written (disk full, read-only home) must not fail the apply it records.
 	const writeReceipt = (): void => {
 		receipt.finishedAt = new Date(deps.now()).toISOString();
-		mkdirSync(join(homeDir, "logs"), { recursive: true, mode: 0o700 });
-		writeAtomic0600(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+		try {
+			mkdirSync(join(homeDir, "logs"), { recursive: true, mode: 0o700 });
+			writeAtomic0600(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+		} catch (error) {
+			receipt.receiptWriteFailed = msg(error);
+			deps.log(`apply receipt write failed ${receiptPath}: ${msg(error)}`);
+		}
 	};
 
 	// A test asks the environment to kill this process at a point (`JABBU_TEST_HOOKS=1` + `JABBU_TEST_CRASH_AT`);

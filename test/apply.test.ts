@@ -453,6 +453,19 @@ describe("runApply execution", () => {
 		expect(statSync(configCopy).mode & 0o777).toBe(0o600);
 	});
 
+	test("a receipt that cannot be written (logs is a file) does not fail the apply (F1)", async () => {
+		const world = makeWorld();
+		writeFileSync(join(home, "logs"), "not a directory");
+		const logged: string[] = [];
+		const { exitCode, receipt } = await runApply(base, makeDeps(world, { log: (line) => logged.push(line) }));
+		expect(exitCode).toBe(0);
+		expect(receipt.status).toBe("ok");
+		expect(receipt.receiptWriteFailed).toMatch(/ENOTDIR|EEXIST/);
+		expect(existsSync(receipt.receiptPath)).toBe(false);
+		expect(logged.some((line) => line.startsWith("apply receipt write failed"))).toBe(true);
+		expect(restartCommands(world)).toHaveLength(1);
+	});
+
 	test("last_good records the config the restarted daemon loaded, not an edit made during apply", async () => {
 		const world = makeWorld();
 		const deps = makeDeps(world, {
