@@ -1,6 +1,7 @@
 import type { ChannelRegistry } from "../channel/registry";
 import type { TaskJudgement } from "./checker";
 import type { TaskGateEnd, TaskGateHooks } from "./gate";
+import { GATE_STALE_REASON } from "./gate";
 import type { TaskRow } from "./ledger";
 import {
 	buildAutoLandCard,
@@ -25,8 +26,9 @@ export interface GateCardEnv {
 /**
  * The gate's card hooks: the running card (only on the reach; a restarted gate posts none), and its end — a landing or
  * an opened PR redraws the running card as the auto-merge card (or posts it), a worker sent back (`rework`) swaps the
- * running line for the reason and drops the button without a new card, a hold redraws it with the receipts and posts
- * one reached card naming the reasons with the owner mention.
+ * running line for the reason and drops the button without a new card, a gate stopped mid-run swaps the running line
+ * for the stop reason and drops the button the same way, a hold redraws it with the receipts and posts one reached
+ * card naming the reasons with the owner mention.
  */
 export function gateCardHooks(
 	env: GateCardEnv,
@@ -43,6 +45,20 @@ export function gateCardHooks(
 				? postCardToThread(channels, log, row.threadRef, env.reached({ kind: "gating" }))
 				: Promise.resolve(undefined),
 		ended: async (end: TaskGateEnd, card) => {
+			// A stale end carries only the stale reason (gate.ts): the task left review mid-run, so no new card and
+			// no owner mention — the running card's line becomes the stop reason and its buttons go, like rework.
+			if (end.blockers.length === 1 && end.blockers[0] === GATE_STALE_REASON) {
+				if (card === undefined) return;
+				const running = env.reached({ kind: "gating" });
+				const swap = (text: string) => text.replace(GATE_RUNNING_LINE, GATE_STALE_REASON);
+				await editThreadCard(channels, log, card, {
+					...running,
+					text: swap(running.text),
+					body: swap(running.body),
+					buttons: [],
+				});
+				return;
+			}
 			const landed = end.landed;
 			const open = end.blockers.length === 0 ? landed : undefined;
 			if (

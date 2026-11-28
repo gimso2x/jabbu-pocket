@@ -51,17 +51,16 @@ export function taskGateStep(
 	policy: AutoLandPolicy,
 	now: ReceiptNow = receiptNowOf(policy),
 ): TaskGateStep {
-	const receipts = gate ?? {};
-	const { review, qa } = receipts;
+	const { review, qa } = gate ?? {};
 	if (policy.review !== undefined && (review?.sha !== sha || receiptStaleOf("review", review, now) !== undefined)) {
 		return { run: "review" };
 	}
 	const { qa: _qa, ...reviewOnly } = policy;
-	const reviewed = receiptBlockers(receipts, sha, risk, reviewOnly, now);
+	const reviewed = receiptBlockers(gate ?? {}, sha, risk, reviewOnly, now);
 	if (reviewed.length > 0) return { blockers: reviewed };
 	if (laneQaRisk(risk, policy) && (qa?.sha !== sha || receiptStaleOf("qa", qa, now) !== undefined))
 		return { run: "qa" };
-	return { blockers: receiptBlockers(receipts, sha, risk, policy, now) };
+	return { blockers: receiptBlockers(gate ?? {}, sha, risk, policy, now) };
 }
 
 /** The `rt` of the gate's notice keys: the runtime, models and overlays a receipt made now would be bound to. */
@@ -129,6 +128,7 @@ export interface TaskGateEnd {
 	blockers: string[];
 	landed?: TaskLandOutcome;
 }
+export const GATE_STALE_REASON = "게이트 중단됨: 작업이 review를 벗어남";
 
 export interface TaskGateDeps {
 	ledger: TaskLedger;
@@ -228,7 +228,7 @@ export class TaskGateRunner {
 		ctx: { abort: AbortController; end: () => void; card: Promise<MessageRef | undefined>; hooks: TaskGateHooks },
 	): Promise<void> {
 		const { ledger, log } = this.#deps;
-		let blockers: string[];
+		let blockers: string[] = [GATE_STALE_REASON]; // a stale break keeps this default; every other break sets its own
 		try {
 			let kind = first;
 			for (;;) {
@@ -239,7 +239,7 @@ export class TaskGateRunner {
 				}
 				if (ledger.get(row.taskId)?.status !== "review") {
 					log.info("task_gate_stale", { task: row.taskId, kind, sha: subject.sha });
-					return;
+					break;
 				}
 				const gate = ledger.recordGate(
 					row.taskId,
