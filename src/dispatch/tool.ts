@@ -330,8 +330,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					};
 		if (params.taskSpec !== undefined) {
 			if (taskDeps === undefined) throw new Error("이 세션에서는 taskSpec을 쓸 수 없습니다");
-			if (name !== undefined)
-				throw new Error("taskSpec에는 name을 줄 수 없습니다(에이전트 이름은 TASKID에서 만듭니다)");
+			if (name !== undefined || givenCwd !== undefined)
+				throw new Error("taskSpec에는 name·cwd를 줄 수 없습니다(이름은 TASKID에서, 저장소는 taskSpec.repo로 정합니다)");
 			const { worker: workerKind, rest } = takeWorkerKind(params.taskSpec);
 			const input = parseTaskSpecInput(rest);
 			// The repo is the worker's working tree: it is refused inside a secrets directory like a `cwd` (qa-z #7).
