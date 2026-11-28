@@ -447,6 +447,28 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("select with an Other row: an out-of-range number is refused, not taken as Other free text", async () => {
+		const h = harness();
+		h.send({ method: "select", id: "s1", title: "고르기", options: [...FOUR, OTHER] });
+		await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "0")).toBe(false);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		const hint = await h.port.writes.waitFor((w) => w.kind === "edit" && w.msg.text.includes("번호나 선택지 이름으로"));
+		expect(h.port.writes.items.filter((w) => w.msg.text.includes("번호나 선택지 이름으로"))).toHaveLength(1);
+		expect(hint.msg.buttons?.map((b) => b.label)).toEqual([...FOUR, OTHER]);
+		// In-range numbers still pick their option, and outside text still picks Other.
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s1")).toEqual(reply("s1", { value: "b" }));
+		h.send({ method: "select", id: "s2", title: "고르기", options: [...FOUR, OTHER] });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "분석부터 보여줘")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "s2")).toEqual(reply("s2", { value: OTHER }));
+		await h.close();
+	});
+
 	test("a held text is only used by an input of the same turn (opRef)", async () => {
 		const h = harness();
 		const ask = (opRef: string, request: Parameters<typeof answerDialog>[2]) =>
@@ -769,6 +791,31 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("ask multi: a multi-word label is picked by name when comma-separated; space-separated numbers still work", async () => {
+		const questions = [
+			{
+				id: "q1",
+				question: "무엇을 고를까?",
+				options: [{ label: "Run tests" }, { label: "Cache" }, { label: "Deploy" }],
+				multi: true,
+			},
+		];
+		const h = harness();
+		h.send({ method: "ask", id: "m1", questions });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "Run tests, Cache")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m1")).toEqual(
+			reply("m1", { answers: [{ id: "q1", selectedOptions: ["Run tests", "Cache"] }] }),
+		);
+		h.send({ method: "ask", id: "m2", questions });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1 3")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "m2")).toEqual(
+			reply("m2", { answers: [{ id: "q1", selectedOptions: ["Run tests", "Deploy"] }] }),
+		);
+		await h.close();
+	});
+
 	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
 		const h = harness();
 		h.send({
@@ -958,6 +1005,27 @@ describe("omp 19.1 form dialogs on choice cards", () => {
 		await h.close();
 	});
 
+	test("form array choice: a multi-word label is picked by name when comma-separated", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f7",
+			html: `<form><fieldset><legend>Features</legend>
+<label><input type="checkbox" name="features" value="run-tests"> Run tests</label>
+<label><input type="checkbox" name="features" value="cache"> Cache</label>
+<label><input type="checkbox" name="features" value="deploy"> Deploy</label>
+</fieldset></form>`,
+		});
+		const posted = await h.card(false);
+		expect(posted.msg.buttons).toBeUndefined();
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "Run tests, Cache")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f7")).toEqual(
+			reply("f7", { data: { features: ["run-tests", "cache"] } }),
+		);
+		await h.close();
+	});
+
 	test("a reply naming no option is refused with a ⚠️ line and the field is asked again", async () => {
 		const h = harness();
 		h.send({
@@ -972,6 +1040,27 @@ describe("omp 19.1 form dialogs on choice cards", () => {
 		await edited(h, posted.ts, "⚠️ Pick: 없는 번호입니다(1~6)");
 		expect(await h.broker.answerDialog(ORIGIN.originKey, "6")).toBe(true);
 		expect(await h.replies.waitFor((r) => r.id === "f2")).toEqual(reply("f2", { data: { x: "f" } }));
+		await h.close();
+	});
+
+	test("a click on 아니오 for a required lone checkbox is refused with a ⚠️ line instead of cancelling the form", async () => {
+		const h = harness();
+		h.send({
+			method: "form",
+			id: "f8",
+			html: `<form><label><input type="checkbox" name="tests" value="yes" required> Run tests</label><label>Service name <input name="svc" required></label></form>`,
+		});
+		const shown = await h.card(true);
+		expect(shown.msg.buttons?.map((b) => b.label)).toEqual(["1. 예", "1. 아니오"]);
+		expect(h.click(shown.msg.buttons?.[1])).toBe(true);
+		const warned = await edited(h, shown.ts, "⚠️ Run tests: 필수 항목입니다");
+		expect(warned.msg.text).toContain("*1. Run tests (필수)*");
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(h.click(shown.msg.buttons?.[0])).toBe(true);
+		await edited(h, shown.ts, "→ 예");
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "web")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "f8")).toEqual(reply("f8", { data: { tests: "yes", svc: "web" } }));
 		await h.close();
 	});
 

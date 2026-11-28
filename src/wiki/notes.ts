@@ -126,9 +126,7 @@ export class WikiNotes {
 
 	/** The wiki project of a repository: the directory name of its git common dir's parent (the client's `project_for`). */
 	async #projectOf(repo: string): Promise<string> {
-		const common = await gitCommonDir(repo, this.#run);
-		if (common === undefined) return UNASSIGNED;
-		const parts = common.replace(/\/+$/, "").split("/");
+		const parts = (await gitCommonDir(repo, this.#run))?.replace(/\/+$/, "").split("/") ?? [];
 		return parts.length >= 2 ? (parts[parts.length - 2] as string) : UNASSIGNED;
 	}
 
@@ -414,7 +412,7 @@ export class WikiNotes {
 
 	/**
 	 * Writes the turn notes that are due: a channel thread's day once the day is over, a DM or thread-less turn at the
-	 * first call after it ended. Rows of a group that was already written are just marked.
+	 * first call after it ended. Rows of a group that was already written go out as a follow-up note (`-2`, `-3`, …).
 	 */
 	async flushTurns(): Promise<void> {
 		const config = this.#deps.config();
@@ -432,7 +430,9 @@ export class WikiNotes {
 				const first = rows[0] as WikiTurnRow;
 				if (first.groupKey.startsWith("thread:") && first.day >= today) continue;
 				const sourceId = `jabbu-turns-${hashOf(first.groupKey)}-${first.day}`;
-				if (store.wikiNoteState(sourceId)?.state === "sent" || (await this.#writeTurns(config, sourceId, rows))) {
+				let target = sourceId;
+				for (let n = 2; store.wikiNoteState(target)?.state === "sent"; n += 1) target = `${sourceId}-${n}`;
+				if (await this.#writeTurns(config, target, rows)) {
 					store.markWikiTurnsSent(rows.map((row) => row.id));
 				}
 			}

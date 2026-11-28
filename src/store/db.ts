@@ -975,9 +975,13 @@ export class Store {
 	/**
 	 * Other threads of a chat turn's still-dispatched rows: messages steered into a turn another thread started. Read
 	 * before the rows close, so a replayed answer (rows already answered) finds none and notifies nothing twice.
+	 * Discord channel-body origins (`discord/ch/<C>`, e.g. `inlineReplyChannels`) answer in the same channel body, so
+	 * differing `thread_ref`s are inline replies in one channel rather than separate threads and get no pointer.
 	 */
 	private steeredThreads(input: { originKey: string; opRef: string; threadRef: string }): string[] {
 		if (chatPlatformOf(input.originKey) === undefined) return [];
+		const origin = parseChatOrigin(input.originKey);
+		if (origin?.platform === "discord" && origin.kind === "ch" && origin.threadId === undefined) return [];
 		const rows = this.db
 			.query(
 				"SELECT DISTINCT thread_ref FROM inbound WHERE origin_key = ? AND op_ref = ? AND state = 'dispatched' AND thread_ref != ? ORDER BY thread_ref",
@@ -1810,19 +1814,6 @@ export class Store {
 				.run(sentParts, replyTs ?? null, deliveryId);
 			return this.requireDelivery(deliveryId);
 		})();
-	}
-
-	/**
-	 * Startup recovery only: a `failed_ambiguous` delivery younger than the freshness window goes back to `pending`
-	 * with redelivered=1, so the owner gets it again with the "중복 가능" header. Returns how many were requeued.
-	 */
-	requeueAmbiguous(): number {
-		const now = this.clock.now();
-		return this.db
-			.query(
-				"UPDATE deliveries SET state = 'pending', redelivered = 1, next_at = ? WHERE state = 'failed_ambiguous' AND ? - created_at < ?",
-			)
-			.run(now, now, FRESHNESS_MS).changes;
 	}
 
 	// ---- owner resolution of held deliveries (`jabbu-pocket deliveries`) ----

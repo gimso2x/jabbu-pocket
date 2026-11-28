@@ -35,10 +35,10 @@ export function failedDelivery(
 }
 
 export interface DeliverySender {
-	/** Whether this platform's post path is rate limited right now. */
-	isBlocked(): boolean;
+	/** Whether this platform's post path is rate limited right now; `delivery` narrows it to that delivery's destination. */
+	isBlocked(delivery?: DeliveryItem): boolean;
 	/** When the current block ends (the retry time of a delivery deferred by it). */
-	blockedUntil(): number;
+	blockedUntil(delivery?: DeliveryItem): number;
 	/** The error text a delivery deferred by the block carries. */
 	blockedReason(): string;
 	send(delivery: DeliveryItem): Promise<DeliverySendResult>;
@@ -90,8 +90,11 @@ export async function finishDeliveryStatus(
  */
 export function deliverySender(options: {
 	gate: RetryAfterGate;
-	/** The gate key the post path is parked under (`chat.postMessage`, `post`). */
-	key: string;
+	/**
+	 * The gate key the post path is parked under: one fixed key, or one per delivery (`chat.postMessage`, `post:<channelId>`).
+	 * A per-delivery key gets `undefined` for the pump's pre-batch check and must answer a key that is never parked.
+	 */
+	key: string | ((delivery: DeliveryItem | undefined) => string);
 	/** The error text a delivery deferred by the block carries (the platform's own wording). */
 	blockedReason: string;
 	send(delivery: DeliveryItem): Promise<DeliverySendResult>;
@@ -100,8 +103,8 @@ export function deliverySender(options: {
 }): DeliverySender {
 	const { gate, key, send, finish } = options;
 	return {
-		isBlocked: () => gate.isBlocked(key),
-		blockedUntil: () => gate.untilOf(key) ?? gate.clock.now(),
+		isBlocked: (delivery) => gate.isBlocked(typeof key === "function" ? key(delivery) : key),
+		blockedUntil: (delivery) => gate.untilOf(typeof key === "function" ? key(delivery) : key) ?? gate.clock.now(),
 		blockedReason: () => options.blockedReason,
 		send,
 		afterSent: (delivery) => finish(delivery, "sent"),
@@ -118,8 +121,7 @@ export function answerFooter(
 	footerOf: (threadRef: string, originKey: string, outcome: "done" | "failed") => string | undefined,
 ): string | undefined {
 	if (delivery.keepStatus === true || (delivery.cancelThreadRefs ?? []).includes(delivery.threadRef)) return undefined;
-	const outcome = failureNoticeBody(delivery.body) ? "failed" : "done";
-	return footerOf(delivery.threadRef, delivery.originKey, outcome);
+	return footerOf(delivery.threadRef, delivery.originKey, failureNoticeBody(delivery.body) ? "failed" : "done");
 }
 
 export interface DeliveryPumpOptions {
@@ -147,8 +149,8 @@ export class DeliveryPump {
 		if (sender.isBlocked()) return 0;
 		let confirmed = 0;
 		for (const delivery of await source.claimDue()) {
-			if (sender.isBlocked()) {
-				const retry = { at: sender.blockedUntil(), sentParts: delivery.sentParts ?? 0 };
+			if (sender.isBlocked(delivery)) {
+				const retry = { at: sender.blockedUntil(delivery), sentParts: delivery.sentParts ?? 0 };
 				await this.#defer(delivery, sender.blockedReason(), retry);
 				continue;
 			}
@@ -203,13 +205,10 @@ export class DeliveryPump {
 	async #finishExpired(): Promise<void> {
 		const { source, log } = this.#options;
 		if (source.takeExpired === undefined) return;
-		let expired: DeliveryItem[];
-		try {
-			expired = await source.takeExpired();
-		} catch (err) {
+		const expired = await Promise.resolve(source.takeExpired()).catch((err) => {
 			log.error("delivery_take_expired_failed", { ...errorFields(err) });
-			return;
-		}
+			return [];
+		});
 		for (const delivery of expired) {
 			log.warn("delivery_expired", { id: delivery.deliveryId });
 			await this.#undelivered(delivery);
