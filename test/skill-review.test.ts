@@ -387,6 +387,33 @@ describe("runSkillReview", () => {
 		expect(notice).not.toContain("second-skill");
 	});
 
+	test("with a bot profile the install notice says the skill lands after the next apply", async () => {
+		const d = realInstall(PROPOSAL_JSON);
+		d.profileSyncPending = true;
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 1 });
+		expect(d.notices.at(-1)).toContain("다음 apply(omp sync) 뒤에 적용됩니다");
+		const plain = realInstall(
+			JSON.stringify([
+				{
+					action: "create",
+					name: "second-skill",
+					description: "Use when second",
+					content: "body",
+					evidence: "이 대화에서 통한 근거",
+					checks: [
+						{ situation: "s1", expect: "e1" },
+						{ situation: "s2", expect: "e2" },
+					],
+				},
+			]),
+		);
+		expect(await runSkillReview(plain, { sessionDir: join(dir, "review") })).toEqual({
+			proposals: 1,
+			installed: 1,
+		});
+		expect(plain.notices.at(-1)).not.toContain("다음 apply");
+	});
+
 	test("the review prompt refuses one-off narratives, secrets and ungated proposals", () => {
 		const prompt = buildSkillReviewPrompt("오너: 안녕");
 		expect(prompt).toContain("일회성 작업 서사");

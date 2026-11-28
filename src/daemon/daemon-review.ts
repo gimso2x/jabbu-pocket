@@ -59,11 +59,10 @@ export class DaemonSkillReview {
 		const answered = store.countAnswered(dmOrigin);
 		const seen = this.#reviewedTurns.get(dmOrigin);
 		// First look at this DM since boot: its count is the baseline, so the cadence counts turns from here on.
-		if (seen === undefined) {
-			this.#reviewedTurns.set(dmOrigin, answered);
+		if (seen === undefined || answered - seen < every) {
+			if (seen === undefined) this.#reviewedTurns.set(dmOrigin, answered);
 			return;
 		}
-		if (answered - seen < every) return;
 		this.#reviewedTurns.set(dmOrigin, answered);
 		// Frozen: no autonomous omp turn. This due review is skipped (not queued); the next one follows `every` turns.
 		if (this.#ctx.frozen() !== undefined) {
@@ -172,6 +171,7 @@ export class DaemonSkillReview {
 					if (revision !== undefined)
 						this.#ctx.log.info("skill_revision_saved", { name: proposal.name, revision: basename(revision) });
 				},
+				profileSyncPending: this.#ctx.options.config.ompProfile !== undefined,
 				requestApproval: (summary) => approvalOf(this.#ctx).request(channel, summary),
 				notify: async (text) => void (await adapter.postNotice(channel, text)),
 				log: this.#ctx.log,
