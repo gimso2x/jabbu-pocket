@@ -112,12 +112,7 @@ function parseLine(line: string): LedgerEvent | undefined {
 
 /** The ledger text to events in file order; blank, broken and other-version lines are skipped, never thrown. */
 export function parseLedger(text: string): LedgerEvent[] {
-	const events: LedgerEvent[] = [];
-	for (const line of text.split("\n")) {
-		const event = line.trim() === "" ? undefined : parseLine(line);
-		if (event !== undefined) events.push(event);
-	}
-	return events;
+	return text.split("\n").flatMap((line) => parseLine(line) ?? []);
 }
 
 /**
@@ -172,14 +167,12 @@ export function foldCandidates(
 				break;
 		}
 	}
-	const out: Candidate[] = [];
-	for (const { daySet, hasSeen, ...cand } of byKey.values()) {
-		if (!hasSeen) continue;
+	return [...byKey.values()].flatMap(({ daySet, hasSeen, ...cand }) => {
+		if (!hasSeen) return [];
 		cand.days = [...daySet].sort();
 		cand.distinctDays = cand.days.length;
-		out.push(cand);
-	}
-	return out;
+		return [cand];
+	});
 }
 
 /**
@@ -325,7 +318,7 @@ export async function runCandidateProposals(deps: CandidateRunDeps, gate: Candid
 		log.warn("candidate_card_unroutable", { keys: due.map((cand) => cand.key).join(",") });
 		return [];
 	}
-	await Promise.all(
+	await Promise.allSettled(
 		due.map(async (cand) => {
 			appendEvent(deps.ledgerPath, { v: 1, ts: ts(), key: cand.key, event: "proposed", via: "card" });
 			log.info("candidate_proposed", { key: cand.key, via: "card", days: cand.distinctDays });
@@ -339,7 +332,13 @@ export async function runCandidateProposals(deps: CandidateRunDeps, gate: Candid
 				return;
 			}
 			if (verdict === "approved") {
-				const experiment = appendExperiment(deps.experimentsPath, cand, deps.now(), deps.timezone);
+				let experiment: string;
+				try {
+					experiment = appendExperiment(deps.experimentsPath, cand, deps.now(), deps.timezone);
+				} catch (error) {
+					log.warn("candidate_experiment_failed", { key: cand.key, error: String(error) });
+					experiment = "unrecorded";
+				}
 				appendEvent(deps.ledgerPath, { v: 1, ts: ts(), key: cand.key, event: "approved", experiment });
 				log.info("candidate_approved", { key: cand.key, experiment });
 			} else if (verdict === "denied") {
