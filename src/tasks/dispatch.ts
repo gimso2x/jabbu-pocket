@@ -360,8 +360,7 @@ export async function resumeTask(
 	if (row.status === "done" || row.status === "cancelled")
 		throw new Error(`${row.taskId}는 이미 ${row.status}로 닫힌 작업입니다`);
 	// A review task whose PR landing is active stays in review: resuming it would orphan the landing — the sweep
-	// and the CI poll only watch review tasks, so nobody would notice the PR merging. The owner closes or waits
-	// for the landing first, or merges the PR and lets the landing finish, then resumes.
+	// and the CI poll only watch review tasks, so nobody would notice the PR merging.
 	if (row.status === "review" && row.land?.state === "active")
 		return `재개 안 함: PR 착지 진행 중입니다(${row.land.prLand.branch}의 PR, CI 확인 중). 착지가 끝나거나 PR이 머지된 뒤 다시 재개하세요.`;
 	if (input.host !== undefined && input.host !== row.host) {

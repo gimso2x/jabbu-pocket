@@ -229,7 +229,13 @@ describe("TASK resume on another worker tier", () => {
 		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
 		const row = h.ledger.require(TASK_ID);
 		h.ledger.transition(TASK_ID, "review", "bot", "outcome reached");
-		const land = { mode: "pr" as const, requestedBy: "auto" as const, sha: "a".repeat(40), baseBranch: "main", prLand: { branch: row.branch } };
+		const land = {
+			mode: "pr" as const,
+			requestedBy: "auto" as const,
+			sha: "a".repeat(40),
+			baseBranch: "main",
+			prLand: { branch: row.branch },
+		};
 		h.ledger.setLand(TASK_ID, { ...land, state: "active" as const });
 		const startsBefore = startsOf(h.herdr).length;
 		const promptsBefore = promptsOf(h.herdr).length;
