@@ -224,6 +224,35 @@ describe("TASK resume on another worker tier", () => {
 		expect(h.ledger.isPaused(h.ledger.require(TASK_ID))).toBe(false);
 	});
 
+	test("a review task with an active PR landing is not resumed: the landing is not orphaned", async () => {
+		const h = setup();
+		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
+		const row = h.ledger.require(TASK_ID);
+		h.ledger.transition(TASK_ID, "review", "bot", "outcome reached");
+		const land = {
+			mode: "pr" as const,
+			requestedBy: "auto" as const,
+			sha: "a".repeat(40),
+			baseBranch: "main",
+			prLand: { branch: row.branch },
+		};
+		h.ledger.setLand(TASK_ID, { ...land, state: "active" as const });
+		const startsBefore = startsOf(h.herdr).length;
+		const promptsBefore = promptsOf(h.herdr).length;
+		const refused = await h.call({ taskSpec: { id: TASK_ID }, task: "하나 더 고쳐" });
+		expect(refused).toContain("재개 안 함");
+		expect(refused).toContain("PR 착지 진행 중");
+		expect(h.ledger.require(TASK_ID).status).toBe("review");
+		expect(startsOf(h.herdr)).toHaveLength(startsBefore);
+		expect(promptsOf(h.herdr)).toHaveLength(promptsBefore);
+
+		// A held (not active) landing does not block the resume.
+		h.ledger.setLand(TASK_ID, { ...land, state: "held" as const, reason: "막힘" });
+		const ok = await h.call({ taskSpec: { id: TASK_ID }, task: "이어서" });
+		expect(ok).toContain("살아 있는 에이전트에 재개 프롬프트를 보냈습니다");
+		expect(h.ledger.require(TASK_ID).status).toBe("working");
+	});
+
 	test("tierConfidence and unknown keys on a resume are refused before anything runs", async () => {
 		const h = setup();
 		await h.call({ taskSpec: { ...SPEC, tier: "middle" }, task: "go" });
