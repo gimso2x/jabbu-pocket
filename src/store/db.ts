@@ -973,9 +973,13 @@ export class Store {
 	/**
 	 * Other threads of a chat turn's still-dispatched rows: messages steered into a turn another thread started. Read
 	 * before the rows close, so a replayed answer (rows already answered) finds none and notifies nothing twice.
+	 * Discord channel-body origins (`discord/ch/<C>`, e.g. `inlineReplyChannels`) answer in the same channel body, so
+	 * differing `thread_ref`s are inline replies in one channel rather than separate threads and get no pointer.
 	 */
 	private steeredThreads(input: { originKey: string; opRef: string; threadRef: string }): string[] {
 		if (chatPlatformOf(input.originKey) === undefined) return [];
+		const origin = parseChatOrigin(input.originKey);
+		if (origin?.platform === "discord" && origin.kind === "ch" && origin.threadId === undefined) return [];
 		const rows = this.db
 			.query(
 				"SELECT DISTINCT thread_ref FROM inbound WHERE origin_key = ? AND op_ref = ? AND state = 'dispatched' AND thread_ref != ? ORDER BY thread_ref",
