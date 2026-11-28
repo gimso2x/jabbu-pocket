@@ -233,7 +233,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				},
 				blockedReason: "discord createMessage",
 				send: (delivery) => this.#send(delivery),
-				finish: (delivery, result) => this.#finishDelivered(delivery, result, options.deliveries.hasHeld),
+				finish: (delivery, result) => this.#finishDelivered(delivery, result, options.deliveries),
 			}),
 			clock: options.clock,
 			log: options.log,
@@ -1253,15 +1253,11 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** After the confirm or once the answer is given up: the shared status finish over this adapter's statuses. */
-	#finishDelivered(
-		delivery: DeliveryItem,
-		result: "sent" | "undelivered",
-		hasHeld?: DeliverySource["hasHeld"],
-	): Promise<void> {
+	#finishDelivered(delivery: DeliveryItem, result: "sent" | "undelivered", deliveries: DeliverySource): Promise<void> {
 		return finishDeliveryStatus(delivery, result, {
 			finishStatus: (threadRef, originKey, outcome, action) => this.finishStatus(threadRef, originKey, outcome, action),
 			tracks: (threadRef, originKey) => this.#status.tracks(threadRef, originKey),
-			hasHeld,
+			hasHeld: deliveries.hasHeld,
 		});
 	}
 }
