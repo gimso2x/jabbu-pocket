@@ -1,4 +1,4 @@
-import { lstatSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
 import { errorFields } from "../channel/text";
@@ -14,7 +14,6 @@ import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
-import { readRegularText, writeAtomic0600 } from "../ops/stamp";
 import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
@@ -24,8 +23,8 @@ import { createBotDriverFactory } from "./bot-driver";
 import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
 import { acquireLock, type Lock, LockHeldError } from "./lock";
-import { testFatal, testStartStall } from "./run-test-hooks";
-import { readVersion } from "./tools";
+import { assertOmpRunnable, checkOmpVersion } from "./omp-boot";
+import { testFatal, testStartDelayMs, testStartStall } from "./run-test-hooks";
 import { startWatchdog, watchdogStallMs } from "./watchdog";
 
 /** `provider/model` in config.json becomes the two RpcClient options. */
@@ -88,25 +87,6 @@ export function channelBindings(
 	return [...discordBindings(config, env, log), ...(config.channels.web?.enabled === true ? [new WebBinding()] : [])];
 }
 
-/** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */
-export async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
-	const version = await readVersion([config.ompExecutable, "--version"]);
-	const recorded = join(config.homeDir, "omp-version");
-	let previous: string | undefined;
-	try {
-		if (lstatSync(recorded, { throwIfNoEntry: false })?.isFile() === true) previous = readRegularText(recorded).trim();
-	} catch {
-		/* unreadable or non-regular */
-	}
-	if (previous !== undefined && previous !== version) log.warn("omp_version_changed", { from: previous, to: version });
-	try {
-		writeAtomic0600(recorded, `${version}\n`);
-	} catch (error) {
-		log.warn("omp_version_write_failed", { path: recorded, error: String(error) });
-	}
-	return version;
-}
-
 /**
  * The crash exit: one synchronous `daemon_fatal` line, then the folded counts (`log_summary`) the hourly flush would
  * have written, then exit 1 — the code Bun itself exits with on an uncaught error or an unhandled rejection.
@@ -141,8 +121,7 @@ export async function runDaemon(
 	/** The config.json text read right before `loadConfig` produced `config` (the only text last-good may record). */
 	bootConfigText?: string,
 ): Promise<number> {
-	let logFile: (line: string) => void;
-	let logPath: string;
+	let logFile: (line: string) => void, logPath: string;
 	try {
 		({ sink: logFile, path: logPath } = openLogSink(config.homeDir));
 	} catch (error) {
@@ -203,21 +182,19 @@ export async function runDaemon(
 	process.on("exit", (code) => lastWords.info("daemon_exit", { code }));
 
 	const model = splitModel(config.model);
-	const agyModel = model.provider === undefined || model.provider === "agy" ? model.model : undefined;
-	const secretsDir = join(config.homeDir, "secrets");
 	const personaFiles = {
 		persona: join(config.homeDir, "workspace", "persona.md"),
 		soul: join(config.homeDir, "workspace", "soul.md"),
 		owner: join(config.homeDir, "workspace", "owner.md"),
-		secrets: { secretsDir, configFile: join(config.homeDir, "config.json") },
+		secrets: { secretsDir: join(config.homeDir, "secrets"), configFile: join(config.homeDir, "config.json") },
 	};
-	const onPersonaError = (error: unknown, path: string) =>
-		log.warn("persona_unreadable", { path, error: String(error) });
 	// Seed the known-secret value index before anything can answer: masking sits below the agent.
 	indexRuntimeSecrets(config, env, log);
 	const exited = Promise.withResolvers<number>();
+	let stopping = false;
 	const shutdown = (signal: string) => {
 		log.info("signal", { signal });
+		stopping = true;
 		daemon.stop().then(
 			() => exited.resolve(0),
 			(error: unknown) => {
@@ -256,12 +233,12 @@ export async function runDaemon(
 		...(agyPool === undefined ? {} : { agyPool, agyStatus: () => agyPool.status(clock.now()) }),
 		driverFactory: createBotDriverFactory({
 			getConfig: () => daemonOptions.config,
-			secretsDir,
+			secretsDir: join(config.homeDir, "secrets"),
 			personaFiles,
-			onPersonaError,
+			onPersonaError: (error: unknown, path: string) => log.warn("persona_unreadable", { path, error: String(error) }),
 			clock,
 			log,
-			agyModel,
+			agyModel: model.provider === undefined || model.provider === "agy" ? model.model : undefined,
 			ompModel: model,
 			agyPool,
 			cwdFor: (origin) => daemon.cwdFor(origin),
@@ -288,10 +265,13 @@ export async function runDaemon(
 	const watchdog = startWatchdog({ stallMs: watchdogStallMs(env), logPath });
 	testStartStall(env);
 	try {
+		await testStartDelayMs(env);
+		await assertOmpRunnable(config, ompVersion);
 		await daemon.start();
 	} catch (error) {
 		watchdog.stop();
-		if (error instanceof NewerSchemaError) {
+		if (stopping) log.info("daemon_start_interrupted", { ...errorFields(error) });
+		else if (error instanceof NewerSchemaError) {
 			// One line with both versions and the remedy: `apply` only sees IPC readiness, so journalctl is where this shows.
 			log.error("daemon_fatal", {
 				kind: "newer_schema",
@@ -305,7 +285,7 @@ export async function runDaemon(
 		await daemon.stop().catch(() => undefined);
 		log.stop();
 		lock.release();
-		return 1;
+		return stopping ? 0 : 1;
 	}
 	const stopAlive = startServiceAlive({ log, clock, snapshot: () => daemon.aliveFields() });
 	testFatal(env);

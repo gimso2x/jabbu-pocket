@@ -313,8 +313,8 @@ function hostPressureGate(read: Partial<HostLoadReader> | undefined): Gate {
  * `ops cycle` contract: any open gate means exit 1, so automation cannot mistake a sick bot for a healthy one. A gate
  * with nothing to judge from is `unknown`, not closed (`jabbu-pocket gates --strict` fails on those too).
  *
- * Held (`failed_ambiguous`) deliveries gate only once they are past the boot requeue window: the daemon's start puts
- * fresher ones back to pending by itself, and a newer one may just be waiting for the owner's look
+ * Held (`failed_ambiguous`) deliveries gate only once they are past the freshness window: nothing rescues a held row
+ * automatically — no restart requeues it — and a newer one may just be waiting for the owner's look
  * (`jabbu-pocket deliveries ack|resend`). Gating on every held row would alert on each one the moment it happened.
  */
 /**

@@ -122,7 +122,7 @@ async function ownerDm(id = QUESTION): Promise<void> {
 }
 
 describe("inline reply channel answers", () => {
-	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+	async function inlineChannelAdapter(): Promise<DiscordAdapter> {
 		const inline = new DiscordAdapter({
 			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
 			core,
@@ -142,22 +142,60 @@ describe("inline reply channel answers", () => {
 			content: "질문",
 			type: 0,
 		});
+		return inline;
+	}
+
+	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+		const inline = await inlineChannelAdapter();
 		const id = deliver(`${CH}:${QUESTION}`, longBody(2500), `discord/ch/${CH}`);
 		await inline.pumpDeliveries();
 		const sent = answers();
 		expect(sent).toHaveLength(2);
 		expect(sent[0]?.channelId).toBe(CH);
 		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 		const lookups = transport.calls.filter((c) => c.method === "getChannel" && c.channelId === QUESTION);
 		expect(lookups.length).toBeLessThanOrEqual(1);
 		expect(transport.calls.some((c) => c.method === "startThread")).toBe(false);
 		await inline.stop();
 	});
+
+	test("an inline answer with multiple ```copy blocks posts as one reply message without splitting", async () => {
+		const inline = await inlineChannelAdapter();
+		const body = "```copy\ncmd one\n```\n설명 첫 줄\n```copy\ncmd two\n```\n설명 둘째 줄\n```copy\ncmd three\n```";
+		const id = deliver(`${CH}:${QUESTION}`, body, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[0]?.content).toContain("```copy\ncmd one\n```");
+		expect(sent[0]?.content).toContain("```copy\ncmd three\n```");
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
+
+	test("an inline answer with prose and a ```card attaches messageReference only to the first part", async () => {
+		const inline = await inlineChannelAdapter();
+		const card = '```card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"요약"},"children":[]}}}\n```';
+		const id = deliver(`${CH}:${QUESTION}`, `결론 한 줄\n${card}`, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
+		expect(sent[1]?.embeds).toHaveLength(1);
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
 });
 
 describe("splitting and destinations", () => {
-	test("a 2500-character answer goes as two messages of at most 2000, both as replies in the DM", async () => {
+	test("a 2500-character answer goes as two messages of at most 2000 in the DM, replying only on part 1", async () => {
 		await ownerDm();
 		const id = deliver(`${DM}:${QUESTION}`, longBody(2500));
 		expect(await adapter.pumpDeliveries()).toBe(1);
@@ -166,8 +204,9 @@ describe("splitting and destinations", () => {
 		for (const post of sent) {
 			expect(post.content?.length ?? 0).toBeLessThanOrEqual(2000);
 			expect(post.channelId).toBe(DM);
-			expect(post.messageReference).toEqual({ messageId: QUESTION });
 		}
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 	});
 
@@ -229,6 +268,29 @@ describe("rate limits and failures", () => {
 		expect(failed).toHaveLength(0);
 	});
 
+	test("a 429 on one channel does not park posts to another channel", async () => {
+		const other = "222222222222222222";
+		transport.setChannel({ id: other, type: 0, guildId: GUILD });
+		const first = deliver(`${CH}:-`, "채널 A 답", "monitor/a");
+		const second = deliver(`${other}:-`, "채널 B 답", "monitor/b");
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		expect(await adapter.pumpDeliveries()).toBe(1);
+		expect(answers().map((post) => post.channelId)).toEqual([other]);
+		expect(row(first)).toMatchObject({ state: "pending", nextAt: now + 5_000 });
+		expect(row(second)?.state).toBe("confirmed");
+	});
+
+	test("a 429 on a notice to one channel does not park deliveries to another channel", async () => {
+		const other = "222222222222222222";
+		transport.setChannel({ id: other, type: 0, guildId: GUILD });
+		transport.createFailures.set(1, new DiscordRateLimitedError(5_000));
+		expect(await adapter.postNotice(CH, "공지")).toBe(false);
+		const id = deliver(`${other}:-`, "채널 B 답", "monitor/b");
+		expect(await adapter.pumpDeliveries()).toBe(1);
+		expect(answers().map((post) => post.channelId)).toEqual([other]);
+		expect(row(id)?.state).toBe("confirmed");
+	});
+
 	test("a 4xx before anything was posted is a definitive failure (failDelivery)", async () => {
 		const id = deliver(`${CH}:-`, "짧은 답", "monitor/x");
 		transport.createFailures.set(1, new DiscordCallError("definitive", "discord_http_403:50013", 403, 50013));
@@ -257,6 +319,51 @@ describe("rate limits and failures", () => {
 		expect(answers()).toHaveLength(2);
 		expect(answers()[1]?.messageReference).toEqual({ messageId: first?.id ?? "" });
 		expect(row(id)?.state).toBe("confirmed");
+	});
+
+	test("a restart resume after a 5xx posts exactly the missing tail, footer or not (round 14 F1)", async () => {
+		// An unbroken paragraph: the cut is a hard cut at the chunk limit, so any limit change moves the boundary.
+		// The first send carried the status footer; the restarted adapter has no status entry, so the resume has
+		// none — with a per-render limit the resumed part would start at the wrong offset and lose (or repeat) a slice.
+		await ownerDm();
+		const body = "가".repeat(4000);
+		const id = deliver(`${DM}:${QUESTION}`, body);
+		transport.createFailures.set(4, new DiscordCallError("ambiguous", "discord_http_500", 500));
+		await adapter.pumpDeliveries();
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 2 });
+		expect(answers()).toHaveLength(2);
+
+		const restarted = new DiscordAdapter({
+			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
+			core,
+			deliveries: source(),
+			ownerUserId: OWNER,
+			clock: { now: () => now },
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+		});
+		await restarted.start();
+		store.resolveAmbiguous(id, "resend");
+		expect(await restarted.pumpDeliveries()).toBe(1);
+		expect(answers()).toHaveLength(3);
+		expect(
+			answers()
+				.map((p) => p.content ?? "")
+				.join(""),
+		).toBe(body);
+		expect(row(id)?.state).toBe("confirmed");
+		await restarted.stop();
+	});
+
+	test("a resume with sentParts past every re-rendered part is held, never confirmed (round 14 F1)", async () => {
+		const id = deliver(`${CH}:-`, longBody(2500), "monitor/x");
+		store.claimDue();
+		store.markAmbiguous(id, "socket hang up", 5);
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 5 });
+		store.resolveAmbiguous(id, "resend");
+		await adapter.pumpDeliveries();
+		expect(answers()).toHaveLength(0);
+		expect(failed).toEqual([{ id, outcome: "ambiguous" }]);
+		expect(row(id)).toMatchObject({ state: "failed_ambiguous", sentParts: 2 });
 	});
 });
 

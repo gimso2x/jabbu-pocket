@@ -322,8 +322,10 @@ export function findBun(pathEnv: string, isExecutable: (path: string) => boolean
  * `read-tree -m -u HEAD prev` only touches paths that differ between the two, so unrelated local edits and untracked
  * files survive (and a conflicting local edit makes it refuse instead of overwriting). */
 export function revertCommandFor(repoDir: string, prev: string): string {
+	// The owner pastes this into a shell: a checkout path with a space or a shell character goes out single-quoted.
+	const dir = /^[\w/.,:@+=-]+$/.test(repoDir) ? repoDir : `'${repoDir.replaceAll("'", `'\\''`)}'`;
 	// Staged changes would ride along in the revert commit (its tree would no longer be prev's): refuse instead.
-	return `git -C ${repoDir} diff --cached --quiet && git -C ${repoDir} read-tree -m -u HEAD ${prev} && git -C ${repoDir} commit -m "revert: restore tree of ${prev}"`;
+	return `git -C ${dir} diff --cached --quiet && git -C ${dir} read-tree -m -u HEAD ${prev} && git -C ${dir} commit -m "revert: restore tree of ${prev}"`;
 }
 
 const LAST_GOOD_SUFFIX = ".last-good";
@@ -624,6 +626,11 @@ export async function runApply(options: ApplyOptions, deps: ApplyDeps): Promise<
 			}
 		}
 	}
+}
+
+/** A path for a command the owner pastes into a shell: plain paths stay as they are, anything else is single-quoted. */
+function shellPathArg(path: string): string {
+	return /^[\w/.,:@+=-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
 /**
@@ -1106,7 +1113,7 @@ async function applyUnderLock(
 	if (ensured.noted) {
 		const detail = ensured.ok
 			? ensured.detail
-			: `${ensured.detail}\nnot restarted; by hand: cd ${repoDir} && bun install --frozen-lockfile && bun src/main.ts apply; ${await cancelDrain()}`;
+			: `${ensured.detail}\nnot restarted; by hand: cd ${shellPathArg(repoDir)} && bun install --frozen-lockfile && bun src/main.ts apply; ${await cancelDrain()}`;
 		steps.push({ name: "deps", ok: ensured.ok, detail, ms: deps.now() - depsT0 });
 		deps.log(`apply step=deps ok=${ensured.ok} detail=${detail}`);
 	} else deps.log(`apply deps ${ensured.detail}`);
@@ -1170,7 +1177,7 @@ async function applyUnderLock(
 		const installed = await installDeps();
 		if (!installed.ok)
 			return failed(
-				`${installed.detail}\nnot restarted; by hand: cd ${repoDir} && bun install --frozen-lockfile && systemctl --user restart ${unit}`,
+				`${installed.detail}\nnot restarted; by hand: cd ${shellPathArg(repoDir)} && bun install --frozen-lockfile && systemctl --user restart ${unit}`,
 			);
 		details.push(installed.detail);
 		// A migrated ledger would make the rolled-back code exit on `newer_schema`: restore the snapshot first.
