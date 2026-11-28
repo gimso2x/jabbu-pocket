@@ -769,6 +769,41 @@ describe("osa-session-settled: a prompt whose session is not settled keeps its t
 		}
 	});
 
+	test("#finalize keeps a completed turn completed when get_last_assistant_text fails (child alive)", async () => {
+		const peer = new FakeOmpPeer();
+		peer.replies.set("get_last_assistant_text", () => ({ error: "timed out" }));
+		const { driver, finals, untilFinals, warns } = await startPeerDriver(peer);
+		try {
+			const opRef = await driver.prompt("go");
+			peer.push(promptResult(opRef, "completed"));
+			await untilFinals(1);
+			// The mailbox rebuilds the answer from the entries; the failed read only costs the text.
+			expect(finals).toEqual([{ opRef, status: "completed", text: "" }]);
+			expect(warns.some((line) => line.includes("event=get_last_assistant_text_failed"))).toBe(true);
+		} finally {
+			await driver.stop();
+		}
+	});
+
+	test("#finalize demotes a completed turn to error only when the child is gone", async () => {
+		const peer = new FakeOmpPeer();
+		peer.replies.set("get_last_assistant_text", () => "hold");
+		const { driver, finals, untilFinals } = await startPeerDriver(peer);
+		try {
+			const opRef = await driver.prompt("go");
+			peer.push(promptResult(opRef, "completed"));
+			// The read is in flight when the child dies: its rejection must demote, not deliver an empty answer.
+			await peer.command((c) => c.type === "get_last_assistant_text");
+			peer.exit(9);
+			await untilFinals(1);
+			expect(finals).toEqual([
+				{ opRef, status: "error", text: "", error: expect.stringContaining("get_last_assistant_text failed") },
+			]);
+		} finally {
+			await driver.stop();
+		}
+	});
+
 	test("AC-1 ②: the wait is capped: no event for tailWaitMs ends the turn normally with tail_wait_timeout", async () => {
 		const peer = tailPeer({ settled: false });
 		const { driver, finals, untilFinals, warns } = await startPeerDriver(peer, { tailWaitMs: 20 });

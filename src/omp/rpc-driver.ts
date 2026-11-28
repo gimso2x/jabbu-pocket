@@ -179,6 +179,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	/** The client whose child is (or was last) running: its exit and stream reports count until `stop()` ends. */
 	#active: OmpRpcClient | undefined;
 	#stopping = false;
+	/** The live child exited: a `#finalize` read that fails then is a dead session, not a slow one. */
+	#exited = false;
 	readonly #finalListeners = new Set<(final: OmpFinal) => void>();
 	readonly #eventListeners = new Set<(event: OmpEvent) => void>();
 	readonly #exitListeners = new Set<(info: OmpExitInfo) => void>();
@@ -211,8 +213,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const problem = await checkOmpRuntime(options.ompExecutable, env);
 		if (problem) throw new OmpDriverError(problem.code, problem.message);
 
-		mkdirSync(resolve(options.cwd), { recursive: true });
-		mkdirSync(resolve(options.sessionDir), { recursive: true });
+		for (const dir of [options.cwd, options.sessionDir]) mkdirSync(resolve(dir), { recursive: true });
 
 		// omp builds the `ask` tool only for a UI session; a child whose dialogs reach the owner runs `rpc-ui`.
 		const args = ["--mode", options.answerDialog === undefined ? "rpc" : "rpc-ui", "--no-title"];
@@ -224,6 +225,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		args.push(...(options.extraArgs ?? []));
 
 		this.#stopping = false;
+		this.#exited = false;
 		const client: OmpRpcClient = new OmpRpcClient({
 			executable: options.ompExecutable,
 			args,
@@ -276,11 +278,10 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		this.#client = client;
 		// `ask` arrives as one dialog only when someone answers it; otherwise explicit false, so a default change cannot
 		// enable a dialog nobody answers.
-		const askDialog = options.answerDialog !== undefined;
 		this.#writeRaw(client, {
 			type: "set_ask_dialog",
-			id: `jabbu-ask-dialog-${askDialog ? "on" : "off"}`,
-			enabled: askDialog,
+			id: `jabbu-ask-dialog-${options.answerDialog !== undefined ? "on" : "off"}`,
+			enabled: options.answerDialog !== undefined,
 		});
 	}
 
@@ -298,8 +299,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	#emitExit(code: number | null, stderr: string): void {
-		const info: OmpExitInfo = { code, expected: this.#stopping, stderr };
-		for (const listener of this.#exitListeners) listener(info);
+		this.#exited = true;
+		for (const listener of this.#exitListeners) listener({ code, expected: this.#stopping, stderr });
 	}
 
 	/** A stdout line that is not one JSON object is skipped by the client; it is only logged. */
@@ -380,10 +381,9 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	/** Asks `get_state` every `tailPollMs` (the next ask only after this one was judged) until the wait ends. */
 	#pollTail(tail: TailWait): void {
 		tail.poll = setTimeout(async () => {
-			const client = this.#client;
-			if (this.#tail !== tail || client === undefined) return;
+			if (this.#tail !== tail || this.#client === undefined) return;
 			try {
-				const state = await client.getState();
+				const state = await this.#client.getState();
 				if (this.#tail !== tail) return;
 				if (state.isSettled && state.queuedMessageCount === 0) {
 					this.#options.log?.info("tail_wait_settled", { opRef: tail.opRef, by: "get_state" });
@@ -451,8 +451,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	#onLocalCommand(id: string, output: string): void {
 		const deliver = () => {
 			this.#admitted.delete(id);
-			const final: OmpFinal = { opRef: id, status: "completed", text: output };
-			for (const listener of this.#finalListeners) listener(final);
+			for (const listener of this.#finalListeners) listener({ opRef: id, status: "completed", text: output });
 		};
 		if (this.#admitted.has(id)) deliver();
 		else this.#early.set(id, deliver);
@@ -466,8 +465,11 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			try {
 				final.text = (await this.#client.getLastAssistantText()) ?? "";
 			} catch (error) {
-				final.status = "error";
-				final.error = `get_last_assistant_text failed: ${error instanceof Error ? error.message : String(error)}`;
+				const message = error instanceof Error ? error.message : String(error);
+				if (this.#exited) {
+					final.status = "error";
+					final.error = `get_last_assistant_text failed: ${message}`;
+				} else this.#options.log?.warn("get_last_assistant_text_failed", { opRef, error: message });
 			}
 		}
 		for (const listener of this.#finalListeners) listener(final);
@@ -490,10 +492,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const opRef = await this.#call((client) => client.prompt(text));
 		this.#admitted.add(opRef);
 		const early = this.#early.get(opRef);
-		if (early) {
-			this.#early.delete(opRef);
-			early();
-		}
+		this.#early.delete(opRef);
+		early?.();
 		return opRef;
 	}
 
