@@ -165,7 +165,16 @@ function appendNotes(path: string, section: string): void {
 		entry === undefined
 			? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
 			: constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW;
-	const fd = openSync(path, flags, 0o600);
+	let fd: number;
+	try {
+		fd = openSync(path, flags, 0o600);
+	} catch (error) {
+		// The workspace folder is made by `init` and nothing recreates it: a missing folder must be an onboarding
+		// refusal with a usable message, not a raw ENOENT for the model to guess at.
+		throw new OnboardingError(
+			`finish: 관찰지를 열 수 없다(${(error as NodeJS.ErrnoException).code ?? "error"}): workspace 폴더를 확인한다`,
+		);
+	}
 	try {
 		if (!fstatSync(fd).isFile()) throw new OnboardingError("finish: 관찰지가 일반 파일이 아니다");
 		writeSync(fd, bytes);

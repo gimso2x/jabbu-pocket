@@ -204,6 +204,23 @@ describe("state machine", () => {
 		await call({ op: "consent", reply: "yes", message: "예" });
 	};
 
+	test("AC-7: finish with a missing workspace folder is an onboarding error, not a raw ENOENT", async () => {
+		const missing = buildOnboardingTool({
+			originKey: ORIGIN,
+			store,
+			notesPath: join(dir, "no-workspace", "owner.md"),
+			timezone: "Asia/Seoul",
+			now: () => now,
+			log: quietLog((line) => logged.push(line)),
+		});
+		const callMissing = (params: Record<string, unknown>) => missing.execute(params, noSignal);
+		await callMissing({ op: "start" });
+		says("예");
+		await callMissing({ op: "consent", reply: "yes", message: "예" });
+		await expect(callMissing({ op: "finish", text: "요약" })).rejects.toBeInstanceOf(OnboardingError);
+		expect(stateOf().phase).toBe("running");
+	});
+
 	test("AC-7: finish refuses over-long text, an over-cap file and a symlink; running and the file stay", async () => {
 		await toFinish();
 		const running = raw();

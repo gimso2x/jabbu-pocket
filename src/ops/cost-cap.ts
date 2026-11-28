@@ -31,9 +31,8 @@ const num = (value: unknown): number => (typeof value === "number" && Number.isF
 
 function entryIdOf(record: unknown): string | undefined {
 	if (typeof record !== "object" || record === null) return undefined;
-	const r = record as { type?: unknown; id?: unknown };
-	if (r.type === "session") return undefined;
-	return typeof r.id === "string" && r.id !== "" ? r.id : undefined;
+	const { type, id } = record as { type?: unknown; id?: unknown };
+	return type === "session" || typeof id !== "string" || id === "" ? undefined : id;
 }
 
 /** `$12.34` — every owner-facing cost text of this module. A positive amount under a cent keeps its significant digits, so a cap of $0.005 never reads "$0.01 passed the cap $0.01". */
@@ -92,17 +91,24 @@ export async function sessionWindowCost(input: {
 	}
 	const totals: WindowCost = { cost: 0, calls: 0 };
 	let lastEntryId: string | undefined;
+	// Usage past the last id-bearing record in range is not covered by the cursor the charge advances to, so it
+	// would be charged again on the next turn: hold it until an id-bearing record covers it (its own id covers
+	// its own usage), and let the next charge pick up what is still held then.
+	let pendingCost = 0;
+	let pendingCalls = 0;
 	for (const [index, record] of records.entries()) {
+		const usage = usageOf(record);
+		if (usage !== undefined && index >= start && (input.afterEntryId === null ? inWindow(record) : true)) {
+			pendingCalls += 1;
+			pendingCost += num(usage.cost?.total);
+		}
 		const id = entryIdOf(record);
 		if (id !== undefined && (input.afterEntryId !== null ? index >= start - 1 : inWindow(record))) {
 			lastEntryId = id;
+			totals.cost += pendingCost;
+			totals.calls += pendingCalls;
+			pendingCost = pendingCalls = 0;
 		}
-		const usage = usageOf(record);
-		if (usage === undefined) continue;
-		if (index < start) continue;
-		if (input.afterEntryId === null && !inWindow(record)) continue;
-		totals.calls += 1;
-		totals.cost += num(usage.cost?.total);
 	}
 	if (lastEntryId !== undefined) totals.lastEntryId = lastEntryId;
 
@@ -291,17 +297,11 @@ export function renderBudget(input: {
 	const lines = [
 		`오늘(${input.day}) 비용(정가 환산) ${usd(input.total)} · 상한 턴 ${cap(input.turnCap)} / 하루 ${cap(input.dailyCap)}`,
 	];
-	if (input.top.length > 0) {
-		lines.push(`상위 오리진: ${input.top.map((row) => `${row.originKey} ${usd(row.cost)}`).join(" · ")}`);
-	} else {
-		lines.push("상위 오리진: 오늘 집계된 턴이 없습니다");
-	}
-	if (input.dailyCap === undefined) {
-		lines.push("하루 상한이 꺼져 있습니다.");
-	} else if (input.total >= input.dailyCap) {
-		lines.push("하루 상한을 넘었습니다. 알림만 갈 뿐 모니터는 멈추지 않습니다.");
-	} else {
-		lines.push(`하루 상한까지 ${usd(input.dailyCap - input.total)} 남았습니다.`);
-	}
+	const top = input.top.map((row) => `${row.originKey} ${usd(row.cost)}`).join(" · ");
+	if (input.top.length > 0) lines.push(`상위 오리진: ${top}`);
+	else lines.push("상위 오리진: 오늘 집계된 턴이 없습니다");
+	if (input.dailyCap === undefined) lines.push("하루 상한이 꺼져 있습니다.");
+	else if (input.total >= input.dailyCap) lines.push("하루 상한을 넘었습니다. 알림만 갈 뿐 모니터는 멈추지 않습니다.");
+	else lines.push(`하루 상한까지 ${usd(input.dailyCap - input.total)} 남았습니다.`);
 	return lines.join("\n");
 }
