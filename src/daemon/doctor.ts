@@ -4,14 +4,13 @@ import { join } from "node:path";
 import { ConfigError, HOME_MODE, type JabbuConfig, loadConfig, readDiscordToken, SECRET_MODE } from "../config";
 import { DiscordRest } from "../discord/rest";
 import { checkOmpRuntime } from "../omp/runtime-check";
-import { countOmpModels, readJudgeRole } from "./doctor-omp";
 import { CODE_ROLLBACK_JOURNAL, type CodeRollbackJournal, readCodeRollbackJournal } from "../ops/apply";
 import { BUNDLE_SOURCES, readStamp } from "../ops/backup";
 import { BACKUP_MAX_AGE_MS } from "../ops/gates";
 import { OWNER_NOTES_MAX_BYTES, PERSONA_MAX_BYTES, SOUL_MAX_BYTES } from "../safety/prompt";
 import { checkCoreDumpLimit } from "./core-dump";
+import { listOmpModels, readJudgeRole } from "./doctor-omp";
 import { readVersion } from "./tools";
-
 
 /** Config errors that only concern the token files; doctor reports those per file and keeps going. */
 const isTokenFileError = (error: unknown): error is ConfigError =>
@@ -234,16 +233,28 @@ export async function runDoctor(
 				"omp runtime",
 				problem === undefined ? `executable=${config.ompExecutable}` : `${problem.code} ${problem.message}`,
 			);
-			const models = await countOmpModels(config.ompExecutable, 30_000, config.ompProfile);
+			const models = await listOmpModels(config.ompExecutable, 30_000, config.ompProfile);
 			report(
-				typeof models === "number" && models > 0,
+				Array.isArray(models) && models.length > 0,
 				"omp models",
-				typeof models === "number"
-					? models > 0
-						? `available=${models}`
+				Array.isArray(models)
+					? models.length > 0
+						? `available=${models.length}`
 						: "available=0 (run: omp login, or set a provider API key, as the account that runs jabbu)"
 					: models,
 			);
+			// The configured default model is what the first turn asks for: a typo passes the count above and
+			// fails only at the first turn (or a `model_stale_no_fallback` warn at session restore).
+			if (config.model !== undefined && Array.isArray(models) && models.length > 0) {
+				const listed = models.includes(config.model);
+				report(
+					listed,
+					"omp model",
+					listed
+						? config.model
+						: `${config.model} is not among the ${models.length} models omp lists (check "model" in ${config.configPath})`,
+				);
+			}
 			// A missing judge role fails at runtime (worker-tier calls, auto review), so it is a `warn` here: the role is
 			// the owner's to set and a warning never counts as a failed check. An unreadable answer is its own line: only
 			// the missing role is actionable.

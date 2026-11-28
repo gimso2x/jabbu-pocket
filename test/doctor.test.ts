@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
 import { checkDiscord, checkInjectedFiles, runDoctor } from "../src/daemon/doctor";
-import { countOmpModels, readJudgeRole } from "../src/daemon/doctor-omp";
+import { countOmpModels, listOmpModels, readJudgeRole } from "../src/daemon/doctor-omp";
 import { readVersion } from "../src/daemon/tools";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
@@ -74,6 +74,19 @@ describe("doctor: omp models", () => {
 	test("counts the models a logged-in omp lists, and 0 when no provider is logged in", async () => {
 		expect(await countOmpModels(fakeOmp(`echo '{"models":[{"id":"a"},{"id":"b"}]}'`))).toBe(2);
 		expect(await countOmpModels(fakeOmp(`echo '{"models":[]}'`))).toBe(0);
+	});
+
+	test("lists the models as provider/id, or the bare id when no provider is named", async () => {
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[{"provider":"anthropic","id":"a"},{"id":"b"}]}'`))).toEqual([
+			"anthropic/a",
+			"b",
+		]);
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[]}'`))).toEqual([]);
+	});
+
+	test("an entry without an id is unparsable, not counted", async () => {
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[{"id":"a"},{}]}'`))).toBe("unparsable output");
+		expect(await listOmpModels(fakeOmp(`echo '{"models":"nope"}'`))).toBe("unparsable output");
 	});
 
 	test("a failing, garbled or hanging omp is a reason, not a count", async () => {
@@ -511,6 +524,75 @@ esac
 		writeOverlay(undefined);
 		probedOmp('{"modelRoles":{"value":{"judge":"x/y"}}}');
 		expect(await judgeLine()).toBe("warn omp judge: 확인 불가 (no ompConfigOverlay for this install)");
+	}, 60_000);
+});
+
+describe("doctor: omp model line", () => {
+	const SRC = join(import.meta.dir, "..", "src");
+	/** A stand-in omp for the probes: `--version`, `models --json` and `config list --json`. */
+	function probedOmp(): void {
+		const path = home.config.ompExecutable;
+		writeFileSync(
+			path,
+			`#!/bin/sh
+case "$1" in
+--version) echo 'omp 9.9.9' ;;
+models) echo '{"models":[{"provider":"anthropic","id":"claude-x"},{"id":"local-y"}]}' ;;
+*) echo '{"modelRoles":{"value":{}}}' ;;
+esac
+`,
+		);
+		chmodSync(path, 0o755);
+	}
+
+	/** Writes (or removes, with `undefined`) `model` in the test home's config.json. */
+	function writeModel(model: string | undefined): void {
+		const configPath = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		if (model === undefined) delete config.model;
+		else config.model = model;
+		writeFileSync(configPath, JSON.stringify(config, null, 2));
+	}
+
+	async function modelLine(): Promise<string | undefined> {
+		const proc = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`import { runDoctor } from ${JSON.stringify(join(SRC, "daemon", "doctor"))};
+				import { OFFLINE_DOCTOR } from ${JSON.stringify(join(import.meta.dir, "helpers", "doctor-network"))};
+				const out = [];
+				await runDoctor(${JSON.stringify(home.dir)}, (line) => out.push(line), undefined, OFFLINE_DOCTOR);
+				console.log(JSON.stringify(out.filter((line) => line.includes(" omp model: "))));`,
+			],
+			{ env: process.env, stdout: "pipe", stderr: "pipe" },
+		);
+		const out = JSON.parse((await new Response(proc.stdout).text()).trim() || "[]") as string[];
+		await proc.exited;
+		return out[0];
+	}
+
+	test("a configured model among the listed ones is an ok line", async () => {
+		writeModel("anthropic/claude-x");
+		probedOmp();
+		expect(await modelLine()).toBe("ok omp model: anthropic/claude-x");
+		writeModel("local-y");
+		expect(await modelLine()).toBe("ok omp model: local-y");
+	}, 60_000);
+
+	test("a configured model omp does not list is a fail line naming the model", async () => {
+		writeModel("anthropic/claude-typo");
+		probedOmp();
+		expect(await modelLine()).toBe(
+			'fail omp model: anthropic/claude-typo is not among the 2 models omp lists (check "model" in ' +
+				`${home.dir}/config.json)`,
+		);
+	}, 60_000);
+
+	test("no configured model is no line", async () => {
+		writeModel(undefined);
+		probedOmp();
+		expect(await modelLine()).toBeUndefined();
 	}, 60_000);
 });
 

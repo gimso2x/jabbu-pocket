@@ -2,6 +2,7 @@
 // file within its size ratchet. A probe runs `omp` with the env the RPC driver gives it, under a time limit.
 import { readFileSync } from "node:fs";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
+
 /** What a short `omp` probe printed, or why it could not be read (spawn error, time limit, unreadable stdout). */
 type OmpProbe = { out: string; code: number } | { failure: string };
 
@@ -52,26 +53,52 @@ async function probeOmp(
 }
 
 /**
- * How many chat models `omp models --json` lists, run with the env the RPC driver gives omp. Zero means no provider
- * login and no API key: every turn would fail with "No default model selected", so doctor says so before the first DM.
- * A string is the reason the count could not be read (timeout, exit code, unparsable output).
+ * The chat models `omp models --json` lists, as `provider/id` (or the bare `id` when the entry names no provider),
+ * run with the env the RPC driver gives omp. Zero means no provider login and no API key: every turn would fail
+ * with "No default model selected", so doctor says so before the first DM. A string is why the list could not be
+ * read (timeout, exit code, unparsable output).
  */
-export async function countOmpModels(
+export async function listOmpModels(
 	ompExecutable: string,
 	timeoutMs = 30_000,
 	/** Config `ompProfile`: the bot profile's models and login (`withOmpProfile`). */
 	ompProfile?: string,
 	base: Record<string, string | undefined> = process.env,
-): Promise<number | string> {
+): Promise<string[] | string> {
 	const probe = await probeOmp(ompExecutable, ["models", "--json"], timeoutMs, ompProfile, base);
 	if ("failure" in probe) return probe.failure;
 	if (probe.code !== 0) return `omp models exited ${probe.code}`;
 	try {
 		const parsed = JSON.parse(probe.out) as { models?: unknown };
-		return Array.isArray(parsed.models) ? parsed.models.length : "unparsable output";
+		if (!Array.isArray(parsed.models)) return "unparsable output";
+		const ids: string[] = [];
+		for (const entry of parsed.models) {
+			const id = modelIdOf(entry);
+			if (id === undefined) return "unparsable output";
+			ids.push(id);
+		}
+		return ids;
 	} catch {
 		return "unparsable output";
 	}
+}
+
+/** `provider/id` of one `models --json` entry, or `undefined` when it names no usable id. */
+function modelIdOf(entry: unknown): string | undefined {
+	const model = entry as { id?: unknown; provider?: unknown };
+	if (typeof model !== "object" || model === null || typeof model.id !== "string" || model.id === "") return undefined;
+	return typeof model.provider === "string" && model.provider !== "" ? `${model.provider}/${model.id}` : model.id;
+}
+
+/** How many chat models `omp models --json` lists (see `listOmpModels`). */
+export async function countOmpModels(
+	ompExecutable: string,
+	timeoutMs = 30_000,
+	ompProfile?: string,
+	base: Record<string, string | undefined> = process.env,
+): Promise<number | string> {
+	const models = await listOmpModels(ompExecutable, timeoutMs, ompProfile, base);
+	return typeof models === "string" ? models : models.length;
 }
 
 /** The result of the judge-role probe: what the role resolves to, or why the role could not be read. */
