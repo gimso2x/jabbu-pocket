@@ -90,6 +90,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { sweepDeliveries } from "./delivery-sweep";
 import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
@@ -789,6 +790,7 @@ export class Daemon {
 		};
 		try {
 			await run("pump", () => this.pump());
+			await run("delivery_sweep", () => sweepDeliveries(this.#store, this.#log));
 			await run("sweep_stalls", () => this.#router?.sweepStalls());
 			await run("lane_tick", () => this.#startLaneTick());
 			try {
@@ -864,8 +866,7 @@ export class Daemon {
 	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
 	async #bootBackup(): Promise<void> {
 		if (readStamp(join(this.#options.config.homeDir, "backups")) !== undefined) return;
-		// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp. The backup runs in a worker:
-		// `runBackup` is fully synchronous, so a slow disk + large home would stall the watchdog beat and boot-loop.
+		// The daemon's clock keeps the gates fresh; a synchronous backup of a slow, large home would stall the watchdog beat and boot-loop.
 		const worker = startBootBackup(this.#options.config, new Date(this.#clock.now()), this.#options.bootBackup);
 		this.#bootBackupWorker = worker;
 		try {
@@ -1349,13 +1350,12 @@ export class Daemon {
 
 	/** The bounded wait between intake stop and child stop; a no-op when nothing runs or the bound is 0. */
 	async #drainRunningTurns(): Promise<void> {
-		const router = this.#router;
 		const boundMs = this.#options.stopDrainMs ?? STOP_DRAIN_MS;
-		if (router === undefined || boundMs <= 0) return;
-		const busy = router.busyOrigins();
+		if (this.#router === undefined || boundMs <= 0) return;
+		const busy = this.#router.busyOrigins();
 		if (busy.length === 0) return;
 		const startedAt = this.#clock.now();
-		const stillBusy = await router.drainRunning(boundMs);
+		const stillBusy = await this.#router.drainRunning(boundMs);
 		if (stillBusy.length > 0) this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
 		else this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 	}
