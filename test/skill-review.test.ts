@@ -292,6 +292,7 @@ describe("runSkillReview", () => {
 				installed.push(proposal.name);
 				return Promise.resolve();
 			},
+			skillInstalled: (name) => existsSync(join(skillDirOf(name, dir), "SKILL.md")),
 			requestApproval: () => Promise.resolve(verdict),
 			notify: (text) => {
 				notices.push(text);
@@ -350,18 +351,19 @@ describe("runSkillReview", () => {
 		return Object.assign(d, { summaries });
 	}
 
-	test("an approved create for a name that already has a SKILL.md leaves the owner's file untouched", async () => {
+	test("a create for a name that already has a SKILL.md is dropped before any approval card", async () => {
 		const skill = skillDirOf("release-checklist", dir);
 		mkdirSync(skill, { recursive: true });
 		writeFileSync(join(skill, "SKILL.md"), "오너가 직접 쓴 스킬\n");
 		const d = realInstall(PROPOSAL_JSON);
-		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 0 });
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 0, installed: 0 });
+		expect(d.summaries).toEqual([]);
+		expect(d.installed).toEqual([]);
 		expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe("오너가 직접 쓴 스킬\n");
 		expect(listSkillRevisions(skill)).toEqual([]);
-		expect(d.notices.at(-1)).not.toContain("release-checklist");
 	});
 
-	test("a patch needs an installed skill, and the approval card says it overwrites one", async () => {
+	test("a patch for a skill that is not installed is dropped before any approval card", async () => {
 		const patch = JSON.stringify([
 			{
 				action: "patch",
@@ -376,10 +378,62 @@ describe("runSkillReview", () => {
 			},
 		]);
 		const d = realInstall(patch);
-		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 0 });
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 0, installed: 0 });
+		expect(d.summaries).toEqual([]);
 		expect(existsSync(join(skillDirOf("missing-skill", dir), "SKILL.md"))).toBe(false);
+	});
+
+	test("a patch for an installed skill reaches a card that says it overwrites one", async () => {
+		const skill = skillDirOf("missing-skill", dir);
+		mkdirSync(skill, { recursive: true });
+		writeFileSync(join(skill, "SKILL.md"), "기존 스킬\n");
+		const patch = JSON.stringify([
+			{
+				action: "patch",
+				name: "missing-skill",
+				description: "Use when x",
+				content: "body",
+				evidence: "이 대화에서 통한 근거",
+				checks: [
+					{ situation: "s1", expect: "e1" },
+					{ situation: "s2", expect: "e2" },
+				],
+			},
+		]);
+		const d = realInstall(patch);
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 1 });
+		expect(d.summaries).toHaveLength(1);
 		expect(d.summaries[0]).toContain("- missing-skill (patch · 기존 스킬 덮어씀): Use when x");
 		expect(d.summaries[0]).toContain("근거: 이 대화에서 통한 근거 · 검증 2짝");
+		expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("body");
+		expect(listSkillRevisions(skill)).toHaveLength(1);
+	});
+
+	test("an inapplicable proposal is dropped while the applicable one still reaches a card", async () => {
+		const skill = skillDirOf("release-checklist", dir);
+		mkdirSync(skill, { recursive: true });
+		writeFileSync(join(skill, "SKILL.md"), "오너가 직접 쓴 스킬\n");
+		const two = JSON.stringify([
+			(JSON.parse(PROPOSAL_JSON) as Array<Record<string, unknown>>)[0],
+			{
+				action: "create",
+				name: "second-skill",
+				description: "Use when second",
+				content: "body",
+				evidence: "이 대화에서 통한 근거",
+				checks: [
+					{ situation: "s1", expect: "e1" },
+					{ situation: "s2", expect: "e2" },
+				],
+			},
+		]);
+		const d = realInstall(two);
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 1 });
+		expect(d.summaries).toHaveLength(1);
+		expect(d.summaries[0]).toContain("second-skill");
+		expect(d.summaries[0]).not.toContain("release-checklist");
+		expect(d.installed).toEqual(["second-skill"]);
+		expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe("오너가 직접 쓴 스킬\n");
 	});
 
 	test("when the 2nd of 3 installs fails the notice names only the 1st and 3rd", async () => {
