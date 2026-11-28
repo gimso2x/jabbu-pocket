@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { gatesCommand } from "../src/cli/gates";
 import { doctorCommand } from "../src/cli/index";
 import { ConfigError, loadConfig } from "../src/config";
-import { countOmpModels } from "../src/daemon/doctor";
+import { countOmpModels } from "../src/daemon/doctor-omp";
 import type { ProcessRunner } from "../src/dispatch/omp";
 import { checkOmpRuntimeSync } from "../src/omp/runtime-check";
 import { writeFreeze } from "../src/ops/freeze";
