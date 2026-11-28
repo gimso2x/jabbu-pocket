@@ -816,9 +816,7 @@ export class TaskSweeper {
 				await this.#post(row, buildAgentWaitingCard(row, screen, this.#deps.ownerUserId, await this.#boardLink(row)));
 				actions.push("agent waiting notice");
 			}
-		} else if (agent.ok) {
-			this.#waitingSince.delete(row.taskId);
-		}
+		} else if (agent.ok) this.#waitingSince.delete(row.taskId);
 		// Paused task worker is herdr-working past interrupt grace: told once per pause.
 		if (
 			pausedAt !== undefined &&
@@ -945,9 +943,8 @@ export class TaskSweeper {
 		const local = ledger.listActive().filter((row) => row.host === null);
 		const pairs: Array<[TaskRow, TaskRow]> = [];
 		for (const [i, a] of local.entries()) {
-			for (const b of local.slice(i + 1)) {
+			for (const b of local.slice(i + 1))
 				if (a.repo === b.repo || (await this.#repoMatches(a, [b.repo]))) pairs.push([a, b]);
-			}
 		}
 		const paths = new Map<string, ReadonlySet<string> | undefined>();
 		const pathsOf = async (row: TaskRow): Promise<ReadonlySet<string> | undefined> => {
@@ -981,12 +978,15 @@ export class TaskSweeper {
 			[b, a],
 		];
 		for (const [own, other] of pair) {
-			if (!ledger.recordNotice(own.taskId, `overlap:${other.taskId}:${hash}`)) continue;
+			// Recorded only after the post went out, like `#restated`: a failed post is tried again next sweep.
+			const key = `overlap:${other.taskId}:${hash}`;
+			if (key in ledger.require(own.taskId).notices) continue;
 			log.info("task_overlap", { task: own.taskId, other: other.taskId, paths: shared.length });
-			await this.#post(
+			const posted = await this.#post(
 				own,
 				`⚠️ 파일 겹침: ${a.taskId}와 ${b.taskId}가 ${shown}를 함께 고칩니다. 먼저 끝나는 쪽을 랜딩한 뒤 다른 쪽을 rebase하세요.`,
 			);
+			if (posted) ledger.recordNotice(own.taskId, key);
 		}
 		for (const [own, other] of pair) {
 			const key = `overlapworker:${other.taskId}:${hash}`;
