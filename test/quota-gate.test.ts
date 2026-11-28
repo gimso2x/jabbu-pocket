@@ -29,6 +29,7 @@ import {
 	usedPercentOfLimit,
 	writeQuotaLift,
 } from "../src/ops/quota-gate";
+import { QUOTA_RECOVERY_CURSOR, QuotaRecoveryTracker } from "../src/ops/quota-recovery";
 import { redact } from "../src/redact";
 import { startTask, type TaskDispatchDeps } from "../src/tasks/dispatch";
 import { createTaskHostOps, type TaskHostOps, type TaskResumeOps } from "../src/tasks/host";
@@ -762,6 +763,47 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 
 		const badMinutes = await runCliCapture(tmp, ["quota", "lift", "anthropic", "--minutes", "0"]);
 		expect(badMinutes.code).toBe(2);
+	});
+
+	test("quota status lists runtime holds restored from the store cursor", async () => {
+		const tmp = mkdtempSync(join(tmpdir(), "jabbu-quota-runtime-"));
+		tempDirs.push(tmp);
+		const liveNow = Date.now();
+		const tracker = new QuotaRecoveryTracker();
+		tracker.recordQuotaError({
+			provider: "anthropic",
+			originKey: "discord/dm/1",
+			reason: "429",
+			resetAt: liveNow + 3_600_000,
+			now: liveNow,
+		});
+		// A hold whose safety window already elapsed is not blocking anymore, so status omits it.
+		tracker.recordQuotaError({
+			provider: "zai",
+			originKey: "discord/dm/2",
+			reason: "429",
+			now: liveNow - 6 * 3_600_000,
+		});
+		const db = new Database(join(tmp, "jabbu.db"));
+		db.exec("CREATE TABLE slack_cursors (cursor_key TEXT PRIMARY KEY, last_ts TEXT NOT NULL, updated_at INTEGER NOT NULL)");
+		db
+			.query("INSERT INTO slack_cursors (cursor_key, last_ts, updated_at) VALUES (?, ?, ?)")
+			.run(QUOTA_RECOVERY_CURSOR, tracker.serialize(), liveNow);
+		db.close();
+
+		const statusJson = await runCliCapture(tmp, ["quota", "status", "--json"]);
+		expect(statusJson.code).toBe(0);
+		const parsed = JSON.parse(statusJson.stdout) as {
+			runtimeHolds: Array<{ provider: string; origins: string[]; resetAt?: number }>;
+		};
+		expect(parsed.runtimeHolds.map((hold) => hold.provider)).toEqual(["anthropic"]);
+		expect(parsed.runtimeHolds[0]?.origins).toEqual(["discord/dm/1"]);
+		expect(parsed.runtimeHolds[0]?.resetAt).toBe(liveNow + 3_600_000);
+
+		const statusPlain = await runCliCapture(tmp, ["quota", "status"]);
+		expect(statusPlain.code).toBe(0);
+		expect(statusPlain.stdout).toContain("runtime_held=1");
+		expect(statusPlain.stdout).toContain("runtime_hold provider=anthropic origins=1");
 	});
 
 	test("quotaGate mode=warn records snapshot and logs without blocking starts, and switches live to hold", async () => {
