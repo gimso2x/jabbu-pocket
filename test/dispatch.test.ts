@@ -379,6 +379,36 @@ describe("remote dispatch (host qualifier)", () => {
 		expect(log.some((line) => line.includes("'agent' 'prompt'") && line.includes("'복잡한 리팩터링'"))).toBe(true);
 	});
 
+	test("an agent list that is not JSON is an error, not an empty list (no name-check bypass)", async () => {
+		const run: ProcessRunner = async (cmd) =>
+			cmd.includes("'agent'") && cmd.includes("'list'")
+				? { code: 0, stdout: "herdr 0.9.5 (warning: update available)\n", timedOut: false }
+				: remoteRun(cmd, {});
+		const result = await herdrRemoteStart({
+			sshTarget: "wsl",
+			name: "jabbu-x-1",
+			task: "t",
+			cwd: "/home/dev/work",
+			options: { run },
+		});
+		expect(result).toEqual({ ok: false, error: "agent list output is not JSON" });
+	});
+
+	test("a workspace list that is not JSON is an error, not a fresh owners workspace", async () => {
+		const run: ProcessRunner = async (cmd) =>
+			cmd.includes("'workspace'") && cmd.includes("'list'")
+				? { code: 0, stdout: "herdr 0.9.5 (warning: update available)\n", timedOut: false }
+				: remoteRun(cmd, {});
+		const result = await herdrRemoteStart({
+			sshTarget: "wsl",
+			name: "jabbu-x-1",
+			task: "t",
+			cwd: "/home/dev/work",
+			options: { run },
+		});
+		expect(result).toEqual({ ok: false, error: "workspace list output is not JSON" });
+	});
+
 	test("every remote herdr word is single-quoted so ssh delivers it verbatim", async () => {
 		const seen: string[][] = [];
 		const run: ProcessRunner = async (cmd) => {
