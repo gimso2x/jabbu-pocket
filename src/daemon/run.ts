@@ -1,4 +1,4 @@
-import { lstatSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
 import { errorFields } from "../channel/text";
@@ -14,7 +14,6 @@ import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
-import { readRegularText, writeAtomic0600 } from "../ops/stamp";
 import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
@@ -24,8 +23,8 @@ import { createBotDriverFactory } from "./bot-driver";
 import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
 import { acquireLock, type Lock, LockHeldError } from "./lock";
+import { assertOmpRunnable, checkOmpVersion } from "./omp-boot";
 import { testFatal, testStartDelayMs, testStartStall } from "./run-test-hooks";
-import { readVersion } from "./tools";
 import { startWatchdog, watchdogStallMs } from "./watchdog";
 
 /** `provider/model` in config.json becomes the two RpcClient options. */
@@ -86,25 +85,6 @@ export function channelBindings(
 	log: Logger,
 ): ChannelBinding[] {
 	return [...discordBindings(config, env, log), ...(config.channels.web?.enabled === true ? [new WebBinding()] : [])];
-}
-
-/** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */
-export async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
-	const version = await readVersion([config.ompExecutable, "--version"]);
-	const recorded = join(config.homeDir, "omp-version");
-	let previous: string | undefined;
-	try {
-		if (lstatSync(recorded, { throwIfNoEntry: false })?.isFile() === true) previous = readRegularText(recorded).trim();
-	} catch {
-		/* unreadable or non-regular */
-	}
-	if (previous !== undefined && previous !== version) log.warn("omp_version_changed", { from: previous, to: version });
-	try {
-		writeAtomic0600(recorded, `${version}\n`);
-	} catch (error) {
-		log.warn("omp_version_write_failed", { path: recorded, error: String(error) });
-	}
-	return version;
 }
 
 /**
@@ -286,6 +266,7 @@ export async function runDaemon(
 	testStartStall(env);
 	try {
 		await testStartDelayMs(env);
+		await assertOmpRunnable(config, ompVersion);
 		await daemon.start();
 	} catch (error) {
 		watchdog.stop();
