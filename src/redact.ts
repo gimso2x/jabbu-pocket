@@ -209,12 +209,12 @@ function maskWrappedShapes(text: string): string {
 }
 
 /**
- * OAuth bearer credentials: a JWT (Entra access tokens, so also any `Authorization: Bearer eyJ…` header),
- * and the value of a credential-named field in JSON or a form body. Chat masking only: the upload check keeps `secretShapes`.
+ * OAuth bearer credentials: a JWT (Entra access tokens, so also any `Authorization: Bearer eyJ…` header), and the
+ * value of a credential-named field in JSON, a form body or an `Authorization` header (a `Basic` base64 user:password, or a non-JWT `Bearer` token — the scheme word goes with the value, the header name stays). Chat masking only: the upload check keeps `secretShapes`.
  */
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 const TOKEN_FIELD_PATTERN =
-	/(["']?\b(?:(?:access|refresh|id)_token|client[_-]?secret|api[_-]?key|password|passwd|secret)["']?\s*[:=]\s*["']?)[^"'&\s,}]{16,}/gi;
+	/(["']?\b(?:(?:access|refresh|id)_token|client[_-]?secret|api[_-]?key|password|passwd|secret|authorization)["']?\s*[:=]\s*["']?)(?:(?:Basic|Bearer)\s+)?[^"'&\s,}]{16,}/gi;
 
 /**
  * A password in a URL's userinfo (`https://user:pass@host`: only the password is masked, up to the last `@` of the
