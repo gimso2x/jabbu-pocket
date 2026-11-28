@@ -48,7 +48,7 @@ export function readHerdrHealth(homeDir: string): HerdrHealthStamp | undefined {
 
 /**
  * The daemon's local herdr probe: `<bin> status server` must exit 0 with a `status: running` line. Each check writes
- * the stamp; the failure streak lives in memory and continues from the stamp after a restart.
+ * the stamp; the failure streak lives in memory and continues from a fresh stamp after a restart.
  */
 export class HerdrHealthProbe {
 	readonly #options: { homeDir: string; bin: string; run: ProcessRunner; now(): number };
@@ -63,7 +63,7 @@ export class HerdrHealthProbe {
 		if (this.#streak === undefined) {
 			const previous = readHerdrHealth(homeDir);
 			this.#streak =
-				previous === undefined || previous.ok
+				previous === undefined || previous.ok || now() - previous.ts.getTime() > HERDR_HEALTH_STALE_MS
 					? { fails: 0, since: "-" }
 					: { fails: previous.fails, since: previous.since };
 		}
