@@ -1,7 +1,7 @@
 // `callDaemonWhenUp`: a request that found nobody listening is sent again while the daemon restarts; a request that
 // went out is never repeated.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -78,6 +78,55 @@ describe("callDaemonWhenUp", () => {
 				server.stop();
 			}
 		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("startIpcServer socket path", () => {
+	test("a directory at the socket path refuses with a remove-it-by-hand error and stays put", () => {
+		const dir = mkdtempSync(join(tmpdir(), "ipc-dir-"));
+		const path = join(dir, "jabbu.sock");
+		mkdirSync(path);
+		try {
+			expect(() => startIpcServer(path, async () => ({ ok: true }))).toThrow(
+				/ipc socket path .* is not a regular file \(remove or move it by hand\)/,
+			);
+			expect(statSync(path).isDirectory()).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a symlink at the socket path is unlinked and the server answers; the target is untouched", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ipc-link-"));
+		const target = join(dir, "target");
+		const path = join(dir, "jabbu.sock");
+		writeFileSync(target, "stale");
+		symlinkSync(target, path);
+		const server = startIpcServer(path, async () => ({ ok: true }));
+		try {
+			expect(await callDaemon(path, { op: "x" })).toEqual({ ok: true });
+			expect(readFileSync(target, "utf8")).toBe("stale");
+		} finally {
+			server.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a live socket at the path is unlinked and the new server answers (a restart in the same home)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ipc-sock-"));
+		const path = join(dir, "jabbu.sock");
+		const first = startIpcServer(path, async () => ({ ok: "first" }));
+		try {
+			const second = startIpcServer(path, async () => ({ ok: "second" }));
+			try {
+				expect(await callDaemon(path, { op: "x" })).toEqual({ ok: "second" });
+			} finally {
+				second.stop();
+			}
+		} finally {
+			first.stop();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

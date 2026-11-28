@@ -29,6 +29,8 @@ import {
 	usedPercentOfLimit,
 	writeQuotaLift,
 } from "../src/ops/quota-gate";
+import { QuotaRecoveryTracker } from "../src/ops/quota-recovery";
+import { executeQuotaReset } from "../src/ops/quota-reset";
 import { redact } from "../src/redact";
 import { startTask, type TaskDispatchDeps } from "../src/tasks/dispatch";
 import { createTaskHostOps, type TaskHostOps, type TaskResumeOps } from "../src/tasks/host";
@@ -762,6 +764,87 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 
 		const badMinutes = await runCliCapture(tmp, ["quota", "lift", "anthropic", "--minutes", "0"]);
 		expect(badMinutes.code).toBe(2);
+	});
+
+	test("single-provider reset saves the snapshot and re-polls at once", () => {
+		const tmp = mkdtempSync(join(tmpdir(), "jabbu-quota-reset-"));
+		tempDirs.push(tmp);
+		const now = BASE_NOW;
+		const gate = new ProviderQuotaGate();
+		gate.updateFromUsage(
+			usagePayload([
+				{ provider: "anthropic", limits: [{ label: "5h", amount: { unit: "percent", usedFraction: 0.97 } }] },
+			]),
+			{ holdPct: 95 },
+			now,
+		);
+		expect(gate.hasHolds).toBe(true);
+		const recovery = new QuotaRecoveryTracker();
+		let saved = 0;
+		let polled = 0;
+		let liftsCleared = 0;
+		const result = executeQuotaReset({
+			rawArg: "anthropic",
+			homeDir: tmp,
+			now,
+			isAgy: false,
+			agyPool: undefined,
+			recovery,
+			gate,
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+			resetSnapshot: () => ({ providers: [], holdCount: 0, liftCount: 0, isAgy: false }),
+			onClearLifts: () => {
+				liftsCleared += 1;
+			},
+			onReleaseEvents: () => {},
+			onSaveSnapshot: () => {
+				saved += 1;
+			},
+			onPollNow: () => {
+				polled += 1;
+			},
+		});
+		expect(result).toContain("게이트 1시간 수동 해제(anthropic)");
+		expect(readQuotaLifts(tmp, now).has("anthropic")).toBe(true);
+		expect(liftsCleared).toBe(1);
+		expect(saved).toBe(1);
+		expect(polled).toBe(1);
+	});
+
+	test("DaemonQuotaGate.resetUsage for one provider re-polls at once, so a recovered provider clears now", async () => {
+		const now = BASE_NOW;
+		const logs: string[] = [];
+		const currentConfig: JabbuConfig = { ...home.config, quotaGate: { holdPct: 95, pollMinutes: 60 } };
+		const ctx = {
+			get options() {
+				return { config: currentConfig };
+			},
+			clock: { now: () => now },
+			log: createLogger({ sink: (line) => logs.push(line), clock: { now: () => now }, redact }),
+		} as unknown as DaemonContext;
+
+		let usedFraction = 0.97;
+		const runner: ProcessRunner = async () => ({
+			code: 0,
+			timedOut: false,
+			stdout: JSON.stringify(
+				usagePayload([{ provider: "anthropic", limits: [{ label: "5h", amount: { unit: "percent", usedFraction } }] }]),
+			),
+		});
+
+		const daemonQuota = new DaemonQuotaGate(ctx, runner);
+		await daemonQuota.pollNow();
+		expect(daemonQuota.refusalFor("anthropic/claude-opus-5-5")).toBeDefined();
+		expect(readQuotaGateSnapshot(home.dir, now).held.map((entry) => entry.provider)).toEqual(["anthropic"]);
+
+		// The owner resets one provider; usage has since recovered, so the immediate re-poll clears the hold now
+		// instead of up to `pollMinutes` later.
+		usedFraction = 0.35;
+		const result = await daemonQuota.resetUsage("anthropic");
+		expect(result).toContain("게이트 1시간 수동 해제(anthropic)");
+		await daemonQuota.idle();
+		expect(daemonQuota.refusalFor("anthropic/claude-opus-5-5")).toBeUndefined();
+		expect(readQuotaGateSnapshot(home.dir, now).held).toEqual([]);
 	});
 
 	test("quotaGate mode=warn records snapshot and logs without blocking starts, and switches live to hold", async () => {
