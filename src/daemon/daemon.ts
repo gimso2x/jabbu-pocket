@@ -90,6 +90,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { sweepDeliveries } from "./delivery-sweep";
 import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
@@ -402,6 +403,9 @@ export class Daemon {
 				store.discard(row.platformMessageId);
 				log.info("inbound_discarded", { reason: "platform_removed", id: row.platformMessageId, origin: row.originKey });
 			}
+		}
+		for (const row of store.closeRemovedPlatformDeliveries(REMOVED_PLATFORM_PREFIXES)) {
+			log.info("delivery_discarded", { reason: "platform_removed", id: row.deliveryId, origin: row.originKey });
 		}
 
 		// Rule (2): settle dispatched rows of the dead process before any new child is started.
@@ -787,6 +791,7 @@ export class Daemon {
 		};
 		try {
 			await run("pump", () => this.pump());
+			await run("delivery_sweep", () => sweepDeliveries(this.#store, this.#log));
 			await run("sweep_stalls", () => this.#router?.sweepStalls());
 			await run("lane_tick", () => this.#startLaneTick());
 			try {
@@ -862,8 +867,7 @@ export class Daemon {
 	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
 	async #bootBackup(): Promise<void> {
 		if (readStamp(join(this.#options.config.homeDir, "backups")) !== undefined) return;
-		// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp. The backup runs in a worker:
-		// `runBackup` is fully synchronous, so a slow disk + large home would stall the watchdog beat and boot-loop.
+		// The daemon's clock keeps the gates fresh; a synchronous backup of a slow, large home would stall the watchdog beat and boot-loop.
 		const worker = startBootBackup(this.#options.config, new Date(this.#clock.now()), this.#options.bootBackup);
 		this.#bootBackupWorker = worker;
 		try {
@@ -899,8 +903,7 @@ export class Daemon {
 	 * dashboard CLI's snapshot, except the daemon answers its own `status` op and no herdr board is started here.
 	 */
 	async #brief(originKey: string, threadRef: string): Promise<void> {
-		const store = this.#store;
-		if (store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
+		if (this.#store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
 		const config = this.#options.config;
 		const route = this.#channels.forThreadRef(threadRef);
 		if (route === undefined) throw new Error("이 대화의 채널을 찾지 못했습니다");
@@ -1064,10 +1067,9 @@ export class Daemon {
 	async drainCut(
 		applyStamp: string,
 	): Promise<{ ok: true; opRefs: number; approvals: number } | { ok: false; error: string }> {
-		const router = this.#router;
 		const store = this.#store;
 		const broker = this.#broker;
-		if (router?.draining !== true || store === undefined || broker === undefined)
+		if (this.#router?.draining !== true || store === undefined || broker === undefined)
 			return { ok: false, error: "not draining" };
 		const approvals = new Map<string, string>();
 		for (const request of broker.pendingRequests()) {
@@ -1223,10 +1225,9 @@ export class Daemon {
 	}
 
 	/**
-	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
-	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
-	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
-	 * the owner message a reply of it.
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and feeds the owner
+	 * message through that platform adapter's own path (same normalizeInbound, same fencing of `quoted`), threaded under
+	 * that root (with `thread`: a reply in that existing thread, and the owner message a reply of it).
 	 */
 	async inject(request: InjectRequest): Promise<InjectResult> {
 		if (this.#adapters.size === 0) throw new Error("daemon not started");
@@ -1349,13 +1350,12 @@ export class Daemon {
 
 	/** The bounded wait between intake stop and child stop; a no-op when nothing runs or the bound is 0. */
 	async #drainRunningTurns(): Promise<void> {
-		const router = this.#router;
 		const boundMs = this.#options.stopDrainMs ?? STOP_DRAIN_MS;
-		if (router === undefined || boundMs <= 0) return;
-		const busy = router.busyOrigins();
+		if (this.#router === undefined || boundMs <= 0) return;
+		const busy = this.#router.busyOrigins();
 		if (busy.length === 0) return;
 		const startedAt = this.#clock.now();
-		const stillBusy = await router.drainRunning(boundMs);
+		const stillBusy = await this.#router.drainRunning(boundMs);
 		if (stillBusy.length > 0) this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
 		else this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 	}

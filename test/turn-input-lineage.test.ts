@@ -343,4 +343,14 @@ describe("trace-inputs dump (AC-3, AC-4)", () => {
 		expect(readFileSync(join(cwd, "sub", "dump.md"), "utf8")).not.toContain(PHONE);
 		expect(traceInputsCommand(["1", "--call", "0"], home, env, cwd)).toBe(2);
 	});
+
+	test("an unknown inbound id is a data failure (exit 1), not a usage error", () => {
+		const cwd = join(home, "cwd");
+		mkdirSync(cwd, { recursive: true });
+		const env = { HOME: where().userHome, PI_CODING_AGENT_DIR: join(home, "omp-agent") };
+		expect(renderTraceInputs(home, 999, undefined, NOW, where()).ok).toBe(false);
+		expect(traceInputsCommand(["999"], home, env, cwd)).toBe(1);
+		// --call out of range stays a usage error (exit 2).
+		expect(traceInputsCommand(["1", "--call", "3"], home, env, cwd)).toBe(2);
+	});
 });
