@@ -318,6 +318,35 @@ describe("runSkillReview", () => {
 		expect(d.notices.at(-1)).toContain("승인하지 않아 설치 안 함");
 	});
 
+	test("denied proposals name every pending path, not just the first", async () => {
+		const three = JSON.stringify(
+			["first-skill", "second-skill", "third-skill"].map((name) => ({
+				action: "create",
+				name,
+				description: `Use when ${name}`,
+				content: "body",
+				evidence: "이 대화에서 통한 근거",
+				checks: [
+					{ situation: "s1", expect: "e1" },
+					{ situation: "s2", expect: "e2" },
+				],
+			})),
+		);
+		const d = deps("denied", three);
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 3, installed: 0 });
+		const notice = d.notices.at(-1) ?? "";
+		expect(notice).toContain("승인하지 않아 설치 안 함");
+		for (const name of ["first-skill", "second-skill", "third-skill"]) expect(notice).toContain(name);
+	});
+
+	test("a throwing approval request still notifies with the pending paths before propagating", async () => {
+		const d = deps("approved");
+		d.requestApproval = () => Promise.reject(new Error("broker down"));
+		await expect(runSkillReview(d, { sessionDir: join(dir, "review") })).rejects.toThrow("broker down");
+		expect(d.notices.at(-1)).toContain("승인 요청에 실패했어요");
+		expect(d.notices.at(-1)).toContain("release-checklist");
+	});
+
 	test("NO_PROPOSAL and failed reviews install nothing", async () => {
 		const none = deps("approved", "NO_PROPOSAL");
 		expect(await runSkillReview(none, { sessionDir: join(dir, "review") })).toEqual({ proposals: 0, installed: 0 });

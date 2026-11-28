@@ -244,12 +244,23 @@ export async function runSkillReview(
 		(p) =>
 			`- ${p.name} (${p.action === "patch" ? "patch · 기존 스킬 덮어씀" : p.action}): ${p.description}\n  근거: ${p.evidence.length <= 120 ? p.evidence : `${p.evidence.slice(0, 119).replace(/[\ud800-\udbff]$/, "")}…`} · 검증 ${p.checks.length}짝(설치 본문 '채택 검증' 절에 기록)`,
 	);
-	const verdict = await deps.requestApproval(
-		`📝 스킬 제안 ${proposals.length}건 — 승인하면 ${proposals.map((p) => p.name).join(", ")}를 설치합니다.\n${lines.join("\n")}`,
-	);
+	let verdict: "approved" | "denied" | "timeout";
+	try {
+		verdict = await deps.requestApproval(
+			`📝 스킬 제안 ${proposals.length}건 — 승인하면 ${proposals.map((p) => p.name).join(", ")}를 설치합니다.\n${lines.join("\n")}`,
+		);
+	} catch (error) {
+		// The pending files already exist: tell the owner where they are before the failure propagates.
+		await deps
+			.notify(
+				`📝 스킬 제안 ${proposals.length}건을 보류했습니다(승인 요청에 실패했어요 — 설치 안 함):\n${paths.join("\n")}`,
+			)
+			.catch(() => undefined);
+		throw error;
+	}
 	if (verdict !== "approved") {
 		await deps.notify(
-			`📝 스킬 제안 ${proposals.length}건을 보류했습니다: ${paths[0] ?? ""} (승인하지 않아 설치 안 함)`,
+			`📝 스킬 제안 ${proposals.length}건을 보류했습니다(승인하지 않아 설치 안 함):\n${paths.join("\n")}`,
 		);
 		return { proposals: proposals.length, installed: 0 };
 	}
