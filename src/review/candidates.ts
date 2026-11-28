@@ -112,12 +112,7 @@ function parseLine(line: string): LedgerEvent | undefined {
 
 /** The ledger text to events in file order; blank, broken and other-version lines are skipped, never thrown. */
 export function parseLedger(text: string): LedgerEvent[] {
-	const events: LedgerEvent[] = [];
-	for (const line of text.split("\n")) {
-		const event = line.trim() === "" ? undefined : parseLine(line);
-		if (event !== undefined) events.push(event);
-	}
-	return events;
+	return text.split("\n").flatMap((line) => parseLine(line) ?? []);
 }
 
 /**
@@ -156,7 +151,9 @@ export function foldCandidates(
 				cand.kind = event.kind;
 				cand.summary = event.summary;
 				cand.evidence = event.evidence;
-				if (Date.parse(`${event.day}T00:00:00Z`) >= cutoff) cand.daySet.add(event.day);
+				// A day after today never counts toward minDays (one day of clock-skew allowance).
+				if (Date.parse(`${event.day}T00:00:00Z`) >= cutoff && Date.parse(`${event.day}T00:00:00Z`) <= now + DAY_MS)
+					cand.daySet.add(event.day);
 				break;
 			case "proposed":
 				cand.status = "proposed";
