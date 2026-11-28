@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
-import { HANDOFF_SCAN_BYTES, scanHandoffBrief } from "../safety/handoff-risk";
+import { scanHandoffBrief } from "../safety/handoff-risk";
 import { assertSafeSkillPath, writeAtomicNoFollow } from "./skill-io";
 import { SKILL_REVISIONS_DIR } from "./skills";
 
@@ -66,7 +66,8 @@ interface SkillTreeScan {
 	warnings: SkillRiskWarning[];
 }
 
-function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
+/** Scans the skill tree for the lockfile's file map. `excludeFile` (the lockfile itself, when it lives inside the tree) is skipped by resolved path so lock/verify round-trips regardless of placement. */
+function scanSkillTree(rootDir: string, action: string, excludeFile?: string): SkillTreeScan {
 	const resolvedRoot = resolve(rootDir);
 	if (!assertSafeSkillPath(resolvedRoot, action, { requireDir: true })) {
 		throw new Error(`${action} failed: skills directory not found: ${resolvedRoot}`);
@@ -79,6 +80,7 @@ function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
 		const entries = readdirSync(dir).sort();
 		for (const name of entries) {
 			const full = join(dir, name);
+			if (excludeFile !== undefined && full === excludeFile) continue;
 			const rel = relative(resolvedRoot, full).replaceAll("\\", "/");
 			const st = lstatSync(full);
 			if (st.isSymbolicLink()) {
@@ -96,7 +98,9 @@ function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
 				sha256: createHash("sha256").update(buf).digest("hex"),
 				bytes: buf.byteLength,
 			};
-			if (TEXT_EXTS.has(extname(name).toLowerCase()) && buf.byteLength <= HANDOFF_SCAN_BYTES) {
+			// scanHandoffBrief truncates to the first 64 KiB itself, so the head of every text file is scanned whatever
+			// its total size; content past that cap stays unscanned (residual, not a silent skip of the whole file).
+			if (TEXT_EXTS.has(extname(name).toLowerCase())) {
 				const scan = scanHandoffBrief(buf.toString("utf8"));
 				for (const finding of scan.findings) {
 					if (finding.severity === "high_risk") {
@@ -115,7 +119,7 @@ function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
 export function writeSkillLock(rootDir: string, lockPath: string, now: () => number = Date.now): SkillLockFile {
 	const resolvedRoot = resolve(rootDir);
 	const resolvedLock = resolve(lockPath);
-	const scan = scanSkillTree(resolvedRoot, "skills lock");
+	const scan = scanSkillTree(resolvedRoot, "skills lock", resolvedLock);
 	if (scan.symlinks.length > 0) {
 		throw new Error(`skills lock refused: symbolic link(s) found: ${scan.symlinks.join(", ")}`);
 	}
@@ -182,7 +186,13 @@ export function verifySkillLock(rootDir: string, lockPath: string): SkillVerifyR
 	const resolvedRoot = resolve(rootDir);
 	const resolvedLock = resolve(lockPath);
 	const lock = readSkillLock(resolvedLock);
-	const scan = scanSkillTree(resolvedRoot, "skills verify");
+	// The lockfile binds one tree: a lock recorded for another root must never verify clean against this one, even
+	// when the relative files and hashes happen to match (stale lock, moved home, --dir mix-up). Re-lock to recover.
+	if (resolve(lock.root) !== resolvedRoot)
+		throw new Error(
+			`skills verify failed: lockfile root ${lock.root} does not match skills directory ${resolvedRoot} (re-lock with skills lock)`,
+		);
+	const scan = scanSkillTree(resolvedRoot, "skills verify", resolvedLock);
 	const lockedKeys = Object.keys(lock.files).sort();
 	const currentKeys = Object.keys(scan.files).sort();
 	const added: string[] = [];

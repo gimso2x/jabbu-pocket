@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
@@ -672,19 +672,16 @@ export class Daemon {
 		}
 		// One failed platform is stopped and dropped; pending rows stay for next boot unless all adapters fail.
 		const started = [...this.#adapters.values()];
-		const failed = (
-			await Promise.all(
-				started.map(async (adapter) => {
-					try {
-						await adapter.start();
-						return [];
-					} catch (error) {
-						await this.#dropAdapter(adapter, "adapter_start_failed", error);
-						return [adapter.platform];
-					}
-				}),
-			)
-		).flat();
+		const failed: string[] = [];
+		await Promise.all(
+			started.map((adapter) =>
+				adapter.start().then(
+					() => undefined,
+					(error: unknown) =>
+						this.#dropAdapter(adapter, "adapter_start_failed", error).then(() => failed.push(adapter.platform)),
+				),
+			),
+		);
 		if (started.length > 0 && failed.length === started.length)
 			throw new Error(`every chat adapter failed to start: ${failed.join(", ")}`);
 
@@ -851,10 +848,9 @@ export class Daemon {
 
 	/** Records a finished sweep in the heartbeat stamp; a stale stamp opens the `sweep_stalled` gate. */
 	#beat(): void {
-		const heartbeat = this.#heartbeat;
-		if (heartbeat === undefined) return;
+		if (this.#heartbeat === undefined) return;
 		try {
-			const loopMs = heartbeat.beat(this.#clock.now(), {
+			const loopMs = this.#heartbeat.beat(this.#clock.now(), {
 				discord: this.#adapters.get("discord")?.connectionState(),
 				draining: this.#router?.draining === true,
 			});
@@ -880,10 +876,9 @@ export class Daemon {
 
 	/** The day's cost state (ledger total, ceiling), read on every `!budget` so a reload or midnight needs no restart; none before the store. */
 	#dailyBudget(now = this.#clock.now()): DailyBudgetState | undefined {
-		const store = this.#store;
-		if (store === undefined) return undefined;
+		if (this.#store === undefined) return undefined;
 		return dailyBudgetState({
-			store,
+			store: this.#store,
 			day: ledgerDay(now, this.#options.config.timezone),
 			cap: this.#options.config.costCap?.dailyUsd,
 		});
@@ -933,19 +928,25 @@ export class Daemon {
 			title: `jabbu 브리핑 ${localIso(now, this.#options.config.timezone).slice(11, 16)}`,
 			comment: briefingSummaryLine(snapshot),
 		});
+		// The PNG is only needed until the upload completes: delete it now (best effort) instead of leaving one
+		// file per render for the hourly media sweep's 24h retention to collect.
+		try {
+			rmSync(out, { force: true });
+		} catch (error) {
+			this.#log.warn("briefing_file_delete_failed", { origin: originKey, ...errorFields(error) });
+		}
 		this.#log.info("briefing_rendered", { origin: originKey, ms: Date.now() - startedAt, height: size.height });
 	}
 
 	/** `!budget`: today's totals, top origins and both ceilings. The ceilings only warn; nothing is stopped by them. */
 	async #budgetCommand(): Promise<string> {
-		const store = this.#store;
-		if (store === undefined) return "비용 장부가 아직 열리지 않았습니다.";
+		// `#dailyBudget` is undefined exactly when the store is not open yet, so no separate store check.
 		const state = this.#dailyBudget();
 		if (state === undefined) return "비용 장부가 아직 열리지 않았습니다.";
 		return renderBudget({
 			day: state.day,
 			total: state.cost,
-			top: store.topDailyOrigins(state.day, 3),
+			top: this.#store?.topDailyOrigins(state.day, 3) ?? [],
 			turnCap: this.#options.config.costCap?.turnUsd,
 			dailyCap: state.cap,
 		});
@@ -1045,9 +1046,8 @@ export class Daemon {
 
 	/** `jabbu-pocket drain`: hold new turns, steers, monitor fires and skill reviews back so a restart cuts nothing (inbound stays `pending`; memory only, the restart ends it, ending it early dispatches what waited). */
 	setDraining(on: boolean): void {
-		const router = this.#router;
-		if (router === undefined || router.draining === on) return;
-		router.draining = on;
+		if (this.#router === undefined || this.#router.draining === on) return;
+		this.#router.draining = on;
 		this.#drainDeferNoticed.clear();
 		this.#log.info(on ? "drain_started" : "drain_cancelled", { ...this.drainCounts() });
 		if (on) {

@@ -4089,6 +4089,11 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 				expectedTail: "공급자 한도입니다. 다시 보내거나 다른 모델로 `/model-jabbu`",
 			},
 			{
+				error: "429 Rate limit reached for requests per min (RPM), retry in 20s",
+				expectedKind: "provider_limit",
+				expectedTail: "일시적 요청 속도 제한입니다. 20s 뒤 다시 보내 주세요",
+			},
+			{
 				error: "prompt is too long: 215000 tokens > 200000 maximum",
 				expectedKind: "context_overflow",
 				expectedTail: "대화가 너무 길어 이어갈 수 없습니다. `/new-jabbu`(또는 `/compact-jabbu`) 뒤 다시 보내 주세요",
@@ -4097,6 +4102,17 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 				error: "401 invalid api key",
 				expectedKind: "auth",
 				expectedTail: "봇 계정 인증 문제입니다. 다시 보내도 같습니다 — 오너가 로그인·키를 확인해야 합니다",
+			},
+			{
+				error: "model_not_found: bad-model",
+				expectedKind: "model_rejected",
+				expectedTail: "설정한 모델을 공급자가 거부했습니다. `/model-jabbu`로 다른 모델로 바꾼 뒤 다시 보내 주세요",
+			},
+			{
+				error: "No tool output found for function call call_1",
+				expectedKind: "tool_history_rejected",
+				expectedTail:
+					"세션의 도구 호출 기록이 어긋나 이어갈 수 없습니다. `/new-jabbu`로 새 세션을 연 뒤 다시 보내 주세요",
 			},
 			{
 				error: "socket hang up",
