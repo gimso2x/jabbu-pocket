@@ -66,7 +66,8 @@ interface SkillTreeScan {
 	warnings: SkillRiskWarning[];
 }
 
-function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
+/** Scans the skill tree for the lockfile's file map. `excludeFile` (the lockfile itself, when it lives inside the tree) is skipped by resolved path so lock/verify round-trips regardless of placement. */
+function scanSkillTree(rootDir: string, action: string, excludeFile?: string): SkillTreeScan {
 	const resolvedRoot = resolve(rootDir);
 	if (!assertSafeSkillPath(resolvedRoot, action, { requireDir: true })) {
 		throw new Error(`${action} failed: skills directory not found: ${resolvedRoot}`);
@@ -79,6 +80,7 @@ function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
 		const entries = readdirSync(dir).sort();
 		for (const name of entries) {
 			const full = join(dir, name);
+			if (excludeFile !== undefined && full === excludeFile) continue;
 			const rel = relative(resolvedRoot, full).replaceAll("\\", "/");
 			const st = lstatSync(full);
 			if (st.isSymbolicLink()) {
@@ -115,7 +117,7 @@ function scanSkillTree(rootDir: string, action: string): SkillTreeScan {
 export function writeSkillLock(rootDir: string, lockPath: string, now: () => number = Date.now): SkillLockFile {
 	const resolvedRoot = resolve(rootDir);
 	const resolvedLock = resolve(lockPath);
-	const scan = scanSkillTree(resolvedRoot, "skills lock");
+	const scan = scanSkillTree(resolvedRoot, "skills lock", resolvedLock);
 	if (scan.symlinks.length > 0) {
 		throw new Error(`skills lock refused: symbolic link(s) found: ${scan.symlinks.join(", ")}`);
 	}
@@ -182,7 +184,7 @@ export function verifySkillLock(rootDir: string, lockPath: string): SkillVerifyR
 	const resolvedRoot = resolve(rootDir);
 	const resolvedLock = resolve(lockPath);
 	const lock = readSkillLock(resolvedLock);
-	const scan = scanSkillTree(resolvedRoot, "skills verify");
+	const scan = scanSkillTree(resolvedRoot, "skills verify", resolvedLock);
 	const lockedKeys = Object.keys(lock.files).sort();
 	const currentKeys = Object.keys(scan.files).sort();
 	const added: string[] = [];

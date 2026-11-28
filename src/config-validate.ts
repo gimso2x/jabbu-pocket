@@ -145,6 +145,7 @@ export function laneLandOf(configPath: string, value: unknown): Record<string, L
 	const record = asRecord(value);
 	if (record === undefined) invalid(configPath, "lanes.land");
 	const land: Record<string, LaneLandRepoConfig> = {};
+	const seen = new Set<string>();
 	for (const [repo, raw] of Object.entries(record)) {
 		const field = `lanes.land.${repo}`;
 		const entry = asRecord(raw);
@@ -176,7 +177,11 @@ export function laneLandOf(configPath: string, value: unknown): Record<string, L
 			if (!isRecordsPath(path)) invalid(configPath, `${field}.remotes.${host}`);
 			return [host, (path as string).replace(/(?<=.)\/+$/, "")] as const;
 		});
-		land[repo.replace(/(?<=.)\/+$/, "")] = {
+		// Two distinct keys that normalise to one ("/repo" and "/repo/") would silently overwrite each other.
+		const key = repo.replace(/(?<=.)\/+$/, "");
+		if (seen.has(key)) invalid(configPath, field);
+		seen.add(key);
+		land[key] = {
 			mode,
 			...(remote === undefined ? {} : { remote }),
 			...(ciGraceMs === undefined ? {} : { ciGraceMs }),
