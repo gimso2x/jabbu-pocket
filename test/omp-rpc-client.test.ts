@@ -304,6 +304,40 @@ describe("session commands", () => {
 		}
 	});
 
+	test("steer, abort and set_thinking_level reject on success:false instead of swallowing the refusal", async () => {
+		const peer = new FakeOmpPeer();
+		peer.replies.set("steer", () => ({ error: "turn already ended", code: "turn_ended" }));
+		peer.replies.set("abort", () => ({ error: "nothing to abort" }));
+		peer.replies.set("set_thinking_level", () => ({ error: "level not offered" }));
+		const client = await startedClient(peer);
+		try {
+			const steer = await client.steer("x").catch((e: unknown) => e);
+			expect(steer).toBeInstanceOf(RpcCommandError);
+			expect(steer).toMatchObject({ code: "turn_ended", command: "steer", message: "turn already ended" });
+			const abort = await client.abort().catch((e: unknown) => e);
+			expect(abort).toBeInstanceOf(RpcCommandError);
+			expect(abort).toMatchObject({ command: "abort", message: "nothing to abort" });
+			const thinking = await client.setThinkingLevel("high").catch((e: unknown) => e);
+			expect(thinking).toBeInstanceOf(RpcCommandError);
+			expect(thinking).toMatchObject({ command: "set_thinking_level", message: "level not offered" });
+		} finally {
+			await client.stop();
+		}
+
+		const second = new FakeOmpPeer();
+		for (const [type, rule] of peer.replies) second.replies.set(type, rule);
+		const driver = await startedDriver(second);
+		try {
+			const error = await driver.steer("x").catch((e: unknown) => e);
+			expect(error).toBeInstanceOf(OmpDriverError);
+			expect(error).toMatchObject({ code: "rpc_error", rpcCode: "turn_ended" });
+			await expect(driver.abort()).rejects.toBeInstanceOf(OmpDriverError);
+			await expect(driver.setThinking("high")).rejects.toBeInstanceOf(OmpDriverError);
+		} finally {
+			await driver.stop();
+		}
+	});
+
 	test("a request without a response times out; the child's exit rejects what still waits", async () => {
 		const peer = new FakeOmpPeer();
 		peer.replies.set("get_state", () => "hold");

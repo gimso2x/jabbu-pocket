@@ -687,17 +687,17 @@ export class OmpRpcClient {
 		return response.id ?? "";
 	}
 
-	// steer, abort and set_thinking_level resolve without checking `success`, as omp's own client always did.
+	// A refusal throws: the mailbox parks a refused steer `uncertain` and treats a refused abort as failed.
 	async steer(message: string): Promise<void> {
-		await this.#request({ type: "steer", message });
+		this.#data(await this.#request({ type: "steer", message }));
 	}
 
 	async abort(): Promise<void> {
-		await this.#request({ type: "abort" });
+		this.#data(await this.#request({ type: "abort" }));
 	}
 
 	async setThinkingLevel(level: string): Promise<void> {
-		await this.#request({ type: "set_thinking_level", level });
+		this.#data(await this.#request({ type: "set_thinking_level", level }));
 	}
 
 	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
