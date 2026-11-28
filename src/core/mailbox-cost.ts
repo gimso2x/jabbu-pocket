@@ -171,11 +171,8 @@ export async function chargeSessionWindow(
 	const { store, originKey, log, clock } = deps;
 	const key = chargedCursorKey(originKey);
 	const chargeFallback = (): void => {
-		if (input.fallbackCost === undefined) {
+		if (input.fallbackCost === undefined || addDailyUsage(deps, input.opRef, input.fallbackCost, 1))
 			store.deleteCursor(key);
-			return;
-		}
-		if (addDailyUsage(deps, input.opRef, input.fallbackCost, 1)) store.deleteCursor(key);
 	};
 	let file: string | undefined;
 	try {
@@ -219,7 +216,7 @@ export async function chargeSessionWindow(
 /**
  * Aborts a turn that passed 3x its ceiling and settles it through the normal final path with the `cost_cap`
  * reason (a failure notice to the thread, but no failure count: `#onFinal` skips `#noteTurnFailure`). A final that
- * settled the turn first wins; this then does nothing.
+ * settled the turn first wins; this then does nothing. An abort that failed stops the child before the drain.
  */
 export async function abortCostCap(host: MailboxHost, turn: ActiveTurn, cap: number): Promise<void> {
 	const driver = host.driver();
@@ -228,11 +225,13 @@ export async function abortCostCap(host: MailboxHost, turn: ActiveTurn, cap: num
 	const spent = turn.costUsd + turn.subAgentUsd;
 	const reason = turn.costStopReason ?? turnCapStopReason(cap, spent);
 	log.warn("cost_cap_turn_stop", { origin: originKey, opRef: turn.opRef, cost: spent, cap });
+	let stopFirst = false;
 	try {
 		await driver.abort();
 	} catch (error) {
+		stopFirst = true;
 		log.warn("cost_cap_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
 	}
 	if (host.turn() !== turn || host.driver() !== driver) return;
-	await host.onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: reason });
+	await host.onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: reason }, stopFirst);
 }
