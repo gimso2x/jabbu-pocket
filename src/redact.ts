@@ -12,9 +12,9 @@ const DISCORD_TOKEN_SHAPE = "(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{23,28}\\.[A-Za-z0-9
 /** Entra (Azure AD) client secret: 3 chars, a digit, `Q~`, then 31–34 chars. */
 const ENTRA_SECRET_SHAPE = "(?<![A-Za-z0-9_~.-])[A-Za-z0-9_~.]{3}[0-9]Q~[A-Za-z0-9_~.-]{31,34}";
 
-/** A PEM private key (`RSA`, `EC`, `OPENSSH`, `ENCRYPTED`, bare), BEGIN through END; the body stops at a next BEGIN, so repeated markers stay linear. */
+/** A PEM private key (`RSA`, `EC`, `OPENSSH`, `ENCRYPTED`, bare), BEGIN through END; the body stops at a next BEGIN, so repeated markers stay linear. A BEGIN with base64 lines but no END (a key cut off by a log cap or a paste) masks the same way, stopping at the first non-base64 line. */
 const PEM_PRIVATE_KEY_SHAPE =
-	"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:(?!-----BEGIN )[\\s\\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----";
+	"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:(?!-----BEGIN )[\\s\\S])*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----(?:\\r?\\n[A-Za-z0-9+/]{16,}={0,2})+";
 
 /**
  * Cloud and forge keys: AWS key id, Google API key, GitLab `glpat-`, npm `npm_` (GitHub's 2021 token format) and Stripe
