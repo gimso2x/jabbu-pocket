@@ -79,8 +79,7 @@ function contextOf(usage: unknown): Pick<OmpState, "context"> {
 	const window = countOf(usage.contextWindow, 1);
 	if (window === undefined) return {};
 	const tokens = countOf(usage.tokens, 0) ?? null;
-	const percent = tokens === null ? null : (countOf(usage.percent, 0) ?? null);
-	return { context: { tokens, window, percent } };
+	return { context: { tokens, window, percent: tokens === null ? null : (countOf(usage.percent, 0) ?? null) } };
 }
 
 export interface RpcOmpDriverOptions {
@@ -120,10 +119,8 @@ export interface RpcOmpDriverOptions {
 
 function toDriverError(error: unknown): unknown {
 	if (!(error instanceof RpcCommandError)) return error;
-	return new OmpDriverError(error.code === "unknown_since" ? "unknown_since" : "rpc_error", error.message, {
-		rpcCode: error.code,
-		cause: error,
-	});
+	const code = error.code === "unknown_since" ? "unknown_since" : "rpc_error";
+	return new OmpDriverError(code, error.message, { rpcCode: error.code, cause: error });
 }
 
 /**
@@ -185,6 +182,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	readonly #admitted = new Set<string>();
 	/** Ends of prompts whose `prompt()` has not resolved yet, delivered on admission so onFinal never precedes it. */
 	readonly #early = new Map<string, () => void>();
+	/** Prompts in flight: only while one runs may an end be buffered in #early (a late frame after a rejection is dropped). */
+	#prompting = 0;
 	/** Last leafId this driver saw from a `leafId()` read; seed for the delta read in `leafIdViaCursor`. */
 	readonly #leafCursor: { since?: string } = {};
 	/**
@@ -316,13 +315,14 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const opRefs = [...this.#admitted];
 		this.#options.log?.warn("omp_stream_protocol_error", { error: error.message, prompts: opRefs.length });
 		this.#admitted.clear();
+		this.#early.clear();
 		for (const opRef of opRefs) {
 			const final: OmpFinal = { opRef, status: "error", text: "", error: `omp stream broken: ${error.message}` };
 			for (const listener of this.#finalListeners) listener(final);
 		}
-		void this.stop().catch((stopError: unknown) => {
-			this.#options.log?.warn("omp_stop_failed", { error: String(stopError) });
-		});
+		void this.stop().catch((stopError: unknown) =>
+			this.#options.log?.warn("omp_stop_failed", { error: String(stopError) }),
+		);
 	}
 
 	#onPromptResult(frame: PromptResultFrame): void {
@@ -332,7 +332,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			// Only a turn still open may wait on a tail: a late or repeated frame of a settled one would fill the single
 			// slot and end the next turn at once. A frame ahead of `prompt()`'s admission waits for it like `#endTurn`.
 			if (this.#admitted.has(id)) this.#beginTail(id);
-			else {
+			else if (this.#prompting > 0) {
 				this.#options.log?.warn("prompt_result_unadmitted", { opRef: id });
 				this.#early.set(id, () => this.#beginTail(id));
 			}
@@ -345,7 +345,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	#endTurn(opRef: string, end: TurnEnd): void {
 		const deliver = () => void this.#finalize(opRef, end);
 		if (this.#admitted.has(opRef)) deliver();
-		else this.#early.set(opRef, deliver);
+		else if (this.#prompting > 0) this.#early.set(opRef, deliver);
 	}
 
 	/**
@@ -369,8 +369,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			if (this.#tail !== tail) return;
 			if (this.#tap?.open === true) {
 				this.#options.log?.info("tail_wait_dialog_open", { opRef: tail.opRef });
-				this.#armTailSilence(tail);
-				return;
+				return this.#armTailSilence(tail);
 			}
 			this.#options.log?.warn("tail_wait_timeout", { opRef: tail.opRef, silentMs: waitMs });
 			this.#endTail({ status: "completed" });
@@ -387,8 +386,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 				if (this.#tail !== tail) return;
 				if (state.isSettled && state.queuedMessageCount === 0) {
 					this.#options.log?.info("tail_wait_settled", { opRef: tail.opRef, by: "get_state" });
-					this.#endTail({ status: "completed" });
-					return;
+					return this.#endTail({ status: "completed" });
 				}
 			} catch (error) {
 				// Still waiting: `session_settled`, a later poll or the silence cap ends it.
@@ -455,7 +453,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			for (const listener of this.#finalListeners) listener(final);
 		};
 		if (this.#admitted.has(id)) deliver();
-		else this.#early.set(id, deliver);
+		else if (this.#prompting > 0) this.#early.set(id, deliver);
 	}
 
 	async #finalize(opRef: string, frame: TurnEnd): Promise<void> {
@@ -487,14 +485,18 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	async prompt(text: string): Promise<string> {
-		const opRef = await this.#call((client) => client.prompt(text));
-		this.#admitted.add(opRef);
-		const early = this.#early.get(opRef);
-		if (early) {
+		this.#prompting += 1;
+		try {
+			const opRef = await this.#call((client) => client.prompt(text));
+			this.#admitted.add(opRef);
+			const early = this.#early.get(opRef);
 			this.#early.delete(opRef);
-			early();
+			early?.();
+			return opRef;
+		} finally {
+			this.#prompting -= 1;
+			this.#early.clear(); // Never admitted, or a stale entry for an ended turn: no admission will ever consume it.
 		}
-		return opRef;
 	}
 
 	steer = (text: string): Promise<void> => this.#call((c) => c.steer(text));
@@ -519,6 +521,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 
 	async state(): Promise<OmpState> {
 		const raw = await this.#call((client) => client.getState());
+		const configured = raw.configuredThinkingLevel;
 		return {
 			sessionId: raw.sessionId,
 			sessionFile: raw.sessionFile,
@@ -528,9 +531,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			messageCount: raw.messageCount,
 			model: raw.model?.id === undefined ? undefined : `${raw.model.provider ?? "?"}/${raw.model.id}`,
 			...(raw.thinkingLevel === undefined ? {} : { thinking: raw.thinkingLevel }),
-			...(typeof raw.configuredThinkingLevel === "string" && raw.configuredThinkingLevel !== raw.thinkingLevel
-				? { configuredThinking: raw.configuredThinkingLevel }
-				: {}),
+			...(typeof configured === "string" && configured !== raw.thinkingLevel ? { configuredThinking: configured } : {}),
 			...contextOf(raw.contextUsage),
 			...(typeof raw.fastModeEnabled === "boolean" ? { fastModeEnabled: raw.fastModeEnabled } : {}),
 			...(typeof raw.fastModeActive === "boolean" ? { fastModeActive: raw.fastModeActive } : {}),
@@ -546,9 +547,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 
 	async setModel(model: string): Promise<string> {
 		const slash = model.indexOf("/");
-		if (slash <= 0 || slash === model.length - 1) {
+		if (slash <= 0 || slash === model.length - 1)
 			throw new OmpDriverError("rpc_error", `model must be provider/id: ${model}`);
-		}
 		const set = await this.#call((client) => client.setModel(model.slice(0, slash), model.slice(slash + 1)));
 		return `${set.provider}/${set.id}`;
 	}

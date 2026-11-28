@@ -769,6 +769,61 @@ describe("osa-session-settled: a prompt whose session is not settled keeps its t
 		}
 	});
 
+	test("a prompt_result with no prompt in flight is dropped, not buffered for the next prompt", async () => {
+		const peer = tailPeer({ settled: true });
+		const { driver, finals, untilFinals, readAll } = await startPeerDriver(peer);
+		try {
+			const first = await driver.prompt("a");
+			peer.push(promptResult(first, "completed"));
+			await untilFinals(1);
+			expect(finals).toHaveLength(1);
+			// No prompt is in flight: the next prompt's id is one past the largest request id seen so far.
+			const seen = peer.commands
+				.map((c) => /^req_(\d+)$/.exec(c.id ?? "")?.[1])
+				.filter((n): n is string => n !== undefined)
+				.map(Number);
+			const nextId = `req_${Math.max(...seen) + 1}`;
+			// The stale end would finalize with the text read now; the real end reads the text below.
+			let textNow = "stale text";
+			peer.replies.set("get_last_assistant_text", () => ({ data: { text: textNow } }));
+			peer.push(promptResult(nextId, "completed"));
+			await readAll();
+			const second = await driver.prompt("b");
+			expect(second).toBe(nextId);
+			// The stale end was dropped: no final yet — the turn waits for its own prompt_result.
+			expect(finals).toHaveLength(1);
+			textNow = "real text";
+			peer.push(promptResult(second, "completed"));
+			await untilFinals(2);
+			expect(finals[1]).toEqual({ opRef: second, status: "completed", text: "real text" });
+		} finally {
+			await driver.stop();
+		}
+	});
+
+	test("a prompt that rejects drops its buffered end: the next prompt completes with its own final", async () => {
+		const peer = tailPeer({ settled: true });
+		peer.replies.set("prompt", () => "hold");
+		const { driver, finals, untilFinals, readAll } = await startPeerDriver(peer);
+		try {
+			const promptPromise = driver.prompt("a");
+			const command = await peer.command((c) => c.type === "prompt");
+			const opRef = command.id ?? "";
+			peer.push(promptResult(opRef, "completed"));
+			await readAll();
+			peer.respond(command, { error: "boom" });
+			await expect(promptPromise).rejects.toThrow("boom");
+			expect(finals).toEqual([]);
+			peer.replies.delete("prompt");
+			const second = await driver.prompt("b");
+			peer.push(promptResult(second, "completed"));
+			await untilFinals(1);
+			expect(finals).toEqual([{ opRef: second, status: "completed", text: "late answer" }]);
+		} finally {
+			await driver.stop();
+		}
+	});
+
 	test("AC-1 ②: the wait is capped: no event for tailWaitMs ends the turn normally with tail_wait_timeout", async () => {
 		const peer = tailPeer({ settled: false });
 		const { driver, finals, untilFinals, warns } = await startPeerDriver(peer, { tailWaitMs: 20 });
