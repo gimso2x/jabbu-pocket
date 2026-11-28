@@ -6,8 +6,8 @@ import { parseArgs } from "node:util";
 import { clearQuotaLift, readQuotaGateSnapshot, readQuotaLifts, writeQuotaLift } from "../ops/quota-gate";
 import {
 	QUOTA_RECOVERY_CURSOR,
-	QuotaRecoveryTracker,
 	type QuotaLiftEntry,
+	QuotaRecoveryTracker,
 	type RuntimeQuotaHold,
 } from "../ops/quota-recovery";
 
