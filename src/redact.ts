@@ -221,7 +221,7 @@ const TOKEN_FIELD_PATTERN =
  * authority) and the value of a signing/credential query parameter (`X-Amz-Signature=`, `sig=`, `token=`, `api_key=`, …):
  * the rest of the link stays readable. Chat masking only: the upload check keeps `secretShapes`.
  */
-const URL_USERINFO_PATTERN = /(\b[A-Za-z][A-Za-z0-9+.-]{0,63}:\/\/[^\s/:@?#]+:)[^\s/?#]+(?=@)/g;
+const URL_USERINFO_PATTERN = /(?<![A-Za-z0-9+.-])([A-Za-z0-9+.-]+:\/\/[^\s/:@?#]+:)[^\s/?#]+(?=@)/g;
 const URL_SIGNED_QUERY_PATTERN =
 	/([?&](?:X-Amz-Signature|X-Amz-Security-Token|X-Goog-Signature|Signature|sig|token|access_token|api[_-]?key|client[_-]?secret|password|passwd|secret)=)[^&\s#"'<>)]+/gi;
 
