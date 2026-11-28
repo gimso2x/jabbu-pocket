@@ -341,6 +341,15 @@ describe("loadConfig", () => {
 		expect(loadConfig(home).costCap).toEqual({ turnUsd: 20, dailyUsd: 300 });
 	});
 
+	test("candidates.minDays larger than windowDays is rejected; equal or smaller loads", () => {
+		writeConfig(baseConfig({ candidates: { minDays: 3, windowDays: 14 } }));
+		expect(loadConfig(home).candidates).toEqual({ minDays: 3, windowDays: 14 });
+		writeConfig(baseConfig({ candidates: { minDays: 14, windowDays: 14 } }));
+		expect(loadConfig(home).candidates).toEqual({ minDays: 14, windowDays: 14 });
+		writeConfig(baseConfig({ candidates: { minDays: 14, windowDays: 3 } }));
+		expect(catchError(() => loadConfig(home)).message).toContain("field=candidates.minDays");
+	});
+
 	test("lanes.completionNudges was removed: any value loads with one config_key_ignored warning and is dropped", () => {
 		for (const value of [0, 3, "2", -1]) {
 			writeConfig(baseConfig({ lanes: { completionNudges: value } }));
