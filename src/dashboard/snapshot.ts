@@ -945,10 +945,8 @@ function sayOf(found: AssistantTail, status: PaneSay["status"]): PaneSay {
 			const more = asks.length > 1 ? ` 외 ${asks.length - 1}개` : "";
 			return { status, question: `${first.question}${more}`, options: first.options, asks };
 		}
-		if (pending.name !== "ask") {
-			return { status, blocked: `도구 실행 승인 대기: ${sayText(str(pending.name) || "?", SAY_TEXT_CHARS)}` };
-		}
-		return { status };
+		// An ask with no readable question still waits on the tool call.
+		return { status, blocked: `도구 실행 승인 대기: ${sayText(str(pending.name) || "?", SAY_TEXT_CHARS)}` };
 	}
 	const error = typeof found.message.errorMessage === "string" ? found.message.errorMessage : "";
 	if (found.message.stopReason === "error" || error !== "") {
@@ -1567,7 +1565,10 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			const owners =
 				db === undefined
 					? []
-					: rows<{ task_id: string; agent: string; host: string | null }>(db, "SELECT task_id, agent, host FROM tasks");
+					: rows<{ task_id: string; agent: string; host: string | null }>(
+							db,
+							"SELECT task_id, agent, host FROM tasks WHERE status IN ('working','blocked','review') ORDER BY created_at DESC",
+						);
 			if (targets.length === 0)
 				return { hosts: [{ host: "local", ok: false as const, error: "herdr is not configured" }] };
 			const says: HerdrSay[] = [];

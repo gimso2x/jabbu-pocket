@@ -109,6 +109,51 @@ describe("dispatch tool (qa-j)", () => {
 		await expect(tool.execute({ mode: "simple", name: "w", task: "x" }, SIGNAL)).rejects.toThrow("simple 모드");
 	});
 
+	// round 16 (dispatch F2): taskSpec is a worker argument, so mode=simple with one is refused instead of
+	// silently starting/resuming a worker while claiming a one-shot print; nothing runs.
+	test("mode simple with a taskSpec is refused", async () => {
+		const runs: string[][] = [];
+		const { tasks } = localTask();
+		const tool = toolWith(
+			async (cmd) => {
+				runs.push(cmd);
+				return { code: 0, stdout: "{}", timedOut: false };
+			},
+			{ herdr: {}, tasks },
+		);
+		await expect(
+			tool.execute({ mode: "simple", taskSpec: { id: "T-20261112-99" }, task: "hi" }, SIGNAL),
+		).rejects.toThrow("simple 모드");
+		expect(runs).toEqual([]);
+	});
+
+	// round 16 (dispatch F3): a cwd on a taskSpec resume was silently ignored (the local worker dir comes from
+	// the registered row), so it is refused like name; nothing runs.
+	test("a taskSpec resume with a cwd is refused", async () => {
+		const runs: string[][] = [];
+		const { row, tasks } = localTask();
+		const tool = toolWith(
+			async (cmd) => {
+				runs.push(cmd);
+				return { code: 0, stdout: "{}", timedOut: false };
+			},
+			{ herdr: {}, tasks },
+		);
+		await expect(
+			tool.execute({ taskSpec: { id: row.taskId }, cwd: "/tmp/elsewhere", task: "hi" }, SIGNAL),
+		).rejects.toThrow("taskSpec에는");
+		expect(runs).toEqual([]);
+	});
+
+	// round 16 (dispatch F4): the TASKID check is case-insensitive but the ledger lookup is not, so an
+	// uppercase TASKID name passed validation and then missed the row.
+	test("an uppercase TASKID name reads the registered row", async () => {
+		const { row, tasks } = localTask();
+		const tool = toolWith(async () => ({ code: 0, stdout: "out", timedOut: false }), { herdr: {}, tasks });
+		const text = await tool.execute({ mode: "worker", name: row.agent.toUpperCase() }, SIGNAL);
+		expect(text).toContain(`▸ ${row.agent} 최근 출력:`);
+	});
+
 	// qa-j n111: a failed `omp -p` does not read as a finished run.
 	test("simple mode marks a non-zero exit in the result", async () => {
 		const tool = toolWith(async () => ({ code: 2, stdout: "partial answer", timedOut: false }));
@@ -120,5 +165,34 @@ describe("dispatch tool (qa-j)", () => {
 			SIGNAL,
 		);
 		expect(ok).toBe("fine");
+	});
+
+	// round 16 (dispatch F5): a failed `omp -p` run dropped the stderr reason (quota 429 reads as a bare exit
+	// code); the failure line carries it now, while a bare failure or a timeout gains no reason line.
+	test("simple mode keeps the stderr reason on a failed run", async () => {
+		const tool = toolWith(async () => ({
+			code: 2,
+			stdout: "partial answer",
+			stderr: `{"error":{"code":"provider_quota","message":"429"}}`,
+			timedOut: false,
+		}));
+		const text = await tool.execute({ task: "빌드 상태 요약" }, SIGNAL);
+		expect(text).toContain("[실패: omp -p exit 2");
+		expect(text).toContain("provider_quota");
+		expect(text).toContain("429");
+		const bare = await toolWith(async () => ({ code: 2, stdout: "partial answer", timedOut: false })).execute(
+			{ task: "x" },
+			SIGNAL,
+		);
+		expect(bare).toContain("[실패: omp -p exit 2");
+		expect(bare).not.toContain("사유:");
+		const timedOut = await toolWith(async () => ({
+			code: null,
+			stdout: "partial",
+			stderr: "boom",
+			timedOut: true,
+		})).execute({ task: "x" }, SIGNAL);
+		expect(timedOut).toContain("시간 초과로 중단됨");
+		expect(timedOut).not.toContain("사유:");
 	});
 });
