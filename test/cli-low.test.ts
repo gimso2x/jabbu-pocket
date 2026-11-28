@@ -104,6 +104,16 @@ describe("CLI commands without a daemon", () => {
 		expect(run.stderr).not.toContain("daemon not reachable");
 	});
 
+	test("--version and version print the package version and exit 0", async () => {
+		for (const command of ["--version", "version"]) {
+			const run = await runCliCapture(home.dir, [command]);
+			expect(run.code).toBe(0);
+			expect(run.stdout).toMatch(/^jabbu-pocket \d+\.\d+\.\d+\n$/);
+			expect(run.stderr).toBe("");
+		}
+		expect((await runCliCapture(home.dir, ["--version", "extra"])).code).toBe(2);
+	});
+
 	test("daemon, doctor, reload and --help refuse stray arguments (exit 2, one line)", async () => {
 		// A home with no config.json: without the guard `daemon` would fail on the config (exit 1).
 		const bare = mkdtempSync(join(tmpdir(), "jabbu-cli-bare-"));
