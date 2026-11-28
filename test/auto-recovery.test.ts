@@ -250,6 +250,15 @@ describe("QuotaRecoveryTracker and reset parsing", () => {
 		// BASE_NOW is 10:00 KST; "14:00" resolves to today 14:00 KST (05:00Z); "09:00" rolls to tomorrow 09:00 KST
 		expect(parseResetAtMs("14:00", BASE_NOW, "Asia/Seoul")).toBe(Date.parse("2026-11-27T05:00:00Z"));
 		expect(parseResetAtMs("09:00", BASE_NOW, "Asia/Seoul")).toBe(Date.parse("2026-11-28T00:00:00Z"));
+
+		// Out-of-range wall times are not reset times (Date.UTC would silently normalize them).
+		expect(parseResetAtMs("25:00", BASE_NOW, "Asia/Seoul")).toBeUndefined();
+		expect(parseResetAtMs("14:60", BASE_NOW, "Asia/Seoul")).toBeUndefined();
+		expect(parseResetAtMs("23:59:60", BASE_NOW, "Asia/Seoul")).toBeUndefined();
+		expect(parseResetAtMs("2026-11-27 25:00:00", BASE_NOW, "Asia/Seoul")).toBeUndefined();
+		expect(parseResetAtMs("2026-13-01 12:00:00", BASE_NOW, "Asia/Seoul")).toBeUndefined();
+		expect(parseResetAtMs("23:59", BASE_NOW, "Asia/Seoul")).toBe(Date.parse("2026-11-27T14:59:00Z"));
+		expect(parseResetAtMs("9:00", BASE_NOW, "Asia/Seoul")).toBe(Date.parse("2026-11-28T00:00:00Z"));
 	});
 
 	test("checks multi-account headroom and blocks premature release until actual headroom, lift, or fallback", () => {
