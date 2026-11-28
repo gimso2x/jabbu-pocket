@@ -155,6 +155,12 @@ function seedCallOf(entry: OmpEntry | undefined): CacheCall | undefined {
  * the bound, so callers do not slice further. Classification still uses the full text (`classifyReason`). */
 const REASON_HEAD_CHARS = 1000;
 const REASON_TAIL_CHARS = 1000;
+/**
+ * Ledger cursor holding the epoch whose driver rotation is still owed its context: the durable half of
+ * `#rotatedSession`, so a daemon restart between the rotation and the next turn keeps the flag.
+ */
+const ROTATION_CURSOR_PREFIX = "rotation:";
+const rotationCursorKey = (originKey: string): string => `${ROTATION_CURSOR_PREFIX}${originKey}`;
 
 function headTailReason(text: string): string {
 	const chars = [...text];
@@ -1222,6 +1228,7 @@ export class OriginMailbox {
 		this.#freshSession = false;
 		const rotated = this.#rotatedSession;
 		this.#rotatedSession = false;
+		if (rotated) store.deleteCursor(rotationCursorKey(originKey));
 		const coldResume = this.#coldResume;
 		this.#coldResume = undefined;
 		const blocks: string[] = peerNotice ? [peerTouchedTurnNotice(originKey)] : [];
@@ -1369,14 +1376,11 @@ export class OriginMailbox {
 		if (!origin) throw new OmpDriverError("not_started", `unknown origin ${originKey}`);
 		// Freshness must be read before the child exists: an empty epoch dir means this session is brand-new.
 		this.#freshSession = epochDirIsFresh(origin.sessionDir);
-		if (this.#freshSession) {
-			// A rotation dropped the session pointer after the last turn; a daemon restart before the next turn loses
-			// the in-memory flag, but exchanges of this epoch prove this is a post-rotation session, not a first one.
-			// A fresh dir with no exchanges is still a first session (`/new` starts a new epoch with none).
-			if (this.#rotatedSession || store.listOriginExchanges(originKey, origin.epoch, 1).length > 0) {
-				this.#freshSession = false;
-				this.#rotatedSession = true;
-			}
+		// The marker the rotation wrote is the only durable record of it: the session dir alone cannot tell a first
+		// session from a post-rotation restart, and an epoch bump (`/new`, cold-resume) leaves the marker stale.
+		if (store.getCursor(rotationCursorKey(originKey)) === String(origin.epoch)) {
+			this.#freshSession = false;
+			this.#rotatedSession = true;
 		}
 		const expected = sessionToResume(origin);
 		this.#spawn = spawnSnapshot(origin.sessionDir, expected);
@@ -1511,7 +1515,12 @@ export class OriginMailbox {
 		this.#turn = undefined;
 		this.#wakeTurnEndWaiters();
 		this.#lastActivityAt = this.#deps.clock.now();
-		if (final.usage?.rotated === true) this.#rotatedSession = true;
+		if (final.usage?.rotated === true) {
+			// Persist the epoch so a restart before the next turn still re-feeds the rotation context.
+			this.#rotatedSession = true;
+			const epoch = store.getOrigin(originKey)?.epoch;
+			if (epoch !== undefined) store.setCursor(rotationCursorKey(originKey), String(epoch));
+		}
 		await recordDailyCost(this.#deps, driver, turn, stopFirst, final.usage);
 		const base = { originKey, opRef: turn.opRef, threadRef: turn.threadRef };
 		if (final.status === "completed") {
