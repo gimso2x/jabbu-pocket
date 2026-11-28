@@ -139,15 +139,16 @@ export class WikiNotes {
 
 	// ---- writing ----
 
-	/** Writes the note and records it as sent; a failure is the warning only. Returns whether the file was written. */
+	/** Writes the note and records it as sent; a sweep that never started leaves it unsent for a later retry. Returns whether it was sent. */
 	#write(config: WikiNotesConfig, note: WikiNote): boolean {
 		const { store, log } = this.#deps;
 		try {
 			const { sweepError } = writeNote(config, note, this.#deps.spawnSweep);
-			store.markWikiNoteSent(note.sourceId);
 			if (sweepError !== undefined) {
 				log.warn("wiki_note_failed", { source: note.sourceId, stage: "sweep", error: sweepError });
+				return false;
 			}
+			store.markWikiNoteSent(note.sourceId);
 			return true;
 		} catch (error) {
 			log.warn("wiki_note_failed", { source: note.sourceId, stage: "outbox", error: String(error).slice(0, 200) });
@@ -287,9 +288,7 @@ export class WikiNotes {
 					? (JSON.parse(known.draft) as NoteDraft)
 					: await this.#taskDraftOf(config, row);
 			if (draft === undefined) return;
-			draft.landing = {
-				lines: landing ?? ["코어 착지가 아니라 `jabbu-pocket tasks close --as done`으로 닫힘"],
-			};
+			draft.landing = { lines: landing ?? ["코어 착지가 아니라 `jabbu-pocket tasks close --as done`으로 닫힘"] };
 			this.#write(config, renderNote(draft));
 		} catch (error) {
 			this.#fail(sourceId, error);
