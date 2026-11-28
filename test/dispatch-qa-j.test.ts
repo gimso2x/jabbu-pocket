@@ -121,4 +121,33 @@ describe("dispatch tool (qa-j)", () => {
 		);
 		expect(ok).toBe("fine");
 	});
+
+	// round 16 (dispatch F5): a failed `omp -p` run dropped the stderr reason (quota 429 reads as a bare exit
+	// code); the failure line carries it now, while a bare failure or a timeout gains no reason line.
+	test("simple mode keeps the stderr reason on a failed run", async () => {
+		const tool = toolWith(async () => ({
+			code: 2,
+			stdout: "partial answer",
+			stderr: `{"error":{"code":"provider_quota","message":"429"}}`,
+			timedOut: false,
+		}));
+		const text = await tool.execute({ task: "빌드 상태 요약" }, SIGNAL);
+		expect(text).toContain("[실패: omp -p exit 2");
+		expect(text).toContain("provider_quota");
+		expect(text).toContain("429");
+		const bare = await toolWith(async () => ({ code: 2, stdout: "partial answer", timedOut: false })).execute(
+			{ task: "x" },
+			SIGNAL,
+		);
+		expect(bare).toContain("[실패: omp -p exit 2");
+		expect(bare).not.toContain("사유:");
+		const timedOut = await toolWith(async () => ({
+			code: null,
+			stdout: "partial",
+			stderr: "boom",
+			timedOut: true,
+		})).execute({ task: "x" }, SIGNAL);
+		expect(timedOut).toContain("시간 초과로 중단됨");
+		expect(timedOut).not.toContain("사유:");
+	});
 });
