@@ -15,7 +15,9 @@ export class RemoteJudgeClock {
 	/** Tasks whose agent was stopped when last seen. */
 	readonly #stopped = new Set<string>();
 
-	/** Whether the task waits for its next slot; `agent` is read only for a remote task inside a slot gap. */
+	/** Whether the task waits for its next slot; `agent` is read only for a remote task inside a slot gap. A probe
+	 * that finds the agent stopped records the stop, so a judgement whose reads kept failing (and so never read the
+	 * agent) is still judged once instead of every sweep. */
 	async waits(
 		row: Pick<TaskRow, "taskId" | "host">,
 		now: number,
@@ -30,7 +32,9 @@ export class RemoteJudgeClock {
 			this.#stopped.delete(row.taskId);
 			return true;
 		}
-		return this.#stopped.has(row.taskId);
+		const stopped = this.#stopped.has(row.taskId);
+		this.#stopped.add(row.taskId);
+		return stopped;
 	}
 
 	/** After a judgement at `now`, with the agent status that judgement read (undefined: unknown, the stop state stays). */
