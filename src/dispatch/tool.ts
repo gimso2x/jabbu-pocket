@@ -461,8 +461,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				throw new Error(`name은 소문자·숫자·-·_ 32자 이내여야 합니다: ${name}`);
 			if (givenCwd !== undefined)
 				throw new Error("cwd는 원격(host) 시작에서만 씁니다. 로컬 워커의 저장소는 taskSpec.repo로 주세요");
+			const agent = TASK_AGENT_NAME.test(name) ? name.toLowerCase() : name; // TASKID names are stored lowercase
 			// A local worker is a registered [TASK] (no ad hoc local start): its row says what runs it, herdr or headless.
-			const row = taskDeps?.ledger.getByAgent(name, null);
+			const row = taskDeps?.ledger.getByAgent(agent, null);
 			if (taskDeps === undefined || row === undefined)
 				throw new Error(
 					`등록된 로컬 작업이 아닙니다: ${name}. 로컬 워커는 taskSpec으로 등록하세요(자유 형식 시작은 없습니다)`,
@@ -475,8 +476,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			if (task === undefined || task === "") {
 				const read = await runtime.read(row);
 				if (!read.ok) return `읽기 실패: ${read.error ?? "unknown"}`;
-				const summary = await taskSummaryLine(taskDeps, name, null);
-				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
+				const summary = await taskSummaryLine(taskDeps, agent, null);
+				return `▸ ${agent} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
 			const followDeps = {
 				ledger: taskDeps.ledger,
@@ -486,8 +487,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
 				log: deps.log,
 			};
-			const follow = await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" });
-			return follow.text;
+			return (await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" })).text;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");
