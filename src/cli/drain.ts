@@ -132,20 +132,16 @@ export class DrainSignalGuard {
 
 	async #onSignal(signal: GuardedSignal): Promise<void> {
 		if (this.#exiting) return;
-		if (this.#restarting) {
-			this.#log(`${signal} ignored: the daemon restart was already requested`);
-			return;
-		}
+		if (this.#restarting) return this.#log(`${signal} ignored: the daemon restart was already requested`);
 		this.#exiting = true;
 		let note = "no drain held";
-		if (this.#socketPath !== undefined) {
+		if (this.#socketPath !== undefined)
 			try {
 				await this.#cancel(this.#socketPath);
 				note = "drain cancelled";
 			} catch (error) {
 				note = `drain cancel failed: ${error instanceof Error ? error.message : String(error)}`;
 			}
-		}
 		this.#log(`${signal}: ${note}; exiting`);
 		this.#exit(SIGNAL_EXIT[signal]);
 	}
@@ -166,6 +162,10 @@ export async function drainCommand(args: string[], homeDir: string): Promise<num
 		args,
 		options: { wait: { type: "boolean" }, timeout: { type: "string" }, cancel: { type: "boolean" } },
 	});
+	if (values.cancel === true && (values.wait === true || values.timeout !== undefined)) {
+		process.stderr.write("drain: --cancel cannot be combined with --wait or --timeout\n");
+		return 2;
+	}
 	// `Number("")` is 0: the value must look like a number, as `apply --timeout` requires.
 	const timeoutMin =
 		values.timeout === undefined
@@ -173,8 +173,8 @@ export async function drainCommand(args: string[], homeDir: string): Promise<num
 			: /^\d+(\.\d+)?$/.test(values.timeout)
 				? Number(values.timeout)
 				: Number.NaN;
-	if (!Number.isFinite(timeoutMin) || timeoutMin < 0) {
-		process.stderr.write("drain: --timeout must be a non-negative number of minutes\n");
+	if (!Number.isFinite(timeoutMin) || timeoutMin < 0 || (values.timeout !== undefined && values.wait !== true)) {
+		process.stderr.write("drain: --timeout must be a non-negative number of minutes, used with --wait\n");
 		return 2;
 	}
 	const socketPath = join(homeDir, "jabbu.sock");
