@@ -370,6 +370,16 @@ describe("checkTask table", () => {
 		expect(written.reachKey).toBe(plain.reachKey);
 	});
 
+	test("the reach key ignores a clock-only PROGRESS `updated` rewrite", async () => {
+		const plain = await checkTask(base);
+		const later = await checkTask({
+			...base,
+			progress: progress().replace("2026-10-26T15:04:05+09:00", "2026-10-26T15:35:00+09:00"),
+		});
+		expect(later.updatedAt).toBe("2026-10-26T15:35:00+09:00");
+		expect(later.reachKey).toBe(plain.reachKey);
+	});
+
 	test("the judgement carries PROGRESS `needs_owner`", async () => {
 		expect((await checkTask(base)).needsOwner).toBe(false);
 		const owner = progress("blocked").replace("---\n#", "needs_owner: yes\n---\n#");

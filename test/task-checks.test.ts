@@ -222,11 +222,11 @@ describe("[check: …] signals in the judgement", () => {
 		expect(complete).toMatchObject({ reached: true, problems: [], checks: [] });
 		expect(complete).toEqual(await judge(spec, false));
 		// The reached-notice key is the pre-check fingerprint, so a deploy does not re-post an old Outcome.
+		// `updatedAt` is left out on purpose: a clock-only PROGRESS rewrite is not a new reach.
 		expect(complete.reachKey).toBe(
 			digest({
 				spec: parseSpec(spec).acceptance,
 				evidence: complete.evidence,
-				updatedAt: complete.updatedAt,
 			}),
 		);
 

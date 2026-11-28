@@ -296,11 +296,11 @@ export async function checkTask(input: CheckInput): Promise<TaskJudgement> {
 		...(blockedChecksPassHead === undefined ? {} : { blockedChecksPassHead }),
 		integrityWarnings,
 		// `head`/`checks`/`integrityWarnings` are absent (dropped by JSON) without a check run or a warning, so such a
-		// task keeps its former key.
+		// task keeps its former key. `updatedAt` stays out: a clock-only rewrite is not a new reach, so the sweep
+		// stays silent instead of posting a second reached card and re-running auto-land on the same tip.
 		reachKey: digest({
 			spec: specDoc?.acceptance,
 			evidence,
-			updatedAt,
 			head: checkRun?.head,
 			checks: checkRun?.results,
 			integrityWarnings: integrityWarnings.length === 0 ? undefined : integrityWarnings,
