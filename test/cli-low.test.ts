@@ -279,6 +279,16 @@ describe("tasks CLI reads (qa-l low B)", () => {
 		expect(monitorShown.stderr).toContain("too many arguments");
 	});
 
+	test("tasks flags belong to their subcommand: --as only for close, --json only for list", async () => {
+		const id = registerTask("flag-target");
+		expect((await runCliCapture(home.dir, ["tasks", "list", "--as", "done"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "show", id, "--as", "done"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "close", id, "--json"])).code).toBe(2);
+		expect((await runCliCapture(home.dir, ["tasks", "list", "--json"])).code).toBe(0);
+		const closed = await runCliCapture(home.dir, ["tasks", "close", id, "--as", "done"]);
+		expect(closed.code, closed.stderr).toBe(0);
+	});
+
 	// qa-l #44: a ledger from before task_transitions existed shows its task with an empty history.
 	test("tasks show on a ledger without task_transitions is not a raw SQLiteError", async () => {
 		const id = registerTask("old ledger");
