@@ -856,6 +856,7 @@ describe("herdr", () => {
 		["an empty-string workerOmpArgs element", { workerOmpArgs: ["--prewalk", ""] }, "(field=workerOmpArgs)"],
 		["a blank workerOmpArgs element", { workerOmpArgs: ["  "] }, "(field=workerOmpArgs)"],
 		["a non-string workerOmpArgs element", { workerOmpArgs: [1] }, "(field=workerOmpArgs)"],
+		["a workerOmpArgs element with a NUL byte", { workerOmpArgs: ["a\u0000b"] }, "(field=workerOmpArgs)"],
 		[
 			"an object ompArgs",
 			{ dispatchHosts: { wsl: { ssh: "wsl", ompArgs: { a: 1 } } } },
@@ -864,6 +865,11 @@ describe("herdr", () => {
 		[
 			"an empty-string ompArgs element",
 			{ dispatchHosts: { wsl: { ssh: "wsl", ompArgs: [""] } } },
+			"(field=dispatchHosts.wsl.ompArgs)",
+		],
+		[
+			"an ompArgs element with a NUL byte",
+			{ dispatchHosts: { wsl: { ssh: "wsl", ompArgs: ["a\u0000b"] } } },
 			"(field=dispatchHosts.wsl.ompArgs)",
 		],
 	])("%s is rejected naming the key", (_name, extra, field) => {
