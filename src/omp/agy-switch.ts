@@ -109,7 +109,7 @@ export interface QuotaSwitchHost {
 	readonly retireChild: () => void;
 	readonly endClient: (client: AgyAcpClient) => Promise<void>;
 	readonly launch: (executable: string, env: Record<string, string>) => Promise<void>;
-	readonly sendPrompt: (client: AgyAcpClient, turn: PendingTurn, text: string) => void;
+	readonly sendPrompt: (client: AgyAcpClient, turn: PendingTurn, text: string, entry?: string) => void;
 	readonly finish: (turn: PendingTurn, final: Omit<OmpFinal, "usage">) => void;
 	readonly withRespawnLock: (fn: () => Promise<void>) => Promise<void>;
 }
@@ -377,7 +377,7 @@ export async function handleAgyQuotaSwitch(
 			});
 			turn.switching = false;
 			const retryPrompt = prependRotationContext(turn.originalPrompt, host.options.rotationContext?.() ?? null);
-			host.sendPrompt(nextClient, turn, retryPrompt);
+			host.sendPrompt(nextClient, turn, retryPrompt, turn.originalPrompt);
 		} catch (error) {
 			host.dropSession(true);
 			turn.usage.rotated = true;
