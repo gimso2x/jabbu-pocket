@@ -107,8 +107,8 @@ describe("inbound uncertain migration", () => {
 			}>
 		).map((row) => row.name);
 
-	test("SCHEMA_VERSION is 13", () => {
-		expect(SCHEMA_VERSION).toBe(13);
+	test("SCHEMA_VERSION is 14", () => {
+		expect(SCHEMA_VERSION).toBe(14);
 	});
 
 	test("a version-10 inbound table (no 'sending') is rebuilt: every column kept, uncertain rows too, sending accepted", () => {
@@ -142,7 +142,7 @@ describe("inbound uncertain migration", () => {
 		expect(indexNames(db).sort()).toEqual([...INDEXES].sort());
 		expect(db.query("SELECT name FROM sqlite_master WHERE name = 'inbound_old'").all()).toEqual([]);
 		db.close();
-		expect(userVersion(path)).toBe(13);
+		expect(userVersion(path)).toBe(14);
 	});
 
 	test("a pre-uncertain inbound table is rebuilt: rows, inbound_id, all 7 indexes kept, uncertain accepted", () => {

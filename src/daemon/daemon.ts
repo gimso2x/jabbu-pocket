@@ -404,6 +404,9 @@ export class Daemon {
 				log.info("inbound_discarded", { reason: "platform_removed", id: row.platformMessageId, origin: row.originKey });
 			}
 		}
+		for (const row of store.closeRemovedPlatformDeliveries(REMOVED_PLATFORM_PREFIXES)) {
+			log.info("delivery_discarded", { reason: "platform_removed", id: row.deliveryId, origin: row.originKey });
+		}
 
 		// Rule (2): settle dispatched rows of the dead process before any new child is started.
 		const recovered = await recoverDispatched({
@@ -863,8 +866,7 @@ export class Daemon {
 	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
 	async #bootBackup(): Promise<void> {
 		if (readStamp(join(this.#options.config.homeDir, "backups")) !== undefined) return;
-		// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp. The backup runs in a worker:
-		// `runBackup` is fully synchronous, so a slow disk + large home would stall the watchdog beat and boot-loop.
+		// The daemon's clock keeps the gates fresh; a synchronous backup of a slow, large home would stall the watchdog beat and boot-loop.
 		const worker = startBootBackup(this.#options.config, new Date(this.#clock.now()), this.#options.bootBackup);
 		this.#bootBackupWorker = worker;
 		try {
@@ -1065,10 +1067,9 @@ export class Daemon {
 	async drainCut(
 		applyStamp: string,
 	): Promise<{ ok: true; opRefs: number; approvals: number } | { ok: false; error: string }> {
-		const router = this.#router;
 		const store = this.#store;
 		const broker = this.#broker;
-		if (router?.draining !== true || store === undefined || broker === undefined)
+		if (this.#router?.draining !== true || store === undefined || broker === undefined)
 			return { ok: false, error: "not draining" };
 		const approvals = new Map<string, string>();
 		for (const request of broker.pendingRequests()) {
@@ -1224,10 +1225,9 @@ export class Daemon {
 	}
 
 	/**
-	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
-	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
-	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
-	 * the owner message a reply of it.
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and feeds the owner
+	 * message through that platform adapter's own path (same normalizeInbound, same fencing of `quoted`), threaded under
+	 * that root (with `thread`: a reply in that existing thread, and the owner message a reply of it).
 	 */
 	async inject(request: InjectRequest): Promise<InjectResult> {
 		if (this.#adapters.size === 0) throw new Error("daemon not started");

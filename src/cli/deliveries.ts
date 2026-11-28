@@ -11,9 +11,9 @@ type Verb = "list" | "ack" | "resend";
 
 /** What the owner mistyped, or the verb to run: the two failure shapes the command line may take. */
 function readCall(args: string[]): Verb | { error: string } {
-	const [verb, idText, ...rest] = args;
+	const [verb, idText] = args;
 	if (verb !== "list" && verb !== "ack" && verb !== "resend") return { error: USAGE_LINE };
-	if (rest.length > 0) return { error: `${USAGE_LINE} (too many arguments)` };
+	if (args.length > (verb === "list" ? 1 : 2)) return { error: `${USAGE_LINE} (too many arguments)` };
 	if (verb !== "list" && (idText === undefined || !/^\d+$/.test(idText)))
 		return { error: `deliveries ${verb}: needs a delivery id` };
 	return verb;

@@ -233,7 +233,7 @@ export class DiscordAdapter implements ChannelAdapter {
 				},
 				blockedReason: "discord createMessage",
 				send: (delivery) => this.#send(delivery),
-				finish: (delivery, result) => this.#finishDelivered(delivery, result),
+				finish: (delivery, result) => this.#finishDelivered(delivery, result, options.deliveries),
 			}),
 			clock: options.clock,
 			log: options.log,
@@ -967,7 +967,6 @@ export class DiscordAdapter implements ChannelAdapter {
 		injected: boolean,
 	): Promise<IngestOutcome | undefined> {
 		if (this.#core.onCardReply === undefined || text === "") return undefined;
-		const platformMessageId = threadRefOf(conversationId, event.id);
 		const cards = [this.#refInOtherChannel(event) ? undefined : event.message_reference?.message_id, threadId].filter(
 			(id): id is string => id !== undefined && id !== event.id,
 		);
@@ -976,7 +975,7 @@ export class DiscordAdapter implements ChannelAdapter {
 			const settled = await settleCardReply(
 				this.#core,
 				this.#log,
-				{ threadRef, platformMessageId, text, injected },
+				{ threadRef, platformMessageId: threadRefOf(conversationId, event.id), text, injected },
 				(originKey) =>
 					this.#beginStatus(threadRef, conversationId, card, spot, originKey, { showStatus: true, typing: true }),
 			);
@@ -1223,12 +1222,9 @@ export class DiscordAdapter implements ChannelAdapter {
 				const part = parts[index];
 				if (part === undefined) continue;
 				const channelId = destination?.channelId ?? target.channel;
-				const messageReference =
-					destination === undefined
-						? replyTo === undefined
-							? undefined
-							: { messageId: replyTo }
-						: destination.messageReference;
+				const topRef = replyTo === undefined ? undefined : { messageId: replyTo };
+				const replyRef = index === 0 ? destination?.messageReference : undefined;
+				const messageReference = destination === undefined ? topRef : replyRef;
 				const posted = await this.#call(`post:${channelId}`, () =>
 					this.#transport.createMessage({
 						channelId,
@@ -1254,10 +1250,11 @@ export class DiscordAdapter implements ChannelAdapter {
 	}
 
 	/** After the confirm or once the answer is given up: the shared status finish over this adapter's statuses. */
-	#finishDelivered(delivery: DeliveryItem, result: "sent" | "undelivered"): Promise<void> {
+	#finishDelivered(delivery: DeliveryItem, result: "sent" | "undelivered", deliveries: DeliverySource): Promise<void> {
 		return finishDeliveryStatus(delivery, result, {
 			finishStatus: (threadRef, originKey, outcome, action) => this.finishStatus(threadRef, originKey, outcome, action),
 			tracks: (threadRef, originKey) => this.#status.tracks(threadRef, originKey),
+			hasHeld: deliveries.hasHeld,
 		});
 	}
 }
