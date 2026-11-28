@@ -36,13 +36,13 @@ export class DaemonSkillReview {
 		return this.#reviewPromise !== undefined;
 	}
 
-	/** Shutdown: no new review or candidate pass starts; `idle()` waits out the running ones. */
+	/** Shutdown: no new review or candidate pass starts; `idle()` waits out a running review only. */
 	stop(): void {
 		this.#stopped = true;
 	}
 
 	idle(): Promise<void> {
-		return Promise.all([this.#reviewPromise, this.#candidatePromise]).then(() => undefined);
+		return this.#reviewPromise === undefined ? Promise.resolve() : this.#reviewPromise.then(() => undefined);
 	}
 
 	/** The owner's live DM origin on the platform of `ownerHome()`; undefined before the owner has a home. */

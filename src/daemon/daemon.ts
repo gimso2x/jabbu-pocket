@@ -1335,8 +1335,8 @@ export class Daemon {
 	}
 
 	/**
-	 * The bounded wait for a running skill review / candidate pass: the fence in `stop()` starts nothing new,
-	 * so this only waits out work already in flight (a review outliving the bound is still orphaned).
+	 * The bounded wait for a running skill review: the fence in `stop()` starts nothing new, so this only waits out
+	 * a review already in flight (still orphaned past the bound); a candidate pass waits on a click, its writes done.
 	 */
 	async #reviewIdleBounded(): Promise<void> {
 		const boundMs = this.#options.stopDrainMs ?? STOP_DRAIN_MS;
