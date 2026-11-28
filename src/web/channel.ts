@@ -55,6 +55,7 @@ export class WebChannel implements ChannelPort {
 			text: msg.text,
 			...(cardJson === undefined ? {} : { cardJson }),
 			...(buttonsJson === undefined ? {} : { buttonsJson }),
+			...(msg.idempotencyKey === undefined ? {} : { deliveryKey: msg.idempotencyKey }),
 		});
 		return {
 			platform: "web",

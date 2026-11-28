@@ -2118,11 +2118,9 @@ export class Store {
 	 * approvals rebuild may have replaced the table.
 	 */
 	private migrate(): void {
-		const originColumns = this.db.query("PRAGMA table_info(origins)").all() as Array<{ name: string }>;
+		const originColumns = new Set(columnsOf(this.db, "origins"));
 		for (const column of ["session_file", "model", "thinking"]) {
-			if (!originColumns.some((existing) => existing.name === column)) {
-				this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
-			}
+			if (!originColumns.has(column)) this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
 		}
 		const columns = this.db.query("PRAGMA table_info(inbound)").all() as Array<{ name: string }>;
 		if (!columns.some((column) => column.name === "thread_ref")) {
@@ -2144,6 +2142,8 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
+		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
+			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);

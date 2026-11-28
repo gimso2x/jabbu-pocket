@@ -30,6 +30,20 @@ import { retireStaleWebStatus } from "./stale-status";
 const TEXT_ATTACHMENT_EXT = /\.(?:txt|md|csv|json|log|yaml|yml|html|xml)$/i;
 const MAX_SCANNED_TEXT_BYTES = 1024 * 1024;
 
+/**
+ * SQLite errors a web post can retry past: the ledger is contended (`SQLITE_BUSY`/`SQLITE_LOCKED`, the 5 s
+ * `busy_timeout` already waited) or the disk is full/unwritable — the row may not have landed, so it is held for the
+ * owner instead of burning one of the 5 definitive attempts. Anything else (a channel that was never attached, a
+ * malformed message) definitely did not post and is definitive.
+ */
+const WEB_TRANSIENT_SQLITE_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_FULL", "SQLITE_IOERR"]);
+
+/** `true`: this post error is definitive — nothing was posted and retrying with backoff is safe. */
+function isWebDefinitiveError(err: unknown): boolean {
+	const code = (err as { code?: unknown } | null)?.code;
+	return typeof code !== "string" || !WEB_TRANSIENT_SQLITE_CODES.has(code);
+}
+
 function webAttachmentNote(filePath: string): string {
 	const base = `[첨부: ${filePath}]`;
 	if (!TEXT_ATTACHMENT_EXT.test(filePath)) return base;
@@ -345,11 +359,13 @@ export class WebAdapter implements ChannelAdapter {
 		try {
 			await this.#channel.post(
 				{ conversationId: target.channel, ...(threadId === undefined ? {} : { threadId }) },
-				{ text },
+				// Web posts the whole body as one message: the delivery id (+ part 0) is its idempotency key, so a
+				// repost after a failed confirm returns the row the first post wrote instead of duplicating it.
+				{ text, idempotencyKey: `delivery:${delivery.deliveryId}:0` },
 			);
 			return { kind: "sent", parts: 1 };
 		} catch (err) {
-			return failedDelivery(err, 0, () => true);
+			return failedDelivery(err, 0, isWebDefinitiveError);
 		}
 	}
 }
