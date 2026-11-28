@@ -34,6 +34,8 @@ export interface SkillReviewDeps {
 	savePending(proposals: SkillProposal[]): string[];
 	/** Installs one approved skill into the agent skills directory. */
 	install(proposal: SkillProposal): Promise<void>;
+	/** Set when the bot runs under an omp profile: installs land in the source tree and reach live sessions at the next apply. */
+	profileSyncPending?: boolean;
 	requestApproval(summary: string): Promise<"approved" | "denied" | "timeout">;
 	notify(text: string): Promise<void>;
 	log: Logger;
@@ -102,18 +104,19 @@ function balancedEnd(text: string, start: number): number {
 		else if (ch === "[" || ch === "{") depth += 1;
 		else if (ch === "]" || ch === "}") {
 			depth -= 1;
-			if (depth === 0) return i;
-			if (depth < 0) return -1;
+			if (depth <= 0) return depth === 0 ? i : -1;
 		}
 	}
 	return -1;
 }
 
 /**
- * First JSON array of objects / object in `text` that parses. Each "[" or "{" is tried as a start (bounded), its
- * balanced end is parsed; prose brackets like "[결과]" or "[1]" simply fail or carry no objects and are skipped.
+ * Each JSON array of objects / object in `text` that parses, in order. Each "[" or "{" is tried as a start (the
+ * attempt budget is shared across candidates), its balanced end is parsed; prose brackets like "[결과]" or "[1]"
+ * simply fail or carry no objects and are skipped. A yielded candidate is skipped past, so a `{"proposals":[...]}`
+ * wrapper never leaks its inner array as a second candidate.
  */
-function firstJsonList(text: string): unknown[] | undefined {
+function* jsonListCandidates(text: string): Generator<unknown[]> {
 	let attempts = 0;
 	for (let i = 0; i < text.length && attempts < MAX_START_ATTEMPTS; i++) {
 		if (text[i] !== "[" && text[i] !== "{") continue;
@@ -126,10 +129,16 @@ function firstJsonList(text: string): unknown[] | undefined {
 		} catch {
 			continue;
 		}
-		if (!Array.isArray(parsed)) return typeof parsed === "object" && parsed !== null ? [parsed] : undefined;
-		if (parsed.length === 0 || parsed.some((entry) => typeof entry === "object" && entry !== null)) return parsed;
+		if (!Array.isArray(parsed)) {
+			yield [parsed];
+			i = end;
+			continue;
+		}
+		if (parsed.length === 0 || parsed.some((entry) => typeof entry === "object" && entry !== null)) {
+			yield parsed;
+			i = end;
+		}
 	}
-	return undefined;
 }
 
 function validProposals(list: unknown[]): SkillProposal[] {
@@ -156,13 +165,9 @@ function validProposals(list: unknown[]): SkillProposal[] {
 		const checks: SkillCheck[] = [];
 		let checksOk = true;
 		for (const rawCheck of rawChecks) {
-			if (typeof rawCheck !== "object" || rawCheck === null) {
-				checksOk = false;
-				break;
-			}
 			const check = rawCheck as Record<string, unknown>;
-			const situation = typeof check.situation === "string" ? check.situation.trim() : "";
-			const expect = typeof check.expect === "string" ? check.expect.trim() : "";
+			const situation = typeof check?.situation === "string" ? check.situation.trim() : "";
+			const expect = typeof check?.expect === "string" ? check.expect.trim() : "";
 			if (situation === "" || expect === "" || situation.length > MAX_CHECK_TEXT || expect.length > MAX_CHECK_TEXT) {
 				checksOk = false;
 				break;
@@ -182,18 +187,20 @@ function validProposals(list: unknown[]): SkillProposal[] {
 
 /**
  * Pulls the proposals out of a model answer that may wrap the JSON in prose or fences: fenced blocks first, then the
- * whole text.
+ * whole text. Each parseable JSON candidate is tried in order until one yields proposals, so a first block that is
+ * entirely invalid no longer shadows a later valid one.
  */
 export function extractProposals(answer: string): SkillProposal[] {
 	const trimmed = answer.trim();
 	if (trimmed === "" || /^NO_PROPOSAL\.?$/i.test(trimmed)) return [];
-	for (const fence of trimmed.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)) {
-		const list = firstJsonList(fence[1] ?? "");
-		const proposals = list === undefined ? [] : validProposals(list);
-		if (proposals.length > 0) return proposals;
-	}
-	const list = firstJsonList(trimmed);
-	return list === undefined ? [] : validProposals(list);
+	const blocks = [...trimmed.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)].map((fence) => fence[1] ?? "");
+	blocks.push(trimmed);
+	for (const block of blocks)
+		for (const list of jsonListCandidates(block)) {
+			const proposals = validProposals(list);
+			if (proposals.length > 0) return proposals;
+		}
+	return [];
 }
 
 /** Words and shapes a plain YAML scalar would be read back as a non-string. */
@@ -216,11 +223,10 @@ function renderAdoptionChecks(proposal: SkillProposal): string {
 	const lines = ["", "## 채택 검증", ""];
 	lines.push(
 		`설치 뒤 아래 짝을 실제 대화에서 한 번씩 돌려 확인한다. 어긋나면 \`jabbu-pocket skills rollback ${proposal.name}\`.`,
+		"",
 	);
-	lines.push("");
 	for (const check of proposal.checks) lines.push(`- ${check.situation} → ${check.expect}`);
-	lines.push("- 이 스킬을 만든 모델과 다른 경로(예: GLM 크론 모니터)에서 쓸 때는 그 모델에서 다시 확인한 뒤 쓴다.");
-	lines.push("");
+	lines.push("- 이 스킬을 만든 모델과 다른 경로(예: GLM 크론 모니터)에서 쓸 때는 그 모델에서 다시 확인한 뒤 쓴다.", "");
 	return lines.join("\n");
 }
 
@@ -279,11 +285,10 @@ export async function runSkillReview(
 	}
 
 	const paths = deps.savePending(proposals);
-	const lines = proposals.map((p) => {
-		const evidence =
-			p.evidence.length <= 120 ? p.evidence : `${p.evidence.slice(0, 119).replace(/[\ud800-\udbff]$/, "")}…`;
-		return `- ${p.name} (${p.action === "patch" ? "patch · 기존 스킬 덮어씀" : p.action}): ${p.description}\n  근거: ${evidence} · 검증 ${p.checks.length}짝(설치 본문 '채택 검증' 절에 기록)`;
-	});
+	const lines = proposals.map(
+		(p) =>
+			`- ${p.name} (${p.action === "patch" ? "patch · 기존 스킬 덮어씀" : p.action}): ${p.description}\n  근거: ${p.evidence.length <= 120 ? p.evidence : `${p.evidence.slice(0, 119).replace(/[\ud800-\udbff]$/, "")}…`} · 검증 ${p.checks.length}짝(설치 본문 '채택 검증' 절에 기록)`,
+	);
 	const verdict = await deps.requestApproval(
 		`📝 스킬 제안 ${proposals.length}건 — 승인하면 ${proposals.map((p) => p.name).join(", ")}를 설치합니다.\n${lines.join("\n")}`,
 	);
@@ -306,7 +311,7 @@ export async function runSkillReview(
 	await deps.notify(
 		`📝 스킬 ${installed.length}개 설치: ${installed.join(", ")} — 다음 세션부터 스킬 목록에 나타납니다.${
 			failed === 0 ? "" : `\n${failed}개는 설치하지 못했습니다(jabbu.log skill_install_failed).`
-		}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
+		}${deps.profileSyncPending === true ? "\n봇 프로필을 쓰면 다음 apply(omp sync) 뒤에 적용됩니다." : ""}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
 	);
 	return { proposals: proposals.length, installed: installed.length };
 }
@@ -321,14 +326,10 @@ function digestMessage(line: string, perMessage: number): { role: string; text: 
 		const content = entry.message?.content;
 		let text = "";
 		if (typeof content === "string") text = content;
-		else if (Array.isArray(content)) {
-			for (const part of content) {
-				if (typeof part === "object" && part !== null && "text" in part) {
-					const value = part.text;
-					if (typeof value === "string") text += value;
-				}
-			}
-		}
+		else if (Array.isArray(content))
+			for (const part of content)
+				if (typeof part === "object" && part !== null && "text" in part && typeof part.text === "string")
+					text += part.text;
 		text = text.trim();
 		if (text === "") return undefined;
 		// Cut by UTF-16 units but never leave half of a surrogate pair at the cut.
@@ -370,10 +371,7 @@ export async function readSessionDigest(
 		files = await Promise.all(
 			(await readdir(sessionDir))
 				.filter((name) => name.endsWith(".jsonl"))
-				.map(async (name) => {
-					const path = join(sessionDir, name);
-					return { path, mtimeMs: (await stat(path)).mtimeMs };
-				}),
+				.map(async (name) => ({ path: join(sessionDir, name), mtimeMs: (await stat(join(sessionDir, name))).mtimeMs })),
 		);
 		files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 	} catch {

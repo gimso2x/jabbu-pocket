@@ -900,6 +900,37 @@ test("a child that dies on its own is reported through onExit", async () => {
 	await driver.stop();
 });
 
+test("a child that dies with a steer queued logs the dropped steer instead of losing it silently", async () => {
+	const harness = makeHarness();
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	const exited = Promise.withResolvers<OmpExitInfo>();
+	driver.onExit((info) => exited.resolve(info));
+	await driver.start();
+	await driver.prompt("@hold");
+	await driver.steer("lost follow-up");
+	process.kill(childPid(driver), "SIGKILL");
+	expect(await exited.promise).toMatchObject({ expected: false });
+	expect(
+		lines.some((line) => line.includes("event=agy.acp.child_died_steers_dropped") && line.includes("dropped=1")),
+	).toBe(true);
+	expect(await driver.state()).toMatchObject({ idle: true, queuedMessageCount: 0 });
+	await driver.stop();
+});
+
+test("stop() with a steer queued logs the dropped steer", async () => {
+	const harness = makeHarness();
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	await driver.start();
+	await driver.prompt("@hold");
+	await driver.steer("lost follow-up");
+	await driver.stop();
+	expect(lines.some((line) => line.includes("event=agy.acp.stop_steers_dropped") && line.includes("dropped=1"))).toBe(
+		true,
+	);
+});
+
 test("a stdout line past 1MiB ends the child; the next prompt starts a new one", async () => {
 	const harness = makeHarness();
 	const driver = harness.make();
@@ -1191,6 +1222,12 @@ test("abort() during @holdtool clears keepalive timer immediately", async () => 
 	await driver.stop();
 });
 
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`timeout after ${ms}ms waiting for ${what}`)), ms);
+	return Promise.race([promise, deadline.promise]).finally(() => clearTimeout(timer));
+}
+
 function makePoolHarness(order: string, names: readonly string[], nowRef: { t: number }) {
 	const harness = makeHarness();
 	const accDir = join(harness.root, "agy-accounts");
@@ -1478,6 +1515,51 @@ test("account pool: stop() during account switch waits cleanly and sends no prom
 		heldSocket?.write("go");
 		heldSocket?.end();
 		await stopping;
+
+		expect(driver.pid).toBeUndefined();
+		expect(sent(harness, "session/prompt")).toHaveLength(1);
+		expect(existsSync(join(harness.sessionDir, "agy-conversation.json"))).toBe(false);
+	} finally {
+		server.stop(true);
+	}
+});
+
+test("account pool: stop() during a held launch ends the launching child instead of waiting out the launch", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const { harness, pool, log } = makePoolHarness(
+		"acct1 agy/gemini-pro-orchestrator-neon\nacct2 agy/gemini-pro-orchestrator-neon\n",
+		["acct1", "acct2"],
+		clock,
+	);
+	const sock = join(harness.root, "init-stop-held.sock");
+	const initHeld = Promise.withResolvers<void>();
+	const server = Bun.listen({
+		unix: sock,
+		socket: {
+			open() {
+				initHeld.resolve();
+			},
+			data() {},
+		},
+	});
+	const driver = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: {
+			FAKE_AGY_QUOTA_DIRS: "antigravity-cli-acct-acct1",
+			FAKE_AGY_HOLD_INIT_DIR: "antigravity-cli-acct-acct2",
+			FAKE_AGY_HOLD_INIT_SOCK: sock,
+		},
+	});
+	try {
+		await driver.start();
+		await driver.prompt("first");
+		await initHeld.promise;
+
+		// The launch is held: stop() must not wait for its timeouts to run out.
+		await within(driver.stop(), 4000, "stop() during held launch");
 
 		expect(driver.pid).toBeUndefined();
 		expect(sent(harness, "session/prompt")).toHaveLength(1);

@@ -120,6 +120,19 @@ describe("extractProposals", () => {
 		expect(extractProposals('[{"name":"ok","description":"","content":"c"}]')).toEqual([]);
 	});
 
+	test("a first JSON candidate with no valid proposal does not shadow a later valid one", () => {
+		const bad = JSON.stringify([{ action: "create", name: "leak", description: "d", content: "c" }]);
+		expect(extractProposals(`${bad}\n${PROPOSAL_JSON}`).map((p) => p.name)).toEqual(["release-checklist"]);
+		expect(extractProposals(`\`\`\`json\n${bad}\n${PROPOSAL_JSON}\n\`\`\``).map((p) => p.name)).toEqual([
+			"release-checklist",
+		]);
+		// A wrapper object first, then a valid array: the wrapper is skipped, not unwrapped.
+		expect(
+			extractProposals(`${JSON.stringify({ proposals: [JSON.parse(bad)[0]] })}\n${PROPOSAL_JSON}`).map((p) => p.name),
+		).toEqual(["release-checklist"]);
+		expect(extractProposals(bad)).toEqual([]);
+	});
+
 	test("a skill named revisions is dropped: it would collide with the revisions directory", () => {
 		const item = (JSON.parse(PROPOSAL_JSON) as Array<Record<string, unknown>>)[0] as Record<string, unknown>;
 		item.name = "revisions";
@@ -391,6 +404,33 @@ describe("runSkillReview", () => {
 		const notice = d.notices.at(-1) ?? "";
 		expect(notice).toContain("스킬 2개 설치: first-skill, third-skill —");
 		expect(notice).not.toContain("second-skill");
+	});
+
+	test("with a bot profile the install notice says the skill lands after the next apply", async () => {
+		const d = realInstall(PROPOSAL_JSON);
+		d.profileSyncPending = true;
+		expect(await runSkillReview(d, { sessionDir: join(dir, "review") })).toEqual({ proposals: 1, installed: 1 });
+		expect(d.notices.at(-1)).toContain("다음 apply(omp sync) 뒤에 적용됩니다");
+		const plain = realInstall(
+			JSON.stringify([
+				{
+					action: "create",
+					name: "second-skill",
+					description: "Use when second",
+					content: "body",
+					evidence: "이 대화에서 통한 근거",
+					checks: [
+						{ situation: "s1", expect: "e1" },
+						{ situation: "s2", expect: "e2" },
+					],
+				},
+			]),
+		);
+		expect(await runSkillReview(plain, { sessionDir: join(dir, "review") })).toEqual({
+			proposals: 1,
+			installed: 1,
+		});
+		expect(plain.notices.at(-1)).not.toContain("다음 apply");
 	});
 
 	test("the review prompt refuses one-off narratives, secrets and ungated proposals", () => {

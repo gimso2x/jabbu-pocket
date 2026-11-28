@@ -94,6 +94,7 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 	mkdirSync(secretsDir, { recursive: true, mode: HOME_MODE });
 	chmodSync(secretsDir, HOME_MODE);
 	mkdirSync(workspaceDir, { recursive: true });
+	chmodSync(workspaceDir, HOME_MODE);
 	const config = {
 		schemaVersion: 1,
 		channels: {
@@ -112,14 +113,11 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 
 	const homePrefix = env.JABBU_HOME ? `JABBU_HOME=${remoteShellQuote(homeDir)} ` : "";
 	process.stdout.write(
-		[
-			`init_done home=${homeDir} config=${configPath} workspace=${workspaceDir}`,
-			"next: put the Discord bot token into a file (never into chat or shell history), then run doctor:",
-			"  umask 077",
-			`  cat > ${remoteShellQuote(join(secretsDir, "discord-bot-token"))}   # paste the bot token then Ctrl-D`,
-			`  ${homePrefix}bun src/main.ts doctor`,
-			"",
-		].join("\n"),
+		`init_done home=${homeDir} config=${configPath} workspace=${workspaceDir}\n` +
+			"next: put the Discord bot token into a file (never into chat or shell history), then run doctor:\n" +
+			"  umask 077\n" +
+			`  cat > ${remoteShellQuote(join(secretsDir, "discord-bot-token"))}   # paste the bot token then Ctrl-D\n` +
+			`  ${homePrefix}bun src/main.ts doctor\n`,
 	);
 	return 0;
 }

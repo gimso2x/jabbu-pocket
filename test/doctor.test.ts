@@ -215,6 +215,28 @@ describe("doctor: home", () => {
 	});
 });
 
+describe("doctor: agy accounts", () => {
+	test("a missing order file is a fail line; a readable one is ok", async () => {
+		const configPath = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		config.agent = "agy";
+		const accountsDir = join(home.dir, "agy-accounts");
+		mkdirSync(accountsDir);
+		config.agyAccounts = { dir: accountsDir };
+		writeFileSync(configPath, JSON.stringify(config));
+		const order = join(accountsDir, "order");
+		const missing: string[] = [];
+		await runDoctor(home.dir, (line) => missing.push(line), undefined, OFFLINE_DOCTOR);
+		expect(missing).toContain(
+			`fail agy accounts: ${order} is not a readable file (check "agyAccounts.dir" in ${configPath})`,
+		);
+		writeFileSync(order, "default\n");
+		const present: string[] = [];
+		await runDoctor(home.dir, (line) => present.push(line), undefined, OFFLINE_DOCTOR);
+		expect(present).toContain(`ok agy accounts: ${order} readable`);
+	});
+});
+
 describe("doctor: config warnings", () => {
 	test("an unknown key is one warn line per warning and never changes the exit code", async () => {
 		const clean: string[] = [];
