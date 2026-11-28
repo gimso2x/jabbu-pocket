@@ -23,6 +23,7 @@ import { type GatesCommandDeps, gatesCommand } from "../src/cli/gates";
 import {
 	BACKUP_FILE_PATTERN,
 	type BackupResult,
+	PRE_RESTORE_KEEP,
 	pruneBackups,
 	readStamp,
 	runBackup,
@@ -579,6 +580,43 @@ describe("pruneBackups direct", () => {
 		const removed = pruneBackups(dir, 1, protect);
 		expect(removed.map((p) => p.split("/").pop())).toEqual(["jabbu-20261022-000000.db", "jabbu-20261021-000000.db"]);
 		expect(existsSync(protect)).toBe(true);
+	});
+
+	test("pre-restore generations are capped at the newest few, same-second pairs included (F8)", () => {
+		const dir = join(home, "backups");
+		mkdirSync(dir);
+		// Seven generations across seven days, plus a same-second pair (J-8: both must survive).
+		for (const name of [
+			"pre-restore-20261020-043000",
+			"pre-restore-20261021-043000",
+			"pre-restore-20261022-043000",
+			"pre-restore-20261023-043000",
+			"pre-restore-20261024-043000",
+			"pre-restore-20261025-043000",
+			"pre-restore-20261025-043000-2",
+		]) {
+			mkdirSync(join(dir, name));
+			writeFileSync(join(dir, name, "jabbu.db"), "x");
+		}
+		const removed = pruneBackups(dir, 14, join(dir, "jabbu-20261025-043000.db"));
+		expect(removed.map((p) => p.split("/").pop()).sort()).toEqual([
+			"pre-restore-20261020-043000",
+			"pre-restore-20261021-043000",
+		]);
+		const kept = readdirSync(dir).filter((n) => n.startsWith("pre-restore-"));
+		kept.sort();
+		expect(kept).toHaveLength(PRE_RESTORE_KEEP);
+		expect(kept).toEqual([
+			"pre-restore-20261022-043000",
+			"pre-restore-20261023-043000",
+			"pre-restore-20261024-043000",
+			"pre-restore-20261025-043000",
+			"pre-restore-20261025-043000-2",
+		]);
+		// Non pre-restore directories are never touched.
+		mkdirSync(join(dir, "manual-copy"));
+		pruneBackups(dir, 14, join(dir, "jabbu-20261025-043000.db"));
+		expect(existsSync(join(dir, "manual-copy"))).toBe(true);
 	});
 });
 

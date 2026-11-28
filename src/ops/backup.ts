@@ -9,7 +9,6 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
-	readFileSync,
 	readSync,
 	realpathSync,
 	renameSync,
@@ -19,12 +18,15 @@ import {
 import { basename, join } from "node:path";
 import { BackupError } from "./backup-error";
 import { refuseSecretHardLink, secretInodes, treeBytes } from "./backup-tree";
-import { parseStampFields, parseStampTs, writeAtomic0600 } from "./stamp";
+import { parseStampFields, parseStampTs, readRegularText, writeAtomic0600 } from "./stamp";
 
 /** Daily backup files live at `<home>/backups/jabbu-YYYYMMDD-HHMMSS.db`; the stamp sits next to them. */
 export const BACKUP_FILE_PATTERN = /^jabbu-\d{8}-\d{6}\.db$/;
 /** Daily bundle files live next to the db snapshots with the same timestamp: `jabbu-bundle-YYYYMMDD-HHMMSS.tar.gz`. */
 export const BUNDLE_FILE_PATTERN = /^jabbu-bundle-\d{8}-\d{6}\.tar\.gz$/;
+export const PRE_RESTORE_PATTERN = /^pre-restore-\d{8}-\d{6}(-\d+)?$/; // `backups/pre-restore-<stamp>` generations
+/** How many `pre-restore-*` generations pruning keeps (newest first). */
+export const PRE_RESTORE_KEEP = 5;
 export const STAMP_FILE = "last-backup.ok";
 export const DEFAULT_KEEP = 14;
 /**
@@ -318,8 +320,7 @@ export function runBackup(options: BackupOptions): BackupResult {
 		const copy = new Database(tmp, { readonly: true, strict: true });
 		let check: string;
 		try {
-			const row = copy.query("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
-			check = row?.quick_check ?? "";
+			check = (copy.query("PRAGMA quick_check").get() as { quick_check?: string } | undefined)?.quick_check ?? "";
 		} finally {
 			copy.close();
 		}
@@ -359,11 +360,11 @@ export function runBackup(options: BackupOptions): BackupResult {
 	let stampPath: string | undefined;
 	if (options.skipBundle !== true) {
 		try {
+			const bundlePart =
+				bundle === undefined ? "" : ` bundle=${bundleName} bundle_bytes=${bundleBytes} bundle_sha256=${bundleSha256}`;
 			stampPath = writeStampAtomic(
 				backupsDir,
-				`ts=${now.toISOString()} file=${target.split("/").pop()} bytes=${bytes} sha256=${sha256} integrity=ok check=quick_check${
-					bundle === undefined ? "" : ` bundle=${bundleName} bundle_bytes=${bundleBytes} bundle_sha256=${bundleSha256}`
-				}\n`,
+				`ts=${now.toISOString()} file=${target.split("/").pop()} bytes=${bytes} sha256=${sha256} integrity=ok check=quick_check${bundlePart}\n`,
 			);
 		} catch (error) {
 			// Both targets were checked absent before the run: without their stamp they are leftovers, not a backup.
@@ -407,25 +408,21 @@ export function retentionDoomed(
 	protect: readonly string[],
 	pattern: RegExp,
 ): string[] {
-	const daily = names
-		.filter((name) => pattern.test(name))
-		.sort()
-		.reverse();
+	const daily = names.filter((name) => pattern.test(name));
+	daily.sort().reverse();
 	const dayOf = (name: string) => name.match(/(\d{8})-\d{6}/)?.[1] ?? "";
 	const baseDays = new Set(protect.filter((name) => pattern.test(name)).map(dayOf));
 	if (baseDays.size === 0 && daily[0] !== undefined) baseDays.add(dayOf(daily[0]));
 	const otherDays = [...new Set(daily.map(dayOf))].filter((day) => !baseDays.has(day));
 	const keptDays = new Set(otherDays.slice(0, Math.max(0, keep - baseDays.size)));
-	const doomed: string[] = [];
-	for (const name of daily) {
+	// A protected name's day is a base day, so protect is never doomed; daily is newest-first, so the first name
+	// seen of a kept day is its latest.
+	return daily.filter((name) => {
 		const day = dayOf(name);
-		// a protected name's day is a base day, so protect is never doomed
-		if (baseDays.has(day)) continue;
-		// daily is newest-first, so the first name seen of a kept day is its latest
-		if (keptDays.delete(day)) continue;
-		doomed.push(name);
-	}
-	return doomed;
+		if (baseDays.has(day)) return false;
+		if (keptDays.delete(day)) return false;
+		return true;
+	});
 }
 
 /**
@@ -435,21 +432,26 @@ export function retentionDoomed(
  */
 export function pruneBackups(backupsDir: string, keep: number, protect: string | readonly string[]): string[] {
 	const guarded = (typeof protect === "string" ? [protect] : protect).map((path) => basename(path));
-	const names = readdirSync(backupsDir, { withFileTypes: true })
-		.filter((e) => e.isFile())
-		.map((e) => e.name);
+	const entries = readdirSync(backupsDir, { withFileTypes: true });
+	const names = entries.filter((e) => e.isFile()).map((e) => e.name);
 	const removed: string[] = [];
-	for (const kind of [BACKUP_FILE_PATTERN, BUNDLE_FILE_PATTERN]) {
-		for (const name of retentionDoomed(names, keep, guarded, kind)) {
-			const path = join(backupsDir, name);
-			try {
-				rmSync(path, { force: true });
-				removed.push(path);
-			} catch {
-				// retention is best effort: the new backup is already verified and stamped
-			}
+	const remove = (path: string): void => {
+		try {
+			rmSync(path, { recursive: true, force: true });
+			removed.push(path);
+		} catch {
+			// retention is best effort: the new backup is already verified and stamped
 		}
-	}
+	};
+	for (const kind of [BACKUP_FILE_PATTERN, BUNDLE_FILE_PATTERN])
+		for (const name of retentionDoomed(names, keep, guarded, kind)) remove(join(backupsDir, name));
+	// `pre-restore-*` generations are directories, so the file retention above never sees them: keep the newest few.
+	const preRestore = entries
+		.filter((e) => e.isDirectory() && PRE_RESTORE_PATTERN.test(e.name))
+		.map((e) => e.name)
+		.sort()
+		.reverse();
+	for (const name of preRestore.slice(PRE_RESTORE_KEEP)) remove(join(backupsDir, name));
 	return removed;
 }
 
@@ -472,12 +474,10 @@ function isWithin(child: string, parent: string): boolean {
 
 /** Reads the success stamp written by `runBackup`; `undefined` when it does not exist or is unreadable. */
 export function readStamp(backupsDir: string, name: string = STAMP_FILE): StampInfo | undefined {
-	const stampPath = join(backupsDir, name);
 	let text: string;
 	try {
 		// A FIFO in the stamp's place would block the read forever.
-		if (!statSync(stampPath).isFile()) return undefined;
-		text = readFileSync(stampPath, "utf8");
+		text = readRegularText(join(backupsDir, name));
 	} catch {
 		return undefined;
 	}
