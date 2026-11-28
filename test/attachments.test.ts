@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sniffImageMime } from "../src/channel/attachments";
+import { retryAfterDelayMs, sniffImageMime } from "../src/channel/attachments";
 import type { CoreSink, DeliverySource } from "../src/channel/types";
 import { DiscordAdapter } from "../src/discord/adapter";
 import { discordCdnAllowed, downloadDiscordAttachment } from "../src/discord/attachments";
@@ -62,6 +62,34 @@ describe("discordCdnAllowed / sniffImageMime", () => {
 	test("sniffs image magic bytes and rejects HTML", () => {
 		expect(sniffImageMime(PNG)).toBe("image/png");
 		expect(sniffImageMime(new Uint8Array([0x3c, 0x68, 0x74, 0x6d, 0x6c]))).toBeUndefined();
+	});
+});
+
+describe("retryAfterDelayMs", () => {
+	const res = (retryAfter: string | null) =>
+		new Response("slow down", { status: 429, headers: retryAfter === null ? {} : { "retry-after": retryAfter } });
+
+	test("caps a huge Retry-After at 60 s instead of parking the ingest for hours", () => {
+		expect(retryAfterDelayMs(res("3600"))).toBe(60_000);
+		expect(retryAfterDelayMs(res("86400"))).toBe(60_000);
+	});
+
+	test("passes small waits through, and reads the HTTP-date form", () => {
+		expect(retryAfterDelayMs(res("0.05"))).toBe(50);
+		expect(retryAfterDelayMs(res("5"))).toBe(5_000);
+		const now = Date.now();
+		const future = new Date(now + 120_000).toUTCString();
+		expect(retryAfterDelayMs(res(future), now)).toBe(60_000);
+		const near = new Date(now + 2_000).toUTCString();
+		expect(retryAfterDelayMs(res(near), now)).toBeGreaterThanOrEqual(1_500);
+		expect(retryAfterDelayMs(res(near), now)).toBeLessThanOrEqual(2_000);
+		const past = new Date(now - 60_000).toUTCString();
+		expect(retryAfterDelayMs(res(past), now)).toBe(0);
+	});
+
+	test("falls back to 1 s when the header is absent or unparseable", () => {
+		expect(retryAfterDelayMs(res(null))).toBe(1_000);
+		expect(retryAfterDelayMs(res("tomorrow-ish"))).toBe(1_000);
 	});
 });
 
