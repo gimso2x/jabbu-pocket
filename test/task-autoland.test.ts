@@ -16,7 +16,7 @@ import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import type { TaskCheck, TaskJudgement } from "../src/tasks/checker";
 import { acceptanceItems } from "../src/tasks/docs";
-import { gateRuntimeKey, type TaskGateEnd, type TaskGateHooks } from "../src/tasks/gate";
+import { GATE_STALE_REASON, gateRuntimeKey, type TaskGateEnd, type TaskGateHooks } from "../src/tasks/gate";
 import { landTask, type TaskLandResult } from "../src/tasks/land";
 import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
 import { migrateTaskSchema } from "../src/tasks/ledger-schema";
@@ -613,6 +613,25 @@ describe("[TASK] review·QA gate (task-review-qa-gate)", () => {
 		expect(after.status).toBe("done");
 		expect(after.gate?.qa).toBeUndefined();
 		expect(h.calls()).toBe(0);
+	});
+
+	test("AC-9: a gate whose task leaves review mid-run ends stopped: no land, no QA receipt, the end is reported", async () => {
+		const release = Promise.withResolvers<void>();
+		hold = release.promise;
+		const row = seedGated("L3");
+		const h = hooks();
+		await gd.autoLand(row, h.gate);
+		await qaEntered.promise;
+		gd.store.tasks.transition(row.taskId, "working", "bot", "resume dispatch");
+		release.resolve();
+		const end = await h.ended;
+		expect(order).toEqual(["review", "qa"]);
+		expect(end).toMatchObject({ blockers: [GATE_STALE_REASON] });
+		expect(end.landed).toBeUndefined();
+		expect(h.calls()).toBe(1);
+		const after = gd.store.tasks.require(row.taskId);
+		expect(after.status).toBe("working");
+		expect(after.gate?.qa).toBeUndefined();
 	});
 
 	test("AC-8: stop() aborts a running TASK gate and waits for it; nothing recorded, no copy left", async () => {

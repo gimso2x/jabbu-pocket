@@ -25,10 +25,11 @@ import {
 } from "../src/tasks/docs";
 import type { TaskEvaluation } from "../src/tasks/evaluate";
 import type { TaskGateHooks } from "../src/tasks/gate";
+import { GATE_STALE_REASON } from "../src/tasks/gate";
 import type { TaskLandOutcome } from "../src/tasks/land";
 import { repoMatchesTask } from "../src/tasks/land-remote";
 import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
-import { buildAgentWaitingCard, NUDGE_MAX, taskLandNote } from "../src/tasks/notify";
+import { buildAgentWaitingCard, GATE_RUNNING_LINE, NUDGE_MAX, taskLandNote } from "../src/tasks/notify";
 import { landsViaPr } from "../src/tasks/pr-land-task";
 import { taskChangedPaths } from "../src/tasks/progress-evidence";
 import { restatedHash } from "../src/tasks/resume-check";
@@ -3296,6 +3297,34 @@ describe("TaskSweeper: [TASK] PR 착지의 카드(AC-18)와 레코드 상태(AC-
 		expect(edit.components).toEqual([]);
 		expect(JSON.stringify(edit.embeds)).toContain(taskLandNote(REWORK));
 		expect(JSON.stringify(edit.embeds)).not.toContain("자동 머지 완료");
+		await r.sweeper.sweep();
+		expect(posts(r)).toHaveLength(1);
+	});
+
+	test("AC-18 게이트 ended stopped: 새 카드 없이 gating 카드의 버튼만 빠지고 줄이 중단 문구로 바뀐다", async () => {
+		const r = rig(
+			{
+				autoLandPolicy: () => BAND_POLICY,
+				repoMatches: async () => true,
+				autoLand: async (_row, gate) => {
+					const card = await gate?.gating();
+					await gate?.ended({ gate: null, blockers: [GATE_STALE_REASON] }, card);
+					return { state: "gating" };
+				},
+			},
+			{ risk: "L3" },
+		);
+		r.next.value = { ok: true, judgement: reachedJudgement({ checks: PASSED }) };
+		await r.sweeper.sweep();
+		// The running card is the only post; its button is gone and the running line is the stop reason.
+		expect(posts(r)).toHaveLength(1);
+		expect(hasButton(posts(r)[0])).toBe(true);
+		const edits = r.transport.calls.filter((c) => c.method === "editMessage");
+		expect(edits).toHaveLength(1);
+		const edit = edits[0] as Extract<FakeDiscordCall, { method: "editMessage" }>;
+		expect(edit.components).toEqual([]);
+		expect(JSON.stringify(edit.embeds)).toContain(GATE_STALE_REASON);
+		expect(JSON.stringify(edit.embeds)).not.toContain(GATE_RUNNING_LINE);
 		await r.sweeper.sweep();
 		expect(posts(r)).toHaveLength(1);
 	});
