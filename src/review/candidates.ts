@@ -24,6 +24,7 @@ export type LedgerEvent =
 			summary: string;
 	  }
 	| { v: 1; ts: string; key: string; event: "proposed"; via: "log" | "card"; ref?: string }
+	| { v: 1; ts: string; key: string; event: "failed" }
 	| { v: 1; ts: string; key: string; event: "approved"; experiment: string }
 	| { v: 1; ts: string; key: string; event: "rejected" };
 
@@ -100,6 +101,8 @@ function parseLine(line: string): LedgerEvent | undefined {
 		case "proposed":
 			if (r.via !== "log" && r.via !== "card") return undefined;
 			return { ...base, event: "proposed", via: r.via, ...(str(r.ref) ? { ref: r.ref } : {}) };
+		case "failed":
+			return { ...base, event: "failed" };
 		case "approved":
 			if (!str(r.experiment)) return undefined;
 			return { ...base, event: "approved", experiment: r.experiment };
@@ -112,12 +115,7 @@ function parseLine(line: string): LedgerEvent | undefined {
 
 /** The ledger text to events in file order; blank, broken and other-version lines are skipped, never thrown. */
 export function parseLedger(text: string): LedgerEvent[] {
-	const events: LedgerEvent[] = [];
-	for (const line of text.split("\n")) {
-		const event = line.trim() === "" ? undefined : parseLine(line);
-		if (event !== undefined) events.push(event);
-	}
-	return events;
+	return text.split("\n").flatMap((line) => parseLine(line) ?? []);
 }
 
 /**
@@ -159,8 +157,10 @@ export function foldCandidates(
 				if (Date.parse(`${event.day}T00:00:00Z`) >= cutoff) cand.daySet.add(event.day);
 				break;
 			case "proposed":
-				cand.status = "proposed";
-				cand.lastProposedAt = at;
+			case "failed":
+				// A card request that threw never showed the card, so `failed` reopens the candidate (no snooze).
+				cand.status = event.event === "failed" ? "open" : "proposed";
+				cand.lastProposedAt = event.event === "failed" ? undefined : at;
 				break;
 			case "approved":
 				cand.status = "approved";
@@ -172,14 +172,12 @@ export function foldCandidates(
 				break;
 		}
 	}
-	const out: Candidate[] = [];
-	for (const { daySet, hasSeen, ...cand } of byKey.values()) {
-		if (!hasSeen) continue;
+	return [...byKey.values()].flatMap(({ daySet, hasSeen, ...cand }) => {
+		if (!hasSeen) return [];
 		cand.days = [...daySet].sort();
 		cand.distinctDays = cand.days.length;
-		out.push(cand);
-	}
-	return out;
+		return [cand];
+	});
 }
 
 /**
@@ -296,7 +294,7 @@ export interface CandidateGate {
 
 /**
  * One pass: gates, fold, due, then a #log line (`log` mode) or approval cards (`card` mode, all awaited). Returns the
- * keys raised. A card's `proposed` line is written before it is shown, so a timeout leaves the ledger as it was.
+ * keys raised. A card's `proposed` line is written before it is shown, so a timeout leaves the ledger as it was; a card request that throws instead writes `failed`, reopening the candidate at once.
  */
 export async function runCandidateProposals(deps: CandidateRunDeps, gate: CandidateGate): Promise<string[]> {
 	const { settings, log } = deps;
@@ -336,6 +334,7 @@ export async function runCandidateProposals(deps: CandidateRunDeps, gate: Candid
 				);
 			} catch (error) {
 				log.warn("candidate_card_failed", { key: cand.key, error: String(error) });
+				appendEvent(deps.ledgerPath, { v: 1, ts: ts(), key: cand.key, event: "failed" });
 				return;
 			}
 			if (verdict === "approved") {
