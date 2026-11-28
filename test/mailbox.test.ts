@@ -815,6 +815,70 @@ describe("mailbox: /new, /status, failures", () => {
 		expect(mailbox.state.driverRunning).toBe(false);
 	});
 
+	test("a recordAnswer failure at turn end still drains the queued followup", async () => {
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(ORIGIN);
+		const first = msg("first");
+		const second = msg("!followup second");
+		await router.route(first);
+		await router.route(second);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(store.getInbound(second.platformMessageId)?.state).toBe("pending");
+		const realRecordAnswer = store.recordAnswer.bind(store);
+		let threw = false;
+		store.recordAnswer = ((...args: Parameters<Store["recordAnswer"]>) => {
+			if (!threw) {
+				threw = true;
+				throw new Error("ledger write failed");
+			}
+			return realRecordAnswer(...args);
+		}) as Store["recordAnswer"];
+		try {
+			await untilFinal(mailbox, driver, () => driver.release());
+		} finally {
+			store.recordAnswer = realRecordAnswer;
+		}
+		expect(threw).toBe(true);
+		expect(logLines.some((line) => line.includes("event=final_failed"))).toBe(true);
+		// The answer is lost (the write failed), but the drain still ran: the followup went out as a new turn.
+		expect(store.getInbound(first.platformMessageId)?.state).toBe("dispatched");
+		expect(store.getInbound(second.platformMessageId)?.state).toBe("dispatched");
+		expect(driver.calls.filter((call) => call.startsWith("prompt:"))).toEqual(["prompt:first", "prompt:second"]);
+	});
+
+	test("a recordTurnFailure failure on child exit still drains the queued followup", async () => {
+		driverOptions = { holdTurns: true };
+		const mailbox = router.mailbox(ORIGIN);
+		const first = msg("first");
+		const second = msg("!followup second");
+		await router.route(first);
+		await router.route(second);
+		const driver = drivers[0] as SteerFailingDriver;
+		expect(store.getInbound(second.platformMessageId)?.state).toBe("pending");
+		const realRecordTurnFailure = store.recordTurnFailure.bind(store);
+		let threw = false;
+		store.recordTurnFailure = ((...args: Parameters<Store["recordTurnFailure"]>) => {
+			if (!threw) {
+				threw = true;
+				throw new Error("ledger write failed");
+			}
+			return realRecordTurnFailure(...args);
+		}) as Store["recordTurnFailure"];
+		try {
+			driver.crash(137);
+			await mailbox.sweepIdle();
+		} finally {
+			store.recordTurnFailure = realRecordTurnFailure;
+		}
+		expect(threw).toBe(true);
+		expect(logLines.some((line) => line.includes("event=exit_failed"))).toBe(true);
+		// The failure notice is lost (the write failed), but the drain still ran on a fresh driver.
+		expect(store.getInbound(first.platformMessageId)?.state).toBe("dispatched");
+		expect(store.getInbound(second.platformMessageId)?.state).toBe("dispatched");
+		expect(drivers).toHaveLength(2);
+		expect(drivers[1]?.calls).toContain("prompt:second");
+	});
+
 	test("a driver that cannot start yields a [turn failed] notice and the actor survives", async () => {
 		driverOptions = { startError: new OmpDriverError("omp_executable_missing", "no omp") };
 		const a = msg("hi");

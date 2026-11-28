@@ -1504,7 +1504,7 @@ export class OriginMailbox {
 		this.#driver = undefined;
 	}
 
-	/** `stopFirst`: the wedged child is stopped before the drain, so a queued next row starts on a fresh child. */
+	/** `stopFirst`: the wedged child is stopped before the drain, so a queued next row starts on a fresh child. A ledger write that throws still runs the tail: the error surfaces as `final_failed`, but queued rows drain. */
 	async #onFinal(driver: OmpSessionDriver, final: OmpFinal, stopFirst = false): Promise<void> {
 		const { store, originKey, log } = this.#deps;
 		const turn = this.#turn;
@@ -1515,64 +1515,66 @@ export class OriginMailbox {
 		this.#turn = undefined;
 		this.#wakeTurnEndWaiters();
 		this.#lastActivityAt = this.#deps.clock.now();
-		if (final.usage?.rotated === true) {
-			// Persist the epoch so a restart before the next turn still re-feeds the rotation context.
-			this.#rotatedSession = true;
-			const epoch = store.getOrigin(originKey)?.epoch;
-			if (epoch !== undefined) store.setCursor(rotationCursorKey(originKey), String(epoch));
-		}
-		await recordDailyCost(this.#deps, driver, turn, stopFirst, final.usage);
-		const base = { originKey, opRef: turn.opRef, threadRef: turn.threadRef };
-		if (final.status === "completed") {
-			const answer = await this.#turnAnswer(driver, turn, final.text);
-			store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
-			log.info("turn_completed", {
-				origin: originKey,
-				opRef: turn.opRef,
-				ms: this.#deps.clock.now() - turn.startedAt,
-				chars: answer.whole.length,
-			});
-			if (isTaskOrigin(originKey))
-				log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
-			this.#consecFailures = 0;
-		} else if (final.error === OWNER_STOP_ERROR) {
-			// The owner's `!stop`: its answer (the `stop:` op, which took over the turn's rows) is the one message —
-			// no notice, no failure count.
-			log.info("owner_stop_settled", { origin: originKey, opRef: turn.opRef });
-		} else if (final.error === "lane_paused") {
-			// The owner's own hold, not a failure: no notice, no failure count — one short line in the thread.
-			store.recordAnswer({
-				...base,
-				parts: ["⏸ 이 턴은 오너 멈춤 요청으로 중단됐습니다(레인 일시정지). 재개는 오너만 합니다."],
-			});
-		} else {
-			const rawReason = final.error ?? final.status;
-			this.#logTurnFailed(rawReason);
-			store.recordTurnFailure({
-				...base,
-				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
-			});
-			// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
-			if (!rawReason.startsWith(COST_CAP_STOP_PREFIX)) {
-				this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
-				await this.#noteTurnFailure(turn.threadRef, rawReason);
+		try {
+			if (final.usage?.rotated === true) {
+				// Persist the epoch so a restart before the next turn still re-feeds the rotation context.
+				this.#rotatedSession = true;
+				const epoch = store.getOrigin(originKey)?.epoch;
+				if (epoch !== undefined) store.setCursor(rotationCursorKey(originKey), String(epoch));
 			}
-		}
-		const error = final.error ?? (final.status === "completed" ? undefined : final.status);
-		this.#deps.onTurnSettled?.({
-			originKey,
-			text: final.text,
-			openDialogs: this.#deps.dialogs?.open(originKey) ?? 0,
-			...(error === undefined ? {} : { error }),
-		});
-		if (stopFirst) await this.#stopDriver();
-		// Record heads after saving answer and before draining so any newly opened turn sees this turn's commits.
-		await this.#recordHeadsAfter(turn);
-		this.#sweepToolFreeUncertain();
-		await this.#drain();
-		if (this.#stopAfterTurn && !this.#turn) {
-			this.#stopAfterTurn = false;
-			await this.#stopDriver();
+			await recordDailyCost(this.#deps, driver, turn, stopFirst, final.usage);
+			const base = { originKey, opRef: turn.opRef, threadRef: turn.threadRef };
+			if (final.status === "completed") {
+				const answer = await this.#turnAnswer(driver, turn, final.text);
+				store.recordAnswer({ ...base, parts: [answer.body], answer: answer.whole });
+				log.info("turn_completed", {
+					origin: originKey,
+					opRef: turn.opRef,
+					ms: this.#deps.clock.now() - turn.startedAt,
+					chars: answer.whole.length,
+				});
+				if (isTaskOrigin(originKey))
+					log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
+				this.#consecFailures = 0;
+			} else if (final.error === OWNER_STOP_ERROR) {
+				// The owner's `!stop`: its answer (the `stop:` op, which took over the turn's rows) is the one message —
+				// no notice, no failure count.
+				log.info("owner_stop_settled", { origin: originKey, opRef: turn.opRef });
+			} else if (final.error === "lane_paused") {
+				// The owner's own hold, not a failure: no notice, no failure count — one short line in the thread.
+				store.recordAnswer({
+					...base,
+					parts: ["⏸ 이 턴은 오너 멈춤 요청으로 중단됐습니다(레인 일시정지). 재개는 오너만 합니다."],
+				});
+			} else {
+				const rawReason = final.error ?? final.status;
+				this.#logTurnFailed(rawReason);
+				store.recordTurnFailure({
+					...base,
+					notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
+				});
+				// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
+				if (!rawReason.startsWith(COST_CAP_STOP_PREFIX)) {
+					this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
+					await this.#noteTurnFailure(turn.threadRef, rawReason);
+				}
+			}
+			this.#deps.onTurnSettled?.({
+				originKey,
+				text: final.text,
+				openDialogs: this.#deps.dialogs?.open(originKey) ?? 0,
+				...(final.status === "completed" && final.error === undefined ? {} : { error: final.error ?? final.status }),
+			});
+		} finally {
+			if (stopFirst) await this.#stopDriver();
+			// Record heads after saving answer and before draining so any newly opened turn sees this turn's commits.
+			await this.#recordHeadsAfter(turn);
+			this.#sweepToolFreeUncertain();
+			await this.#drain();
+			if (this.#stopAfterTurn && !this.#turn) {
+				this.#stopAfterTurn = false;
+				await this.#stopDriver();
+			}
 		}
 	}
 
@@ -1608,26 +1610,29 @@ export class OriginMailbox {
 		const turn = this.#turn;
 		this.#turn = undefined;
 		this.#wakeTurnEndWaiters();
-		// The dispatched rows of the dead turn are answered with one notice; the prompt is never resent.
-		if (turn) {
-			// The dead child spent money too: charge the day as `#onFinal` does (its live total when the state is gone).
-			await recordDailyCost(this.#deps, driver, turn);
-			const codeReason = `omp_exited code=${info.code ?? "null"}`;
-			const stderrTail = info.stderr.trim();
-			const classifyReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail}`;
-			// Full text: #logTurnFailed keeps the head + tail — a pre-cut copy would miscount the dropped chars.
-			this.#logTurnFailed(classifyReason);
-			store.recordTurnFailure({
-				originKey,
-				opRef: turn.opRef,
-				threadRef: turn.threadRef,
-				notice: failedNotice(codeReason, turn.peer, this.#threadSource(), classifyReason),
-			});
-			this.#noteQuotaErrorIfLimit(turn.threadRef, classifyReason, turn.model);
-			await this.#noteTurnFailure(turn.threadRef, codeReason);
+		try {
+			// The dispatched rows of the dead turn are answered with one notice; the prompt is never resent.
+			if (turn) {
+				// The dead child spent money too: charge the day as `#onFinal` does (its live total when the state is gone).
+				await recordDailyCost(this.#deps, driver, turn);
+				const codeReason = `omp_exited code=${info.code ?? "null"}`;
+				const stderrTail = info.stderr.trim();
+				const classifyReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail}`;
+				// Full text: #logTurnFailed keeps the head + tail — a pre-cut copy would miscount the dropped chars.
+				this.#logTurnFailed(classifyReason);
+				store.recordTurnFailure({
+					originKey,
+					opRef: turn.opRef,
+					threadRef: turn.threadRef,
+					notice: failedNotice(codeReason, turn.peer, this.#threadSource(), classifyReason),
+				});
+				this.#noteQuotaErrorIfLimit(turn.threadRef, classifyReason, turn.model);
+				await this.#noteTurnFailure(turn.threadRef, codeReason);
+			}
+		} finally {
+			this.#sweepToolFreeUncertain();
+			await this.#drain();
 		}
-		this.#sweepToolFreeUncertain();
-		await this.#drain();
 	}
 
 	#logTurnFailed(rawReason: string, classifyReason = rawReason, error?: unknown): void {
