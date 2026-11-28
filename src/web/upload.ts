@@ -169,12 +169,25 @@ export function adoptWebFile(sourcePath: string, homeDir: string, userHome = hom
 	}
 }
 
+/** Uploads run one at a time: each buffers up to ~150 MiB in memory (whole body + form parse + file copies), so concurrent uploads would multiply the peak. */
+let uploadQueue: Promise<unknown> = Promise.resolve();
+
 /** Validates, size-caps (25 MiB), and stores uploaded files from `/api/web/upload` under `<home>/media/inbound/web/`. */
 export async function saveWebUpload(
 	request: Request,
 	homeDir: string,
 	userHome = homedir(),
 ): Promise<WebUploadOutcome> {
+	const run = uploadQueue.then(() => saveWebUploadInner(request, homeDir, userHome));
+	// A refused upload must not break the chain for later ones.
+	uploadQueue = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+async function saveWebUploadInner(request: Request, homeDir: string, userHome = homedir()): Promise<WebUploadOutcome> {
 	try {
 		const root = resolveUploadDir(homeDir, userHome);
 		const contentType = request.headers.get("content-type") ?? "";

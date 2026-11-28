@@ -191,9 +191,23 @@ export function runtimeFor(
 	return headlessRuntime(using.headless, using.warn);
 }
 
-/** An owner-paused task takes new work only after the hold is lifted. */
-export function releaseHold(ledger: Pick<TaskLedger, "isPaused" | "unpauseTask">, row: TaskRow): void {
-	if (ledger.isPaused(row)) ledger.unpauseTask(row.taskId);
+/**
+ * Lifts the owner pause of a task and returns a `fail` that re-applies it: the lift runs before the send, so a
+ * headless worker takes the prompt at once (its Mailbox holds rows while paused); a send that fails reports through
+ * `fail`, which puts the hold back first — a task whose resume failed stays paused instead of silently unpausing.
+ * When the task was not paused `fail` just returns its text.
+ */
+export function releaseHold(
+	ledger: Pick<TaskLedger, "get" | "isPaused" | "unpauseTask" | "pauseTask">,
+	row: TaskRow,
+): (text: string) => string {
+	if (!ledger.isPaused(row)) return (text) => text;
+	ledger.unpauseTask(row.taskId);
+	return (text) => {
+		const fresh = ledger.get(row.taskId);
+		if (fresh !== undefined && (fresh.status === "working" || fresh.status !== "blocked")) ledger.pauseTask(row.taskId);
+		return text;
+	};
 }
 
 /**
