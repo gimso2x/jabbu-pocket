@@ -1374,6 +1374,41 @@ test("account pool: all accounts exhausted reports soonest reset and blocks next
 	await driver.stop();
 });
 
+test("account pool: unreadable or empty order fails the start instead of falling back to the default account", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const harness = makeHarness();
+	const accDir = join(harness.root, "agy-accounts");
+	const geminiDir = join(harness.root, ".gemini");
+	mkdirSync(accDir, { recursive: true });
+	mkdirSync(geminiDir, { recursive: true });
+	const { log } = captureLog();
+	const makePool = () =>
+		new AgyAccountPool({
+			config: () => ({ dir: accDir }),
+			statePath: join(harness.root, "agy-quota-state.json"),
+			geminiDir,
+			now: () => clock.t,
+			log,
+		});
+
+	// No `order` file at all: the pool is configured but broken.
+	const driver = harness.make({ accounts: makePool(), timezone: "Asia/Seoul", now: () => clock.t, log });
+	const error = await driver.start().catch((e: unknown) => e);
+	expect(error).toBeInstanceOf(OmpDriverError);
+	expect(String((error as Error).message)).toContain("order 읽기 실패");
+	expect(spawns(harness)).toHaveLength(0);
+	await driver.stop();
+
+	// An order naming an account with no token anywhere is the same failure, not a default fallback.
+	writeFileSync(join(accDir, "order"), "ghost\n");
+	const driver2 = harness.make({ accounts: makePool(), timezone: "Asia/Seoul", now: () => clock.t, log });
+	const error2 = await driver2.start().catch((e: unknown) => e);
+	expect(error2).toBeInstanceOf(OmpDriverError);
+	expect(String((error2 as Error).message)).toContain("유효한 계정 없음");
+	expect(spawns(harness)).toHaveLength(0);
+	await driver2.stop();
+});
+
 test("account pool: demotes to fallback tier and automatically promotes back to primary after reset", async () => {
 	const clock = { t: 1_795_500_000_000 };
 	const { harness, pool, log } = makePoolHarness(

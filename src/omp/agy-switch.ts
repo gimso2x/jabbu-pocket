@@ -13,6 +13,7 @@ import {
 } from "./agy-quota";
 import type { AgyToolKeepalive, AgyToolKeepaliveOptions } from "./agy-tool-keepalive";
 import type { OmpEntry, OmpEvent, OmpFinal, OmpTurnUsage, OmpUsage } from "./driver";
+import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
 
 export interface AgyOmpDriverOptions {
@@ -166,7 +167,7 @@ export async function applyAgyConfig(params: {
 	await params.setOption("thought_level", target.thinking);
 }
 
-/** Selects the account for a new ACP launch (`undefined` = pool off; throws when every account is blocked). */
+/** Selects the account for a new ACP launch (pool off = no account; throws when every account is blocked or the pool is configured but broken). */
 export function selectLaunchAccount(
 	options: AgyOmpDriverOptions,
 	now: number,
@@ -177,9 +178,7 @@ export function selectLaunchAccount(
 	if (picked === null) throw allAccountsExhaustedError(accounts, now, options.timezone);
 	if (picked === undefined) {
 		const err = accounts.status(now)?.error;
-		if (err !== undefined) {
-			options.log?.warn("agy.account.fallback_default", { origin: options.originKey, reason: err });
-		}
+		if (err !== undefined) throw new OmpDriverError("rpc_error", `agy account pool unavailable: ${err}`);
 		return {};
 	}
 	return { account: picked, appDataDir: accounts.prepareAccountDir(picked) };
