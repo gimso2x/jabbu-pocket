@@ -1,5 +1,5 @@
 import { accessSync, chmodSync, constants, existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { defaultHomeDir, HOME_MODE, SECRET_MODE, workspaceOverlapsHome } from "../config";
 import { remoteShellQuote } from "../dispatch/omp";
@@ -49,6 +49,7 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 		return fail("--app-id must be a Discord id (17-20 digits)");
 	// An empty value would resolve to the current directory; leave the option out to get the default instead.
 	if (values.omp === "") return fail("--omp is empty; leave it out to use omp on PATH");
+	if (values.omp !== undefined && !isAbsolute(values.omp)) return fail("--omp must be an absolute path");
 	if (values.workspace === "") return fail("--workspace is empty; leave it out to use <home>/workspace");
 	const omp = values.omp === undefined ? Bun.which("omp", { PATH: env.PATH ?? "" }) : resolve(values.omp);
 	if (omp === null) return fail("omp not found on PATH; pass --omp <absolute path to omp>");
@@ -109,8 +110,7 @@ export function initCommand(args: string[], env: Record<string, string | undefin
 	writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: SECRET_MODE, flag: "wx" });
 	chmodSync(configPath, SECRET_MODE);
 
-	const homePrefix =
-		env.JABBU_HOME === undefined || env.JABBU_HOME === "" ? "" : `JABBU_HOME=${remoteShellQuote(homeDir)} `;
+	const homePrefix = env.JABBU_HOME ? `JABBU_HOME=${remoteShellQuote(homeDir)} ` : "";
 	process.stdout.write(
 		[
 			`init_done home=${homeDir} config=${configPath} workspace=${workspaceDir}`,

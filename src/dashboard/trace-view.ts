@@ -42,6 +42,8 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 		running: ["실행 중", "is-info"],
 		done: ["완료", "is-success"],
 		failed: ["실패", "is-danger"],
+		paused: ["멈춤", "is-warning"],
+		blocked: ["막힘", "is-warning"],
 	};
 	const clock = Math.max(0, state.now - answer.startedAt);
 	const endOf = (span: TraceSpan): number => Math.max(span.start, span.end ?? clock);
@@ -55,17 +57,14 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 	const money = (amount: number): string => (amount <= 0 ? "" : `$${amount.toFixed(amount >= 1 ? 2 : 3)}`);
 	const size = (n: number): string => (n >= 1024 ? `${(n / 1024).toFixed(1)}KB` : `${n}B`);
 	/** The marks a row wears after its name: a tool result the tool cut, a call that only has a summary, a brief. */
-	const chips = (span: TraceSpan): string[] => [
-		...(span.truncated === undefined ? [] : [`잘림 ${span.truncated.shownLines}/${span.truncated.totalLines}줄`]),
-		...(span.compactedTools === undefined || span.compactedTools === 0
-			? []
-			: [`압축으로 요약만 ${span.compactedTools}건`]),
-		...(span.briefPartial === true
-			? ["브리프 미리보기만"]
-			: span.briefBytes === undefined
-				? []
-				: [`브리프 ${size(span.briefBytes)}`]),
-	];
+	const chips = (span: TraceSpan): string[] => {
+		const out: string[] = [];
+		if (span.truncated !== undefined) out.push(`잘림 ${span.truncated.shownLines}/${span.truncated.totalLines}줄`);
+		if ((span.compactedTools ?? 0) > 0) out.push(`압축으로 요약만 ${span.compactedTools}건`);
+		if (span.briefPartial === true) out.push("브리프 미리보기만");
+		else if (span.briefBytes !== undefined) out.push(`브리프 ${size(span.briefBytes)}`);
+		return out;
+	};
 	const count = (n: number): string =>
 		n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
 
@@ -233,13 +232,12 @@ export function renderTrace(answer: TurnTrace, state: TraceViewState): string {
 export function flowDoing(span: TraceSpan): string {
 	const cut = (text: string): string => (text.length > 70 ? `${text.slice(0, 69)}…` : text);
 	const own: TraceSpan[] = [];
-	const collect = (list: TraceSpan[] | undefined): void => {
-		for (const child of list ?? []) {
-			if (child.worker !== undefined) continue;
+	const collect = (list: TraceSpan[] | undefined): void =>
+		(list ?? []).forEach((child) => {
+			if (child.worker !== undefined) return;
 			own.push(child);
 			collect(child.children);
-		}
-	};
+		});
 	collect(span.children);
 	const newest = (spans: TraceSpan[]): TraceSpan | undefined => {
 		let found: TraceSpan | undefined;
@@ -253,9 +251,10 @@ export function flowDoing(span: TraceSpan): string {
 		return last === undefined ? "기다리는 중" : cut(say(last));
 	}
 	const last = say(newest(own));
-	if (span.status === "failed") {
-		const why = span.error ?? last;
-		return cut(why === "" ? "실패" : `실패 · ${why}`);
+	if (span.status === "failed" || span.status === "paused" || span.status === "blocked") {
+		const word = { failed: "실패", paused: "멈춤", blocked: "막힘" }[span.status];
+		const why = span.status === "failed" ? (span.error ?? last) : last;
+		return cut(why === "" ? word : `${word} · ${why}`);
 	}
 	return cut(last === "" ? "끝남" : `끝남 · ${last}`);
 }
@@ -272,6 +271,8 @@ export function renderFlow(answer: TurnTrace, state: TraceViewState): string {
 		running: ["실행 중", "is-info"],
 		done: ["완료", "is-success"],
 		failed: ["실패", "is-danger"],
+		paused: ["멈춤", "is-warning"],
+		blocked: ["막힘", "is-warning"],
 	};
 	const money = (amount: number): string => (amount <= 0 ? "" : `$${amount.toFixed(amount >= 1 ? 2 : 3)}`);
 	const clockText = (ms: number): string => {
@@ -293,18 +294,17 @@ export function renderFlow(answer: TurnTrace, state: TraceViewState): string {
 	const root = answer.root;
 	const workers = (root.children ?? []).filter((span) => span.worker !== undefined);
 	const approvals = answer.approvals ?? [];
-	const counts = {
-		running: workers.filter((span) => span.status === "running").length,
-		done: workers.filter((span) => span.status === "done").length,
-		failed: workers.filter((span) => span.status === "failed").length,
-		pending: approvals.filter((item) => item.status === "pending").length,
-	};
+	const counts: Record<SpanStatus, number> = { running: 0, done: 0, failed: 0, paused: 0, blocked: 0 };
+	for (const span of workers) counts[span.status]++;
+	const pending = approvals.filter((item) => item.status === "pending").length;
 	const chips = (
 		[
 			["진행 중", counts.running, "is-info"],
 			["끝남", counts.done, "is-success"],
 			["실패", counts.failed, "is-danger"],
-			["승인 대기", counts.pending, "is-warning"],
+			["멈춤", counts.paused, "is-warning"],
+			["막힘", counts.blocked, "is-warning"],
+			["승인 대기", pending, "is-warning"],
 		] as Array<[string, number, string]>
 	)
 		.map(([label, n, tone]) => `<span class="badge fl-count ${n > 0 ? tone : "is-zero"}">${label} <b>${n}</b></span>`)
@@ -349,7 +349,7 @@ export function renderFlow(answer: TurnTrace, state: TraceViewState): string {
 					"div",
 					"",
 					"approvals",
-					`is-approvals${counts.pending > 0 ? " is-pending" : ""}`,
+					`is-approvals${pending > 0 ? " is-pending" : ""}`,
 					`<span class="fl-kicker">오너 승인</span><ul class="fl-apprs">${approvals.map(approvalRow).join("")}</ul>`,
 				);
 

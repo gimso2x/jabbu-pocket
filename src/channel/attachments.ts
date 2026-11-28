@@ -63,14 +63,19 @@ const MAGIC_HEAD_BYTES = 12;
 
 /** Sniffs the first bytes; `undefined` when the content is not a supported image (HTML error pages etc.). */
 export function sniffImageMime(head: Uint8Array): string | undefined {
-	return IMAGE_MAGIC.find((magic) =>
-		magic.segments.every((segment) => segment.bytes.every((byte, i) => head[segment.offset + i] === byte)),
-	)?.mime;
+	const at = (offset: number, bytes: number[]): boolean => bytes.every((byte, i) => head[offset + i] === byte);
+	return IMAGE_MAGIC.find((magic) => magic.segments.every((s) => at(s.offset, s.bytes)))?.mime;
 }
 
-function retryAfterMs(response: Response): number | undefined {
-	const seconds = Number(response.headers.get("retry-after") ?? Number.NaN);
-	return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : undefined;
+/**
+ * The 429 wait in ms: the server's `Retry-After` as seconds or an HTTP-date, capped at 60 s (the REST layer
+ * caps its wait the same way); 1 s when the header is absent or unparseable, 0 when the date already passed.
+ */
+export function retryAfterDelayMs(response: Response, now = Date.now()): number {
+	const raw = response.headers.get("retry-after");
+	if (raw === null) return 1_000;
+	const ms = Number.isFinite(Number(raw)) ? Number(raw) * 1000 : Date.parse(raw) - now;
+	return Number.isNaN(ms) ? 1_000 : Math.min(Math.max(ms, 0), 60_000);
 }
 
 export interface DownloadFileArgs {
@@ -139,8 +144,9 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 			if (response.status === 429 || response.status >= 500) {
 				await response.body?.cancel();
 				if (attempt < retries) {
-					// A 429 waits out the server's Retry-After (1 s when absent); 5xx keeps the caller's linear backoff.
-					const delay = response.status === 429 ? (retryAfterMs(response) ?? 1_000) : retryDelayMs * (attempt + 1);
+					// A 429 waits out the server's Retry-After (capped at 60 s; 1 s when absent); 5xx keeps the
+					// caller's linear backoff.
+					const delay = response.status === 429 ? retryAfterDelayMs(response) : retryDelayMs * (attempt + 1);
 					await new Promise((resolve) => setTimeout(resolve, delay));
 					continue;
 				}
@@ -180,9 +186,7 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 						reader.cancel();
 						return await cleanup("too_large_streamed");
 					}
-					if (head.length < MAGIC_HEAD_BYTES) {
-						for (const byte of value.subarray(0, MAGIC_HEAD_BYTES - head.length)) head.push(byte);
-					}
+					if (head.length < MAGIC_HEAD_BYTES) head.push(...value.subarray(0, MAGIC_HEAD_BYTES - head.length));
 					// FileHandle.write is a single write(2) and may short-write without error (disk filling up);
 					// letting a partial chunk through would rename a silently truncated file.
 					const { bytesWritten } = await tmp.write(value);
@@ -203,7 +207,13 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 			await rename(tmpPath, args.destPath);
 			return { ok: true, bytes: total, mime: contentType.split(";")[0]?.trim() || undefined };
 		} catch (error) {
-			if (attempt < retries && isRetryableNetworkError(error)) {
+			const retryable =
+				error instanceof Error &&
+				(error.name === "AbortError" ||
+					error.name === "TimeoutError" ||
+					error.name === "TypeError" ||
+					error.name === "ConnectionError");
+			if (attempt < retries && retryable) {
 				await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
 				continue;
 			}
@@ -215,19 +225,13 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 		await rm(tmpPath, { force: true });
 		return { ok: false, error };
 	}
-
-	function isRetryableNetworkError(error: unknown): boolean {
-		const name = error instanceof Error ? error.name : "";
-		return name === "AbortError" || name === "TimeoutError" || name === "TypeError" || name === "ConnectionError";
-	}
 }
 
 async function fileExists(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch {
-		return false;
-	}
+	return stat(path).then(
+		(s) => s.isFile(),
+		() => false,
+	);
 }
 
 /** What the platform's transport does to fetch one file; throws with the reason on failure. */
