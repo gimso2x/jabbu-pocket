@@ -20,6 +20,27 @@ export function testStartStall(env: Record<string, string | undefined>): void {
 }
 
 /**
+ * Overall bound on a graceful stop, in ms: `JABBU_TEST_SHUTDOWN_TIMEOUT_MS` under `JABBU_TEST_HOOKS=1`, else
+ * `fallback` (production: 60 s, inside the packaged unit's TimeoutStopSec=90). A missing or non-positive value
+ * keeps the fallback, so a stray variable in production never shortens a real stop.
+ */
+export function shutdownTimeoutMs(env: Record<string, string | undefined>, fallback: number): number {
+	if (env.JABBU_TEST_HOOKS !== "1") return fallback;
+	const ms = Number(env.JABBU_TEST_SHUTDOWN_TIMEOUT_MS);
+	return Number.isFinite(ms) && ms > 0 ? ms : fallback;
+}
+
+/**
+ * `JABBU_TEST_STOP_STALL_MS=<ms>`: holds the shutdown for <ms> before `stop()` runs, so a second signal (or the
+ * shutdown bound) lands while the stop is still in flight. Read only when `JABBU_TEST_HOOKS=1`.
+ */
+export function testStopStallMs(env: Record<string, string | undefined>): number | undefined {
+	if (env.JABBU_TEST_HOOKS !== "1") return undefined;
+	const ms = Number(env.JABBU_TEST_STOP_STALL_MS);
+	return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
  * `JABBU_TEST_START_DELAY_MS=<ms>`: awaits <ms> before `daemon.start()` runs, so a signal can land after the
  * handlers are installed but before the daemon boots (the start then refuses: see `Daemon.start()`'s stopped
  * check). Read only when `JABBU_TEST_HOOKS=1`.

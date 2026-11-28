@@ -122,7 +122,7 @@ async function ownerDm(id = QUESTION): Promise<void> {
 }
 
 describe("inline reply channel answers", () => {
-	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+	async function inlineChannelAdapter(): Promise<DiscordAdapter> {
 		const inline = new DiscordAdapter({
 			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
 			core,
@@ -142,22 +142,60 @@ describe("inline reply channel answers", () => {
 			content: "질문",
 			type: 0,
 		});
+		return inline;
+	}
+
+	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+		const inline = await inlineChannelAdapter();
 		const id = deliver(`${CH}:${QUESTION}`, longBody(2500), `discord/ch/${CH}`);
 		await inline.pumpDeliveries();
 		const sent = answers();
 		expect(sent).toHaveLength(2);
 		expect(sent[0]?.channelId).toBe(CH);
 		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 		const lookups = transport.calls.filter((c) => c.method === "getChannel" && c.channelId === QUESTION);
 		expect(lookups.length).toBeLessThanOrEqual(1);
 		expect(transport.calls.some((c) => c.method === "startThread")).toBe(false);
 		await inline.stop();
 	});
+
+	test("an inline answer with multiple ```copy blocks posts as one reply message without splitting", async () => {
+		const inline = await inlineChannelAdapter();
+		const body = "```copy\ncmd one\n```\n설명 첫 줄\n```copy\ncmd two\n```\n설명 둘째 줄\n```copy\ncmd three\n```";
+		const id = deliver(`${CH}:${QUESTION}`, body, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[0]?.content).toContain("```copy\ncmd one\n```");
+		expect(sent[0]?.content).toContain("```copy\ncmd three\n```");
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
+
+	test("an inline answer with prose and a ```card attaches messageReference only to the first part", async () => {
+		const inline = await inlineChannelAdapter();
+		const card = '```card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"요약"},"children":[]}}}\n```';
+		const id = deliver(`${CH}:${QUESTION}`, `결론 한 줄\n${card}`, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
+		expect(sent[1]?.embeds).toHaveLength(1);
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
 });
 
 describe("splitting and destinations", () => {
-	test("a 2500-character answer goes as two messages of at most 2000, both as replies in the DM", async () => {
+	test("a 2500-character answer goes as two messages of at most 2000 in the DM, replying only on part 1", async () => {
 		await ownerDm();
 		const id = deliver(`${DM}:${QUESTION}`, longBody(2500));
 		expect(await adapter.pumpDeliveries()).toBe(1);
@@ -166,8 +204,9 @@ describe("splitting and destinations", () => {
 		for (const post of sent) {
 			expect(post.content?.length ?? 0).toBeLessThanOrEqual(2000);
 			expect(post.channelId).toBe(DM);
-			expect(post.messageReference).toEqual({ messageId: QUESTION });
 		}
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 	});
 
