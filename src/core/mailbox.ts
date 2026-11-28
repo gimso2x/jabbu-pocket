@@ -1542,8 +1542,7 @@ export class OriginMailbox {
 					log.info("task_turn_output_dropped", { origin: originKey, chars: answer.whole.length });
 				this.#consecFailures = 0;
 			} else if (final.error === OWNER_STOP_ERROR) {
-				// The owner's `!stop`: its answer (the `stop:` op, which took over the turn's rows) is the one message —
-				// no notice, no failure count.
+				// The owner's `!stop`: its answer (the `stop:` op) is the one message — no notice, no failure count.
 				log.info("owner_stop_settled", { origin: originKey, opRef: turn.opRef });
 			} else if (final.error === "lane_paused") {
 				// The owner's own hold, not a failure: no notice, no failure count — one short line in the thread.
@@ -1554,10 +1553,7 @@ export class OriginMailbox {
 			} else {
 				const rawReason = final.error ?? final.status;
 				this.#logTurnFailed(rawReason);
-				store.recordTurnFailure({
-					...base,
-					notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
-				});
+				store.recordTurnFailure({ ...base, notice: failedNotice(rawReason, turn.peer, this.#threadSource()) });
 				// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
 				if (!rawReason.startsWith(COST_CAP_STOP_PREFIX)) {
 					this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
@@ -1621,8 +1617,7 @@ export class OriginMailbox {
 				// The dead child spent money too: charge the day as `#onFinal` does (its live total when the state is gone).
 				await recordDailyCost(this.#deps, driver, turn);
 				const codeReason = `omp_exited code=${info.code ?? "null"}`;
-				const stderrTail = info.stderr.trim();
-				const classifyReason = stderrTail === "" ? codeReason : `${codeReason}: ${stderrTail}`;
+				const classifyReason = info.stderr.trim() === "" ? codeReason : `${codeReason}: ${info.stderr.trim()}`;
 				// Full text: #logTurnFailed keeps the head + tail — a pre-cut copy would miscount the dropped chars.
 				this.#logTurnFailed(classifyReason);
 				store.recordTurnFailure({
