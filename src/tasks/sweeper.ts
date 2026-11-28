@@ -14,7 +14,7 @@ import type { TaskGateHooks } from "./gate";
 import { gateCardHooks } from "./gate-cards";
 import type { TaskLandOutcome } from "./land";
 import type { TaskLedger, TaskRow } from "./ledger";
-import { taskPausedAt } from "./ledger";
+import { TaskTransitionError, taskPausedAt } from "./ledger";
 import {
 	agyLimitLine,
 	autoLandBlockers,
@@ -308,6 +308,11 @@ export class TaskSweeper {
 		this.#checking.set(row.taskId, run);
 		try {
 			return await run;
+		} catch (error) {
+			// A post-evaluation transition lost the race with a human close: the clean "already moved" result.
+			if (!(error instanceof TaskTransitionError)) throw error;
+			const status = this.#deps.ledger.get(row.taskId)?.status ?? row.status;
+			return { taskId: row.taskId, status, read: true, summary: "이미 전환됨", actions: [] };
 		} finally {
 			if (this.#checking.get(row.taskId) === run) this.#checking.delete(row.taskId);
 		}
@@ -316,7 +321,7 @@ export class TaskSweeper {
 	async #checkSerialized(staleRow: TaskRow): Promise<TaskCheckResult> {
 		const { ledger, log } = this.#deps;
 		const row = ledger.get(staleRow.taskId);
-		if (row === undefined) {
+		if (row === undefined)
 			return {
 				taskId: staleRow.taskId,
 				status: staleRow.status,
@@ -324,10 +329,8 @@ export class TaskSweeper {
 				summary: "작업을 찾지 못했습니다",
 				actions: [],
 			};
-		}
-		if (row.status !== staleRow.status && row.status !== "working" && row.status !== "blocked") {
+		if (row.status !== staleRow.status && row.status !== "working" && row.status !== "blocked")
 			return { taskId: row.taskId, status: row.status, read: true, summary: "이미 전환됨", actions: [] };
-		}
 		const now = this.#deps.now();
 		const actions: string[] = [];
 		let evaluation: TaskEvaluation;
@@ -816,9 +819,7 @@ export class TaskSweeper {
 				await this.#post(row, buildAgentWaitingCard(row, screen, this.#deps.ownerUserId, await this.#boardLink(row)));
 				actions.push("agent waiting notice");
 			}
-		} else if (agent.ok) {
-			this.#waitingSince.delete(row.taskId);
-		}
+		} else if (agent.ok) this.#waitingSince.delete(row.taskId);
 		// Paused task worker is herdr-working past interrupt grace: told once per pause.
 		if (
 			pausedAt !== undefined &&
@@ -945,9 +946,8 @@ export class TaskSweeper {
 		const local = ledger.listActive().filter((row) => row.host === null);
 		const pairs: Array<[TaskRow, TaskRow]> = [];
 		for (const [i, a] of local.entries()) {
-			for (const b of local.slice(i + 1)) {
+			for (const b of local.slice(i + 1))
 				if (a.repo === b.repo || (await this.#repoMatches(a, [b.repo]))) pairs.push([a, b]);
-			}
 		}
 		const paths = new Map<string, ReadonlySet<string> | undefined>();
 		const pathsOf = async (row: TaskRow): Promise<ReadonlySet<string> | undefined> => {
