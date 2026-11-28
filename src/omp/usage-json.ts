@@ -185,7 +185,7 @@ export function limitLine(limit: UsageLimit, today: string, formats: ReturnType<
 	}
 	const parts: string[] = [];
 	if (fraction !== undefined && Number.isFinite(fraction))
-		parts.push(`${number.format(Math.max(0, fraction) * 100)}% 남음`);
+		parts.push(`${number.format(Math.min(1, Math.max(0, fraction)) * 100)}% 남음`);
 	if (remaining !== undefined && amount.unit !== "percent" && amount.unit !== "unknown") {
 		parts.push(`${number.format(remaining)} ${amount.unit} 남음`);
 	}

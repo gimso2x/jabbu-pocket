@@ -148,6 +148,11 @@ import { DEFAULT_LANE_RISK, laneBranchOf, laneIdsOnBranches, nextLaneId, resolve
 /** A forced lane start past a capacity/quota refusal asks the owner on a card; only an explicit 승인 counts. */
 const FORCE_START_SUMMARY = "시작 거부 사유를 무시하고 레인을 강행 시작합니다";
 const FORCE_START_IMPACT = "승인하면 거부 사유를 무시하고 레인의 worktree와 워커를 시작합니다(중간에 실패할 수 있음)";
+/** A landing deferred because the lane's turn is running (the tick retries it). */
+const LAND_DEFERRED_TEXT =
+	"⏳ 레인이 마무리 보고를 쓰는 중이라, 끝나는 대로 머지합니다. 결과는 이 스레드의 카드에 표시됩니다.";
+/** A discard refused because the lane's turn is running. */
+const LANE_DISCARD_BUSY_TEXT = "레인이 아직 마무리 보고를 쓰는 중입니다. 끝난 뒤 다시 시도해 주세요.";
 
 /** Work lanes: one omp session per long task with its own thread, registry row and verified end. */
 export class LaneManager {
@@ -1301,15 +1306,13 @@ export class LaneManager {
 		fromTick: boolean,
 	): Promise<SettleOutcome> {
 		const { log, approvals } = this.#deps;
-		const lines = refusalCardLines(refusals);
 		const channel = parseThreadRef(lane.threadRef)?.channel;
 		let verdict: "approved" | "denied" | "timeout" = "timeout";
-		const ownerEvents = ownerEventCount(lane);
 		if (approvals !== undefined && channel !== undefined) {
 			try {
 				verdict = await approvals.request(
 					channel,
-					`레인 ${lane.name} 완료 무결성 거부 — 승인하면 그대로 닫습니다.\n${lines.join("\n")}`,
+					`레인 ${lane.name} 완료 무결성 거부 — 승인하면 그대로 닫습니다.\n${refusalCardLines(refusals).join("\n")}`,
 				);
 			} catch (error) {
 				log.warn("lane_integrity_approval_failed", { lane: lane.name, error: String(error) });
@@ -1319,7 +1322,7 @@ export class LaneManager {
 		const { store, clock } = this.#deps;
 		const approval =
 			verdict === "approved"
-				? approvalRecord(store.getLane(lane.name), ownerEvents, sha, refusals, clock.now())
+				? approvalRecord(store.getLane(lane.name), ownerEventCount(lane), sha, refusals, clock.now())
 				: undefined;
 		if (approval !== undefined) store.patchLane(lane.name, undefined, { integrityApproval: approval });
 		// The owner may have paused the lane, answered (back to working) or it claimed again while the card waited.
@@ -1424,12 +1427,11 @@ export class LaneManager {
 								? prior
 								: { head: run.head, runs: (prior?.head === run.head ? prior.runs : 0) + 1, lastAt: clock.now() };
 					}
-					const passed = run.results.length - failed.length - inconclusive.length;
 					store.patchLane(
 						lane.name,
 						{
 							event: "checks",
-							detail: `${passed}/${run.results.length} 통과${inconclusive.length > 0 ? ` · ${inconclusive.length} 확인 불가` : ""}`,
+							detail: `${run.results.length - failed.length - inconclusive.length}/${run.results.length} 통과${inconclusive.length > 0 ? ` · ${inconclusive.length} 확인 불가` : ""}`,
 							sha: run.head,
 						},
 						{
@@ -2021,10 +2023,7 @@ export class LaneManager {
 			if (queued) {
 				// The lane's own turn is still running in the worktree this landing removes: the tick lands it afterwards.
 				this.#deps.log.info("lane_land_deferred", { lane: name, by, reason: "lane_turn_running" });
-				return {
-					handled: true,
-					text: "⏳ 레인이 마무리 보고를 쓰는 중이라, 끝나는 대로 머지합니다. 결과는 이 스레드의 카드에 표시됩니다.",
-				};
+				return { handled: true, text: LAND_DEFERRED_TEXT };
 			}
 			return { handled: true, text: await this.#runLanding(name, false) };
 		} finally {
@@ -2086,7 +2085,6 @@ export class LaneManager {
 		}
 		// `lanes.land` is read when the landing begins (`land.mode` keeps it for the rest): `pr` lands through a PR, never asks.
 		const landMode = lane.meta.externalPr === undefined ? await this.#deps.landMode?.(repo) : undefined;
-		const viaPr = land.mode === "pr" || landMode?.config.mode === "pr";
 		const push = by === "owner" || matched;
 		// An auto-merge speaks up when it fails (nobody clicked anything); so does a landing the tick resumed.
 		const unattended = by === "auto" || resumed;
@@ -2098,7 +2096,12 @@ export class LaneManager {
 		try {
 			// An idle child of this lane (it answered a question after closing) still has the worktree as its cwd.
 			await this.#deps.stopWhenIdle(lane.originKey);
-			if (viaPr) {
+			// A turn may have started while the landing was prepared: the tick retries after it, like the entry check.
+			if (this.#deps.laneBusy?.(lane.originKey) === true) {
+				log.info("lane_land_deferred", { lane: name, by, reason: "lane_turn_running" });
+				return LAND_DEFERRED_TEXT;
+			}
+			if (land.mode === "pr" || landMode?.config.mode === "pr") {
 				const outcome = await this.#prLand.run(lane, landMode, { repo, worktree, branch, baseBranch, sha });
 				const settled = await this.#prLand.settle(lane, outcome, unattended);
 				if (typeof settled === "string") return settled;
@@ -2121,7 +2124,6 @@ export class LaneManager {
 			}
 			result = { state: "blocked", reason: `머지를 ${errors}번 끝내지 못함: ${cutCodePointSafe(String(error), 200)}` };
 		}
-		const short = sha.slice(0, 12);
 		if (result.state === "not-ff") {
 			const attempts = land.attempts + 1;
 			this.#deps.wikiNotes?.laneDropDraft(lane);
@@ -2180,7 +2182,7 @@ export class LaneManager {
 		this.#dropReviewFiles(row);
 		await this.#showResult(await this.#sync(row, "transition"), false);
 		await this.#recordFollowups(row);
-		return `✅ 머지했습니다: ${baseBranch} ← ${short} · ${result.pushed === undefined ? "push 없음(origin 원격 없음)" : `push ${result.pushed}`} · ${cleaned}`;
+		return `✅ 머지했습니다: ${baseBranch} ← ${sha.slice(0, 12)} · ${result.pushed === undefined ? "push 없음(origin 원격 없음)" : `push ${result.pushed}`} · ${cleaned}`;
 	}
 
 	/**
@@ -2330,14 +2332,14 @@ export class LaneManager {
 		}
 		if (this.#landing.has(name)) return { handled: false, text: "머지가 진행 중이라 폐기할 수 없습니다." };
 		if (land.requestedBy !== undefined) return { handled: false, text: "머지가 예약돼 있어 폐기할 수 없습니다." };
-		if (this.#deps.laneBusy?.(lane.originKey) === true) {
-			return { handled: false, text: "레인이 아직 마무리 보고를 쓰는 중입니다. 끝난 뒤 다시 시도해 주세요." };
-		}
+		if (this.#deps.laneBusy?.(lane.originKey) === true) return { handled: false, text: LANE_DISCARD_BUSY_TEXT };
 		this.#landing.add(name);
 		try {
 			await this.#stopQa(name);
 			// An idle child of this lane still has the worktree as its cwd.
 			await this.#deps.stopWhenIdle(lane.originKey);
+			// A turn may have started while the discard was prepared: leave the worktree, the owner retries.
+			if (this.#deps.laneBusy?.(lane.originKey) === true) return { handled: false, text: LANE_DISCARD_BUSY_TEXT };
 			await this.#removeLaneWorktree(name, { repo, worktree, branch });
 			if (existsSync(worktree)) {
 				log.warn("lane_discard_failed", { lane: name, worktree });
@@ -3074,13 +3076,12 @@ export class LaneManager {
 			{},
 		);
 		this.#deps.log.info("lane_not_done", { lane: lane.name, reasons: reasons.length });
-		const rendered = await this.#sync(row, "transition");
 		// Frozen: no autonomous re-prompt into a running lane. The lane stays not-done; the next verdict after unfreeze steers.
 		if (this.#deps.frozen?.() !== undefined) this.#deps.log.warn("lane_send_held_frozen", { lane: lane.name });
 		else this.#send(lane.name, "not-done", buildNotDonePrompt(reasons));
 		return {
 			text: `[not-done] 완료 주장이 검증을 통과하지 못했습니다:\n${reasons.map((r) => `- ${r}`).join("\n")}`,
-			row: rendered,
+			row: await this.#sync(row, "transition"),
 		};
 	}
 

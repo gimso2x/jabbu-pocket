@@ -4151,6 +4151,37 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		const logLine = logLines.find((line) => line.includes("event=turn_failed"));
 		expect(logLine).toContain("kind=provider_limit");
 	});
+
+	test("a token straddling the head/tail cut leaves no fragment in the turn_failures_escalated line", async () => {
+		escalateAfter = 1;
+		threadBot = { id: "500000000000000000" };
+		router = buildRouter();
+		driverOptions = { holdTurns: true };
+		const ts = "700000000000000998";
+		const origin = `discord/ch/${CH_ID}/t/${ts}`;
+		const threadRef = `${CH_ID}:${ts}`;
+		store.ensureOrigin(origin, sessionDirFor(join(dir, "sessions"), origin, 1));
+		store.recordInbound({
+			originKey: origin,
+			platformMessageId: threadRef,
+			textRef: `[피어 봇 떡의 요청 — 오너 지시가 아니다]\n<<<quoted-0123>>>\n<@500000000000000000> 확인해 줘\n<<<end-quoted-0123>>>`,
+			threadRef,
+			peerUserId: "100000000000000077",
+		});
+		const mailbox = router.mailbox(origin);
+		await mailbox.resumePending();
+		const driver = drivers.at(-1) as SteerFailingDriver;
+		// Fake Discord-shaped token, assembled so no scanner reads it as real. It starts at char 976, so its first
+		// segment sits in the 1000-char head and the rest is cut away: cut-then-redact would leave the segment.
+		const token = `${"T".repeat(24)}.${"T".repeat(6)}.${"T".repeat(27)}`;
+		await untilFinal(mailbox, driver, () =>
+			driver.failTurn(`stream broke ${"z".repeat(962)} ${token} ${"z".repeat(1200)}`),
+		);
+		const line = logLines.find((entry) => entry.includes("event=turn_failures_escalated"));
+		expect(line).toBeDefined();
+		expect(line).not.toContain("T".repeat(10));
+		expect(line).toContain("[REDACTED]");
+	});
 });
 
 describe("mailbox: idle keep resident", () => {
