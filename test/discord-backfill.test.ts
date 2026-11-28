@@ -260,6 +260,24 @@ describe("recover()", () => {
 		expect(store.getCursor(`dc:${DM}`)).toBe("100000000000000001");
 	});
 
+	test("a rate limit stops the pass: one line, the next target is not scanned", async () => {
+		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
+		store.setCursor(`dc:${DM}`, WATERMARK);
+		transport.history.set(DM, [dm("100000000000000001")]);
+		store.ensureOrigin(`discord/ch/${CH}`, join(home.dir, "s2"));
+		store.setCursor(`dc:${CH}`, WATERMARK);
+		transport.history.set(CH, [
+			{ id: "100000000000000001", channel_id: CH, author: { id: OWNER }, content: `<@${BOT}> 질문`, type: 0 },
+		]);
+		const adapter = await boot();
+		transport.failNext.listMessages = [new DiscordRateLimitedError(60_000)];
+		await recover(adapter);
+		expect(calls("listMessages")).toHaveLength(1);
+		expect(inbound).toEqual([]);
+		expect(logs.filter((line) => line.includes("event=backfill_rate_limited"))).toHaveLength(1);
+		expect(logs.some((line) => line.includes("event=backfill_read_failed"))).toBe(false);
+	});
+
 	test("a leftover slack/ origin row (the removed channel) is no Discord target; Discord keeps dc:<id> only", async () => {
 		store.ensureOrigin("slack/dm/D0SLACK001", join(home.dir, "s0"));
 		store.ensureOrigin(`discord/dm/${DM}`, join(home.dir, "s1"));
