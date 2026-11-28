@@ -73,7 +73,7 @@ export function sniffImageMime(head: Uint8Array): string | undefined {
  */
 export function retryAfterDelayMs(response: Response, now = Date.now()): number {
 	const raw = response.headers.get("retry-after");
-	if (raw === null) return 1_000;
+	if (raw === null || raw.trim() === "") return 1_000;
 	const ms = Number.isFinite(Number(raw)) ? Number(raw) * 1000 : Date.parse(raw) - now;
 	return Number.isNaN(ms) ? 1_000 : Math.min(Math.max(ms, 0), 60_000);
 }
