@@ -463,18 +463,18 @@ export async function herdrRemoteStart(
 	}
 	const cleanup = uncancellable(runner);
 
-	const list = await herdrRun(["agent", "list"], runner);
-	if (list.code !== 0) return { ok: false, error: `agent list failed: ${herdrFailure(list, 120)}` };
-	if (parseHerdrAgents(list.stdout)?.some((agent) => agent.name === name) === true) {
-		return { ok: false, error: `herdr already has an agent named ${name}` };
-	}
+	const found = await herdrAgentEntry(name, runner);
+	if (!found.ok) return found;
+	if (found.agent !== undefined) return { ok: false, error: `herdr already has an agent named ${name}` };
 
 	const label = "jabbu-owners";
 	const wsList = await herdrRun(["workspace", "list"], runner);
 	if (wsList.code !== 0) return { ok: false, error: `workspace list failed: ${herdrFailure(wsList)}` };
 	const listedWorkspaces = parseHerdrJson<HerdrWorkspaceList>(wsList.stdout);
+	// Not JSON is an error, not an empty list: no silent duplicate owners workspace.
+	if (listedWorkspaces === undefined) return { ok: false, error: "workspace list output is not JSON" };
 	let workspaceId =
-		listedWorkspaces?.result?.workspaces?.find((workspace) => workspace.label === label)?.workspace_id ?? "";
+		listedWorkspaces.result?.workspaces?.find((workspace) => workspace.label === label)?.workspace_id ?? "";
 
 	let createdWorkspace = false;
 	let tabId = "";
