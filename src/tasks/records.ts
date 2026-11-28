@@ -174,10 +174,13 @@ export function recordsTicker(
 		const seen = last.get(row.taskId);
 		const at = ctx.clock.now();
 		if (seen?.status === row.status && at - seen.at < RECORDS_COMMIT_INTERVAL_MS) return;
-		last.set(row.taskId, { status: row.status, at });
 		const result = await recordStatus(row, ops(row), repo, git);
-		if (result?.state === "failed" || result?.state === "skipped")
+		if (result?.state === "failed" || result?.state === "skipped") {
+			// Not marked: the next round tries again instead of waiting out the interval on a transient failure.
 			ctx.log.warn("records_commit_failed", { task: row.taskId, ...result });
+			return;
+		}
+		if (result !== undefined) last.set(row.taskId, { status: row.status, at });
 	};
 }
 
