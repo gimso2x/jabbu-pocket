@@ -35,8 +35,13 @@ export function processStartedAt(pid: number): number | undefined {
 /**
  * Whether the process `pid` plausibly started the lock recorded at `recordedStartedAt`: its actual start is no later
  * than the lock write plus tolerance. An unreadable start time fails closed (the pid alone decides, as before).
+ * `startedAt` is the process-start probe (default: the real `/proc` read); tests inject one.
  */
-export function startedAtMatches(pid: number, recordedStartedAt: number): boolean {
-	const started = processStartedAt(pid);
+export function startedAtMatches(
+	pid: number,
+	recordedStartedAt: number,
+	startedAt: (pid: number) => number | undefined = processStartedAt,
+): boolean {
+	const started = startedAt(pid);
 	return started === undefined || started <= recordedStartedAt + STARTED_AT_TOLERANCE_MS;
 }

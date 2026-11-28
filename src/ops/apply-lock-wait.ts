@@ -1,6 +1,7 @@
 // Taking `<home>/apply.lock` for one apply: a live holder is waited for (no drain, no restart meanwhile), a stale one
 // taken over. Running past the limit changes nothing and fails, leaving the holder's lock alone.
-import { holderAlive } from "../daemon/lock";
+import { currentBootId, holderAlive } from "../daemon/lock";
+import { processStartedAt } from "../daemon/proc-start";
 import { type ApplyLockInfo, createApplyLock, errorCode, parseApplyLock, reclaimStaleApplyLock } from "./apply-lock";
 import { readRegularText } from "./stamp";
 
@@ -11,6 +12,8 @@ export interface LockWaitDeps {
 	sleep(ms: number): Promise<void>;
 	pid: number;
 	isAlive(pid: number): boolean;
+	/** Start time of a process (ms), for the holder's recorded start check; absent: the real `/proc` read. */
+	processStartedAt?: (pid: number) => number | undefined;
 	log(line: string): void;
 }
 
@@ -62,8 +65,22 @@ export async function acquireApplyLock(
 			return done({ ok: false, detail: `${lockPath} is held by this apply ${stamp} itself`, noted: true });
 		}
 		// A dead holder (or one from another boot), broken JSON, or this pid left by an earlier process (another
-		// stamp) is stale.
-		if (holder === undefined || holder.pid === deps.pid || !holderAlive(holder.pid, holder.bootId, deps.isAlive)) {
+		// stamp) is stale. So is a holder whose pid was reused after the lock was written: the process at that
+		// pid started later than the lock records (the daemon lock checks the same way). An unparsable
+		// `startedAt` fails open, exactly as before.
+		const recorded = holder === undefined ? Number.NaN : Date.parse(holder.startedAt);
+		const recordedStartedAt = Number.isNaN(recorded) ? undefined : recorded;
+		const alive =
+			holder !== undefined &&
+			holderAlive(
+				holder.pid,
+				holder.bootId,
+				deps.isAlive,
+				currentBootId(),
+				recordedStartedAt,
+				deps.processStartedAt ?? processStartedAt,
+			);
+		if (holder === undefined || holder.pid === deps.pid || !alive) {
 			const reclaim = reclaimStaleApplyLock(lockPath, seen, deps.pid);
 			if (reclaim.outcome === "contention") {
 				return done({ ok: false, detail: `lock contention (moved-aside lock left at ${reclaim.aside})`, noted: true });
