@@ -48,6 +48,7 @@ let drivers: FakeOmpDriver[];
 beforeEach(() => {
 	home = makeHome("jabbu-borrowed-lane-");
 	daemon = undefined;
+	onDriver = undefined;
 	repos = [];
 	drivers = [];
 });
@@ -59,7 +60,9 @@ afterEach(async () => {
 	for (const repo of repos) removeRepoAndWorktrees(repo);
 });
 
-async function boot(): Promise<Daemon> {
+let onDriver: ((driver: FakeOmpDriver) => void) | undefined;
+
+async function boot(options: { inlineReplyChannels?: string[] } = {}): Promise<Daemon> {
 	transport = new WaitingDiscordTransport();
 	transport.setChannel({ id: CH, type: 0, guildId: GUILD });
 	const peerBots = [{ userId: PEER, name: "떡" }];
@@ -70,7 +73,15 @@ async function boot(): Promise<Daemon> {
 	daemon = new Daemon({
 		config: {
 			...home.config,
-			channels: { ...home.config.channels, discord: { ...discord, mentionFreeChannels: [CH], peerBots } },
+			channels: {
+				...home.config.channels,
+				discord: {
+					...discord,
+					mentionFreeChannels: [CH],
+					peerBots,
+					...(options.inlineReplyChannels === undefined ? {} : { inlineReplyChannels: options.inlineReplyChannels }),
+				},
+			},
 			// The lane start must not depend on how many omp sessions this machine runs right now.
 			hostSessionCeiling: 0,
 		},
@@ -86,6 +97,7 @@ async function boot(): Promise<Daemon> {
 		driverFactory: (_origin, sessionDir) => {
 			const driver = new FakeOmpDriver({ sessionDir, store: sessions, holdTurns: true });
 			drivers.push(driver);
+			onDriver?.(driver);
 			return driver;
 		},
 	});
@@ -162,5 +174,87 @@ describe("AC-4: 작업: written at a channel root", () => {
 		const answer = transport.posts((text) => text.includes("이 스레드에서 레인"))[0];
 		expect(answer?.channelId).toBe(sf(9101));
 		expect(answer?.content).not.toContain("https://");
+	});
+});
+
+describe("inlineReplyChannels: lane opens and borrows a thread on the owner message", () => {
+	test("jabbu_work_start during an inline turn opens a thread on the message and routes the turn answer inside it", async () => {
+		let resolveDriver!: (driver: FakeOmpDriver) => void;
+		const firstDriver = new Promise<FakeOmpDriver>((resolve) => {
+			resolveDriver = resolve;
+		});
+		onDriver = (driver) => {
+			if (drivers.length === 1) resolveDriver(driver);
+		};
+		await boot({ inlineReplyChannels: [CH] });
+		const repo = makeRepo(repos);
+		await transport.emitMessage(owner(9201, "레인 만들어줘"));
+		await transport.waitForPosts((text) => text.startsWith("⏳ 작업 중"));
+		const channelDriver = await firstDriver;
+		expect(transport.calls.filter((call) => call.method === "startThread")).toEqual([]);
+		expect(row(9201)).toMatchObject({ originKey: `discord/ch/${CH}`, threadRef: `${CH}:${sf(9201)}` });
+		const statusPost = transport.posts((text) => text.startsWith("⏳ 작업 중"))[0];
+		expect(statusPost?.channelId).toBe(CH);
+		expect(statusPost?.messageReference).toEqual({ messageId: sf(9201) });
+
+		const tool = daemon?.hostToolsFor(`discord/ch/${CH}`).find((candidate) => candidate.name === "jabbu_work_start");
+		if (!tool) throw new Error("jabbu_work_start missing");
+		const reply = String(
+			await tool.execute({ title: "인라인 레인", cwd: repo }, { signal: new AbortController().signal }),
+		);
+		expect(transport.posts((text) => text.startsWith("🔄 인라인 레인"))).toEqual([]);
+		expect(transport.calls.filter((call) => call.method === "startThread")).toEqual([
+			{ method: "startThread", channelId: CH, messageId: sf(9201), name: "인라인 레인", id: sf(9201) },
+		]);
+		const lane = daemon?.store.listLanes()[0];
+		expect(lane?.threadRef).toBe(`${CH}:${sf(9201)}`);
+		expect(lane?.meta.borrowedThread).toBe(true);
+		const laneStatus = transport.posts((text) => text.startsWith("⏳ 인라인 레인"))[0];
+		expect(laneStatus?.channelId).toBe(sf(9201));
+		expect(reply).toContain(`이 스레드에서 레인 \`${lane?.name}\`을 시작했습니다`);
+		expect(reply).not.toContain("https://");
+
+		let resolveDelete!: () => void;
+		const statusDeleted = new Promise<void>((resolve) => {
+			resolveDelete = resolve;
+		});
+		const origDelete = transport.deleteMessage.bind(transport);
+		transport.deleteMessage = async (args) => {
+			await origDelete(args);
+			if (args.messageId === statusPost?.id) resolveDelete();
+		};
+		channelDriver.release();
+		await transport.waitForPosts((text) => text.includes("ECHO 레인 만들어줘"));
+		await statusDeleted;
+		const answer = transport.posts((text) => text.includes("ECHO 레인 만들어줘"))[0];
+		expect(answer?.channelId).toBe(sf(9201));
+		expect(answer?.messageReference).toBeUndefined();
+		expect(
+			transport.calls.some(
+				(call) => call.method === "deleteMessage" && call.channelId === CH && call.messageId === statusPost?.id,
+			),
+		).toBe(true);
+	});
+
+	test("작업: trigger in inlineReplyChannels opens and borrows the owner message's thread", async () => {
+		await boot({ inlineReplyChannels: [CH] });
+		const repo = makeRepo(repos);
+		await transport.emitMessage(owner(9211, `작업: 인라인 @${repo}`));
+		await transport.waitForPosts((text) => text.includes("이 스레드에서 레인"));
+		const lane = daemon?.store.listLanes()[0];
+		expect(lane?.threadRef).toBe(`${CH}:${sf(9211)}`);
+		expect(lane?.meta.borrowedThread).toBe(true);
+		expect(transport.posts((text) => text.startsWith("🔄 인라인"))).toEqual([]);
+		expect(transport.calls.filter((call) => call.method === "startThread")).toEqual([
+			{ method: "startThread", channelId: CH, messageId: sf(9211), name: "인라인", id: sf(9211) },
+		]);
+		const laneStatus = transport.posts((text) => text.startsWith("⏳ 인라인"))[0];
+		expect(laneStatus?.channelId).toBe(sf(9211));
+		const answer = transport.posts((text) => text.includes("이 스레드에서 레인"))[0];
+		expect(answer?.channelId).toBe(sf(9211));
+		expect(answer?.content).not.toContain("https://");
+
+		await transport.emitMessage(owner(9212, "추가 지시", 9211));
+		expect(row(9212)?.originKey).toBe(lane?.originKey);
 	});
 });

@@ -24,7 +24,7 @@ import { CHECK_TIMEOUT_MS, type SignalCheck } from "../tasks/signals";
 import { resolveWorkerTier } from "../tasks/worker-tier";
 import { localDay } from "../time";
 import { changedFilesSince, fileSize, headOf, sessionDelta } from "./attach";
-import { claimBorrowedThread, failBorrowedStatus } from "./borrow-thread";
+import { type BorrowThreadRequest, claimBorrowedThread, failBorrowedStatus, openLaneThread } from "./borrow-thread";
 import { buildLaneOutcomeCard, type LaneCardView, laneSessionActionId } from "./card";
 import { computeLaneChanges } from "./changes";
 import { laneCost } from "./cost";
@@ -370,7 +370,7 @@ export class LaneManager {
 		/** An open lane of the same conversation, title and path is returned (`reused`) instead of starting another. */
 		reuseOpen?: boolean;
 		/** `parentOrigin`'s own thread, borrowed instead of opening a sibling when free (`claimBorrowedThread`). */
-		borrowThread?: { threadId: string };
+		borrowThread?: BorrowThreadRequest;
 	}): Promise<LaneRow & { startNote?: string; reused?: boolean }> {
 		const { store, channels, clock, log } = this.#deps;
 		const frozen = this.#deps.frozen?.();
@@ -506,19 +506,18 @@ export class LaneManager {
 				// An untracked sub directory of the repository is not in the worktree; an empty one changes no git status.
 				mkdirSync(laneCwd, { recursive: true });
 				const port = channels.portFor(input.channel);
-				// A borrowed thread is the conversation itself: no root, no new thread; its first message is the owner's.
-				let threadId: string;
-				if (borrowed !== undefined) threadId = borrowed.threadId;
-				else {
-					const root = await port.post({ conversationId: input.channel }, { text: `🔄 ${shown}` });
-					rootRef = { platform: port.platform, conversationId: input.channel, messageId: root.messageId };
-					// Discord: the lane thread is started from the root (its id is the root's), so the status goes inside it.
-					if (port.openThread !== undefined) {
-						await port.openThread(rootRef, title);
+				// A borrowed thread is the conversation itself (or the owner's inline root with a new thread opened on it).
+				const threadId = await openLaneThread(
+					port,
+					{ channel: input.channel, title, shown },
+					borrowed,
+					(ref) => {
+						rootRef = ref;
+					},
+					() => {
 						threadOpened = true;
-					}
-					threadId = root.messageId;
-				}
+					},
+				);
 				// No await between picking the name and reserving it (like the lane id above).
 				const name = this.#uniqueName(slugify(title));
 				this.#reservedNames.add(name);
