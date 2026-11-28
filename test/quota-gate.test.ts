@@ -828,9 +828,7 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 			code: 0,
 			timedOut: false,
 			stdout: JSON.stringify(
-				usagePayload([
-					{ provider: "anthropic", limits: [{ label: "5h", amount: { unit: "percent", usedFraction } }] },
-				]),
+				usagePayload([{ provider: "anthropic", limits: [{ label: "5h", amount: { unit: "percent", usedFraction } }] }]),
 			),
 		});
 
