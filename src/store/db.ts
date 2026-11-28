@@ -34,6 +34,7 @@ import {
 import type { ApprovalDetail, ApprovalInput, AutoChoiceInput, ExpiredApproval } from "../safety/approval";
 import { TaskLedger } from "../tasks/ledger";
 import { type CardAnswerVerdict, insertCardAnswer, judgeCardAnswer } from "./card-answers";
+import { applyDeliveryFacts, listAmbiguousDeliveries, resolveAmbiguousDelivery } from "./db-delivery-facts";
 import { bumpEpoch } from "./db-epoch";
 import {
 	type ApprovalRow,
@@ -699,8 +700,7 @@ export class Store {
 
 	/** pending -> dispatched. Records the op_ref and the omp leafId cursor taken just before dispatch. */
 	markDispatched(platformMessageId: string, input: { opRef: string; entryCursor: string | null }): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "dispatched");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "dispatched");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'dispatched', dispatched_at = ?, op_ref = ?, entry_cursor = ? WHERE platform_message_id = ?",
@@ -726,8 +726,7 @@ export class Store {
 
 	/** pending|sending -> uncertain: the input may already have reached the omp child, so nothing replays it until the owner decides. */
 	markUncertain(platformMessageId: string, reason: UncertainReason): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "uncertain");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "uncertain");
 		this.db
 			.query(
 				"UPDATE inbound SET state = 'uncertain', uncertain_reason = ?, uncertain_at = ? WHERE platform_message_id = ?",
@@ -755,8 +754,7 @@ export class Store {
 
 	/** pending|dispatched|uncertain -> discarded. With `opRef` the row is re-linked to that op (see `newEpoch`). */
 	discard(platformMessageId: string, opRef?: string): InboundRow {
-		const current = this.requireInbound(platformMessageId);
-		assertInboundTransition(current.state, "discarded");
+		assertInboundTransition(this.requireInbound(platformMessageId).state, "discarded");
 		this.db
 			.query("UPDATE inbound SET state = 'discarded', op_ref = COALESCE(?, op_ref) WHERE platform_message_id = ?")
 			.run(opRef ?? null, platformMessageId);
@@ -1816,6 +1814,20 @@ export class Store {
 		})();
 	}
 
+	/** Hold + owner notice in one transaction (nested calls run as savepoints): a notice failure leaves the row `inflight`. */
+	markAmbiguousWithNotice(
+		deliveryId: number,
+		error: string,
+		sentParts = 0,
+		replyTs?: string,
+		ownerUserId?: string,
+	): boolean {
+		return this.db.transaction(() => {
+			this.markAmbiguous(deliveryId, error, sentParts, replyTs);
+			return this.noticeAmbiguous(deliveryId, ownerUserId);
+		})();
+	}
+
 	// ---- owner resolution of held deliveries (`jabbu-pocket deliveries`) ----
 
 	/** The held rows waiting for the owner, oldest id first. */
@@ -2290,45 +2302,6 @@ export class Store {
 			// observers only; the transition itself is already durable
 		}
 	}
-}
-
-/** The one UPDATE every delivery transition writes; a null error keeps the row's stored one. */
-function applyDeliveryFacts(db: Database, deliveryId: number, next: DeliveryFacts, error: string | null): void {
-	db.query(
-		"UPDATE deliveries SET state = ?, attempts = ?, next_at = ?, redelivered = ?, last_error = COALESCE(?, last_error) WHERE delivery_id = ?",
-	).run(next.state, next.attempts, next.nextAt, next.redelivered ? 1 : 0, error, deliveryId);
-}
-
-const deliveryFactsOf = (row: DeliverySql): DeliveryFacts => ({
-	state: row.state,
-	attempts: row.attempts,
-	nextAt: row.next_at,
-	redelivered: row.redelivered === 1,
-	createdAt: row.created_at,
-});
-
-/** The `failed_ambiguous` rows waiting for the owner, oldest id first (the `jabbu-pocket deliveries list` list). */
-export function listAmbiguousDeliveries(db: Database): DeliveryRow[] {
-	return (
-		db.query("SELECT * FROM deliveries WHERE state = 'failed_ambiguous' ORDER BY delivery_id").all() as DeliverySql[]
-	).map(toDelivery);
-}
-
-/**
- * The owner's manual resolution on a bare connection: `transitionDelivery` refuses any row that is not
- * `failed_ambiguous`, so the UPDATE only ever closes a held row. Shared by `Store.resolveAmbiguous` semantics; no
- * hooks fire on this path (the CLI process has none).
- */
-export function resolveAmbiguousDelivery(
-	db: Database,
-	now: number,
-	deliveryId: number,
-	how: "ack" | "resend",
-): DeliveryRow {
-	const raw = db.query("SELECT * FROM deliveries WHERE delivery_id = ?").get(deliveryId) as DeliverySql | null;
-	if (raw === null) throw new StoreError("not_found", `delivery ${deliveryId}`);
-	applyDeliveryFacts(db, deliveryId, transitionDelivery(deliveryFactsOf(raw), how, now), null);
-	return toDelivery(db.query("SELECT * FROM deliveries WHERE delivery_id = ?").get(deliveryId) as DeliverySql);
 }
 
 export function openStore(options: StoreOptions): Store {

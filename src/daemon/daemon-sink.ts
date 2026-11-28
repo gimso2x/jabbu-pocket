@@ -666,9 +666,8 @@ export function deliverySources(
 		fail: (deliveryId, error, outcome, sentParts, replyTs) => {
 			if (outcome === "ambiguous") {
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
-				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
-				// One owner notice per held delivery, into the thread the answer was headed for.
-				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
+				// Hold and notice commit together: a notice failure leaves the row inflight for boot recovery to retry.
+				store.markAmbiguousWithNotice(deliveryId, error, sentParts, replyTs, primaryOwnerUserId(config.channels));
 				return true;
 			}
 			return store.failDelivery(deliveryId, error).state === "expired";
