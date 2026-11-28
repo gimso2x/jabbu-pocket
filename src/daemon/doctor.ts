@@ -10,6 +10,7 @@ import { BACKUP_MAX_AGE_MS } from "../ops/gates";
 import { OWNER_NOTES_MAX_BYTES, PERSONA_MAX_BYTES, SOUL_MAX_BYTES } from "../safety/prompt";
 import { checkCoreDumpLimit } from "./core-dump";
 import { listOmpModels, readJudgeRole } from "./doctor-omp";
+import { checkConfigRepos } from "./doctor-repos";
 import { readVersion } from "./tools";
 
 /** Config errors that only concern the token files; doctor reports those per file and keeps going. */
@@ -284,17 +285,16 @@ export async function runDoctor(
 			const present = existsSync(credentials);
 			report(present, "agy auth", present ? `${credentials} present` : `no ${credentials} (run: agy, then sign in)`);
 		}
+		checkConfigRepos(config, report, warn);
 	}
 	// The version beside the path is that bun's own answer; the bun running this report is named only when it differs.
 	const bunPath = Bun.which("bun");
 	const pathBunVersion = bunPath === null ? undefined : await readVersion([bunPath, "--version"]);
-	report(
-		bunPath !== null,
-		"bun",
+	const bunDetail =
 		bunPath === null
 			? `not on PATH (running ${Bun.version})`
-			: `${bunPath} ${pathBunVersion}${pathBunVersion === Bun.version ? "" : ` (running ${Bun.version})`}`,
-	);
+			: `${bunPath} ${pathBunVersion}${pathBunVersion === Bun.version ? "" : ` (running ${Bun.version})`}`;
+	report(bunPath !== null, "bun", bunDetail);
 
 	checkBackupBundle(homeDir, report, warn);
 	checkInjectedFiles(homeDir, warn);
