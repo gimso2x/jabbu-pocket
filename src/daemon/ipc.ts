@@ -25,9 +25,10 @@ export interface IpcServer {
 }
 
 export function startIpcServer(path: string, handler: IpcHandler): IpcServer {
-	// A non-file at the socket path is never ours to remove (like the lock's notFile refusal); a symlink is unlinked as before.
+	// A non-file at the socket path is never ours to remove (like the lock's notFile refusal); a symlink is unlinked as before,
+	// and so is a socket: a previous daemon's live socket (a restart in the same home) is stale once the lock is held.
 	const st = lstatSync(path, { throwIfNoEntry: false });
-	if (st !== undefined && !st.isFile() && !st.isSymbolicLink())
+	if (st !== undefined && !st.isFile() && !st.isSymbolicLink() && !st.isSocket())
 		throw new Error(`ipc socket path ${path} is not a regular file (remove or move it by hand)`);
 	rmSync(path, { force: true }); // the single-instance lock is held, so a leftover socket file is stale
 	// Created under umask 0177 so the socket is never visible with wider permissions, then pinned to 0600.
@@ -46,9 +47,7 @@ export function startIpcServer(path: string, handler: IpcHandler): IpcServer {
 						out: { rest: Buffer.alloc(0), endWhenDone: true },
 					};
 				},
-				drain(socket) {
-					pump(socket, socket.data.out);
-				},
+				drain: (socket) => pump(socket, socket.data.out),
 				data(socket, chunk) {
 					if (overCap(socket.data, chunk, IPC_MAX_LINE_BYTES)) {
 						socket.data.buffer = "";

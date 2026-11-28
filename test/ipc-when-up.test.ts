@@ -113,6 +113,23 @@ describe("startIpcServer socket path", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("a live socket at the path is unlinked and the new server answers (a restart in the same home)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "ipc-sock-"));
+		const path = join(dir, "jabbu.sock");
+		const first = startIpcServer(path, async () => ({ ok: "first" }));
+		try {
+			const second = startIpcServer(path, async () => ({ ok: "second" }));
+			try {
+				expect(await callDaemon(path, { op: "x" })).toEqual({ ok: "second" });
+			} finally {
+				second.stop();
+			}
+		} finally {
+			first.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("startIpcServer input cap", () => {
