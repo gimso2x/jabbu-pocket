@@ -761,7 +761,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		}
 		const dropped = (turn.droppedSteers ?? 0) + this.#queued.length;
 		const end = promptReplyEnd({ ...turn, stopReason, failure, dropped });
-		if (this.#context !== undefined) turn.usage.contextTokens = this.#context.used;
+		if (this.#context !== undefined && this.#usageUpdatedThisTurn) turn.usage.contextTokens = this.#context.used;
 		// Before the final: a prompt sent on it must already find the conversation dropped.
 		turn.usage.rotated = this.#rotateIfFull(turn.usage.calls);
 		this.#finish(turn, { opRef: turn.opRef, text: turn.text, ...end });

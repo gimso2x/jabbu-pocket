@@ -788,6 +788,24 @@ test("a turn that calls the model without a usage_update warns once that rotatio
 	await driver.stop();
 });
 
+test("a turn without a usage_update does not report the previous turn's contextTokens", async () => {
+	const harness = makeHarness();
+	const driver = harness.make();
+	await driver.start();
+
+	const half = nextFinal(driver);
+	await driver.prompt("@half");
+	expect((await half).usage).toMatchObject({ contextTokens: 500, rotated: false });
+
+	// No usage_update this turn: the final must not carry the previous turn's 500.
+	const blind = nextFinal(driver);
+	await driver.prompt("@no-usage again");
+	const blindFinal = await blind;
+	expect(blindFinal.usage).toMatchObject({ calls: 1, rotated: false });
+	expect(blindFinal.usage?.contextTokens).toBeUndefined();
+	await driver.stop();
+});
+
 test("agyMcpServers reach session/new and session/load; a reload's new list applies from the next start", async () => {
 	const harness = makeHarness();
 	let servers = [
