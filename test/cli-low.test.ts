@@ -103,6 +103,16 @@ describe("CLI commands without a daemon", () => {
 		expect(run.stderr).not.toContain("daemon not reachable");
 	});
 
+	test("--version and version print the package version and exit 0", async () => {
+		for (const command of ["--version", "version"]) {
+			const run = await runCliCapture(home.dir, [command]);
+			expect(run.code).toBe(0);
+			expect(run.stdout).toMatch(/^jabbu-pocket \d+\.\d+\.\d+\n$/);
+			expect(run.stderr).toBe("");
+		}
+		expect((await runCliCapture(home.dir, ["--version", "extra"])).code).toBe(2);
+	});
+
 	test("reload says the daemon is not reachable, exit 1", async () => {
 		const run = await runMain(home.dir, ["reload"]);
 		expect(run.code).toBe(1);
