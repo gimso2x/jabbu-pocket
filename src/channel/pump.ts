@@ -164,16 +164,19 @@ export class DeliveryPump {
 			if (result.kind === "deferred") await this.#defer(delivery, errorText(result.error), result.retry);
 			if (result.kind === "failed") await this.#fail(delivery, result);
 			if (result.kind !== "sent") continue;
-			// The answer is out either way: a confirm that throws is logged, never resent, and the status still finishes.
-			if (await this.#ledger(delivery, "confirm", () => source.confirm(delivery.deliveryId))) {
-				log.info("delivery_sent", {
-					id: delivery.deliveryId,
-					parts: result.parts,
-					...(result.path === undefined ? {} : { path: result.path }),
-					redelivered: delivery.redelivered,
-				});
-				confirmed += 1;
+			// A confirm that throws leaves the row inflight for the next sweep to resend — hold it as ambiguous instead.
+			const confirmError = await this.#ledger(delivery, "confirm", () => source.confirm(delivery.deliveryId));
+			if (confirmError !== null) {
+				await this.#fail(delivery, failedDelivery(confirmError, result.parts));
+				continue;
 			}
+			log.info("delivery_sent", {
+				id: delivery.deliveryId,
+				parts: result.parts,
+				...(result.path === undefined ? {} : { path: result.path }),
+				redelivered: delivery.redelivered,
+			});
+			confirmed += 1;
 			try {
 				await sender.afterSent(delivery);
 			} catch (err) {
@@ -193,10 +196,10 @@ export class DeliveryPump {
 		const { source, log } = this.#options;
 		log.warn("delivery_failed", { id: delivery.deliveryId, sent_parts: sentParts, outcome, error });
 		let gaveUp = outcome === "ambiguous";
-		const written = await this.#ledger(delivery, "fail", async () => {
+		const failWrite = async (): Promise<void> => {
 			if ((await source.fail(delivery.deliveryId, error, outcome, sentParts, replyTs)) === true) gaveUp = true;
-		});
-		if (written && gaveUp) await this.#undelivered(delivery);
+		};
+		if ((await this.#ledger(delivery, "fail", failWrite)) === null && gaveUp) await this.#undelivered(delivery);
 	}
 
 	/** Rows the ledger expired since the last pump: their threads' statuses end as undelivered. */
@@ -235,14 +238,14 @@ export class DeliveryPump {
 	}
 
 	/** One ledger write (confirm/fail/defer): a throw (SQLITE_FULL/BUSY) is logged and the batch goes on; the row
-	 * stays in flight as claimed, which the next start recovers. False when it threw. */
-	async #ledger(delivery: DeliveryItem, call: string, write: () => Promise<unknown> | unknown): Promise<boolean> {
+	 * stays in flight as claimed, which the next start recovers. Null when it wrote, the error when it threw. */
+	async #ledger(delivery: DeliveryItem, call: string, write: () => Promise<unknown> | unknown): Promise<unknown> {
 		try {
 			await write();
-			return true;
+			return null;
 		} catch (err) {
 			this.#options.log.error("delivery_ledger_failed", { id: delivery.deliveryId, call, ...errorFields(err) });
-			return false;
+			return err;
 		}
 	}
 }
