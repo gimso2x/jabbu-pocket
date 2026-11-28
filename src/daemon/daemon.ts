@@ -470,7 +470,7 @@ export class Daemon {
 					: boardNoticeFor(store, originKey),
 			costCap: () => this.#options.config.costCap,
 			budgetProvider: () => this.#budgetCommand(),
-			briefingProvider: (originKey, threadRef) => this.#brief(originKey, threadRef),
+			briefingProvider: (originKey, threadRef, isDiscarded) => this.#brief(originKey, threadRef, isDiscarded),
 			restartProvider: (originKey, threadRef) => restart.request(originKey, threadRef),
 			usageResetProvider: (arg) => this.#quota.resetUsage(arg),
 			commandPicker: (info) => this.#picker.open(info),
@@ -897,7 +897,7 @@ export class Daemon {
 	 * `!brief`: the status the page shows, as one PNG uploaded to the asking thread — no model call. Assembled like the
 	 * dashboard CLI's snapshot, except the daemon answers its own `status` op and no herdr board is started here.
 	 */
-	async #brief(originKey: string, threadRef: string): Promise<void> {
+	async #brief(originKey: string, threadRef: string, isDiscarded?: () => boolean): Promise<void> {
 		if (this.#store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
 		const config = this.#options.config;
 		const route = this.#channels.forThreadRef(threadRef);
@@ -923,6 +923,12 @@ export class Daemon {
 			timeoutMs: BRIEFING_TIMEOUT_MS,
 			...(this.#options.briefingRun === undefined ? {} : { run: this.#options.briefingRun }),
 		});
+		// A `!new` during the render discards the row: skip the upload, so the old epoch's picture never lands.
+		// (The render file stays for the hourly media sweep's 24h retention to collect.)
+		if (isDiscarded?.() === true) {
+			this.#log.info("briefing_discarded", { origin: originKey });
+			return;
+		}
 		await route.port.uploadFile(route.target, {
 			path: out,
 			title: `jabbu 브리핑 ${localIso(now, this.#options.config.timezone).slice(11, 16)}`,

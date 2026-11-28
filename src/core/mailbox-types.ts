@@ -273,10 +273,10 @@ export interface MailboxDeps {
 	/** The repository HEADs around a conversation turn (wiki turn notes); absent = no git is started. */
 	turnHeads?: TurnHeadsDeps;
 	/**
-	 * `!brief`: draws the origin's one-page status picture and uploads it to `threadRef`. Resolving = the image is in
-	 * the thread; throwing = nothing was uploaded and the reason becomes the one failure line. Absent = not wired.
+	 * `!brief`: draws a one-page status picture and uploads it to `threadRef` (skipped when `isDiscarded` says a `!new`
+	 * discarded the row). Resolving = the image is in the thread; throwing = nothing was uploaded. Absent = not wired.
 	 */
-	briefingProvider?: (originKey: string, threadRef: string) => Promise<void>;
+	briefingProvider?: (originKey: string, threadRef: string, isDiscarded?: () => boolean) => Promise<void>;
 	/** `!restart`: called with the row's origin and thread, its line becomes the answer. Absent = not wired. */
 	restartProvider?: RestartProvider;
 	/** `/usage-reset-jabbu`: resets quota holds/usage blocks; absent = not wired. */
