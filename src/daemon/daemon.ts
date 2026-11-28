@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
@@ -12,7 +12,6 @@ import { TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { OriginRouter, sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin, REMOVED_PLATFORM_PREFIXES } from "../core/origin-key";
 import { COMMAND_OP_REF, type MailboxClock } from "../core/types";
-import { briefingFileName, briefingSummaryLine, renderBriefingHtml } from "../dashboard/briefing";
 import { snapshotReader } from "../dashboard/snapshot-assembly";
 import { escapeDiscordMarkdown } from "../discord/format";
 import { createDispatchAudit, installProcessAudit } from "../dispatch/audit";
@@ -47,7 +46,6 @@ import { HERDR_HEALTH_CHECK_MS, type HerdrHealthProbe } from "../ops/herdr-healt
 import { resolvedCeiling } from "../ops/host-resources";
 import { hostSessionsInfo } from "../ops/host-sessions";
 import { sweepMedia } from "../ops/media-prune";
-import { BRIEFING_TIMEOUT_MS, BRIEFING_WIDTH, renderPng } from "../ops/screenshot";
 import { redact } from "../redact";
 import { ApprovalBroker } from "../safety/approval";
 import type { HostToolDef } from "../safety/host-tools";
@@ -61,11 +59,11 @@ import type { TaskLandOutcome } from "../tasks/land";
 import { repoMatchesTask } from "../tasks/land-remote";
 import type { TaskRow } from "../tasks/ledger";
 import { TASK_SWEEP_MS, type TaskSweeper } from "../tasks/sweeper";
-import { localIso } from "../time";
 import { notifyWebOwnerTurn } from "../web/notify";
 import { turnNoteRepos, WikiNotes } from "../wiki/notes";
 import { type BootBackupHandle, startBootBackup } from "./boot-backup";
 import { readBotUsageSummary } from "./bot-driver";
+import { uploadBriefing } from "./briefing-upload";
 import { DIALOG_AMBIGUOUS_NOTICE, MEDIA_SWEEP_INTERVAL_MS, STOP_DRAIN_MS, WIKI_FLUSH_MS } from "./daemon-constants";
 import {
 	adapterOfThread,
@@ -912,36 +910,16 @@ export class Daemon {
 			// The snapshot's own herdr/ssh/git calls always use the real runner: `briefingRun` is the capture seam only.
 			run: realProcessRunner,
 		})();
-		const dir = join(config.homeDir, "media", "briefing");
-		mkdirSync(dir, { recursive: true });
-		// `<YYYYMMDD-HHmmss in the bot's zone>-<suffix>`: the suffix is per render, so two briefings in the same second never collide.
-		const out = join(dir, `${briefingFileName(now, this.#options.config.timezone)}-${randomUUID().slice(0, 8)}.png`);
-		const startedAt = Date.now();
-		const size = await renderPng(renderBriefingHtml(snapshot, now), out, {
-			chromium: config.briefing?.chromium ?? "chromium",
-			width: BRIEFING_WIDTH,
-			timeoutMs: BRIEFING_TIMEOUT_MS,
-			...(this.#options.briefingRun === undefined ? {} : { run: this.#options.briefingRun }),
+		await uploadBriefing({
+			config,
+			snapshot,
+			route,
+			now,
+			originKey,
+			isDiscarded,
+			log: this.#log,
+			run: this.#options.briefingRun,
 		});
-		// A `!new` during the render discards the row: skip the upload, so the old epoch's picture never lands.
-		// (The render file stays for the hourly media sweep's 24h retention to collect.)
-		if (isDiscarded?.() === true) {
-			this.#log.info("briefing_discarded", { origin: originKey });
-			return;
-		}
-		await route.port.uploadFile(route.target, {
-			path: out,
-			title: `jabbu 브리핑 ${localIso(now, this.#options.config.timezone).slice(11, 16)}`,
-			comment: briefingSummaryLine(snapshot),
-		});
-		// The PNG is only needed until the upload completes: delete it now (best effort) instead of leaving one
-		// file per render for the hourly media sweep's 24h retention to collect.
-		try {
-			rmSync(out, { force: true });
-		} catch (error) {
-			this.#log.warn("briefing_file_delete_failed", { origin: originKey, ...errorFields(error) });
-		}
-		this.#log.info("briefing_rendered", { origin: originKey, ms: Date.now() - startedAt, height: size.height });
 	}
 
 	/** `!budget`: today's totals, top origins and both ceilings. The ceilings only warn; nothing is stopped by them. */
