@@ -212,6 +212,9 @@ export async function runDoctor(
 		if (config === undefined) report(false, "config", failure instanceof ConfigError ? failure.message : "unreadable");
 	}
 	if (config) {
+		// Warnings are probable mistakes (an unknown key, an ignored key): doctor is the owner's way to validate a
+		// config edit, so each gets a line here; a warning never counts as a failed check.
+		for (const warning of config.warnings ?? []) warn("config", `${warning.field} (${warning.reason})`);
 		try {
 			accessSync(config.ompExecutable, constants.X_OK);
 			const version = await readVersion([config.ompExecutable, "--version"]);
@@ -284,6 +287,24 @@ export async function runDoctor(
 			const credentials = join(homedir(), ".gemini", "oauth_creds.json");
 			const present = existsSync(credentials);
 			report(present, "agy auth", present ? `${credentials} present` : `no ${credentials} (run: agy, then sign in)`);
+			// The accounts pool reads <dir>/order at the first agy turn: a typo'd dir passes load and fails only then.
+			if (config.agyAccounts !== undefined) {
+				const order = join(config.agyAccounts.dir, "order");
+				let readable = false;
+				try {
+					readable = statSync(order).isFile();
+					if (readable) accessSync(order, constants.R_OK);
+				} catch {
+					readable = false;
+				}
+				report(
+					readable,
+					"agy accounts",
+					readable
+						? `${order} readable`
+						: `${order} is not a readable file (check "agyAccounts.dir" in ${config.configPath})`,
+				);
+			}
 		}
 		checkConfigRepos(config, report, warn);
 	}

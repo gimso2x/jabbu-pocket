@@ -304,6 +304,40 @@ describe("session commands", () => {
 		}
 	});
 
+	test("steer, abort and set_thinking_level reject on success:false instead of swallowing the refusal", async () => {
+		const peer = new FakeOmpPeer();
+		peer.replies.set("steer", () => ({ error: "turn already ended", code: "turn_ended" }));
+		peer.replies.set("abort", () => ({ error: "nothing to abort" }));
+		peer.replies.set("set_thinking_level", () => ({ error: "level not offered" }));
+		const client = await startedClient(peer);
+		try {
+			const steer = await client.steer("x").catch((e: unknown) => e);
+			expect(steer).toBeInstanceOf(RpcCommandError);
+			expect(steer).toMatchObject({ code: "turn_ended", command: "steer", message: "turn already ended" });
+			const abort = await client.abort().catch((e: unknown) => e);
+			expect(abort).toBeInstanceOf(RpcCommandError);
+			expect(abort).toMatchObject({ command: "abort", message: "nothing to abort" });
+			const thinking = await client.setThinkingLevel("high").catch((e: unknown) => e);
+			expect(thinking).toBeInstanceOf(RpcCommandError);
+			expect(thinking).toMatchObject({ command: "set_thinking_level", message: "level not offered" });
+		} finally {
+			await client.stop();
+		}
+
+		const second = new FakeOmpPeer();
+		for (const [type, rule] of peer.replies) second.replies.set(type, rule);
+		const driver = await startedDriver(second);
+		try {
+			const error = await driver.steer("x").catch((e: unknown) => e);
+			expect(error).toBeInstanceOf(OmpDriverError);
+			expect(error).toMatchObject({ code: "rpc_error", rpcCode: "turn_ended" });
+			await expect(driver.abort()).rejects.toBeInstanceOf(OmpDriverError);
+			await expect(driver.setThinking("high")).rejects.toBeInstanceOf(OmpDriverError);
+		} finally {
+			await driver.stop();
+		}
+	});
+
 	test("a request without a response times out; the child's exit rejects what still waits", async () => {
 		const peer = new FakeOmpPeer();
 		peer.replies.set("get_state", () => "hold");
@@ -605,4 +639,46 @@ describe("process group", () => {
 			expect(existsSync(`/proc/${pid}/cmdline`) && Bun.file(`/proc/${pid}/stat`).size > 0).toBe(false);
 		}, 20_000);
 	}
+});
+
+describe("stop() kill waves", () => {
+	/** The peer's child with a pid no process group can ever have (above the kernel's pid_max). */
+	const goneGroupSpawn =
+		(peer: FakeOmpPeer) => (argv: string[], options: { cwd: string; env: Record<string, string> }) => ({
+			...peer.spawn(argv, options),
+			pid: 4_194_305,
+		});
+
+	test("stop() skips the post-exit SIGKILL when the process group is already gone", async () => {
+		const peer = new FakeOmpPeer();
+		const client = new OmpRpcClient({
+			executable: "omp",
+			args: ["--mode", "rpc"],
+			cwd: root,
+			env: {},
+			spawn: goneGroupSpawn(peer),
+		});
+		await client.start();
+		await client.stop();
+		expect(peer.signals).toEqual(["SIGTERM"]);
+	});
+
+	test("stop() clears the SIGKILL timer #onExit armed when the child died on its own", async () => {
+		const peer = new FakeOmpPeer();
+		const client = new OmpRpcClient({
+			executable: "omp",
+			args: ["--mode", "rpc"],
+			cwd: root,
+			env: {},
+			terminationGraceMs: 20,
+			spawn: goneGroupSpawn(peer),
+		});
+		await client.start();
+		peer.exit(3);
+		await Promise.resolve(); // let #onExit run and arm its SIGKILL timer
+		await client.stop();
+		// sleep-ok: proving a cleared timer never fires requires waiting past its 20ms deadline
+		await Bun.sleep(100);
+		expect(peer.signals).toEqual(["SIGTERM", "SIGTERM"]);
+	});
 });

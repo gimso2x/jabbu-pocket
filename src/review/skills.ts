@@ -40,6 +40,8 @@ export interface SkillReviewDeps {
 	savePending(proposals: SkillProposal[]): string[];
 	/** Installs one approved skill into the agent skills directory. */
 	install(proposal: SkillProposal): Promise<void>;
+	/** Set when the bot runs under an omp profile: installs land in the source tree and reach live sessions at the next apply. */
+	profileSyncPending?: boolean;
 	requestApproval(summary: string): Promise<"approved" | "denied" | "timeout">;
 	notify(text: string): Promise<void>;
 	log: Logger;
@@ -57,7 +59,7 @@ export const MAX_EVIDENCE = 2_000;
 export const MIN_CHECKS = 2;
 export const MAX_CHECKS = 4;
 export const MAX_CHECK_TEXT = 500;
-/** Revisions of one skill live at `<skills>/<name>/revisions/<install-time>.md`. */
+/** Revisions of one skill live at `<skills>/<name>/revisions/<install-time>.md` — so no skill may be named `revisions`, or the lock scan (which skips that directory) could never see it. */
 export const SKILL_REVISIONS_DIR = "revisions";
 /** Every line terminator a frontmatter reader may honour (CRLF first so it collapses to one space). */
 const LINE_BREAKS = /\r\n|[\r\n\u2028\u2029\u0085]/g;
@@ -108,18 +110,19 @@ function balancedEnd(text: string, start: number): number {
 		else if (ch === "[" || ch === "{") depth += 1;
 		else if (ch === "]" || ch === "}") {
 			depth -= 1;
-			if (depth === 0) return i;
-			if (depth < 0) return -1;
+			if (depth <= 0) return depth === 0 ? i : -1;
 		}
 	}
 	return -1;
 }
 
 /**
- * First JSON array of objects / object in `text` that parses. Each "[" or "{" is tried as a start (bounded), its
- * balanced end is parsed; prose brackets like "[결과]" or "[1]" simply fail or carry no objects and are skipped.
+ * Each JSON array of objects / object in `text` that parses, in order. Each "[" or "{" is tried as a start (the
+ * attempt budget is shared across candidates), its balanced end is parsed; prose brackets like "[결과]" or "[1]"
+ * simply fail or carry no objects and are skipped. A yielded candidate is skipped past, so a `{"proposals":[...]}`
+ * wrapper never leaks its inner array as a second candidate.
  */
-function firstJsonList(text: string): unknown[] | undefined {
+function* jsonListCandidates(text: string): Generator<unknown[]> {
 	let attempts = 0;
 	for (let i = 0; i < text.length && attempts < MAX_START_ATTEMPTS; i++) {
 		if (text[i] !== "[" && text[i] !== "{") continue;
@@ -132,10 +135,16 @@ function firstJsonList(text: string): unknown[] | undefined {
 		} catch {
 			continue;
 		}
-		if (!Array.isArray(parsed)) return typeof parsed === "object" && parsed !== null ? [parsed] : undefined;
-		if (parsed.length === 0 || parsed.some((entry) => typeof entry === "object" && entry !== null)) return parsed;
+		if (!Array.isArray(parsed)) {
+			yield [parsed];
+			i = end;
+			continue;
+		}
+		if (parsed.length === 0 || parsed.some((entry) => typeof entry === "object" && entry !== null)) {
+			yield parsed;
+			i = end;
+		}
 	}
-	return undefined;
 }
 
 function validProposals(list: unknown[]): SkillProposal[] {
@@ -150,7 +159,7 @@ function validProposals(list: unknown[]): SkillProposal[] {
 		const name = typeof item.name === "string" ? item.name.trim() : "";
 		const description = typeof item.description === "string" ? item.description.trim() : "";
 		const content = typeof item.content === "string" ? item.content.trim() : "";
-		if (!NAME_PATTERN.test(name) || seen.has(name)) continue;
+		if (!NAME_PATTERN.test(name) || name === SKILL_REVISIONS_DIR || seen.has(name)) continue;
 		if (description === "" || description.length > MAX_DESCRIPTION) continue;
 		if (content === "" || content.length > MAX_CONTENT) continue;
 		// Adoption gate: a proposal the conversation never actually vindicated, or whose fire/do-not-fire checks are
@@ -184,18 +193,20 @@ function validProposals(list: unknown[]): SkillProposal[] {
 
 /**
  * Pulls the proposals out of a model answer that may wrap the JSON in prose or fences: fenced blocks first, then the
- * whole text.
+ * whole text. Each parseable JSON candidate is tried in order until one yields proposals, so a first block that is
+ * entirely invalid no longer shadows a later valid one.
  */
 export function extractProposals(answer: string): SkillProposal[] {
 	const trimmed = answer.trim();
 	if (trimmed === "" || /^NO_PROPOSAL\.?$/i.test(trimmed)) return [];
-	for (const fence of trimmed.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)) {
-		const list = firstJsonList(fence[1] ?? "");
-		const proposals = list === undefined ? [] : validProposals(list);
-		if (proposals.length > 0) return proposals;
-	}
-	const list = firstJsonList(trimmed);
-	return list === undefined ? [] : validProposals(list);
+	const blocks = [...trimmed.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)].map((fence) => fence[1] ?? "");
+	blocks.push(trimmed);
+	for (const block of blocks)
+		for (const list of jsonListCandidates(block)) {
+			const proposals = validProposals(list);
+			if (proposals.length > 0) return proposals;
+		}
+	return [];
 }
 
 /** Words and shapes a plain YAML scalar would be read back as a non-string. */
@@ -306,7 +317,7 @@ export async function runSkillReview(
 	await deps.notify(
 		`📝 스킬 ${installed.length}개 설치: ${installed.join(", ")} — 다음 세션부터 스킬 목록에 나타납니다.${
 			failed === 0 ? "" : `\n${failed}개는 설치하지 못했습니다(jabbu.log skill_install_failed).`
-		}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
+		}${deps.profileSyncPending === true ? "\n봇 프로필을 쓰면 다음 apply(omp sync) 뒤에 적용됩니다." : ""}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
 	);
 	return { proposals: proposals.length, installed: installed.length };
 }
@@ -366,10 +377,7 @@ export async function readSessionDigest(
 		files = await Promise.all(
 			(await readdir(sessionDir))
 				.filter((name) => name.endsWith(".jsonl"))
-				.map(async (name) => {
-					const path = join(sessionDir, name);
-					return { path, mtimeMs: (await stat(path)).mtimeMs };
-				}),
+				.map(async (name) => ({ path: join(sessionDir, name), mtimeMs: (await stat(join(sessionDir, name))).mtimeMs })),
 		);
 		files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 	} catch {
@@ -482,9 +490,10 @@ export function backupSkillRevision(dir: string, now: number): string | undefine
 export function installSkill(dir: string, proposal: SkillProposal, now: number): string | undefined {
 	return withSkillLock(dir, () => {
 		const current = join(dir, "SKILL.md");
-		assertSafeSkillPath(dir, "install", { requireDir: true });
-		assertSafeSkillPath(join(dir, SKILL_REVISIONS_DIR), "install", { requireDir: true });
+		for (const path of [dir, join(dir, SKILL_REVISIONS_DIR)])
+			assertSafeSkillPath(path, "install", { requireDir: true });
 		const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
+		if (proposal.name === SKILL_REVISIONS_DIR) throw new Error("install refused: revisions is a reserved name");
 		if (proposal.action === "create" && exists)
 			throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
 		if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);

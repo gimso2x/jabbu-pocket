@@ -1,3 +1,4 @@
+import type { Logger } from "../log";
 import type { OmpFinal } from "./driver";
 
 /*
@@ -59,4 +60,19 @@ export function withDroppedSteers(final: Omit<OmpFinal, "usage">, dropped: numbe
 			? {}
 			: { error: `${final.error} (steer ${dropped}건 미전달)` }),
 	};
+}
+
+/**
+ * Queued steers dropped with no final to carry them (child death, driver stop): count them on the turn and log
+ * them, or they vanish silently — the mailbox already marked them delivered when `steer()` resolved on enqueue.
+ */
+export function noteDroppedSteers(
+	options: { log?: Logger; originKey?: string },
+	event: string,
+	turn: { opRef: string; droppedSteers?: number } | undefined,
+	queued: readonly string[],
+): void {
+	if (queued.length === 0) return;
+	if (turn !== undefined) turn.droppedSteers = (turn.droppedSteers ?? 0) + queued.length;
+	options.log?.warn(event, { origin: options.originKey, opRef: turn?.opRef, dropped: queued.length });
 }

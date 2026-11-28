@@ -3,6 +3,7 @@
 // second request while a capture runs answered at once, the origin's normal messages still starting turns during a
 // capture (the render never holds the serial chain), and `!brief` answering while a turn runs.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Daemon } from "../src/daemon/daemon";
 import type { UploadFileArgs } from "../src/discord/transport";
@@ -201,6 +202,8 @@ describe("AC-4: !brief", () => {
 		expect(upload?.channelId).toBe(OWNER_DM);
 		expect(upload?.filePath).toContain(join("media", "briefing"));
 		expect(upload?.content).toContain("주의");
+		// The render file is only needed until the upload completes: a successful upload deletes it.
+		expect(existsSync(upload?.filePath ?? "")).toBe(false);
 		// Only the injected marker was posted as text: the image is the answer, no extra line.
 		expect(transport.posts().filter((post) => !(post.content ?? "").startsWith("🧪 inject"))).toHaveLength(0);
 		const row = d.store.listInbound({ originKey: ORIGIN })[0];
@@ -248,7 +251,7 @@ describe("AC-4: !brief", () => {
 		expect(uploads()).toHaveLength(1);
 	});
 
-	test("a capture that succeeds after !new settles quietly: no settle-failure log, no briefing delivery", async () => {
+	test("a capture that succeeds after !new uploads nothing: the old epoch's picture never lands", async () => {
 		const held = heldChromium();
 		const d = await boot({ briefingRun: held.run });
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "!brief" });
@@ -256,8 +259,11 @@ describe("AC-4: !brief", () => {
 		await d.inject({ origin: ORIGIN, asOwner: true, text: "!new" });
 		expect((await waitForRow(d, "!brief", "discarded"))?.state).toBe("discarded");
 		held.release();
-		await transport.waitForUploads();
-		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		// The provider checks the discard just before the upload: its skip line is the settle signal.
+		for (let hop = 0; hop < 200 && !lines.some((line) => line.includes("briefing_discarded")); hop += 1)
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(lines.some((line) => line.includes("briefing_discarded"))).toBe(true);
+		expect(uploads()).toHaveLength(0);
 		expect(lines.some((line) => line.includes("briefing_settle_failed"))).toBe(false);
 		expect(failurePosts()).toHaveLength(0);
 		expect(

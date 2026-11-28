@@ -6,6 +6,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	readlinkSync,
 	realpathSync,
@@ -21,10 +22,10 @@ import {
 	ompCommand,
 	profileAgentDir,
 	runProfileSync,
-	syncProfile,
 	TRIAL_PROMPT,
 	type TrialResult,
 } from "../src/cli/omp";
+import { syncProfile } from "../src/cli/omp-sync";
 import { loadConfig } from "../src/config";
 import { countOmpModels } from "../src/daemon/doctor-omp";
 import type { RunProcessOptions, RunProcessResult } from "../src/dispatch/omp";
@@ -427,6 +428,45 @@ describe("AC-5: jabbu-pocket omp sync", () => {
 		// A dry run only lists changes, so it takes no lock and succeeds under the same hold.
 		const listed = withSkillLock(m1, () => syncProfile({ source, target, userHome, dryRun: true }));
 		expect(listed.changed).toContain("copied managed-skills/m1/SKILL.md");
+	});
+
+	test("an overwriting sync snapshots the profile SKILL.md into revisions/ first", () => {
+		sync(true);
+		const later = new Date(Date.now() + 60_000);
+		put(join(source, "managed-skills", "m1", "SKILL.md"), "m1 v2\n");
+		utimesSync(join(source, "managed-skills", "m1", "SKILL.md"), later, later);
+		expect(sync().code).toBeGreaterThan(0);
+		expect(readFileSync(join(target, "managed-skills", "m1", "SKILL.md"), "utf8")).toBe("m1 v2\n");
+		const revisions = readdirSync(join(target, "managed-skills", "m1", "revisions"));
+		expect(revisions).toHaveLength(1);
+		expect(readFileSync(join(target, "managed-skills", "m1", "revisions", revisions[0] as string), "utf8")).toBe(
+			"m1 v1\n",
+		);
+	});
+
+	test("--init overwriting a bot-side skill snapshots it into revisions/ first", () => {
+		sync(true);
+		const later = new Date(Date.now() + 60_000);
+		put(join(target, "managed-skills", "m2", "SKILL.md"), "m2 by bot\n");
+		utimesSync(join(target, "managed-skills", "m2", "SKILL.md"), later, later);
+		expect(sync(true).code).toBe(1);
+		expect(readFileSync(join(target, "managed-skills", "m2", "SKILL.md"), "utf8")).toBe("m2 v1\n");
+		const revisions = readdirSync(join(target, "managed-skills", "m2", "revisions"));
+		expect(revisions).toHaveLength(1);
+		expect(readFileSync(join(target, "managed-skills", "m2", "revisions", revisions[0] as string), "utf8")).toBe(
+			"m2 by bot\n",
+		);
+	});
+
+	test("a differing but older source SKILL.md warns instead of silently keeping the profile copy", () => {
+		sync(true);
+		const later = new Date(Date.now() + 60_000);
+		put(join(target, "managed-skills", "m2", "SKILL.md"), "m2 by bot\n");
+		utimesSync(join(target, "managed-skills", "m2", "SKILL.md"), later, later);
+		const { code, lines } = sync();
+		expect(code).toBe(0);
+		expect(readFileSync(join(target, "managed-skills", "m2", "SKILL.md"), "utf8")).toBe("m2 by bot\n");
+		expect(lines.some((l) => l.startsWith("warn managed-skills/m2: owner's SKILL.md differs"))).toBe(true);
 	});
 
 	test("jabbu-pocket omp sync: --init flag through the command, and a home without ompProfile is refused", async () => {

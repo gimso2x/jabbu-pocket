@@ -25,6 +25,7 @@ import { resolveWorkerTier } from "../tasks/worker-tier";
 import { localDay } from "../time";
 import { changedFilesSince, fileSize, headOf, sessionDelta } from "./attach";
 import { type BorrowThreadRequest, claimBorrowedThread, failBorrowedStatus, openLaneThread } from "./borrow-thread";
+import { gateLaneBrief } from "./brief-gate";
 import { buildLaneOutcomeCard, type LaneCardView, laneSessionActionId } from "./card";
 import { computeLaneChanges } from "./changes";
 import { laneCost } from "./cost";
@@ -396,7 +397,7 @@ export class LaneManager {
 			? `${cutCodePointSafe(fullBrief, MAX_BRIEF_CHARS)}\n[브리프 ${fullBrief.length}자 중 앞 ${MAX_BRIEF_CHARS}자만 남김: 뒷부분은 이 리뷰에 없다]`
 			: fullBrief;
 		// Topic keywords put a floor under the class (raise only); `startNote` tells the starter.
-		const floored = applyRiskFloor(risk, [title, brief]);
+		const floored = applyRiskFloor(risk, [title, fullBrief]);
 		// The tier follows the final risk (floor applied; a lane nobody rated counts as DEFAULT_LANE_RISK).
 		const worker = resolveWorkerTier(
 			floored.risk,
@@ -428,6 +429,9 @@ export class LaneManager {
 				};
 			}
 		}
+		// A lane brief goes to an unattended worker like a [TASK] handoff brief: the same risk scan gates it
+		// before anything is created (a reuse above sends no new brief, so it is not gated).
+		const gateSuffix = await gateLaneBrief(this.#deps, input);
 		// A start without a conversation (no `parentOrigin`) has nothing to be the same request of: its key is its own.
 		const startKey = `${input.parentOrigin ?? crypto.randomUUID()}\0${titleHash ?? title}\0${cwd}`;
 		if (this.#startingKeys.has(startKey)) throw new LaneInputError("같은 레인을 시작하는 중입니다");
@@ -437,16 +441,19 @@ export class LaneManager {
 			const found = await resolveLaneRepo(cwd);
 			if (!found.ok) throw new LaneInputError(found.problem);
 			const { repo, baseBranch, sub } = found.value;
-			const disks = [diskHeadroom(repo, this.#deps.statfs)];
-			const capacity = startCapacity(this.#deps.hostLoad, disks, this.#deps.hostSessions);
+			const capacity = startCapacity(
+				this.#deps.hostLoad,
+				[diskHeadroom(repo, this.#deps.statfs)],
+				this.#deps.hostSessions,
+			);
 			const quotaHold = this.#deps.quotaRefusal?.(model?.model);
 			const refusals = quotaHold === undefined ? capacity.refusals : [...capacity.refusals, quotaHold];
 			// `force` is the model's claim the owner ordered it: each refusal asks the owner on a card; without an
 			// approver the force is refused, and freeze is re-checked after the card.
 			const forceConfirmed = async (reasons: readonly string[]): Promise<boolean> => {
-				const ask = this.#deps.requestApproval;
-				if (input.force !== true || ask === undefined || input.parentOrigin === undefined) return false;
-				const answer = await ask({
+				if (input.force !== true || this.#deps.requestApproval === undefined || input.parentOrigin === undefined)
+					return false;
+				const answer = await this.#deps.requestApproval({
 					channel: input.channel,
 					summary: FORCE_START_SUMMARY,
 					detail: { action: reasons.join("\n"), impact: FORCE_START_IMPACT },
@@ -631,6 +638,7 @@ export class LaneManager {
 			if (briefCut) log.warn("lane_brief_cut", { lane: lane.name, chars: fullBrief.length, kept: MAX_BRIEF_CHARS });
 			const notes = [
 				...(floored.note === undefined ? [] : [floored.note]),
+				...(gateSuffix === "" ? [] : [gateSuffix.trim()]),
 				...(worker.note === undefined ? [] : [worker.note]),
 				...(capacity.warning === undefined ? [] : [capacity.warning]),
 				...(briefCut
@@ -665,11 +673,10 @@ export class LaneManager {
 			return Promise.resolve(false);
 		}
 		if (fenceUncertain(this.#deps, lane, kind)) return Promise.resolve(false);
-		const seq = lane.meta.steerSeq + 1;
-		this.#deps.store.patchLane(name, undefined, { steerSeq: seq });
+		this.#deps.store.patchLane(name, undefined, { steerSeq: lane.meta.steerSeq + 1 });
 		return this.#deps
 			.route({
-				platformMessageId: `lane:${name}:${kind}:${seq}`,
+				platformMessageId: `lane:${name}:${kind}:${lane.meta.steerSeq + 1}`,
 				originKey: lane.originKey,
 				ownerVerified: true,
 				text,
@@ -1028,9 +1035,8 @@ export class LaneManager {
 		const { store, clock, log } = this.#deps;
 		const lane = store.getLaneByOrigin(originKey);
 		if (lane?.status !== "paused") return;
-		const key = `lane_paused_work:${lane.name}:${lane.meta.pausedAt ?? 0}`;
-		const warned = store.getCursor(key) !== undefined;
-		if (!warned) store.setCursor(key, String(clock.now()));
+		const warned = store.getCursor(`lane_paused_work:${lane.name}:${lane.meta.pausedAt ?? 0}`) !== undefined;
+		if (!warned) store.setCursor(`lane_paused_work:${lane.name}:${lane.meta.pausedAt ?? 0}`, String(clock.now()));
 		log.warn("lane_paused_working", { lane: lane.name, warned });
 		this.#spawn(lane.name, async () => {
 			if (!warned) await this.#postInThread(lane, "⚠️ 멈춘 레인이 다시 작업을 시작했습니다 — 다시 멈췄습니다");
@@ -1184,7 +1190,6 @@ export class LaneManager {
 		const lane = this.#requireLane(originKey);
 		if (lane.status === "closed") return `lane ${lane.name} ${CLOSED_LANE_REPLY}`;
 		if (lane.status === "paused") return `lane ${lane.name} ${PAUSED_LANE_REPLY}`;
-		const needsOwner = options.needsOwner === true;
 		const milestone = cutCodePointSafe(redact(text.replace(/\s+/g, " ").trim()), MAX_MILESTONE_CHARS);
 		if (milestone === "") throw new Error("text is required");
 		const origin = this.#deps.store.getOrigin(lane.originKey);
@@ -1192,14 +1197,14 @@ export class LaneManager {
 			(await this.#deps.session.openFile(lane.originKey)) ??
 			(origin === undefined ? undefined : sessionToResume(origin));
 		const evidence = await verifyProgressEvidence(lane.meta.worktree ?? lane.cwd, options.evidence, sessionFile);
-		if (!evidence.ok && !needsOwner) return `progress not recorded: ${evidence.reason}`;
+		if (!evidence.ok && options.needsOwner !== true) return `progress not recorded: ${evidence.reason}`;
 		const recorded = evidence.ok
 			? [...(lane.meta.evidence ?? []), evidence.value].slice(-MAX_LANE_EVIDENCE)
 			: lane.meta.evidence;
 		const ownerQuestion = ownerQuestionOf(options, this.#deps.clock.now());
 		const patched = this.#deps.store.patchLane(
 			lane.name,
-			{ event: needsOwner ? "needs_owner" : "progress", detail: milestone },
+			{ event: options.needsOwner === true ? "needs_owner" : "progress", detail: milestone },
 			{ milestone, milestoneEvidence: evidence.ok ? evidence.value : undefined, evidence: recorded, ownerQuestion },
 		);
 		await this.#sync(patched, "milestone");
@@ -1778,12 +1783,11 @@ export class LaneManager {
 				return;
 			}
 			const label = receipt.verdict === "inconclusive" ? "확인 불가" : receipt.verdict;
-			const scored = receipt.confidence === undefined ? label : `${label} ${formatConfidence(receipt.confidence)}`;
 			const row = store.patchLane(
 				name,
 				{
 					event: "review",
-					detail: `${scored} · ${receipt.model}${staleReason === undefined ? "" : ` · 재검사(${staleReason})`}`,
+					detail: `${receipt.confidence === undefined ? label : `${label} ${formatConfidence(receipt.confidence)}`} · ${receipt.model}${staleReason === undefined ? "" : ` · 재검사(${staleReason})`}`,
 					sha: receipt.sha,
 				},
 				{ review: receipt },
@@ -1843,10 +1847,9 @@ export class LaneManager {
 				if (this.#stopped || abort.signal.aborted || lane?.status !== "closed" || lane.meta.sha === undefined) return;
 				this.#checkAborts.add(abort);
 				const reviewer = this.#deps.reviewer;
-				const worktreesDir = this.#deps.qaWorktreesDir;
 				log.info("lane_qa_started", { lane: name, sha: lane.meta.sha, model: qa.model });
 				receipt =
-					reviewer === undefined || worktreesDir === undefined
+					reviewer === undefined || this.#deps.qaWorktreesDir === undefined
 						? {
 								sha: lane.meta.sha,
 								verdict: "inconclusive",
@@ -1857,7 +1860,7 @@ export class LaneManager {
 							}
 						: await runLaneQa(
 								{ lane, policy: qa, signal: abort.signal },
-								qaDepsOf(reviewer, worktreesDir, () => clock.now(), log),
+								qaDepsOf(reviewer, this.#deps.qaWorktreesDir, () => clock.now(), log),
 							);
 			} finally {
 				this.#checkAborts.delete(abort);
@@ -2150,7 +2153,6 @@ export class LaneManager {
 		const preSha = result.preSha === "unknown" ? (recorded ?? "unknown") : result.preSha;
 		const { cleanup } = result;
 		if (cleanup !== undefined) log.warn("lane_cleanup_failed", { lane: name, sha, cleanup });
-		const cleaned = cleanup === undefined ? "worktree 정리" : `⚠️ ${cleanup}`;
 		if (result.state === "merged-not-pushed") {
 			const row = this.#patchLand(
 				name,
@@ -2162,7 +2164,7 @@ export class LaneManager {
 			await this.#showResult(await this.#sync(row, "transition"), unattended);
 			await this.#recordFollowups(row);
 			return `⚠️ ${baseBranch}에 머지했지만 push origin/${baseBranch}는 되지 않았습니다: ${result.reason}${
-				cleanup === undefined ? "" : ` · ${cleaned}`
+				cleanup === undefined ? "" : ` · ⚠️ ${cleanup}`
 			}`;
 		}
 		const row = this.#patchLand(
@@ -2182,7 +2184,7 @@ export class LaneManager {
 		this.#dropReviewFiles(row);
 		await this.#showResult(await this.#sync(row, "transition"), false);
 		await this.#recordFollowups(row);
-		return `✅ 머지했습니다: ${baseBranch} ← ${sha.slice(0, 12)} · ${result.pushed === undefined ? "push 없음(origin 원격 없음)" : `push ${result.pushed}`} · ${cleaned}`;
+		return `✅ 머지했습니다: ${baseBranch} ← ${sha.slice(0, 12)} · ${result.pushed === undefined ? "push 없음(origin 원격 없음)" : `push ${result.pushed}`} · ${cleanup === undefined ? "worktree 정리" : `⚠️ ${cleanup}`}`;
 	}
 
 	/**
@@ -2288,11 +2290,10 @@ export class LaneManager {
 				log.warn("lane_core_rebase_superseded", { lane: lane.name, status: current.status, to: result.newSha });
 				return { state: "superseded", status: current.status, oldSha: result.oldSha, newSha: result.newSha };
 			}
-			const previous = lane.meta.claim;
 			const claim: LaneClaim = {
-				repo: previous?.repo ?? worktree,
+				repo: lane.meta.claim?.repo ?? worktree,
 				commit: result.newSha,
-				summary: `${previous?.summary ?? lane.title} (코어 rebase ${moved})`,
+				summary: `${lane.meta.claim?.summary ?? lane.title} (코어 rebase ${moved})`,
 				claimedAt: this.#claimStamp(current),
 			};
 			store.transitionLane(
@@ -2996,8 +2997,7 @@ export class LaneManager {
 	async #withCost(lane: LaneRow, view: LaneCardView): Promise<LaneCardView> {
 		if (view.cost !== undefined) return view;
 		try {
-			const totals = await laneCost(lane);
-			return { ...view, cost: { usd: totals.costTotal, calls: totals.calls } };
+			return await laneCost(lane).then((totals) => ({ ...view, cost: { usd: totals.costTotal, calls: totals.calls } }));
 		} catch (error) {
 			this.#deps.log.warn("lane_cost_failed", { lane: lane.name, error: String(error) });
 			return view;
@@ -3103,13 +3103,13 @@ export class LaneManager {
 				if (next !== undefined && (lane.status !== "done-claimed" || claim?.claimedAt !== next.claimedAt))
 					this.#nextSettleAt.delete(lane.name);
 				// Timed-out checks are run again only a grace after their last run (one 300 s run per tick would stall it).
-				const timedOut = lane.meta.checks?.inconclusive;
 				// Frozen: the deferred verdict waits. A not-done now could not be steered and would never be judged again.
 				if (
 					lane.status === "done-claimed" &&
 					claim &&
 					now - claim.claimedAt >= CLAIM_GRACE_MS &&
-					(timedOut === undefined || now - timedOut.lastAt >= CLAIM_GRACE_MS) &&
+					(lane.meta.checks?.inconclusive === undefined ||
+						now - lane.meta.checks?.inconclusive.lastAt >= CLAIM_GRACE_MS) &&
 					(this.#nextSettleAt.get(lane.name)?.at ?? now) <= now &&
 					!frozen
 				) {

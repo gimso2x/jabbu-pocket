@@ -303,16 +303,6 @@ export class RpcChunkAssembler {
 	}
 }
 
-/** `true` when `ready` offers protocol 2 with the frame limits this client decodes. */
-function offersProtocol2(ready: Record<string, unknown>): boolean {
-	return (
-		Array.isArray(ready.supportedProtocolVersions) &&
-		ready.supportedProtocolVersions.includes(2) &&
-		ready.maxFrameBytes === MAX_RPC_FRAME_BYTES &&
-		ready.maxReassembledFrameBytes === MAX_RPC_REASSEMBLED_BYTES
-	);
-}
-
 const PROMPT_STATUSES: ReadonlySet<unknown> = new Set(["completed", "aborted", "error"]);
 
 /** A `prompt_result` frame as the turn's end; a status omp did not send (or sent as anything else) ends it as an error. */
@@ -373,6 +363,8 @@ export class OmpRpcClient {
 	readonly #options: OmpRpcClientOptions;
 	#child: RpcChild | undefined;
 	#stopping: Promise<void> | undefined;
+	/** The SIGKILL wave #onExit arms when a child dies on its own; stop() clears it. */
+	#exitKill: ReturnType<typeof setTimeout> | undefined;
 	#protocol2 = false;
 	/** Set once the child has exited: later requests fail with it instead of waiting for an answer that cannot come. */
 	#exitError: OmpDriverError | undefined;
@@ -415,7 +407,12 @@ export class OmpRpcClient {
 		);
 		try {
 			const frame = await ready.promise;
-			if (!offersProtocol2(frame)) {
+			if (
+				!Array.isArray(frame.supportedProtocolVersions) ||
+				!frame.supportedProtocolVersions.includes(2) ||
+				frame.maxFrameBytes !== MAX_RPC_FRAME_BYTES ||
+				frame.maxReassembledFrameBytes !== MAX_RPC_REASSEMBLED_BYTES
+			) {
 				throw new OmpDriverError(
 					"omp_rpc_unsupported",
 					`omp at ${options.executable} does not offer RPC protocol 2 (ready: ${JSON.stringify(frame).slice(0, 200)})`,
@@ -453,13 +450,20 @@ export class OmpRpcClient {
 		const child = this.#child;
 		if (!child) return Promise.resolve();
 		this.#stopping ??= (async () => {
+			clearTimeout(this.#exitKill);
+			this.#exitKill = undefined;
 			this.#rejectAll(new Error("rpc client stopped"));
 			child.signal("SIGTERM");
 			const kill = setTimeout(() => child.signal("SIGKILL"), this.#options.terminationGraceMs ?? TERMINATION_GRACE_MS);
 			await child.exited.catch(() => null);
 			clearTimeout(kill);
-			// Group members got the SIGTERM with the leader and its whole grace; whatever outlived the leader goes now.
-			child.signal("SIGKILL");
+			// The group may be gone already — and its pgid reused. Only signal stragglers while the group is still there.
+			try {
+				process.kill(-child.pid, 0);
+				child.signal("SIGKILL");
+			} catch {
+				// ESRCH: the group is gone; EPERM: not ours to signal — either way the kill wave is a no-op.
+			}
 		})();
 		return this.#stopping;
 	}
@@ -472,15 +476,18 @@ export class OmpRpcClient {
 		if (this.#stopping === undefined) {
 			// Died on its own: what it started would outlive it, so the group is ended the way stop() ends it.
 			child.signal("SIGTERM");
-			setTimeout(() => child.signal("SIGKILL"), this.#options.terminationGraceMs ?? TERMINATION_GRACE_MS);
+			clearTimeout(this.#exitKill);
+			this.#exitKill = setTimeout(
+				() => child.signal("SIGKILL"),
+				this.#options.terminationGraceMs ?? TERMINATION_GRACE_MS,
+			);
 		}
 		for (const listener of this.#exitListeners) listener(code, child.stderr());
 	}
 
 	#rejectAll(error: Error): void {
-		const pending = [...this.#pending.values()];
+		for (const request of this.#pending.values()) request.reject(error);
 		this.#pending.clear();
-		for (const request of pending) request.reject(error);
 		for (const controller of this.#toolCalls.values()) controller.abort(error);
 		this.#toolCalls.clear();
 	}
@@ -499,9 +506,8 @@ export class OmpRpcClient {
 					this.#ready.resolve(value);
 					continue;
 				}
-				if (value.type === "rpc_chunk" && !this.#protocol2) {
+				if (value.type === "rpc_chunk" && !this.#protocol2)
 					throw new RpcProtocolError("rpc_chunk before protocol 2 was negotiated");
-				}
 				const frame = chunks.push(value);
 				if (frame !== undefined) this.#dispatch(frame);
 			}
@@ -518,10 +524,9 @@ export class OmpRpcClient {
 		for (const listener of this.#frameListeners) listener(frame);
 		const response = asResponse(frame);
 		if (response !== undefined) {
-			const pending = response.id === undefined ? undefined : this.#pending.get(response.id);
-			if (pending !== undefined && response.id !== undefined) {
+			if (response.id !== undefined) {
+				this.#pending.get(response.id)?.resolve(response);
 				this.#pending.delete(response.id);
-				pending.resolve(response);
 			}
 			return;
 		}
@@ -588,9 +593,8 @@ export class OmpRpcClient {
 
 	/** One frame to the child outside request tracking (dialog answers, `set_ask_dialog`, tool results). */
 	write(frame: Record<string, unknown>): void {
-		const child = this.#child;
-		if (!child) throw new OmpDriverError("not_started", "rpc client not started");
-		child.write(`${JSON.stringify(frame)}\n`);
+		if (!this.#child) throw new OmpDriverError("not_started", "rpc client not started");
+		this.#child.write(`${JSON.stringify(frame)}\n`);
 	}
 
 	/** `write` for frames whose loss only matters through the child's exit, which is reported on its own. */
@@ -627,9 +631,7 @@ export class OmpRpcClient {
 			this.#pending.delete(id);
 			answered.reject(error instanceof Error ? error : new Error(String(error)));
 		}
-		return answered.promise.finally(() => {
-			if (timer !== undefined) clearTimeout(timer);
-		});
+		return answered.promise.finally(() => clearTimeout(timer));
 	}
 
 	#data<T>(response: Response): T {
@@ -643,41 +645,39 @@ export class OmpRpcClient {
 
 	/** Every decoded frame, before it is routed (chunked frames reassembled). */
 	onFrame(listener: (frame: Record<string, unknown>) => void): () => void {
-		this.#frameListeners.add(listener);
-		return () => this.#frameListeners.delete(listener);
+		return this.#listen(this.#frameListeners, listener);
 	}
 
 	onEvent(listener: (event: OmpEvent) => void): () => void {
-		this.#eventListeners.add(listener);
-		return () => this.#eventListeners.delete(listener);
+		return this.#listen(this.#eventListeners, listener);
 	}
 
 	/** Session events, agent events included. */
 	onSessionEvent(listener: (event: OmpEvent) => void): () => void {
-		this.#sessionListeners.add(listener);
-		return () => this.#sessionListeners.delete(listener);
+		return this.#listen(this.#sessionListeners, listener);
 	}
 
 	onPromptResult(listener: (frame: PromptResultFrame) => void): () => void {
-		this.#promptResultListeners.add(listener);
-		return () => this.#promptResultListeners.delete(listener);
+		return this.#listen(this.#promptResultListeners, listener);
 	}
 
 	onBtwRecord(listener: (record: BtwRecord) => void): () => void {
-		this.#btwListeners.add(listener);
-		return () => this.#btwListeners.delete(listener);
+		return this.#listen(this.#btwListeners, listener);
 	}
 
 	/** The child exited (on its own or through `stop()`). */
 	onExit(listener: (code: number | null, stderr: string) => void): () => void {
-		this.#exitListeners.add(listener);
-		return () => this.#exitListeners.delete(listener);
+		return this.#listen(this.#exitListeners, listener);
 	}
 
 	/** The stream broke the protocol; the client is stopping the child. */
 	onProtocolError(listener: (error: RpcProtocolError) => void): () => void {
-		this.#protocolErrorListeners.add(listener);
-		return () => this.#protocolErrorListeners.delete(listener);
+		return this.#listen(this.#protocolErrorListeners, listener);
+	}
+
+	#listen<T extends unknown[]>(set: Set<(...args: T) => void>, listener: (...args: T) => void): () => void {
+		set.add(listener);
+		return () => set.delete(listener);
 	}
 
 	/** Resolves with the request id once the prompt is admitted; its end comes as a `prompt_result` with that id. */
@@ -687,17 +687,17 @@ export class OmpRpcClient {
 		return response.id ?? "";
 	}
 
-	// steer, abort and set_thinking_level resolve without checking `success`, as omp's own client always did.
+	// A refusal throws: the mailbox parks a refused steer `uncertain` and treats a refused abort as failed.
 	async steer(message: string): Promise<void> {
-		await this.#request({ type: "steer", message });
+		this.#data(await this.#request({ type: "steer", message }));
 	}
 
 	async abort(): Promise<void> {
-		await this.#request({ type: "abort" });
+		this.#data(await this.#request({ type: "abort" }));
 	}
 
 	async setThinkingLevel(level: string): Promise<void> {
-		await this.#request({ type: "set_thinking_level", level });
+		this.#data(await this.#request({ type: "set_thinking_level", level }));
 	}
 
 	async setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
