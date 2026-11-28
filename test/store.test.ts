@@ -810,3 +810,35 @@ describe("ledger query plans", () => {
 		expect(planOf(raw, sql, ["m1", 7])).not.toContain("TEMP B-TREE");
 	});
 });
+
+describe("chargeDailyUsage", () => {
+	test("a failing cursor move rolls the day's increment back with it", () => {
+		const store = open();
+		const day = "20261110";
+		store.chargeDailyUsage({ day, originKey: "o1", cost: 1.5, calls: 2 }, "charged:o1", "file\te9");
+		expect(store.dailyCost(day, "o1")).toBeCloseTo(1.5, 6);
+		expect(store.getCursor("charged:o1")).toBe("file\te9");
+		const origSetCursor = store.setCursor.bind(store);
+		store.setCursor = () => {
+			throw new Error("SQLITE_BUSY: database is locked");
+		};
+		try {
+			expect(() =>
+				store.chargeDailyUsage({ day, originKey: "o1", cost: 0.5, calls: 1 }, "charged:o1", "file\te10"),
+			).toThrow("SQLITE_BUSY");
+		} finally {
+			store.setCursor = origSetCursor;
+		}
+		expect(store.dailyCost(day, "o1")).toBeCloseTo(1.5, 6);
+		expect(store.getCursor("charged:o1")).toBe("file\te9");
+	});
+
+	test("a null cursor value deletes the cursor with the increment", () => {
+		const store = open();
+		const day = "20261110";
+		store.setCursor("charged:o1", "file\te9");
+		store.chargeDailyUsage({ day, originKey: "o1", cost: 0.5, calls: 1 }, "charged:o1", null);
+		expect(store.dailyCost(day, "o1")).toBeCloseTo(0.5, 6);
+		expect(store.getCursor("charged:o1")).toBeUndefined();
+	});
+});

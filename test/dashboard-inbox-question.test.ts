@@ -340,6 +340,13 @@ describe("inbox question: isolation and other reasons", () => {
 		);
 		expect(html).not.toContain("retry later");
 	});
+	test("AC-3: an ask with no readable question still says why the pane is blocked", async () => {
+		const path = session("ask-empty.jsonl", [assistant([{ type: "toolCall", id: "c1", name: "ask", arguments: {} }])]);
+		const fake = runner([{ name: "a1", status: "blocked", pane: "p1", session: pathSession(path) }]);
+		const agent = agentOf(await buildSnapshot(deps(fake.run)), "p1");
+		expect(agent.question).toBeUndefined();
+		expect(agent.blocked).toBe("도구 실행 승인 대기: ask");
+	});
 });
 
 describe("inbox question: remote panes and the cap", () => {
