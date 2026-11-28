@@ -89,7 +89,7 @@ import {
 	transitionDelivery,
 	type UncertainReason,
 } from "./transitions";
-import { WebMessageStore } from "./web-messages";
+import { WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL, WebMessageStore } from "./web-messages";
 
 /** Schema 13: tables of removed features that nothing reads or writes; `dropRemovedTables` drops them on open. */
 const DROPPED_AT_13 = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
@@ -226,7 +226,6 @@ export const HERDR_PROMPT_PREVIEW_CHARS = 120;
 /** The registry keeps the newest entries only; a lane that lives for weeks must not grow without bound. */
 const MAX_LANE_HISTORY = 200;
 
-/** One row of `usage_daily`: the day (bot-zone `YYYYMMDD`), the origin, and its priced cost and call count. */
 type DailyUsageInput = { day: string; originKey: string; cost: number; calls: number };
 
 export class Store {
@@ -2192,6 +2191,7 @@ export class Store {
 		}
 		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
 			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
+		this.db.run(WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL);
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);

@@ -97,6 +97,16 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 		);
 	});
 
+	test("a PEM private key cut off before its END line is masked up to the first non-base64 line", () => {
+		const kind = "RSA PRIVATE KEY";
+		const cut = [`-----BEGIN ${kind}-----`, "MIIEowIBAAKCAQEAtesttest", "TESTTESTTESTTESTTEST=="].join("\n");
+		expect(redact(`key:\n${cut}\ndone`)).toBe(`key:\n${REDACTED}\ndone`);
+		// A lone header with no body line is not a key fragment: it stays.
+		expect(redact(`error: missing -----BEGIN ${kind}----- in file`)).toBe(
+			`error: missing -----BEGIN ${kind}----- in file`,
+		);
+	});
+
 	test("lookalikes survive: a public key, AKIA in a word, a webhook docs URL", () => {
 		const text =
 			"-----BEGIN PUBLIC KEY----- AKIAX https://discord.com/api/webhooks docs https://hooks.slack.com/ glpat-x";
