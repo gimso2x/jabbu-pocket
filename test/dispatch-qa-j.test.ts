@@ -145,6 +145,15 @@ describe("dispatch tool (qa-j)", () => {
 		expect(runs).toEqual([]);
 	});
 
+	// round 16 (dispatch F4): the TASKID check is case-insensitive but the ledger lookup is not, so an
+	// uppercase TASKID name passed validation and then missed the row.
+	test("an uppercase TASKID name reads the registered row", async () => {
+		const { row, tasks } = localTask();
+		const tool = toolWith(async () => ({ code: 0, stdout: "out", timedOut: false }), { herdr: {}, tasks });
+		const text = await tool.execute({ mode: "worker", name: row.agent.toUpperCase() }, SIGNAL);
+		expect(text).toContain(`▸ ${row.agent} 최근 출력:`);
+	});
+
 	// qa-j n111: a failed `omp -p` does not read as a finished run.
 	test("simple mode marks a non-zero exit in the result", async () => {
 		const tool = toolWith(async () => ({ code: 2, stdout: "partial answer", timedOut: false }));
