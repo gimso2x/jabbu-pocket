@@ -296,13 +296,9 @@ async function statusCommand(
 ): Promise<number> {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
 	const socketPath = join(homeDir, "jabbu.sock");
-	let report: StatusReport | undefined;
-	try {
-		const response = await callDaemon(socketPath, { op: "status" }, 10_000);
-		if (isStatusResponse(response)) report = response.status;
-	} catch {
-		report = undefined; // no daemon answering: fall back to the database file
-	}
+	// No daemon answering: fall back to the database file.
+	const response = await callDaemon(socketPath, { op: "status" }, 10_000).catch(() => undefined);
+	let report = isStatusResponse(response) ? response.status : undefined;
 	if (!report) {
 		const dbPath = join(homeDir, "jabbu.db");
 		if (!existsSync(dbPath)) {
@@ -483,6 +479,10 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 	const [command, ...rest] = argv;
 	const homeDir = resolve(defaultHomeDir(env));
 	try {
+		// `daemon`, `doctor` and `reload` take no arguments: refuse any stray one here, so
+		// `daemon --help` cannot boot the daemon and `doctor --json` cannot run unchecked.
+		if (["daemon", "doctor", "reload"].includes(command ?? "") && rest.length > 0)
+			parseArgs({ args: rest, options: {} });
 		switch (command) {
 			case "init":
 				return initCommand(rest, env);
@@ -541,7 +541,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 				return traceInputsCommand(rest, homeDir, env);
 			default:
 				process.stderr.write(USAGE);
-				return command === undefined || command === "--help" || command === "help" ? 0 : 2;
+				return command === undefined || ((command === "--help" || command === "help") && rest.length === 0) ? 0 : 2;
 		}
 	} catch (error) {
 		// node:util parseArgs (unknown option, missing value, `--days -1`): an argument mistake, so a usage error.

@@ -233,6 +233,10 @@ describe("jabbu-pocket deliveries (CLI)", () => {
 		expect((await cli("ack", "abc")).code).toBe(2);
 		expect((await cli("ack")).code).toBe(2);
 		expect((await cli("nope")).code).toBe(2);
+		// `list` takes no id: one stray argument used to be silently ignored.
+		const listExtra = await cli("list", "12");
+		expect(listExtra.code).toBe(2);
+		expect(listExtra.stderr).toContain("too many arguments");
 	});
 
 	test("no ledger yet: a plain sentence, exit 1 (never an empty database)", async () => {
@@ -365,6 +369,36 @@ describe("notice: one owner notice per held delivery", () => {
 		store.resolveAmbiguous(answer.deliveryId, "resend");
 		expect(await pump.pump()).toBe(1);
 		expect(row(answer.deliveryId)?.state).toBe("confirmed");
+	});
+});
+
+describe("markAmbiguousWithNotice: hold and notice commit together (round 14 F6)", () => {
+	test("a notice failure leaves the row inflight: no held row without its owner notice", () => {
+		store.ensureOrigin(DM_ORIGIN, "/s/dm");
+		const answer = only(store.recordAnswer({ originKey: DM_ORIGIN, opRef: "op-1", threadRef: "t", parts: ["답"] }));
+		store.claimDue();
+		expect(row(answer.deliveryId)).toMatchObject({ state: "inflight" });
+		// Fault injection: the notice insert throws (a contended ledger) after the hold committed — the two steps
+		// must roll back together, or the owner never learns the row is held.
+		const patched = store as unknown as { insertDelivery: (...args: never[]) => never };
+		const original = patched.insertDelivery;
+		patched.insertDelivery = () => {
+			throw new Error("SQLITE_BUSY");
+		};
+		try {
+			expect(() => store.markAmbiguousWithNotice(answer.deliveryId, "socket hang up", 0, undefined, OWNER)).toThrow(
+				"SQLITE_BUSY",
+			);
+		} finally {
+			patched.insertDelivery = original;
+		}
+		// The hold rolled back with the notice: the row is inflight, so boot recovery re-attempts the send.
+		expect(row(answer.deliveryId)).toMatchObject({ state: "inflight" });
+		expect(store.listAmbiguous()).toEqual([]);
+		// With the ledger healthy again, the same call holds the row and inserts its one notice.
+		expect(store.markAmbiguousWithNotice(answer.deliveryId, "socket hang up", 0, undefined, OWNER)).toBe(true);
+		expect(row(answer.deliveryId)).toMatchObject({ state: "failed_ambiguous" });
+		expect(store.listDeliveries().find((r) => r.opRef === `ambiguous-notice:${answer.deliveryId}`)).toBeDefined();
 	});
 });
 

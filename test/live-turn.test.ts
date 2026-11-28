@@ -297,6 +297,31 @@ describe("OriginMailbox live view", () => {
 			await mailbox.close();
 		}
 	});
+
+	test("AC-4: a provider-limit error with a token straddling the head/tail cut leaves no fragment in the log", async () => {
+		const mailbox = liveMailbox();
+		try {
+			const driver = await streaming(mailbox);
+			// Fake Discord-shaped token, assembled so no scanner reads it as real.
+			const token = `${"T".repeat(24)}.${"T".repeat(6)}.${"T".repeat(27)}`;
+			// The token starts at char 976, so its whole first segment sits in the 1000-char head and the
+			// rest is cut away: cut-then-redact would leave the segment in the log line.
+			const errorMessage = `429 rate_limit_error ${"z".repeat(953)} ${token} ${"z".repeat(1200)}`;
+			driver.emitEvent({
+				type: "auto_retry_start",
+				attempt: 1,
+				maxAttempts: 5,
+				delayMs: 10,
+				errorMessage,
+			});
+			const line = logLines.find((entry) => entry.includes("event=provider_limit_hit"));
+			expect(line).toBeDefined();
+			expect(line).not.toContain("T".repeat(10));
+			expect(line).toContain("[REDACTED]");
+		} finally {
+			await mailbox.close();
+		}
+	});
 });
 
 describe("daemon live op", () => {
