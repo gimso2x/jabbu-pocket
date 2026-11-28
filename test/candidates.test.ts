@@ -121,6 +121,18 @@ describe("parse", () => {
 });
 
 describe("distinct days", () => {
+	test("distinct days: a future-dated seen day does not count toward minDays", () => {
+		const future = [seen("a", "2026-11-10"), seen("a", "2026-11-11"), seen("a", "2026-12-28")];
+		const [cand] = fold(future);
+		expect(cand?.distinctDays).toBe(2);
+		expect(cand?.days).toEqual(["2026-11-10", "2026-11-11"]);
+		expect(due(future)).toEqual([]);
+		// A day one day ahead (clock-skew allowance) still counts.
+		const skewed = [seen("a", "2026-11-11"), seen("a", "2026-11-12"), seen("a", "2026-11-13")];
+		expect(fold(skewed)[0]?.distinctDays).toBe(3);
+		expect(due(skewed)).toEqual(["a"]);
+	});
+
 	test("distinct days: same day twice is 1, three days are 3, days outside windowDays are not counted", () => {
 		const [cand] = fold([seen("a", "2026-11-11"), seen("a", "2026-11-11")]);
 		expect(cand?.distinctDays).toBe(1);
