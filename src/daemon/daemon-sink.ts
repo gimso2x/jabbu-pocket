@@ -96,9 +96,8 @@ export class DaemonInbound {
 				});
 				if (!inserted) return { duplicate: true };
 				// An owner message lets a peer-capped thread continue: the cap counts peer rows after this moment.
-				if (store.countPeerInboundSince(message.threadRef, 0) > 0) {
+				if (store.countPeerInboundSince(message.threadRef, 0) > 0)
 					store.setCursor(`${PEER_HOP_RESET_CURSOR}${message.threadRef}`, String(ctx.clock.now()));
-				}
 				if (parseCommand(message.text)?.kind === "restart") {
 					// Ahead of every lane, task and drain branch: the mailbox answers `!restart` at once, mid-drain too (held
 					// for the next process it would restart again), without a turn or a driver.
