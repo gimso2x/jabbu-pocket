@@ -44,6 +44,11 @@ const TASK_ID = /^T-\d{8}-\d{2,}$/;
 /** The local temporary ref the host branch is fetched into: the PR push's source, never a branch. */
 export const tempRefOf = (taskId: string): string => `refs/jabbu/task/${taskId}`;
 
+/** Deletes the task's temporary ref from the local clone, best-effort: a landing that settles without a merge must not leave it pinning the fetched objects against gc (a later attempt re-fetches). */
+export async function dropTempRef(env: RemoteLandEnv, mode: RemoteLandMode, row: TaskRow): Promise<void> {
+	await env.git(["-C", mode.localRepo, "update-ref", "-d", tempRefOf(row.taskId)]).catch(() => undefined);
+}
+
 /** The `lanes.land` entry a task lands by: its repository's own, or (on a host) the one whose `remotes[host]` is its repository. */
 export const landModeOfRow = (
 	config: Pick<JabbuConfig, "lanes" | "recordsRepo" | "dispatchHosts">,
@@ -139,6 +144,7 @@ export async function prepareRemote(
 	await fetchBase(env, mode, baseBranch);
 	const sha = await fetchTaskBranch(env, row, mode);
 	if (sha !== head.sha) {
+		await dropTempRef(env, mode, row);
 		return { stop: `원격 worktree HEAD가 브랜치 끝이 아님(HEAD ${head.sha.slice(0, 12)}, 브랜치 ${sha.slice(0, 12)})` };
 	}
 	const tracking = `refs/remotes/${mode.config.remote ?? "origin"}/${baseBranch}`;
@@ -148,6 +154,7 @@ export async function prepareRemote(
 		return now.clean ? now.sha : "dirty";
 	};
 	const judged = await rejudge(row, sha, deps, tipOf, base === "" ? undefined : base);
+	if (judged !== undefined) await dropTempRef(env, mode, row);
 	return judged === undefined ? { sha, baseBranch, repo: mode.localRepo } : { stop: judged };
 }
 
@@ -211,10 +218,15 @@ export async function remoteIntegrityBase(env: RemoteLandEnv, row: TaskRow): Pro
 		if (baseBranch === undefined) return undefined;
 		await fetchBase(env, mode, baseBranch);
 		const tip = await fetchTaskBranch(env, row, mode);
-		const tracking = `refs/remotes/${mode.config.remote ?? "origin"}/${baseBranch}`;
-		const merged = (await env.git(["-C", mode.localRepo, "merge-base", tracking, tip])).stdout.trim();
-		if (merged === "" || merged === row.baseSha) return undefined;
-		return (await isAncestor(env.git, mode.localRepo, row.baseSha, merged)) ? merged : undefined;
+		// A read-only probe: nothing after it reads the ref (a landing re-fetches), so it never leaves one behind.
+		try {
+			const tracking = `refs/remotes/${mode.config.remote ?? "origin"}/${baseBranch}`;
+			const merged = (await env.git(["-C", mode.localRepo, "merge-base", tracking, tip])).stdout.trim();
+			if (merged === "" || merged === row.baseSha) return undefined;
+			return (await isAncestor(env.git, mode.localRepo, row.baseSha, merged)) ? merged : undefined;
+		} finally {
+			await dropTempRef(env, mode, row);
+		}
 	} catch {
 		return undefined;
 	}

@@ -118,38 +118,34 @@ export class WikiNotes {
 		return (out ?? "")
 			.split("\n")
 			.filter((line) => line.includes("\t"))
-			.map((line) => {
-				const [sha, ...subject] = line.split("\t");
-				return { sha: (sha as string).slice(0, 12), subject: oneLine(subject.join("\t"), 120) };
-			});
+			.map((line) => line.split("\t"))
+			.map(([sha, ...subject]) => ({ sha: (sha as string).slice(0, 12), subject: oneLine(subject.join("\t"), 120) }));
 	}
 
 	/** The wiki project of a repository: the directory name of its git common dir's parent (the client's `project_for`). */
 	async #projectOf(repo: string): Promise<string> {
-		const common = await gitCommonDir(repo, this.#run);
-		if (common === undefined) return UNASSIGNED;
-		const parts = common.replace(/\/+$/, "").split("/");
+		const parts = (await gitCommonDir(repo, this.#run))?.replace(/\/+$/, "").split("/") ?? [];
 		return parts.length >= 2 ? (parts[parts.length - 2] as string) : UNASSIGNED;
 	}
 
 	/** Whether `wikiNotes.repos` lets this repository's work through (no list = all). */
 	async #wanted(config: WikiNotesConfig, repo: string): Promise<boolean> {
-		return config.repos === undefined || config.repos.length === 0
-			? true
-			: await repoMatchesCommonDir(repo, config.repos, this.#run);
+		const repos = config.repos;
+		return repos === undefined || repos.length === 0 ? true : await repoMatchesCommonDir(repo, repos, this.#run);
 	}
 
 	// ---- writing ----
 
-	/** Writes the note and records it as sent; a failure is the warning only. Returns whether the file was written. */
+	/** Writes the note and records it as sent; a sweep that never started leaves it unsent for a later retry. Returns whether it was sent. */
 	#write(config: WikiNotesConfig, note: WikiNote): boolean {
 		const { store, log } = this.#deps;
 		try {
 			const { sweepError } = writeNote(config, note, this.#deps.spawnSweep);
-			store.markWikiNoteSent(note.sourceId);
 			if (sweepError !== undefined) {
 				log.warn("wiki_note_failed", { source: note.sourceId, stage: "sweep", error: sweepError });
+				return false;
 			}
+			store.markWikiNoteSent(note.sourceId);
 			return true;
 		} catch (error) {
 			log.warn("wiki_note_failed", { source: note.sourceId, stage: "outbox", error: String(error).slice(0, 200) });
@@ -289,9 +285,7 @@ export class WikiNotes {
 					? (JSON.parse(known.draft) as NoteDraft)
 					: await this.#taskDraftOf(config, row);
 			if (draft === undefined) return;
-			draft.landing = {
-				lines: landing ?? ["코어 착지가 아니라 `jabbu-pocket tasks close --as done`으로 닫힘"],
-			};
+			draft.landing = { lines: landing ?? ["코어 착지가 아니라 `jabbu-pocket tasks close --as done`으로 닫힘"] };
 			this.#write(config, renderNote(draft));
 		} catch (error) {
 			this.#fail(sourceId, error);
@@ -394,18 +388,22 @@ export class WikiNotes {
 					: `turn:${turn.originKey}:${turn.opRef}`;
 			for (const row of turn.rows) {
 				if (row.headBefore === row.headAfter || !(await this.#wanted(config, row.repo))) continue;
-				store.addWikiTurn({
-					originKey: turn.originKey,
-					opRef: turn.opRef,
-					repo: row.repo,
-					threadRef: turn.threadRef,
-					groupKey,
-					day: localDay(row.endedAt, timezone),
-					inbound: texts.inbound,
-					conclusion: texts.conclusion,
-					commits: (await this.#commitsOf(row.repo, `${row.headBefore}..${row.headAfter}`)).slice(0, COMMITS_MAX),
-					endedAt: row.endedAt,
-				});
+				try {
+					store.addWikiTurn({
+						originKey: turn.originKey,
+						opRef: turn.opRef,
+						repo: row.repo,
+						threadRef: turn.threadRef,
+						groupKey,
+						day: localDay(row.endedAt, timezone),
+						inbound: texts.inbound,
+						conclusion: texts.conclusion,
+						commits: (await this.#commitsOf(row.repo, `${row.headBefore}..${row.headAfter}`)).slice(0, COMMITS_MAX),
+						endedAt: row.endedAt,
+					});
+				} catch (error) {
+					this.#fail(`turn:${turn.originKey}:${turn.opRef}:${row.repo}`, error);
+				}
 			}
 		} catch (error) {
 			this.#fail(`turn:${turn.originKey}:${turn.opRef}`, error);
@@ -414,7 +412,7 @@ export class WikiNotes {
 
 	/**
 	 * Writes the turn notes that are due: a channel thread's day once the day is over, a DM or thread-less turn at the
-	 * first call after it ended. Rows of a group that was already written are just marked.
+	 * first call after it ended. Rows of a group that was already written go out as a follow-up note (`-2`, `-3`, …).
 	 */
 	async flushTurns(): Promise<void> {
 		const config = this.#deps.config();
@@ -432,7 +430,9 @@ export class WikiNotes {
 				const first = rows[0] as WikiTurnRow;
 				if (first.groupKey.startsWith("thread:") && first.day >= today) continue;
 				const sourceId = `jabbu-turns-${hashOf(first.groupKey)}-${first.day}`;
-				if (store.wikiNoteState(sourceId)?.state === "sent" || (await this.#writeTurns(config, sourceId, rows))) {
+				let target = sourceId;
+				for (let n = 2; store.wikiNoteState(target)?.state === "sent"; n += 1) target = `${sourceId}-${n}`;
+				if (await this.#writeTurns(config, target, rows)) {
 					store.markWikiTurnsSent(rows.map((row) => row.id));
 				}
 			}
@@ -446,7 +446,6 @@ export class WikiNotes {
 
 	async #writeTurns(config: WikiNotesConfig, sourceId: string, rows: WikiTurnRow[]): Promise<boolean> {
 		const first = rows[0] as WikiTurnRow;
-		const commits = rows.flatMap((row) => row.commits);
 		const lines = [
 			"## 대화 작업",
 			...rows.map((row, index) => {
@@ -456,7 +455,7 @@ export class WikiNotes {
 			"",
 			"## 출처",
 			`- 스레드 ${first.threadRef}`,
-			`- 턴 ${rows.length}개 · 커밋 ${commits.length}개 · 날짜 ${first.day}`,
+			`- 턴 ${rows.length}개 · 커밋 ${rows.flatMap((row) => row.commits).length}개 · 날짜 ${first.day}`,
 		];
 		return this.#write(config, {
 			sourceId,

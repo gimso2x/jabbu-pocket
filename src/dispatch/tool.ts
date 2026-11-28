@@ -170,6 +170,14 @@ export async function gateHandoff(
 	);
 }
 
+/** A forced [TASK] start past a capacity/quota refusal asks the owner on a card; only an explicit 승인 counts. */
+const FORCE_START_SUMMARY = "시작 거부 사유를 무시하고 [TASK]를 강행 시작합니다";
+const FORCE_START_IMPACT = "승인하면 거부 사유를 무시하고 워크트리와 워커를 시작합니다(중간에 실패할 수 있음)";
+
+/** Board card link failures only warn: the start reply still goes out without the link. */
+const boardLinkError = (log: DispatchToolDeps["log"], host: string | null) => (error: string) =>
+	log.warn("dispatch_board_link_failed", { host: host ?? "local", error });
+
 /** The `jabbu_dispatch` host tool for chat origins; `undefined` when the omp binary is not provided. */
 export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	const herdrOn = deps.herdr !== undefined;
@@ -178,10 +186,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 	const boardLink: BoardLinkResolver | undefined =
 		board === undefined
 			? undefined
-			: (host, paneId) =>
-					boardCardLink(board, host, paneId, {
-						onError: (error) => deps.log.warn("dispatch_board_link_failed", { host: host ?? "local", error }),
-					});
+			: (host, paneId) => boardCardLink(board, host, paneId, { onError: boardLinkError(deps.log, host) });
 	const tool: HostToolDef = {
 		name: "jabbu_dispatch",
 		label: "Dispatch work",
@@ -213,7 +218,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				force: {
 					type: "boolean",
 					description:
-						"taskSpec 신규 등록이 `시작 거부: 호스트 여유`(메모리·디스크)로 거부된 뒤 오너가 강행을 명시했을 때만 true. 다른 거부 사유나 단순 부하 경고에는 쓰지 않고 사유를 오너에게 그대로 전달한다",
+						"taskSpec 신규 등록이 `시작 거부: 호스트 여유`(메모리·디스크)나 프로바이더 쿼터 보류로 거부된 뒤 오너가 강행을 명시했을 때만 true. 강행은 오너 승인 카드로 확인하고 카드가 거부·시간 초과되면 시작하지 않는다. 다른 거부 사유나 단순 부하 경고에는 쓰지 않고 사유를 오너에게 그대로 전달한다",
 				},
 				taskSpec: TASK_SPEC_SCHEMA,
 			},
@@ -233,11 +238,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		workerKind: "agy" | undefined,
 		taskDeps: TaskDispatchDeps,
 	): WorkerTier {
-		const omp = resolveWorkerTier(
-			row.risk,
-			{ tier: input.tier ?? row.tier ?? undefined, tierReason: input.tierReason },
-			deps.laneModels?.(),
-		);
+		const wanted = { tier: input.tier ?? row.tier ?? undefined, tierReason: input.tierReason };
+		const omp = resolveWorkerTier(row.risk, wanted, deps.laneModels?.());
 		return workerKind === "agy"
 			? resolveAgyWorker(omp, {
 					risk: row.risk,
@@ -312,6 +314,17 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 						...(deps.run === undefined ? {} : { run: deps.run }),
 						...(boardLink === undefined ? {} : { boardLink }),
 						...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
+						...(deps.approve === undefined
+							? {}
+							: {
+									confirmForce: async (reasons) => {
+										const detail = { action: reasons.join("\n"), impact: FORCE_START_IMPACT };
+										const answer = await deps.approve?.(FORCE_START_SUMMARY, detail, signal);
+										if (answer !== "approved") return false;
+										refuseIfFrozen();
+										return true;
+									},
+								}),
 						gateBrief: (brief) => gateWork(brief, signal),
 						log: deps.log,
 					};
@@ -333,11 +346,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					registered === undefined || (input.tier === undefined && workerKind === undefined)
 						? undefined
 						: resolveResumeWorker(registered, input, workerKind, taskDeps);
-				return (
-					redact(
-						await resumeTask(taskDeps, { id: input.id, task, host, ...(switchTo === undefined ? {} : { switchTo }) }),
-					) + gate.suffix
-				);
+				const args = { id: input.id, task, host, ...(switchTo === undefined ? {} : { switchTo }) };
+				return redact(await resumeTask(taskDeps, args)) + gate.suffix;
 			}
 			// Exclusions and acceptance are forbidding/checking sentences by design; they are not scanned.
 			const { spec } = input;
@@ -360,16 +370,14 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			}
 			// The tier follows the final risk (approval and floor applied) and the live `lanes.models` of this call.
 			const tier = resolveWorkerTier(floored.risk, spec, deps.laneModels?.());
-			const worker =
-				workerKind === "agy"
-					? resolveAgyWorker(tier, {
-							risk: floored.risk,
-							host: host ?? null,
-							agy: deps.workerAgy?.(),
-							busy: agyOccupant(taskDeps.ledger),
-							runtime: herdrOn || taskDeps.headless !== undefined,
-						})
-					: tier;
+			const agyOptions = {
+				risk: floored.risk,
+				host: host ?? null,
+				agy: deps.workerAgy?.(),
+				busy: agyOccupant(taskDeps.ledger),
+				runtime: herdrOn || taskDeps.headless !== undefined,
+			};
+			const worker = workerKind === "agy" ? resolveAgyWorker(tier, agyOptions) : tier;
 			const started = await startTask(taskDeps, {
 				spec: { ...spec, risk: floored.risk },
 				task,
@@ -469,36 +477,27 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				const summary = await taskSummaryLine(taskDeps, name, null);
 				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
-			const follow = await followupTask(
-				{
-					ledger: taskDeps.ledger,
-					runtime: () => runtime,
-					gate: (text) => gateWork(text, signal),
-					originKey: deps.originKey,
-					...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
-					log: deps.log,
-				},
-				{ id: row.taskId, text: task, source: "tool" },
-			);
+			const followDeps = {
+				ledger: taskDeps.ledger,
+				runtime: () => runtime,
+				gate: (text: string) => gateWork(text, signal),
+				originKey: deps.originKey,
+				...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
+				log: deps.log,
+			};
+			const follow = await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" });
 			return follow.text;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");
 		const gate = await gateWork(task, signal);
 		deps.log.info("dispatch_simple", { origin: deps.originKey });
+		const secrets = join(deps.homeDir, "secrets");
 		const result = await runOmpPrint({
 			task,
 			cwd: deps.workspaceDir,
 			...(deps.run === undefined ? {} : { run: deps.run }),
-			systemPromptAppendix: buildFloorsPrompt(
-				join(deps.homeDir, "secrets"),
-				deps.originKey,
-				false,
-				false,
-				false,
-				{},
-				false,
-			),
+			systemPromptAppendix: buildFloorsPrompt(secrets, deps.originKey, false, false, false, {}, false),
 			ompBin: deps.ompExecutable,
 			...(deps.ompProfile === undefined ? {} : { ompProfile: deps.ompProfile }),
 			...(deps.ompConfigOverlay === undefined ? {} : { overlayConfig: deps.ompConfigOverlay }),

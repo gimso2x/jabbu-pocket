@@ -101,12 +101,19 @@ export function askText(
 	return win.text;
 }
 
+/** Multi-select candidates: comma-separated segments first, so a label may contain spaces; whitespace parts only when no comma segment names an option. */
+function multiParts(text: string, labels: readonly string[]): string[] {
+	const segments = text.split(/\s*,\s*/).filter((part) => part !== "");
+	if (segments.some((part) => optionOf(labels, part) !== undefined)) return segments;
+	return text.split(/\s+/).filter((part) => part !== "");
+}
+
 /** A text answer to one `ask` question: option numbers/labels, else free text (`customInput`). */
 function textAnswer(question: OmpAskQuestion, text: string): AskAnswer {
 	const labels = question.options.map((option) => option.label);
 	const trimmed = text.trim();
 	if (question.multi === true) {
-		const parts = trimmed.split(/[,\s]+/).filter((part) => part !== "");
+		const parts = multiParts(trimmed, labels);
 		const picked = parts.map((part) => optionOf(labels, part));
 		const matched = picked.flatMap((index) => (index === undefined ? [] : [labels[index] as string]));
 		if (matched.length === 0) return { selectedOptions: [], customInput: trimmed };

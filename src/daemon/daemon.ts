@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ChannelAdapter } from "../channel/adapter";
 import { ChannelRegistry } from "../channel/registry";
-import { cutCodePointSafe, escapeMrkdwn } from "../channel/text";
+import { cutCodePointSafe, errorFields, escapeMrkdwn } from "../channel/text";
 import { type JabbuConfig, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../config";
 import { idleKeepOptions } from "../core/idle-keep";
 import { coldResumeTokens, formatColdResumeNotice } from "../core/mailbox-cold-resume";
@@ -38,7 +38,7 @@ import {
 	reportThreadPattern,
 	spawnRunner,
 } from "../ops/apply";
-import { readStamp, runBackup } from "../ops/backup";
+import { readStamp } from "../ops/backup";
 import { formatCacheMissNotice, formatColdCacheNotice } from "../ops/cache-monitor";
 import { type DailyBudgetState, dailyBudgetState, ledgerDay, renderBudget } from "../ops/cost-cap";
 import { createFreezeProbe, type FreezeState } from "../ops/freeze";
@@ -64,6 +64,7 @@ import { TASK_SWEEP_MS, type TaskSweeper } from "../tasks/sweeper";
 import { localIso } from "../time";
 import { notifyWebOwnerTurn } from "../web/notify";
 import { turnNoteRepos, WikiNotes } from "../wiki/notes";
+import { type BootBackupHandle, startBootBackup } from "./boot-backup";
 import { readBotUsageSummary } from "./bot-driver";
 import { DIALOG_AMBIGUOUS_NOTICE, MEDIA_SWEEP_INTERVAL_MS, STOP_DRAIN_MS, WIKI_FLUSH_MS } from "./daemon-constants";
 import {
@@ -147,6 +148,7 @@ export class Daemon {
 	#stopped = false;
 	#stopPromise: Promise<void> | undefined; // the in-flight shutdown; a re-entering stop() awaits it instead of returning
 	#heartbeat: SweepHeartbeatWriter | undefined;
+	#bootBackupWorker: BootBackupHandle | undefined;
 	/** `<home>/FROZEN` re-read within seconds; autonomous paths (dispatch, monitors, lanes, task reminders) consult it. */
 	readonly #frozen: () => FreezeState | undefined;
 	#broker: ApprovalBroker | undefined;
@@ -327,6 +329,7 @@ export class Daemon {
 	}
 
 	async start(): Promise<void> {
+		if (this.#stopped) throw new Error("daemon stopped before start");
 		const config = this.#options.config;
 		// The text this boot runs on: recorded as last-good at ready only if nobody edited the file meanwhile.
 		const bootConfigText =
@@ -388,10 +391,9 @@ export class Daemon {
 			pid: process.pid,
 			omp_version: this.#options.ompVersion,
 			recovered_inflight: store.recoveredInflight,
-			requeued_ambiguous: store.requeueAmbiguous(),
 		});
 		for (const { field, reason } of config.warnings ?? []) log.warn("config_warning", { field, reason });
-		this.#bootBackup();
+		await this.#bootBackup();
 
 		// Rows of a removed platform (`slack/…`, `teams/…`) have no adapter to answer on: close them without running a turn.
 		for (const state of ["pending", "dispatched"] as const) {
@@ -650,12 +652,11 @@ export class Daemon {
 			picker: this.#picker,
 			statusText: (originKey) => this.#statusText(originKey),
 		});
-		const deliveriesOf = deliverySources(store, config, crash);
 		for (const binding of this.#options.channels) {
 			const platform = binding.port.platform;
 			const adapter = binding.createAdapter({
 				core,
-				deliveries: deliveriesOf(platform),
+				deliveries: deliverySources(store, config, crash)(platform),
 				clock: this.#clock,
 				log,
 				config,
@@ -745,7 +746,7 @@ export class Daemon {
 		event: "adapter_start_failed" | "adapter_detached",
 		error: unknown,
 	): Promise<void> {
-		this.#log.error(event, { platform: adapter.platform, error: String(error) });
+		this.#log.error(event, { platform: adapter.platform, ...errorFields(error) });
 		if (this.#adapters.get(adapter.platform) === adapter) this.#adapters.delete(adapter.platform);
 		await adapter
 			.stop()
@@ -764,7 +765,7 @@ export class Daemon {
 					await adapter.pumpDeliveries();
 					await adapter.tick();
 				} catch (error) {
-					this.#log.error("pump_failed", { platform: adapter.platform, error: String(error) });
+					this.#log.error("pump_failed", { platform: adapter.platform, ...errorFields(error) });
 				}
 			}
 		});
@@ -791,7 +792,7 @@ export class Daemon {
 				// A restart drain fires no monitor: due slots are claimed by the next process's catch-up.
 				if (this.#router?.draining !== true) await this.#monitors?.tick();
 			} catch (error) {
-				this.#log.error("monitor_tick_failed", { error: String(error) });
+				this.#log.error("monitor_tick_failed", { ...errorFields(error) });
 			}
 			await run("idle_sweep", () => this.#startIdleSweep());
 			await run("task_sweep", () => this.#maybeSweepTasks());
@@ -803,7 +804,7 @@ export class Daemon {
 			try {
 				await this.#gates.sweep();
 			} catch (error) {
-				this.#log.error("gate_sweep_failed", { error: String(error) });
+				this.#log.error("gate_sweep_failed", { ...errorFields(error) });
 			}
 			try {
 				this.#sweepPeerSilence();
@@ -819,7 +820,7 @@ export class Daemon {
 			await run("review_candidates", () => this.#review.maybeProposeCandidates());
 			await run("beat", () => this.#beat());
 		} catch (error) {
-			this.#log.error("sweep_failed", { step, error: String(error) });
+			this.#log.error("sweep_failed", { step, ...errorFields(error) });
 		}
 	}
 
@@ -828,7 +829,7 @@ export class Daemon {
 		if (this.#bgSweeps.has(kind) || this.#stopped) return;
 		this.#bgSweeps.add(kind);
 		void work()
-			.catch((error: unknown) => this.#log.error(errEvent, { error: String(error) }))
+			.catch((error: unknown) => this.#log.error(errEvent, { ...errorFields(error) }))
 			.finally(() => this.#bgSweeps.delete(kind));
 	}
 
@@ -858,16 +859,14 @@ export class Daemon {
 	}
 
 	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
-	#bootBackup(): void {
-		const { homeDir, maxBundleBytes } = this.#options.config;
-		if (readStamp(join(homeDir, "backups")) !== undefined) return;
+	async #bootBackup(): Promise<void> {
+		if (readStamp(join(this.#options.config.homeDir, "backups")) !== undefined) return;
+		// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp. The backup runs in a worker:
+		// `runBackup` is fully synchronous, so a slow disk + large home would stall the watchdog beat and boot-loop.
+		const worker = startBootBackup(this.#options.config, new Date(this.#clock.now()), this.#options.bootBackup);
+		this.#bootBackupWorker = worker;
 		try {
-			// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp.
-			const result = (this.#options.bootBackup ?? runBackup)({
-				homeDir,
-				now: new Date(this.#clock.now()),
-				...(maxBundleBytes === undefined ? {} : { maxBundleBytes }),
-			});
+			const result = await worker.done;
 			this.#log.info("boot_backup_done", { file: result.file, bundle: result.bundle ?? "none" });
 		} catch (error) {
 			this.#log.warn("boot_backup_failed", { error: String(error) });
@@ -992,7 +991,7 @@ export class Daemon {
 				try {
 					await this.#taskSweeper.sweep(due);
 				} catch (error) {
-					this.#log.error("task_sweep_failed", { tasks: due.size, error: String(error) });
+					this.#log.error("task_sweep_failed", { tasks: due.size, ...errorFields(error) });
 				}
 			} while (this.#taskSweepAgain && !this.#stopped);
 		} finally {
@@ -1327,6 +1326,7 @@ export class Daemon {
 	}
 
 	async #shutdown(): Promise<void> {
+		this.#bootBackupWorker?.terminate(); // a stop requested mid-backup ends the worker, so `start()` resumes
 		clearInterval(this.#timer);
 		this.#lanes?.stop();
 		this.#landing.stop();

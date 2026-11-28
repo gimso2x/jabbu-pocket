@@ -3,6 +3,15 @@ import type { PeerHealthInfo } from "./peer-health";
 import type { DashboardSnapshot } from "./snapshot";
 import { esc } from "./text";
 
+export { renderTurnsView } from "./channel-board";
+export {
+	channelDisplayTitle,
+	effectiveLaneColumn,
+	isChannelMainOrigin,
+	isLaneOriginKey,
+	laneLandBadge,
+} from "./channel-meta";
+
 /**
  * Self-contained operational UX renderers shipped into `SCRIPT` (`html.ts`) beside `renderDashboardMain`.
  * Keep every function free of module-level imports other than `esc` (already shipped in `SCRIPT`).

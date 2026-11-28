@@ -76,6 +76,8 @@ export interface TaskDispatchDeps {
 	/** The host-wide omp session ceiling the start gate judges (`hostSessionCeiling`); local starts only. */
 	hostSessions?: SessionCeilingGate;
 	quotaRefusal?: QuotaRefusalCheck;
+	/** Owner confirmation for a forced start past a capacity/quota refusal: asked with the refusal lines; absent → force is refused. */
+	confirmForce?: (reasons: readonly string[]) => Promise<boolean>;
 	/** The daemon's Mailbox port: present → a new local non-agy task runs headless (`runtime='headless'`), else on herdr. */
 	headless?: TaskMailboxPort;
 	/** herdr board card link of a started agent (`config.herdrBoard`); absent → the card carries no link. */
@@ -205,7 +207,7 @@ export async function startTask(
 		task: string | undefined;
 		host: string | null;
 		worker: WorkerTier;
-		/** The owner explicitly accepted a tight host: a capacity refusal passes (the load warning still shows). */
+		/** The owner ordered forcing past a tight host: a refusal passes only on an owner-card confirmation (the load warning still shows). */
 		force?: boolean;
 	},
 ): Promise<string> {
@@ -217,8 +219,11 @@ export async function startTask(
 		throw new Error("taskSpec은 [TASK] 요청이 온 채팅 스레드 안에서만 쓸 수 있습니다(현재 스레드를 알 수 없음)");
 	}
 	hostEntryOf(deps, host); // unknown host fails before anything is reserved
+	// `force` is the model's claim the owner ordered it: each refusal asks the owner on a card; without a confirmer the force is refused.
+	const forceConfirmed = (reasons: readonly string[]): Promise<boolean> =>
+		input.force === true && deps.confirmForce !== undefined ? deps.confirmForce(reasons) : Promise.resolve(false);
 	const quotaHold = deps.quotaRefusal?.(worker.model ?? undefined);
-	if (quotaHold !== undefined && input.force !== true) {
+	if (quotaHold !== undefined && !(await forceConfirmed([quotaHold]))) {
 		deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
 		return `시작 거부: ${quotaHold}`;
 	}
@@ -227,7 +232,7 @@ export async function startTask(
 	if (host === null) {
 		const disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
 		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
-		if (capacity.refusals.length > 0 && input.force !== true) {
+		if (capacity.refusals.length > 0 && !(await forceConfirmed([...capacity.refusals]))) {
 			deps.log.warn("task_start_refused_capacity", {
 				repo: spec.repo,
 				path: disk.path,
@@ -369,10 +374,8 @@ export async function resumeTask(
 	deps.log.info("task_resume_check", { task: row.taskId, findings: check.findings.length, notes: check.notes.length });
 	const alive = await runtime.exists(row);
 	if (!alive.ok) return `재개 실패: ${alive.error}`;
-	const switchTo =
-		input.switchTo !== undefined && (input.switchTo.model !== row.workerModel || input.switchTo.tier !== row.tier)
-			? input.switchTo
-			: undefined;
+	const w = input.switchTo;
+	const switchTo = w !== undefined && (w.model !== row.workerModel || w.tier !== row.tier) ? w : undefined;
 	const promptFor = (handoff?: string): string =>
 		buildTaskPrompt({
 			mode: "resume",
@@ -478,17 +481,14 @@ async function resumeOnOtherWorker(
 		const closed = await runtime.close(row);
 		if (!closed.ok) return `재개 실패: 이전 워커를 닫지 못했습니다: ${closed.error}`;
 	}
+	const { tier, tierReason, workerModel: model, tierConfidence } = row;
+	const before = { tier, tierReason, model, tierConfidence };
 	const worker = { tier: switchTo.tier, tierReason: switchTo.tierReason, tierConfidence: null };
 	deps.ledger.setWorker(row.taskId, { ...worker, model: switchTo.model });
 	const next: TaskRow = { ...row, ...worker, workerModel: switchTo.model };
 	const started = await startAgent(deps, next, input.promptFor(brief));
 	if (!started.ok) {
-		deps.ledger.setWorker(row.taskId, {
-			tier: row.tier,
-			tierReason: row.tierReason,
-			model: row.workerModel,
-			tierConfidence: row.tierConfidence,
-		});
+		deps.ledger.setWorker(row.taskId, before);
 		deps.log.warn("task_resume_model_switch_failed", { task: row.taskId, from, to, error: started.error });
 		return `재개 실패: ${started.error} (${row.taskId} 워커는 원래 ${from}로 되돌렸습니다. 이전 워커는 이미 닫혔으니 다시 재개하면 원래 설정으로 뜹니다)`;
 	}

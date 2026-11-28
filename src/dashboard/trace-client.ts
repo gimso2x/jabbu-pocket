@@ -5,8 +5,7 @@
  * jumping), re-reads every 5 seconds, and answers the tree's keys and clicks.
  */
 export const TRACE_CLIENT = `function traceController(host) {
-	let id = null;
-	let url = "";
+	let id = null, url = "";
 	let notes = null;
 	let title = "";
 	let answer = null;
@@ -152,9 +151,10 @@ export const TRACE_CLIENT = `function traceController(host) {
 			for (const spanId of ids) known.add(spanId);
 		} catch (error) {
 			if (mine !== generation || answer) return;
+			console.error(error);
 			const line = document.createElement("p");
 			line.className = "note";
-			line.textContent = "트레이스를 읽지 못했어요 (" + (error && error.message ? error.message : String(error)) + ")";
+			line.textContent = "트레이스를 읽지 못했어요. 다시 시도해 주세요.";
 			bar.hidden = true;
 			view.replaceChildren(line);
 		}

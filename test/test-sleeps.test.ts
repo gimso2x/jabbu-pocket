@@ -41,6 +41,40 @@ describe("unjustifiedSleeps", () => {
 		]);
 	});
 
+	test("여러 줄에 걸친 고정 sleep(지연이 다음 줄에 있는 setTimeout·Bun.sleep)도 걸린다", () => {
+		const timeout = diffOf([...hunk("-0,0 +1,3", "+setTimeout(", "+  () => { resolve(); },", "+  500);")]);
+		expect(unjustifiedSleeps(timeout).map((hit) => [hit.file, hit.line, hit.text])).toEqual([
+			["test/a.ts", 1, "setTimeout("],
+		]);
+		const sleep = diffOf([...hunk("-0,0 +1,3", "+Bun.sleep(", "+  500", "+);")]);
+		expect(unjustifiedSleeps(sleep).map((hit) => [hit.file, hit.line, hit.text])).toEqual([
+			["test/a.ts", 1, "Bun.sleep("],
+		]);
+	});
+
+	test("setInterval 고정 지연도 한 줄·여러 줄 모두 걸린다", () => {
+		const single = diffOf([...hunk("-0,0 +1", "+setInterval(() => poll(), 100);")]);
+		expect(unjustifiedSleeps(single).map((hit) => [hit.file, hit.line])).toEqual([["test/a.ts", 1]]);
+		const multi = diffOf([...hunk("-0,0 +1,3", "+setInterval(", "+  () => poll(),", "+  100);")]);
+		expect(unjustifiedSleeps(multi).map((hit) => [hit.file, hit.line])).toEqual([["test/a.ts", 1]]);
+	});
+
+	test("여러 줄에 걸친 변수 지연·0 지연은 통과한다", () => {
+		const variable = diffOf([...hunk("-0,0 +1,3", "+Bun.sleep(", "+  delayMs", "+);")]);
+		const zero = diffOf([...hunk("-0,0 +1,3", "+setTimeout(", "+  () => {},", "+  0);")]);
+		expect(unjustifiedSleeps(variable)).toEqual([]);
+		expect(unjustifiedSleeps(zero)).toEqual([]);
+	});
+
+	test("여러 줄에 걸친 호출의 앞줄·첫 줄 표지도 통과시킨다", () => {
+		const prevLine = diffOf([
+			...hunk("-0,0 +1,4", "+// sleep-ok: 측정 창", "+setTimeout(", "+  () => {},", "+  500);"),
+		]);
+		const firstLine = diffOf([...hunk("-0,0 +1,3", "+setTimeout( // sleep-ok: 측정 창", "+  () => {},", "+  500);")]);
+		expect(unjustifiedSleeps(prevLine)).toEqual([]);
+		expect(unjustifiedSleeps(firstLine)).toEqual([]);
+	});
+
 	test("Bun.sleepSync 숫자 0은 통과, 0이 아니면 걸린다", () => {
 		const diff = diffOf([...hunk("-0,0 +1,2", "+Bun.sleepSync(0);", "+Bun.sleepSync(10);")]);
 		const hits = unjustifiedSleeps(diff);

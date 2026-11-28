@@ -119,9 +119,9 @@ loginctl enable-linger "$USER"   # (선택) 로그아웃·재부팅 뒤에도 �
 <tr><td><b>⏰ 모니터</b></td><td>cron · 지정 시각 · 스크립트 조건 세 가지 트리거로 에이전트를 깨웁니다. 변화가 없으면 조용히 넘어가고(<code>[SILENT]</code>, 해시 억제, wake gate), 실패는 10분·1시간·4시간 간격으로 재시도한 뒤 인시던트로 묶어 한 번만 알립니다. cron에 스크립트(<code>command</code>)를 달면 모델 턴 없이 그 출력을 글자 그대로 올립니다(<code>deliver: "verbatim"</code>).</td></tr>
 <tr><td><b>📒 잃지 않는 장부</b></td><td>모든 수신·전달을 SQLite에 남깁니다. 꺼져 있던 동안의 메시지는 다시 읽어 오고(백필), 재시작에 끊긴 턴은 세션 기록에서 답을 복구합니다. 재시작은 진행 중인 턴이 끝나기를 기다리고(drain), 앞뒤로 스레드에 알립니다. 모델이 죽어 있어도 <code>!restart</code>는 턴 없이 데몬이 직접 재시작하고 결과를 봇 글로 남깁니다.</td></tr>
 <tr><td><b>🩺 자가진단</b></td><td>백업 나이 · 멈춘 턴 · 끊긴 연결 · 밀린 전달 · 모니터 정지 · 하루 비용 상한 경고 등 21개 건강 게이트(오프사이트·herdr·비용 상한·Discord를 설정했을 때만 생기는 4개와 drain이 남았을 때만 생기는 <code>drain_orphaned</code>, 장부를 못 읽을 때만 생기는 <code>ledger_unreadable</code> 포함, 기본 설치에서 보이는 것은 15개)를 5분마다 판정해, 열리면 오너 DM으로 알리고 닫히면 회복을 알립니다. <code>jabbu-pocket gates</code>는 판정할 수 있는 게이트가 하나라도 열리면 exit 1이고, 판정 근거가 없는 게이트(unknown — 하트비트·DB가 아직 없음)는 <code>--strict</code>에서 exit 1입니다.</td></tr>
-<tr><td><b>📊 현황판</b></td><td><code>jabbu-pocket dashboard</code>는 루프백에만 여는 읽기 전용 웹 현황판입니다. 턴 보드(대화(디스코드 채널·스레드)마다 카드 하나, <code>확인 필요 / 진행 중 / 완료</code>)·승인 대기·<code>[TASK]</code>·herdr 워커 보드·알림·건강 게이트를 한 화면에 모으고, 워커 보드는 실시간으로, 나머지는 15초마다 갱신합니다. 레인·<code>[TASK]</code>의 변경은 <code>?diff=lane:&lt;이름&gt;</code>·<code>?diff=task:&lt;ID&gt;</code> 화면에서 머지 전에 훑을 수 있고, 카드의 <code>변경 보기:</code> 링크가 그곳을 엽니다. 헤드리스로 도는 <code>[TASK]</code>는 TASK 상세의 <code>작업 내역</code>에서 워커 세션 대화와 진행 중 턴을 보고, 웹 대화 인증 뒤에서 지시 넣기·멈춤·재개를 디스코드와 같은 처리로 합니다. 턴 카드의 <code>대화</code> 탭은 그 스레드의 omp 세션(사용자 글·모델 글·도구 호출과 결과)을 마스킹해 보여 줍니다. 턴이 도는 동안에는 대화 맨 아래 <code>생성 중</code> 블록에 모델이 지금 쓰는 글·생각·준비 중인 도구·실행 중 도구의 부분 출력이 1초 안팎 지연으로 따라오고(현황판이 데몬 소켓에 겹치지 않게 1초마다 묻습니다), 메시지가 끝나면 확정본으로 바뀝니다. 자체 인증이 없고 세션 내용까지 보이므로, 밖에서 볼 때는 Cloudflare Access 같은 앞단 인증 프록시 뒤에서만 엽니다.</td></tr>
+<tr><td><b>📊 현황판</b></td><td><code>jabbu-pocket dashboard</code>는 루프백에만 여는 읽기 전용 웹 현황판입니다. 턴 보드(대화(디스코드 채널·스레드)마다 카드 하나, <code>확인 필요 / 진행 중 / 완료</code>)·승인 대기·<code>[TASK]</code>·herdr 워커 보드·알림·건강 게이트·운영 로그·DB 기반 피어 상태(<code>dashboard.peerHomes</code>)를 한 화면에 모으고, 워커 보드는 실시간으로, 나머지는 15초마다 갱신합니다. 레인·<code>[TASK]</code>의 변경은 <code>?diff=lane:&lt;이름&gt;</code>·<code>?diff=task:&lt;ID&gt;</code> 화면에서 머지 전에 훑을 수 있고, 카드의 <code>변경 보기:</code> 링크가 그곳을 엽니다. 헤드리스로 도는 <code>[TASK]</code>는 TASK 상세의 <code>작업 내역</code>에서 워커 세션 대화와 진행 중 턴을 보고, 웹 대화 인증(<code>channels.web</code>) 뒤에서 지시 넣기·멈춤·재개를 디스코드와 같은 처리로 합니다. 턴 카드의 <code>대화</code> 탭은 그 스레드의 omp·<code>agy acp</code> 세션(사용자 글·모델 글·도구 호출과 결과)을 마스킹해 보여 줍니다. 턴이 도는 동안에는 대화 맨 아래 <code>생성 중</code> 블록에 모델이 지금 쓰는 글·생각·준비 중인 도구·실행 중 도구의 부분 출력이 1초 안팎 지연으로 따라오고(현황판이 데몬 소켓에 겹치지 않게 1초마다 묻습니다), 메시지가 끝나면 확정본으로 바뀝니다. 자체 인증이 없고 세션 내용까지 보이므로, 밖에서 볼 때는 Cloudflare Access 같은 앞단 인증 프록시 뒤에서만 엽니다.</td></tr>
 <tr><td><b>💾 백업과 복구</b></td><td>매일 DB 스냅샷(<code>quick_check</code> 통과분만)과 세션·설정 번들을 남기고, sha256으로 확인하는 오프사이트 복제를 지원합니다. 복구는 <code>jabbu-pocket restore</code> 한 줄입니다.</td></tr>
-<tr><td><b>🛡️ 보안</b></td><td>오너 외 입력 무시, 실제 비밀 값까지 색인하는 두 겹 마스킹, 자식 프로세스 환경 정리, 비밀 경로 업로드 차단, 인용·첨부 속 인젝션 경고, 디스패치 감사 로그, 한 줄 킬스위치(<code>jabbu-pocket freeze</code>).</td></tr>
+<tr><td><b>🛡️ 보안</b></td><td>오너 외 입력 무시, 실제 비밀 값까지 색인하는 두 겹 마스킹, 자식 프로세스 환경 정리, 비밀 경로 업로드 차단, 인용·첨부 속 인젝션 경고, 셸 표기 우회(<code>$'...'</code>·인용 분할·이스케이프)까지 환원하는 위임 위험 검사, 설치 스킬 SHA-256 락파일 검증(<code>jabbu-pocket skills lock|verify</code>), 디스패치 감사 로그, 한 줄 킬스위치(<code>jabbu-pocket freeze</code>).</td></tr>
 </table>
 
 ### 더 쓰기
@@ -135,6 +135,8 @@ loginctl enable-linger "$USER"   # (선택) 로그아웃·재부팅 뒤에도 �
 - **[워커 omp 인자](docs/guide.md#5-설정-파일-jabbuconfigjson)** — `workerOmpArgs`·`dispatchHosts.<h>.ompArgs`: `[TASK]` 워커 omp에만 `--prewalk` 같은 인자를 붙임
 - **agy 워커 시범** — `workerAgy: { model }`: `taskSpec.worker: "agy"`인 로컬 L0·L1 `[TASK]`(동시 1개, 품질 미검증). 데몬에 헤드리스 포트가 있으면 herdr 없이 데몬 Mailbox에서 agy print 모드(`-p` stream-json, 자식 하나로 여러 턴)로 돌고, 없으면 herdr `--kind agy`로 띄움(이미 herdr로 시작한 TASK는 재개해도 herdr). 세션 한정 `--settings`로 그 워크트리(와 기록 디렉터리)만 신뢰하고 `git push`·`git reset --hard`·`git clean`·`systemctl`·`jabbu`·`bun src/main.ts`·`rm -rf /` 명령과 secrets 디렉터리 `read_file`을 거부(agy 1.5.17 print 모드에서 실측, `agy acp`는 이 거부를 적용하지 않아 쓰지 않음), 새 대화의 첫 프롬프트 앞에 워커용 안전 안내를 붙임. 헤드리스 agy는 턴을 입력으로 끊을 수 없어 중단은 자식 종료이고 다음 지시는 `--conversation`으로 같은 대화를 이어 받음(대화를 못 찾으면 새 대화로 시작해 안내를 다시 붙임), 로그는 자식마다 `~/.gemini/antigravity-cli/log/cli-task-<에이전트>-*.log`에 따로 남고 진행 조회는 마지막 답(`agy-last-answer.txt`)을 읽음. 조건 밖이거나 herdr·헤드리스 포트가 다 없으면 omp 등급 워커로 뜨고 답에 이유 한 줄. 한도에 걸리면(herdr는 화면의 `RESOURCE_EXHAUSTED`·`quota`·`rate limit`, 헤드리스는 턴 오류 `agy rate limited (429)`) 그 TASK를 blocked로 두고 `agy 한도` 카드를 한 번 올린 뒤 독촉을 멈춤(재개하면 풀림)
 - **[비용 상한](docs/guide.md#5-설정-파일-jabbuconfigjson)** — `costCap`: 턴·하루 상한은 알리기만 하고(턴은 상한의 3배에서만 중단), `!budget`으로 확인
+- **[프로바이더별 쿼터 게이트](docs/guide.md#5-설정-파일-jabbuconfigjson)** — `quotaGate`: `omp usage --json`으로 기준치 이상인 프로바이더의 새 레인·`[TASK]` 시작을 보류(`mode: "warn"`이면 경보·기록 전용). 공급자 한도 오류로 보류된 대기열도 실제 여유 회복이 확인되면 자동 해제하고, `jabbu-pocket quota status|lift|clear`나 `!usage-reset`으로 수동 제어
+- **[Discord `#ops` 상태 패널·부하 경보](docs/guide.md#5-설정-파일-jabbuconfigjson)** — `opsPanel`: 지정 채널에 상태 임베드를 핀으로 고정·제자리 갱신하고, 호스트 CPU·메모리·cgroup 사용률이 지속 임계치를 넘으면 경보를 올렸다가 히스테리시스 회복 시 같은 메시지를 `resolved`로 갱신
 
 ## 작동 방식
 
@@ -163,7 +165,7 @@ loginctl enable-linger "$USER"   # (선택) 로그아웃·재부팅 뒤에도 �
 
 ## Discord(선택)
 
-Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다. 대화·`!` 명령·승인/질문/TASK 버튼·파일·놓친 메시지 복구·DM 모니터·서버 채널 스레드의 작업 레인·`inject`가 동작합니다. 게이트·재시작 같은 데몬 알림은 오너의 가장 최근 1:1 대화로 가고 `!home`으로 바꿀 수 있습니다.
+Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다. 대화·`!` 명령(인자 없는 `!model`·`!thinking`·`!fast`·`!usage-reset`의 SelectMenu 드롭다운 피커 포함)·모바일 stacked 표 변환·승인/질문/TASK 버튼·`#ops` 고정 상태 패널(`opsPanel`)·파일·놓친 메시지 복구·DM 모니터·서버 채널 스레드의 작업 레인·`inject`가 동작합니다. 게이트·재시작 같은 데몬 알림은 오너의 가장 최근 1:1 대화로 가고 `!home`으로 바꿀 수 있습니다.
 
 이미 설치한 봇에 Discord를 더할 때:
 
@@ -180,7 +182,10 @@ Discord에서 오너 한 명의 DM·서버 채널 대화를 받습니다. 대화
 | 아무 메시지 | omp에게 일을 시킵니다. 작업 중이면 진행 중인 턴에 끼워 넣습니다 |
 | `!followup <메시지>` | 끼워 넣지 않고 지금 작업이 끝난 뒤 이어서 보냅니다 |
 | `!btw <질문>` | 진행 중인 작업에 끼워 넣지 않고 그 질문에만 바로 답합니다(`💬 곁질문:` 답이 따로 옴, 작업 중이 아니면 일반 메시지로 처리, 슬래시 명령으로는 등록하지 않음) |
-| `!model` · `!thinking` | 대화방별 모델·thinking 수준을 보거나 바꿉니다 |
+| `!model` · `!thinking` · `!fast` | 대화방별 모델·thinking·fast 설정을 보거나 바꿉니다(인자 없이 보내면 SelectMenu 피커 표시) |
+| `!status` · `!brief` (`!브리핑`) | 대화 컨텍스트·장부·게이트 요약을 보거나, 현재 상태를 한 장 PNG 브리핑으로 받습니다 |
+| `!usage` · `!usage-reset` | 세션 사용량·비용을 보거나, 프로바이더 쿼터 보류·계정 차단을 해제합니다(인자 없이 보내면 SelectMenu 피커 표시) |
+| `!home` · `!용도` | 데몬 알림을 받을 기본 대화를 지정하거나, 채널·스레드의 참고 용도 메모를 설정합니다 |
 | `!new` | 진행 중인 턴을 멈추고 새 대화를 시작합니다 |
 | `!queue` | 진행 중인 작업과 대기열을 봅니다 |
 | `!stop` | 진행 중인 턴과 같은 대화방의 대기 메시지만 멈추고 세션은 그대로 둡니다 |

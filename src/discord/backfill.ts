@@ -6,7 +6,7 @@ import {
 	MAX_PAGES,
 	SingleFlightBackfill,
 } from "../channel/backfill";
-import { errorText } from "../channel/text";
+import { errorFields, errorText } from "../channel/text";
 import type { IngestOutcome } from "../channel/types";
 import type { Logger } from "../log";
 import { redact } from "../redact";
@@ -38,11 +38,6 @@ export function snowflakeTime(id: string): number {
 export function snowflakeAt(ms: number): string {
 	const since = BigInt(Math.floor(ms)) - DISCORD_EPOCH_MS;
 	return String(since > 0n ? since << 22n : 0n);
-}
-
-/** The larger of two snowflakes, by value: ids differ in length, so a string compare would get it wrong. */
-function laterId(a: string, b: string): string {
-	return BigInt(a) >= BigInt(b) ? a : b;
 }
 
 /**
@@ -117,20 +112,15 @@ export class DiscordBackfill extends SingleFlightBackfill {
 	}
 
 	protected failed(err: unknown): void {
-		this.#deps.log.error("discord_backfill_failed", { error: redact(errorText(err)) });
+		this.#deps.log.error("discord_backfill_failed", { ...errorFields(err) });
 	}
 
 	protected async pass(): Promise<void> {
 		const { log } = this.#deps;
-		if (!(await this.#deps.ready())) {
-			log.warn("discord_backfill_skipped", { reason: "not_ready" });
-			return;
-		}
+		if (!(await this.#deps.ready())) return log.warn("discord_backfill_skipped", { reason: "not_ready" });
 		const targets = new Map<string, BackfillTarget>();
-		for (const target of this.#deps.targets()) {
-			const known = targets.get(target.channelId);
-			if (known === undefined || known.dm === undefined) targets.set(target.channelId, target);
-		}
+		for (const target of this.#deps.targets())
+			if (targets.get(target.channelId)?.dm === undefined) targets.set(target.channelId, target);
 		let scanned = 0;
 		let recovered = 0;
 		let skipped = 0;
@@ -139,9 +129,16 @@ export class DiscordBackfill extends SingleFlightBackfill {
 				skipped += 1;
 				continue;
 			}
-			const result = await this.#scan(target);
-			scanned += result.scanned;
-			recovered += result.recovered;
+			try {
+				const result = await this.#scan(target);
+				scanned += result.scanned;
+				recovered += result.recovered;
+			} catch (err) {
+				// A rate limit stops the pass: the route is parked, so the next target would fail the same way.
+				if (!(err instanceof DiscordRateLimitedError)) throw err;
+				log.warn("backfill_rate_limited", { channelId: target.channelId, retryAfterMs: err.retryAfterMs });
+				break;
+			}
 		}
 		log.info("discord_backfill", {
 			targets: targets.size,
@@ -213,6 +210,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 				place.dm = located.dm;
 			} catch (err) {
 				// After a restart the channel cache is empty, so a left server answers here first (403 50001).
+				if (err instanceof DiscordRateLimitedError) throw err;
 				if (unreadable(err)) this.#quarantine(key, target.channelId, redact(errorText(err)));
 				else log.warn("backfill_read_failed", { target: key, error: redact(errorText(err)) });
 				return done.scanned;
@@ -230,6 +228,7 @@ export class DiscordBackfill extends SingleFlightBackfill {
 					limit: PAGE_LIMIT,
 				});
 			} catch (err) {
+				if (err instanceof DiscordRateLimitedError) throw err;
 				if (unreadable(err)) this.#quarantine(key, target.channelId, redact(errorText(err)));
 				else log.warn("backfill_read_failed", { target: key, error: redact(errorText(err)) });
 				return done.scanned;
@@ -274,9 +273,10 @@ export class DiscordBackfill extends SingleFlightBackfill {
 						return done.scanned;
 					}
 					cursors.deleteCursor(attemptKey);
-					log.error("backfill_dead_letter", { target: key, id: message.id, error: redact(errorText(err)) });
+					log.error("backfill_dead_letter", { target: key, id: message.id, ...errorFields(err) });
 				}
-				watermark = laterId(watermark, watermarkId);
+				// The larger snowflake wins, by value: ids differ in length, so a string compare would get it wrong.
+				watermark = BigInt(watermark) >= BigInt(watermarkId) ? watermark : watermarkId;
 			}
 			cursors.setCursor(key, watermark);
 			if (messages.length < PAGE_LIMIT) break;

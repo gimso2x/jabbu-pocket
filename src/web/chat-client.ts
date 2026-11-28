@@ -40,6 +40,11 @@ export const CHAT_SCRIPT = `(() => {
     el.textContent = msg || "";
     el.hidden = !msg;
   };
+  /** A failed request shows one fixed Korean line; the raw failure goes to the console, never the screen. */
+  const showErr = (scope, err, line) => {
+    console.error(err);
+    setErr(scope, line);
+  };
   const setSseState = (live) => {
     if (!sseEl) return;
     sseEl.className = "wc-sig wc-sig-sse " + (live ? "is-live" : "is-wait");
@@ -222,7 +227,7 @@ export const CHAT_SCRIPT = `(() => {
       const out = await apiPost("api/web/upload?" + botQs(), form, true);
       q.files.push(...(out.files || []));
     } catch (err) {
-      setErr(scope, "업로드 실패: " + (err instanceof Error ? err.message : String(err)));
+      showErr(scope, err, "업로드에 실패했습니다. 다시 시도해 주세요.");
     } finally {
       q.uploading = Math.max(0, q.uploading - picked.length);
       renderPending(scope);
@@ -256,7 +261,7 @@ export const CHAT_SCRIPT = `(() => {
       }, false);
       await refreshConversations();
     } catch (err) {
-      setErr(scope, "전송 실패: " + (err instanceof Error ? err.message : String(err)));
+      showErr(scope, err, "전송에 실패했습니다. 다시 시도해 주세요.");
     } finally {
       if (ui.send) ui.send.disabled = false;
     }
@@ -293,7 +298,7 @@ export const CHAT_SCRIPT = `(() => {
       actBtn.disabled = true;
       void apiPost("api/web/action", { bot: activeBot, actionId: actBtn.getAttribute("data-action-id"), messageId: actBtn.getAttribute("data-message-id") }, false).catch((err) => {
         actBtn.disabled = false;
-        setErr("main", "버튼 처리 실패: " + (err instanceof Error ? err.message : String(err)));
+        showErr("main", err, "버튼 처리에 실패했습니다. 다시 시도해 주세요.");
       });
       return;
     }
