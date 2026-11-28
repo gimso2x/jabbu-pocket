@@ -16,7 +16,7 @@ import {
 } from "../src/discord/transport";
 import { createLogger } from "../src/log";
 import { redact } from "../src/redact";
-import { openStore, type Store } from "../src/store/db";
+import { INTERIM_INFIX, openStore, type Store } from "../src/store/db";
 import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
 
 const OWNER = "100000000000000001";
@@ -122,7 +122,7 @@ async function ownerDm(id = QUESTION): Promise<void> {
 }
 
 describe("inline reply channel answers", () => {
-	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+	async function inlineChannelAdapter(): Promise<DiscordAdapter> {
 		const inline = new DiscordAdapter({
 			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
 			core,
@@ -142,22 +142,60 @@ describe("inline reply channel answers", () => {
 			content: "질문",
 			type: 0,
 		});
+		return inline;
+	}
+
+	test("a body-root answer is posted in the channel, its first part replying to the message, with no lookup of the message id", async () => {
+		const inline = await inlineChannelAdapter();
 		const id = deliver(`${CH}:${QUESTION}`, longBody(2500), `discord/ch/${CH}`);
 		await inline.pumpDeliveries();
 		const sent = answers();
 		expect(sent).toHaveLength(2);
 		expect(sent[0]?.channelId).toBe(CH);
 		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 		const lookups = transport.calls.filter((c) => c.method === "getChannel" && c.channelId === QUESTION);
 		expect(lookups.length).toBeLessThanOrEqual(1);
 		expect(transport.calls.some((c) => c.method === "startThread")).toBe(false);
 		await inline.stop();
 	});
+
+	test("an inline answer with multiple ```copy blocks posts as one reply message without splitting", async () => {
+		const inline = await inlineChannelAdapter();
+		const body = "```copy\ncmd one\n```\n설명 첫 줄\n```copy\ncmd two\n```\n설명 둘째 줄\n```copy\ncmd three\n```";
+		const id = deliver(`${CH}:${QUESTION}`, body, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[0]?.content).toContain("```copy\ncmd one\n```");
+		expect(sent[0]?.content).toContain("```copy\ncmd three\n```");
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
+
+	test("an inline answer with prose and a ```card attaches messageReference only to the first part", async () => {
+		const inline = await inlineChannelAdapter();
+		const card = '```card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"요약"},"children":[]}}}\n```';
+		const id = deliver(`${CH}:${QUESTION}`, `결론 한 줄\n${card}`, `discord/ch/${CH}`);
+		await inline.pumpDeliveries();
+		const sent = answers();
+		expect(sent).toHaveLength(2);
+		expect(sent[0]?.channelId).toBe(CH);
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.channelId).toBe(CH);
+		expect(sent[1]?.messageReference).toBeUndefined();
+		expect(sent[1]?.embeds).toHaveLength(1);
+		expect(row(id)?.state).toBe("confirmed");
+		await inline.stop();
+	});
 });
 
 describe("splitting and destinations", () => {
-	test("a 2500-character answer goes as two messages of at most 2000, both as replies in the DM", async () => {
+	test("a 2500-character answer goes as two messages of at most 2000 in the DM, replying only on part 1", async () => {
 		await ownerDm();
 		const id = deliver(`${DM}:${QUESTION}`, longBody(2500));
 		expect(await adapter.pumpDeliveries()).toBe(1);
@@ -166,8 +204,9 @@ describe("splitting and destinations", () => {
 		for (const post of sent) {
 			expect(post.content?.length ?? 0).toBeLessThanOrEqual(2000);
 			expect(post.channelId).toBe(DM);
-			expect(post.messageReference).toEqual({ messageId: QUESTION });
 		}
+		expect(sent[0]?.messageReference).toEqual({ messageId: QUESTION });
+		expect(sent[1]?.messageReference).toBeUndefined();
 		expect(row(id)?.state).toBe("confirmed");
 	});
 
@@ -389,6 +428,63 @@ describe("status finish", () => {
 		expect(edits).toHaveLength(1);
 		expect(edits[0]).toMatchObject({ channelId: DM, messageId: status?.id });
 		expect(edits[0]?.content).toMatch(/^✅ 완료 · \d\d:\d\d$/);
+	});
+
+	test("an answer finishes as failed while an earlier interim of the thread is held (round 14 F4)", async () => {
+		// The shared source maps no keepStatus, so this adapter maps it like the daemon's itemOf: only then does a
+		// held interim leave the ⏳ running for the answer's finish to downgrade instead of stamping ✅.
+		const heldSource = (): DeliverySource => ({
+			...source(),
+			claimDue: () =>
+				store.claimDue(undefined, "discord").map((row) => ({
+					deliveryId: row.deliveryId,
+					originKey: row.originKey,
+					threadRef: row.threadRef,
+					body: row.body,
+					redelivered: row.redelivered,
+					keepStatus: row.opRef.includes(INTERIM_INFIX),
+					sentParts: row.sentParts,
+					replyTs: row.replyTs,
+				})),
+			hasHeld: (threadRef, beforeId) => store.hasHeldDelivery(threadRef, beforeId),
+		});
+		await ownerDm();
+		const interim = store.recordInterim({
+			originKey: `discord/dm/${DM}`,
+			opRef: "op-1",
+			threadRef: `${DM}:${QUESTION}`,
+			index: 0,
+			body: "작업 중",
+		});
+		const answer = store.recordAnswer({
+			originKey: `discord/dm/${DM}`,
+			opRef: "op-1",
+			threadRef: `${DM}:${QUESTION}`,
+			parts: ["답입니다"],
+		});
+		expect(answer).toHaveLength(1);
+		const held = new DiscordAdapter({
+			channel: new DiscordChannel(transport, { ownerUserId: OWNER }),
+			core,
+			deliveries: heldSource(),
+			ownerUserId: OWNER,
+			clock: { now: () => now },
+			log: createLogger({ sink: () => {}, clock: { now: () => now }, redact }),
+		});
+		await held.start();
+		// The interim's post is the 2nd createMessage (after the ⏳ status): a 5xx holds it, the answer posts after.
+		transport.createFailures.set(2, new DiscordCallError("ambiguous", "discord_http_500", 500));
+		await held.pumpDeliveries();
+		expect(row(interim.deliveryId)?.state).toBe("failed_ambiguous");
+		expect(answers()).toHaveLength(1);
+		expect(row(answer[0]?.deliveryId ?? -1)?.state).toBe("confirmed");
+		// The turn is not whole: the status ends ⚠️, never ✅.
+		const added = transport.calls
+			.filter((c) => c.method === "addReaction")
+			.map((c) => ("emoji" in c ? c.emoji : undefined));
+		expect(added).toContain("⚠️");
+		expect(added).not.toContain("✅");
+		await held.stop();
 	});
 });
 

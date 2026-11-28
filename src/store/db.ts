@@ -972,9 +972,13 @@ export class Store {
 	/**
 	 * Other threads of a chat turn's still-dispatched rows: messages steered into a turn another thread started. Read
 	 * before the rows close, so a replayed answer (rows already answered) finds none and notifies nothing twice.
+	 * Discord channel-body origins (`discord/ch/<C>`, e.g. `inlineReplyChannels`) answer in the same channel body, so
+	 * differing `thread_ref`s are inline replies in one channel rather than separate threads and get no pointer.
 	 */
 	private steeredThreads(input: { originKey: string; opRef: string; threadRef: string }): string[] {
 		if (chatPlatformOf(input.originKey) === undefined) return [];
+		const origin = parseChatOrigin(input.originKey);
+		if (origin?.platform === "discord" && origin.kind === "ch" && origin.threadId === undefined) return [];
 		const rows = this.db
 			.query(
 				"SELECT DISTINCT thread_ref FROM inbound WHERE origin_key = ? AND op_ref = ? AND state = 'dispatched' AND thread_ref != ? ORDER BY thread_ref",
@@ -1830,6 +1834,14 @@ export class Store {
 		return listAmbiguousDeliveries(this.db);
 	}
 
+	/** Whether an earlier delivery for this thread is held (`failed_ambiguous`). */
+	hasHeldDelivery(threadRef: string, beforeDeliveryId: number): boolean {
+		const held = this.db
+			.query("SELECT 1 FROM deliveries WHERE thread_ref = ? AND delivery_id < ? AND state = 'failed_ambiguous' LIMIT 1")
+			.get(threadRef, beforeDeliveryId);
+		return held !== null;
+	}
+
 	/**
 	 * `ack` closes a held row as arrived; `resend` puts it back in the queue now with the duplicate-warning header and
 	 * keeps `sentParts`/`replyTs`, so the resend posts only what never went out. Anything else throws `invalid_transition`.
@@ -2125,11 +2137,9 @@ export class Store {
 	 * approvals rebuild may have replaced the table.
 	 */
 	private migrate(): void {
-		const originColumns = this.db.query("PRAGMA table_info(origins)").all() as Array<{ name: string }>;
+		const originColumns = new Set(columnsOf(this.db, "origins"));
 		for (const column of ["session_file", "model", "thinking"]) {
-			if (!originColumns.some((existing) => existing.name === column)) {
-				this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
-			}
+			if (!originColumns.has(column)) this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
 		}
 		const columns = this.db.query("PRAGMA table_info(inbound)").all() as Array<{ name: string }>;
 		if (!columns.some((column) => column.name === "thread_ref")) {
@@ -2151,6 +2161,8 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
+		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
+			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);

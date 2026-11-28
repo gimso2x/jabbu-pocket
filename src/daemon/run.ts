@@ -1,4 +1,4 @@
-import { lstatSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ChannelBinding } from "../channel/adapter";
 import { errorFields } from "../channel/text";
@@ -14,7 +14,6 @@ import { AgyAccountPool } from "../omp/agy-account-pool";
 import { withOmpProfile } from "../omp/env";
 import { type AggregatingLogger, createAggregatingLogger, startServiceAlive } from "../ops/log-hygiene";
 import { LogDirError, openLogSink } from "../ops/logfile";
-import { readRegularText, writeAtomic0600 } from "../ops/stamp";
 import { testHostLoad, testStatfs } from "../ops/test-host-hooks";
 import { redact } from "../redact";
 import { indexRuntimeSecrets } from "../safety/secret-index";
@@ -24,8 +23,9 @@ import { createBotDriverFactory } from "./bot-driver";
 import { crashHook } from "./crash";
 import { Daemon } from "./daemon";
 import { acquireLock, type Lock, LockHeldError } from "./lock";
+import { assertOmpRunnable, checkOmpVersion } from "./omp-boot";
 import { testFatal, testStartDelayMs, testStartStall } from "./run-test-hooks";
-import { readVersion } from "./tools";
+import { createShutdown } from "./shutdown";
 import { startWatchdog, watchdogStallMs } from "./watchdog";
 
 /** `provider/model` in config.json becomes the two RpcClient options. */
@@ -86,25 +86,6 @@ export function channelBindings(
 	log: Logger,
 ): ChannelBinding[] {
 	return [...discordBindings(config, env, log), ...(config.channels.web?.enabled === true ? [new WebBinding()] : [])];
-}
-
-/** Logs the omp version on every start and warns when it differs from the one recorded by the previous start. */
-export async function checkOmpVersion(config: JabbuConfig, log: Logger): Promise<string> {
-	const version = await readVersion([config.ompExecutable, "--version"]);
-	const recorded = join(config.homeDir, "omp-version");
-	let previous: string | undefined;
-	try {
-		if (lstatSync(recorded, { throwIfNoEntry: false })?.isFile() === true) previous = readRegularText(recorded).trim();
-	} catch {
-		/* unreadable or non-regular */
-	}
-	if (previous !== undefined && previous !== version) log.warn("omp_version_changed", { from: previous, to: version });
-	try {
-		writeAtomic0600(recorded, `${version}\n`);
-	} catch (error) {
-		log.warn("omp_version_write_failed", { path: recorded, error: String(error) });
-	}
-	return version;
 }
 
 /**
@@ -211,18 +192,7 @@ export async function runDaemon(
 	// Seed the known-secret value index before anything can answer: masking sits below the agent.
 	indexRuntimeSecrets(config, env, log);
 	const exited = Promise.withResolvers<number>();
-	let stopping = false;
-	const shutdown = (signal: string) => {
-		log.info("signal", { signal });
-		stopping = true;
-		daemon.stop().then(
-			() => exited.resolve(0),
-			(error: unknown) => {
-				log.error("stop_failed", { ...errorFields(error) });
-				exited.resolve(1);
-			},
-		);
-	};
+	const shutdown = createShutdown({ stop: () => daemon.stop(), log, env, exited });
 	const hostLoad = testHostLoad(env); // test-only idle host, behind JABBU_TEST_HOOKS=1
 	const statfs = testStatfs(env); // test-only roomy disk, behind JABBU_TEST_HOOKS=1
 	const ompVersion = await checkOmpVersion(config, log);
@@ -276,7 +246,7 @@ export async function runDaemon(
 	for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
 		process.removeAllListeners(signal);
 		process.on(signal, () => {
-			if (signal !== "SIGHUP") return shutdown(signal);
+			if (signal !== "SIGHUP") return shutdown.handle(signal);
 			log.info("signal", { signal });
 			daemon.reloadConfig("sighup");
 		});
@@ -286,10 +256,11 @@ export async function runDaemon(
 	testStartStall(env);
 	try {
 		await testStartDelayMs(env);
+		await assertOmpRunnable(config, ompVersion);
 		await daemon.start();
 	} catch (error) {
 		watchdog.stop();
-		if (stopping) log.info("daemon_start_interrupted", { ...errorFields(error) });
+		if (shutdown.stopping) log.info("daemon_start_interrupted", { ...errorFields(error) });
 		else if (error instanceof NewerSchemaError) {
 			// One line with both versions and the remedy: `apply` only sees IPC readiness, so journalctl is where this shows.
 			log.error("daemon_fatal", {
@@ -304,7 +275,7 @@ export async function runDaemon(
 		await daemon.stop().catch(() => undefined);
 		log.stop();
 		lock.release();
-		return stopping ? 0 : 1;
+		return shutdown.stopping ? 0 : 1;
 	}
 	const stopAlive = startServiceAlive({ log, clock, snapshot: () => daemon.aliveFields() });
 	testFatal(env);

@@ -23,8 +23,8 @@ export const DEFAULT_SKILL_REVIEW_TURNS = 10;
 /**
  * How long stop() waits for running turns to settle before stopping the omp children: a turn that finishes in
  * time records its own answer, so the restart's recovery finds it instead of reporting `interrupted_by_restart`.
- * Budget note: the waits before the drain (adapter stop, pump, monitors idle) are unbounded and the drain itself
- * is 20s. The packaged unit (packaging/jabbu.service) sets TimeoutStopSec=90 with KillMode=mixed: only the main
+ * Budget note: the waits before the drain (adapter stop, pump, monitors idle) are bounded only by the runDaemon
+ * shutdown timeout (60 s); the drain itself is 20s. The packaged unit (packaging/jabbu.service) sets TimeoutStopSec=90 with KillMode=mixed: only the main
  * process gets SIGTERM, the daemon stops its omp children itself, and leftover processes get
  * SIGKILL as soon as the main process exits, or together with it once TimeoutStopSec expires. Check a deployed unit with `systemctl --user show jabbu -p TimeoutStopUSec -p KillMode`.
  */
