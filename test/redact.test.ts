@@ -78,6 +78,11 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 		["https://hooks.slack.com/services/", "T00000000/B00000000/TESTTESTTESTTESTTESTTEST"],
 		["https://discord.com/api/webhooks/", `123456789012345678/${"T".repeat(68)}`],
 		["https://discordapp.com/api/webhooks/", `123456789012345678/${"t".repeat(68)}`],
+		["hf_", "T".repeat(34)],
+		["SG.", `${"T".repeat(22)}.${"U".repeat(43)}`],
+		["gsk_", "T".repeat(52)],
+		["dop_v1_", "a1".repeat(32)],
+		["xai-", "T".repeat(48)],
 	])("%s… is replaced", (head, tail) => {
 		expect(redact(`before ${head}${tail} after`)).toBe(`before ${REDACTED} after`);
 	});
@@ -97,6 +102,16 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 		);
 	});
 
+	test("a PEM private key cut off before its END line is masked up to the first non-base64 line", () => {
+		const kind = "RSA PRIVATE KEY";
+		const cut = [`-----BEGIN ${kind}-----`, "MIIEowIBAAKCAQEAtesttest", "TESTTESTTESTTESTTEST=="].join("\n");
+		expect(redact(`key:\n${cut}\ndone`)).toBe(`key:\n${REDACTED}\ndone`);
+		// A lone header with no body line is not a key fragment: it stays.
+		expect(redact(`error: missing -----BEGIN ${kind}----- in file`)).toBe(
+			`error: missing -----BEGIN ${kind}----- in file`,
+		);
+	});
+
 	test("lookalikes survive: a public key, AKIA in a word, a webhook docs URL", () => {
 		const text =
 			"-----BEGIN PUBLIC KEY----- AKIAX https://discord.com/api/webhooks docs https://hooks.slack.com/ glpat-x";
@@ -113,6 +128,11 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 			"0".repeat(20) +
 			" pk_live_" +
 			"0".repeat(20);
+		expect(redact(text)).toBe(text);
+	});
+
+	test("new provider lookalikes survive: short bodies and a longer word holding the prefix", () => {
+		const text = "hf_short xhf_012345678901234567890 gsk_short dop_v1_abc xai-short SG.a.b";
 		expect(redact(text)).toBe(text);
 	});
 });
@@ -214,6 +234,18 @@ describe("byte budget", () => {
 		);
 		expect(redact(`https://example.com/x?password=${value}`)).toBe(`https://example.com/x?password=${REDACTED}`);
 		expect(redact(`https://example.com/?mytoken=${value}`)).toBe(`https://example.com/?mytoken=${value}`);
+	});
+
+	test("Authorization header values are masked, the header name stays", () => {
+		const basic = "dXNlcjpodW50ZXIyLXBhc3N3b3JkMTIzNDU2";
+		expect(redact(`fetch failed: 401 Authorization: Basic ${basic}`)).toBe(
+			`fetch failed: 401 Authorization: ${REDACTED}`,
+		);
+		expect(redact(`{"Authorization": "Basic ${basic}"}`)).toBe(`{"Authorization": "${REDACTED}"}`);
+		expect(redact(`Proxy-Authorization: Basic ${basic}`)).toBe(`Proxy-Authorization: ${REDACTED}`);
+		expect(redact("Authorization: Bearer abcdef0123456789abcdef0123456789")).toBe(`Authorization: ${REDACTED}`);
+		// A Basic value under the 16-char floor is the documented residual (same floor as every other field).
+		expect(redact("Authorization: Basic dXNlcjpwYXNz")).toBe("Authorization: Basic dXNlcjpwYXNz");
 	});
 });
 
