@@ -186,8 +186,11 @@ export function ledgerOf(ledger: TaskLedger, keep: (row: TaskRow) => boolean): T
 	});
 }
 
+/** The sweep's bound on one herdr call: a wedged remote herdr stalls one row, not the sweep. */
+export const SWEEP_HERDR_TIMEOUT_MS = 20_000;
+
 /** The herdr call options of a task's host: a dispatch host's ssh target and herdr binary, the local ones otherwise. */
-export function herdrOptionsOf(ctx: DaemonContext, row: TaskRow): HerdrRunnerOptions {
+export function herdrOptionsOf(ctx: DaemonContext, row: TaskRow, timeoutMs?: number): HerdrRunnerOptions {
 	const entry =
 		row.host !== null && Object.hasOwn(ctx.options.config.dispatchHosts ?? {}, row.host)
 			? ctx.options.config.dispatchHosts?.[row.host]
@@ -198,13 +201,14 @@ export function herdrOptionsOf(ctx: DaemonContext, row: TaskRow): HerdrRunnerOpt
 		...(entry === undefined ? {} : { sshTarget: entry.ssh }),
 		...(entry?.herdrBin === undefined ? {} : { herdrBin: entry.herdrBin }),
 		...(run === undefined ? {} : { run }),
+		...(timeoutMs === undefined ? {} : { timeoutMs }),
 	};
 }
 
 /** The worker of a task by its recorded runtime: herdr (the row host's options) or the daemon's Mailbox. */
-export function taskRuntimeOf(ctx: DaemonContext, row: TaskRow): TaskRuntime {
+export function taskRuntimeOf(ctx: DaemonContext, row: TaskRow, timeoutMs?: number): TaskRuntime {
 	return runtimeFor(row, {
-		herdr: (r) => herdrOptionsOf(ctx, r),
+		herdr: (r) => herdrOptionsOf(ctx, r, timeoutMs),
 		headless: taskMailboxPort(ctx),
 		warn: (event, fields) => ctx.log.warn(event, fields),
 	});
