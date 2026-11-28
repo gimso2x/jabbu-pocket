@@ -1,5 +1,5 @@
 # bun scripts/tla-covered.ts --record 가 쓴다. 이 파일들이 바뀌면 Mailbox.tla를 다시 본다.
-d3d9938675b90b246c11de07388c75bde4de4890  src/core/mailbox.ts
+e07ba7a1e30b3108d05a7227c1108ef82b4179d4  src/core/mailbox.ts
 aea9dd2e94901f820941ee9502fb04169a4eb9b3  src/core/mailbox-active-turn.ts
 f8888f06b599e3beb391d844c8904259d0b4abe4  src/core/mailbox-types.ts
 831840f0df4bffff3760d585194b349788f266a7  src/core/mailbox-commands.ts
