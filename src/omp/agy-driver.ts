@@ -835,14 +835,14 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			this.#options.log?.warn("agy_rotation_blind", { origin: this.#options.originKey, calls });
 		}
 		if (context === undefined || context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
-		this.#dropSession(false);
-		this.#retireChild();
 		this.#options.log?.info("agy_conversation_rotated", {
 			origin: this.#options.originKey,
 			conversationId: this.#sessionId,
 			contextTokens: context.used,
 			window: context.size,
 		});
+		this.#dropSession(false);
+		this.#retireChild();
 		return true;
 	}
 
