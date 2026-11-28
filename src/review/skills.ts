@@ -34,6 +34,8 @@ export interface SkillReviewDeps {
 	savePending(proposals: SkillProposal[]): string[];
 	/** Installs one approved skill into the agent skills directory. */
 	install(proposal: SkillProposal): Promise<void>;
+	/** Set when the bot runs under an omp profile: installs land in the source tree and reach live sessions at the next apply. */
+	profileSyncPending?: boolean;
 	requestApproval(summary: string): Promise<"approved" | "denied" | "timeout">;
 	notify(text: string): Promise<void>;
 	log: Logger;
@@ -309,7 +311,7 @@ export async function runSkillReview(
 	await deps.notify(
 		`📝 스킬 ${installed.length}개 설치: ${installed.join(", ")} — 다음 세션부터 스킬 목록에 나타납니다.${
 			failed === 0 ? "" : `\n${failed}개는 설치하지 못했습니다(jabbu.log skill_install_failed).`
-		}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
+		}${deps.profileSyncPending === true ? "\n봇 프로필을 쓰면 다음 apply(omp sync) 뒤에 적용됩니다." : ""}\n나빠지면 \`jabbu-pocket skills rollback <이름>\`로 직전 개정으로 되돌릴 수 있습니다.`,
 	);
 	return { proposals: proposals.length, installed: installed.length };
 }

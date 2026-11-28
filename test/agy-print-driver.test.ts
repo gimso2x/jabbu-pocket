@@ -542,6 +542,43 @@ test("abort with a steer queued ends the turn `aborted` and says the steer was n
 	await driver.stop();
 });
 
+test("a child that dies with a steer queued logs the dropped steer instead of losing it silently", async () => {
+	const h = harness();
+	const warns: string[] = [];
+	const driver = h.make({
+		log: { debug: () => {}, info: () => {}, warn: (event) => warns.push(event), error: () => {} },
+	});
+	const exited = Promise.withResolvers<OmpExitInfo>();
+	driver.onExit((info) => exited.resolve(info));
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	await driver.steer("lost follow-up");
+	process.kill(h.lastPid(), "SIGKILL");
+	expect(await exited.promise).toMatchObject({ expected: false });
+	expect(warns).toContain("agy.print.child_died_steers_dropped");
+	expect((await driver.state()).queuedMessageCount).toBe(0);
+	await driver.stop();
+});
+
+test("stop() with a steer queued logs the dropped steer", async () => {
+	const h = harness();
+	const warns: string[] = [];
+	const driver = h.make({
+		log: { debug: () => {}, info: () => {}, warn: (event) => warns.push(event), error: () => {} },
+	});
+	await driver.start();
+	const working = Promise.withResolvers<void>();
+	driver.onEvent((event) => event.type === "message_update" && working.resolve());
+	await driver.prompt("@hold");
+	await working.promise;
+	await driver.steer("lost follow-up");
+	await driver.stop();
+	expect(warns).toContain("agy.print.stop_steers_dropped");
+});
+
 test("a SUCCESS result ending with agy's standalone quota line turns into a 429 error and retires the child", async () => {
 	const h = harness();
 	const driver = h.make();

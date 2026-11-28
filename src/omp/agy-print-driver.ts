@@ -6,6 +6,7 @@ import { appendTurnChunk, resetTurnText } from "./agy-notice";
 import * as Quota from "./agy-quota";
 import * as Switch from "./agy-switch";
 import { AgyToolKeepalive } from "./agy-tool-keepalive";
+import { noteDroppedSteers } from "./agy-trajectory";
 import type * as Omp from "./driver";
 import { OmpDriverError } from "./driver";
 import { buildChildEnv } from "./env";
@@ -131,15 +132,14 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		return { sessionId: this.#conversationId ?? "", idle, settled: idle, ...counts, model: this.#model() };
 	}
 	async entriesSince(since?: string): Promise<Omp.OmpEntries> {
-		const leafId = this.#entries.at(-1)?.id ?? null;
-		if (since === undefined) return { entries: [...this.#entries], leafId };
+		if (since === undefined) return { entries: [...this.#entries], leafId: this.#entries.at(-1)?.id ?? null };
 		const index = this.#entries.findIndex((entry) => entry.id === since);
 		if (index === -1) throw new OmpDriverError("unknown_since", `no such entry: ${since}`);
-		return { entries: this.#entries.slice(index + 1), leafId };
+		return { entries: this.#entries.slice(index + 1), leafId: this.#entries.at(-1)?.id ?? null };
 	}
 	async stop(): Promise<void> {
 		this.#started = false;
-		this.#dropTurn();
+		this.#dropTurn("agy.print.stop_steers_dropped");
 		this.#retire();
 		await this.#retiring;
 	}
@@ -158,8 +158,9 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		else this.#retire();
 		return { cancelled: turn !== undefined };
 	}
-	#dropTurn(): void {
+	#dropTurn(event?: string): void {
 		if (this.#turn !== undefined) Object.assign(this.#turn, { finished: true }).settled.resolve();
+		if (event !== undefined) noteDroppedSteers(this.#options, event, this.#turn, this.#queued);
 		this.#turn = undefined;
 		this.#queued = [];
 	}
@@ -242,7 +243,7 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		if (child.ended || this.#child !== child) return;
 		this.#child = undefined;
 		this.#toolKeepalive.clear();
-		this.#dropTurn();
+		this.#dropTurn("agy.print.child_died_steers_dropped");
 		if (!this.#started || !child.ready) return;
 		for (const listener of this.#exits) listener({ code, expected: false, stderr: child.stderr });
 	}
@@ -336,9 +337,8 @@ export class AgyPrintDriver implements Omp.OmpSessionDriver {
 		const { model } = this.#options;
 		const entry = { entries: this.#entries, nextSeq: () => ++this.#seq, provider: "agy", model, usage: undefined };
 		Switch.pushAgyAssistantEntry({ ...entry, text, succeeded });
-		const queued = this.#queued.join("\n\n");
+		const queued = this.#queued.splice(0).join("\n\n");
 		if (succeeded && queued !== "") {
-			this.#queued = [];
 			this.#send(child, turn, queued);
 			return;
 		}
