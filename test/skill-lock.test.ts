@@ -78,6 +78,25 @@ describe("skill-lock integrity and risk scan", () => {
 		expect(verified.warnings).toEqual([]);
 	});
 
+	test("a lockfile inside the skills dir round-trips clean, via API and CLI", () => {
+		writeSkill("alpha", { "SKILL.md": "v1\n" });
+		const insideLock = join(skillsDir, "skills.lock.json");
+		writeSkillLock(skillsDir, insideLock);
+		expect(verifySkillLock(skillsDir, insideLock).ok).toBe(true);
+		// A second lock (the first lockfile now exists in the tree) still verifies clean.
+		writeSkillLock(skillsDir, insideLock);
+		const verified = verifySkillLock(skillsDir, insideLock);
+		expect(verified.ok).toBe(true);
+		expect(verified.added).toEqual([]);
+		expect(verified.modified).toEqual([]);
+
+		const locked = captureOutput(() => skillsCommand(["lock", "--dir", skillsDir, "--file", insideLock], {}));
+		expect(locked.code).toBe(0);
+		const ok = captureOutput(() => skillsCommand(["verify", "--dir", skillsDir, "--file", insideLock], {}));
+		expect(ok.code).toBe(0);
+		expect(ok.stdout).toContain("skill_verify ok=true");
+	});
+
 	test("detects added, modified, and removed skill files", () => {
 		writeSkill("alpha", { "SKILL.md": "v1\n" });
 		writeSkill("beta", { "SKILL.md": "v1\n" });
