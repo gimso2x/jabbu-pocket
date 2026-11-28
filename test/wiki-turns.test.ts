@@ -83,6 +83,52 @@ describe("conversation turn notes", () => {
 		expect(wiki.outbox()).toEqual([]);
 	});
 
+	test("AC-3: one repo's failing write does not drop the remaining repos' rows", async () => {
+		const repoA = makeRepo(repos);
+		const repoB = makeRepo(repos);
+		const repoC = makeRepo(repos);
+		const rows = [commitTurn(repoA, "feat: A"), commitTurn(repoB, "feat: B"), commitTurn(repoC, "feat: C")];
+		const original = store.addWikiTurn.bind(store);
+		const add = spyOn(store, "addWikiTurn");
+		try {
+			add.mockImplementation((input) => {
+				if (input.repo === repoB) throw new Error("database is locked");
+				return original(input);
+			});
+			await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op1", threadRef: THREAD_REF, rows });
+		} finally {
+			add.mockRestore();
+		}
+		expect(store.listUnsentWikiTurns().map((row) => row.repo)).toEqual([repoA, repoC]);
+		expect(wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes(repoB))).toBe(true);
+	});
+
+	test("AC-3: a note whose sweep never started stays unsent and is retried at the next flush", async () => {
+		const repo = makeRepo(repos);
+		await wiki.notes.recordTurn({
+			originKey: "discord/dm/200000000000000001",
+			opRef: "op1",
+			threadRef: "200000000000000001:400000000000000001",
+			rows: [commitTurn(repo, "fix: 하나")],
+		});
+		// The wiki client is missing: the file is written but no sweep starts.
+		wiki.config = { ...(wiki.config as NonNullable<typeof wiki.config>), client: join(wiki.dir, "missing-client") };
+		await wiki.notes.flushTurns();
+		const ids = wiki.outbox();
+		expect(ids).toHaveLength(1);
+		expect(wiki.sweeps).toEqual([]);
+		expect(wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes("sweep"))).toBe(true);
+		expect(store.wikiNoteState(ids[0] as string)).toBeUndefined();
+		expect(store.listUnsentWikiTurns()).toHaveLength(1);
+
+		// Client back in place: the next flush retries the sweep and the note is sent.
+		wiki.config = { ...(wiki.config as NonNullable<typeof wiki.config>), client: join(wiki.dir, "client") };
+		await wiki.notes.flushTurns();
+		expect(store.wikiNoteState(ids[0] as string)).toEqual({ state: "sent" });
+		expect(store.listUnsentWikiTurns()).toEqual([]);
+		expect(wiki.sweeps).toHaveLength(1);
+	});
+
 	test("AC-3: a turn recorded after its group's note was written goes out as a follow-up note", async () => {
 		const repo = makeRepo(repos);
 		const first = commitTurn(repo, "feat: 첫 번째");

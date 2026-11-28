@@ -34,6 +34,7 @@ import {
 import type { ApprovalDetail, ApprovalInput, AutoChoiceInput, ExpiredApproval } from "../safety/approval";
 import { TaskLedger } from "../tasks/ledger";
 import { type CardAnswerVerdict, insertCardAnswer, judgeCardAnswer } from "./card-answers";
+import { applyDeliveryFacts, listAmbiguousDeliveries, resolveAmbiguousDelivery } from "./db-delivery-facts";
 import { bumpEpoch } from "./db-epoch";
 import {
 	type ApprovalRow,
@@ -1831,11 +1832,33 @@ export class Store {
 		})();
 	}
 
+	/** Hold + owner notice in one transaction (nested calls run as savepoints): a notice failure leaves the row `inflight`. */
+	markAmbiguousWithNotice(
+		deliveryId: number,
+		error: string,
+		sentParts = 0,
+		replyTs?: string,
+		ownerUserId?: string,
+	): boolean {
+		return this.db.transaction(() => {
+			this.markAmbiguous(deliveryId, error, sentParts, replyTs);
+			return this.noticeAmbiguous(deliveryId, ownerUserId);
+		})();
+	}
+
 	// ---- owner resolution of held deliveries (`jabbu-pocket deliveries`) ----
 
 	/** The held rows waiting for the owner, oldest id first. */
 	listAmbiguous(): DeliveryRow[] {
 		return listAmbiguousDeliveries(this.db);
+	}
+
+	/** Whether an earlier delivery for this thread is held (`failed_ambiguous`). */
+	hasHeldDelivery(threadRef: string, beforeDeliveryId: number): boolean {
+		const held = this.db
+			.query("SELECT 1 FROM deliveries WHERE thread_ref = ? AND delivery_id < ? AND state = 'failed_ambiguous' LIMIT 1")
+			.get(threadRef, beforeDeliveryId);
+		return held !== null;
 	}
 
 	/**
@@ -2131,11 +2154,9 @@ export class Store {
 	 * approvals rebuild may have replaced the table.
 	 */
 	private migrate(): void {
-		const originColumns = this.db.query("PRAGMA table_info(origins)").all() as Array<{ name: string }>;
+		const originColumns = new Set(columnsOf(this.db, "origins"));
 		for (const column of ["session_file", "model", "thinking"]) {
-			if (!originColumns.some((existing) => existing.name === column)) {
-				this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
-			}
+			if (!originColumns.has(column)) this.db.run(`ALTER TABLE origins ADD COLUMN ${column} TEXT`);
 		}
 		const columns = this.db.query("PRAGMA table_info(inbound)").all() as Array<{ name: string }>;
 		for (const [column, ddl] of [
@@ -2153,6 +2174,8 @@ export class Store {
 		if (!deliveryColumns.some((column) => column.name === "reply_ts")) {
 			this.db.run("ALTER TABLE deliveries ADD COLUMN reply_ts TEXT");
 		}
+		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
+			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);
@@ -2291,45 +2314,6 @@ export class Store {
 			// observers only; the transition itself is already durable
 		}
 	}
-}
-
-/** The one UPDATE every delivery transition writes; a null error keeps the row's stored one. */
-function applyDeliveryFacts(db: Database, deliveryId: number, next: DeliveryFacts, error: string | null): void {
-	db.query(
-		"UPDATE deliveries SET state = ?, attempts = ?, next_at = ?, redelivered = ?, last_error = COALESCE(?, last_error) WHERE delivery_id = ?",
-	).run(next.state, next.attempts, next.nextAt, next.redelivered ? 1 : 0, error, deliveryId);
-}
-
-const deliveryFactsOf = (row: DeliverySql): DeliveryFacts => ({
-	state: row.state,
-	attempts: row.attempts,
-	nextAt: row.next_at,
-	redelivered: row.redelivered === 1,
-	createdAt: row.created_at,
-});
-
-/** The `failed_ambiguous` rows waiting for the owner, oldest id first (the `jabbu-pocket deliveries list` list). */
-export function listAmbiguousDeliveries(db: Database): DeliveryRow[] {
-	return (
-		db.query("SELECT * FROM deliveries WHERE state = 'failed_ambiguous' ORDER BY delivery_id").all() as DeliverySql[]
-	).map(toDelivery);
-}
-
-/**
- * The owner's manual resolution on a bare connection: `transitionDelivery` refuses any row that is not
- * `failed_ambiguous`, so the UPDATE only ever closes a held row. Shared by `Store.resolveAmbiguous` semantics; no
- * hooks fire on this path (the CLI process has none).
- */
-export function resolveAmbiguousDelivery(
-	db: Database,
-	now: number,
-	deliveryId: number,
-	how: "ack" | "resend",
-): DeliveryRow {
-	const raw = db.query("SELECT * FROM deliveries WHERE delivery_id = ?").get(deliveryId) as DeliverySql | null;
-	if (raw === null) throw new StoreError("not_found", `delivery ${deliveryId}`);
-	applyDeliveryFacts(db, deliveryId, transitionDelivery(deliveryFactsOf(raw), how, now), null);
-	return toDelivery(db.query("SELECT * FROM deliveries WHERE delivery_id = ?").get(deliveryId) as DeliverySql);
 }
 
 export function openStore(options: StoreOptions): Store {

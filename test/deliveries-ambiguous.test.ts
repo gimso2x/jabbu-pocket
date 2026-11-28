@@ -368,6 +368,36 @@ describe("notice: one owner notice per held delivery", () => {
 	});
 });
 
+describe("markAmbiguousWithNotice: hold and notice commit together (round 14 F6)", () => {
+	test("a notice failure leaves the row inflight: no held row without its owner notice", () => {
+		store.ensureOrigin(DM_ORIGIN, "/s/dm");
+		const answer = only(store.recordAnswer({ originKey: DM_ORIGIN, opRef: "op-1", threadRef: "t", parts: ["답"] }));
+		store.claimDue();
+		expect(row(answer.deliveryId)).toMatchObject({ state: "inflight" });
+		// Fault injection: the notice insert throws (a contended ledger) after the hold committed — the two steps
+		// must roll back together, or the owner never learns the row is held.
+		const patched = store as unknown as { insertDelivery: (...args: never[]) => never };
+		const original = patched.insertDelivery;
+		patched.insertDelivery = () => {
+			throw new Error("SQLITE_BUSY");
+		};
+		try {
+			expect(() => store.markAmbiguousWithNotice(answer.deliveryId, "socket hang up", 0, undefined, OWNER)).toThrow(
+				"SQLITE_BUSY",
+			);
+		} finally {
+			patched.insertDelivery = original;
+		}
+		// The hold rolled back with the notice: the row is inflight, so boot recovery re-attempts the send.
+		expect(row(answer.deliveryId)).toMatchObject({ state: "inflight" });
+		expect(store.listAmbiguous()).toEqual([]);
+		// With the ledger healthy again, the same call holds the row and inserts its one notice.
+		expect(store.markAmbiguousWithNotice(answer.deliveryId, "socket hang up", 0, undefined, OWNER)).toBe(true);
+		expect(row(answer.deliveryId)).toMatchObject({ state: "failed_ambiguous" });
+		expect(store.listDeliveries().find((r) => r.opRef === `ambiguous-notice:${answer.deliveryId}`)).toBeDefined();
+	});
+});
+
 describe("held rows in the ledger another process reads", () => {
 	test("a bare connection resolves without the Store's boot recovery touching inflight rows", () => {
 		const inflight = held(DM_ORIGIN, "보내는 중");
