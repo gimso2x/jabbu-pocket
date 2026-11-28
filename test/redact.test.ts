@@ -78,6 +78,11 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 		["https://hooks.slack.com/services/", "T00000000/B00000000/TESTTESTTESTTESTTESTTEST"],
 		["https://discord.com/api/webhooks/", `123456789012345678/${"T".repeat(68)}`],
 		["https://discordapp.com/api/webhooks/", `123456789012345678/${"t".repeat(68)}`],
+		["hf_", "T".repeat(34)],
+		["SG.", `${"T".repeat(22)}.${"U".repeat(43)}`],
+		["gsk_", "T".repeat(52)],
+		["dop_v1_", "a1".repeat(32)],
+		["xai-", "T".repeat(48)],
 	])("%s… is replaced", (head, tail) => {
 		expect(redact(`before ${head}${tail} after`)).toBe(`before ${REDACTED} after`);
 	});
@@ -113,6 +118,11 @@ describe("fable IMP-13: cloud keys, webhook URLs and private keys", () => {
 			"0".repeat(20) +
 			" pk_live_" +
 			"0".repeat(20);
+		expect(redact(text)).toBe(text);
+	});
+
+	test("new provider lookalikes survive: short bodies and a longer word holding the prefix", () => {
+		const text = "hf_short xhf_012345678901234567890 gsk_short dop_v1_abc xai-short SG.a.b";
 		expect(redact(text)).toBe(text);
 	});
 });
