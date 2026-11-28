@@ -36,7 +36,7 @@ import {
 	shouldSwitchAgyAccount,
 } from "./agy-switch";
 import { AgyToolKeepalive } from "./agy-tool-keepalive";
-import { isTrajectoryLoss, promptReplyEnd, withDroppedSteers } from "./agy-trajectory";
+import { isTrajectoryLoss, noteDroppedSteers, promptReplyEnd, withDroppedSteers } from "./agy-trajectory";
 import {
 	type OmpCommand,
 	type OmpCompactResult,
@@ -201,7 +201,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		const keepQueued = turn.rateLimit !== undefined && !turn.hadToolCall && this.#options.accounts !== undefined;
 		if (!keepQueued && this.#queued.length > 0) turn.droppedSteers = (turn.droppedSteers ?? 0) + this.#queued.length;
 		if (!keepQueued) this.#queued = [];
-		const reply = turn.promptReplied;
 		turn.cancelling ??= (async () => {
 			try {
 				client.notify("session/cancel", { sessionId: this.#sessionId });
@@ -212,7 +211,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			const ms = this.#options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
 			const timer = setTimeout(() => unanswered.resolve(false), ms);
 			const answered = await Promise.race([
-				Promise.race([turn.settled.promise, reply.promise]).then(() => true),
+				Promise.race([turn.settled.promise, turn.promptReplied.promise]).then(() => true),
 				unanswered.promise,
 			]);
 			clearTimeout(timer);
@@ -372,6 +371,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			turn.promptReplied.resolve();
 			turn.settled.resolve();
 		}
+		noteDroppedSteers(this.#options, "agy.acp.stop_steers_dropped", turn, this.#queued);
 		this.#turn = undefined;
 		this.#queued = [];
 		await this.#respawning;
@@ -619,6 +619,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			turn.finished = true;
 			turn.settled.resolve();
 		}
+		noteDroppedSteers(this.#options, "agy.acp.child_died_steers_dropped", turn, this.#queued);
 		this.#turn = undefined;
 		this.#queued = [];
 		if (!this.#stopping) for (const listener of this.#exitListeners) listener({ code, expected: false, stderr });
@@ -834,12 +835,11 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			this.#options.log?.warn("agy_rotation_blind", { origin: this.#options.originKey, calls });
 		}
 		if (context === undefined || context.size <= 0 || context.used < context.size * AGY_ROTATE_RATIO) return false;
-		const conversationId = this.#sessionId;
 		this.#dropSession(false);
 		this.#retireChild();
 		this.#options.log?.info("agy_conversation_rotated", {
 			origin: this.#options.originKey,
-			conversationId,
+			conversationId: this.#sessionId,
 			contextTokens: context.used,
 			window: context.size,
 		});

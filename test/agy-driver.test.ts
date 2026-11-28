@@ -900,6 +900,37 @@ test("a child that dies on its own is reported through onExit", async () => {
 	await driver.stop();
 });
 
+test("a child that dies with a steer queued logs the dropped steer instead of losing it silently", async () => {
+	const harness = makeHarness();
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	const exited = Promise.withResolvers<OmpExitInfo>();
+	driver.onExit((info) => exited.resolve(info));
+	await driver.start();
+	await driver.prompt("@hold");
+	await driver.steer("lost follow-up");
+	process.kill(childPid(driver), "SIGKILL");
+	expect(await exited.promise).toMatchObject({ expected: false });
+	expect(
+		lines.some((line) => line.includes("event=agy.acp.child_died_steers_dropped") && line.includes("dropped=1")),
+	).toBe(true);
+	expect(await driver.state()).toMatchObject({ idle: true, queuedMessageCount: 0 });
+	await driver.stop();
+});
+
+test("stop() with a steer queued logs the dropped steer", async () => {
+	const harness = makeHarness();
+	const { log, lines } = captureLog();
+	const driver = harness.make({ log });
+	await driver.start();
+	await driver.prompt("@hold");
+	await driver.steer("lost follow-up");
+	await driver.stop();
+	expect(lines.some((line) => line.includes("event=agy.acp.stop_steers_dropped") && line.includes("dropped=1"))).toBe(
+		true,
+	);
+});
+
 test("a stdout line past 1MiB ends the child; the next prompt starts a new one", async () => {
 	const harness = makeHarness();
 	const driver = harness.make();
