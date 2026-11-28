@@ -375,6 +375,15 @@ describe("loadConfig", () => {
 		});
 	});
 
+	test("two lanes.land keys that collide after the trailing-slash strip are rejected", () => {
+		writeConfig(baseConfig({ lanes: { land: { "/work/a": { mode: "ff" }, "/work/a/": { mode: "pr" } } } }));
+		expect(catchError(() => loadConfig(home)).message).toContain("field=lanes.land./work/a/");
+		writeConfig(baseConfig({ lanes: { land: { "/work/a": { mode: "ff" }, "/work/b/": { mode: "pr" } } } }));
+		expect(loadConfig(home).lanes).toEqual({
+			land: { "/work/a": { mode: "ff" }, "/work/b": { mode: "pr" } },
+		});
+	});
+
 	describe("lanes.land remotes", () => {
 		const dispatchHosts = { wsl: { ssh: "wsl-box" }, oci: { ssh: "me@oci" } };
 		const landOf = (remotes: unknown, extra: Record<string, unknown> = {}) => ({
