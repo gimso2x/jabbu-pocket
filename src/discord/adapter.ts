@@ -61,7 +61,11 @@ import { parseChatOrigin } from "../core/origin-key";
 import { isHomeCommand, parseCommand, parsePurposeCommand, TAKES_ARG } from "../core/types";
 import type { Logger } from "../log";
 import { redact } from "../redact";
-import { type BackfillCursors, type BackfillTarget, DiscordBackfill, snowflakeTime } from "./backfill";
+import type { DiscordAdapterOptions } from "./adapter-options";
+
+export type { DiscordAdapterOptions } from "./adapter-options";
+
+import { DiscordBackfill, snowflakeTime } from "./backfill";
 import { type Destination, type DiscordChannel, PUBLIC_THREAD, THREAD_EXISTS, THREAD_NAME_MAX } from "./channel";
 import { toDiscordEmoji } from "./emoji";
 import { InlineRoots } from "./inline-root";
@@ -104,48 +108,6 @@ const SEEN_INTERACTIONS_MAX = 1000;
 const THREAD_NOTICE_MEMORY = 1000;
 /** Characters of the replied-to post put in the prompt's context line. */
 const REPLY_CONTEXT_MAX = 300;
-export interface DiscordAdapterOptions {
-	/** The port: its transport carries every call, its channel cache tells threads from messages. */
-	channel: DiscordChannel;
-	core: CoreSink;
-	deliveries: DeliverySource;
-	ownerUserId: string;
-	clock: AdapterClock;
-	log: Logger;
-	/** Servers whose messages are taken; absent: every server. DMs are not affected. */
-	guildIds?: readonly string[] | undefined;
-	/** Channel ids where the owner's message counts as addressed without a mention. */
-	mentionFreeChannels?: readonly string[] | undefined;
-	/** The Discord #log ledger channel (`channels.discord.logChannelId`): inbound there or in its threads never becomes a turn. */
-	logChannel?: string | undefined;
-	/** `channels.discord.inlineReplyChannels` and a lookup of a message's recorded origin (an edit goes where its original went). */
-	inline?: ConstructorParameters<typeof InlineRoots>[0];
-	/** In a server channel only a mention addresses the bot. */
-	requireMention?: boolean | undefined;
-	/** Peer bots whose server channel messages that mention this bot are taken (`channels.discord.peerBots`). */
-	peerBots?: PeerBotList | undefined;
-	/** Peer input cap per thread (top-level `peerHopLimit`). Default `DEFAULT_PEER_HOP_LIMIT`. */
-	peerHopLimit?: { turns: number; windowMinutes: number } | undefined;
-	/** Whether a thread root is a registered [TASK]: its status reaction belongs to the task sweep. */
-	isTaskRoot?: ((threadRef: string) => boolean) | undefined;
-	/** Called after a live message failed as `inbound_failed` (the missed-message recovery trigger). */
-	onInboundFailure?: (() => void) | undefined;
-	/**
-	 * Missed-message recovery behind `recover()`: the watermarks and the channels to read (asked at every pass).
-	 * Absent: `recover()` does nothing.
-	 */
-	recovery?: { cursors: BackfillCursors; targets(): BackfillTarget[]; maxPages?: number | undefined } | undefined;
-	/** Directory for downloaded inbound attachments (`<home>/media`); without it attachments are skipped with a note. */
-	mediaRoot?: string | undefined;
-	/** The typing indicator's interval timer (tests fire it by hand). Default `setInterval`/`clearInterval`, unref'd. */
-	typingTimers?: TypingTimers | undefined;
-	/** How long `start()` waits for the first Ready before it lets the daemon go on. Default `START_WAIT_MS`. */
-	startWaitMs?: number | undefined;
-	/** How long a mentioned peer post waits for the rest of its split answer. Default `PEER_PART_WAIT_MS`; 0: no wait. */
-	peerPartWaitMs?: number | undefined;
-	/** A fatal gateway close after `start()` returned: the daemon drops this adapter (see `AdapterDeps.detach`). */
-	onFatal?: ((error: Error) => void) | undefined;
-}
 
 /** The longest `start()` waits for the first Ready; a gateway that is still failing to connect goes on in the background. */
 export const START_WAIT_MS = 30_000;
@@ -188,6 +150,8 @@ export class DiscordAdapter implements ChannelAdapter {
 	readonly #seenInteractions = new Set<string>();
 	readonly #threadNoticeSent = new Set<string>();
 	readonly #recoveredThreads = new Set<string>();
+	/** Intake runs in flight per thread ref; one thread's messages are taken in arrival order. */
+	readonly #intake = new Map<string, Promise<void>>();
 	#ready: Promise<string | undefined> = Promise.resolve(undefined);
 	readonly #startWaitMs: number;
 	readonly #peerParts: PeerParts;
@@ -652,6 +616,40 @@ export class DiscordAdapter implements ChannelAdapter {
 			// The log channel is a ledger, not a conversation: nothing said there or in its threads reaches omp.
 			if (conversationId === this.#logChannel) return this.#drop(event, "log_channel");
 		}
+		// One thread's intake runs in arrival order: an edit must not overtake the original it fixes, and a
+		// reply must not record before the root that opened its thread. The key is the thread ref, so a root
+		// and its thread's replies share it (an edit shares its original's id), while other threads run beside.
+		const intakeKey = threadRefOf(conversationId, threadId ?? event.id);
+		const prevIntake = this.#intake.get(intakeKey) ?? Promise.resolve();
+		const run = prevIntake.then(() =>
+			this.#processMessagePlaced(event, quoted, injected, onThread, editedAt, {
+				conversationId,
+				threadId,
+				dm,
+				botUserId,
+			}),
+		);
+		const chained = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.#intake.set(intakeKey, chained);
+		void chained.finally(() => {
+			if (this.#intake.get(intakeKey) === chained) this.#intake.delete(intakeKey);
+		});
+		return run;
+	}
+
+	/** The rest of `#processMessage` once the thread is known, run serialized per thread ref (see there). */
+	async #processMessagePlaced(
+		event: DiscordMessageEvent,
+		quoted: readonly string[],
+		injected: boolean,
+		onThread: (() => void) | undefined,
+		editedAt: string | undefined,
+		place: { conversationId: string; threadId: string | undefined; dm: boolean; botUserId: string },
+	): Promise<IngestOutcome> {
+		const { conversationId, threadId, dm, botUserId } = place;
 		// Only an original taken as plain owner input can be edited: a card reply the card consumed leaves no row.
 		if (editedAt !== undefined) {
 			const original = threadRefOf(conversationId, event.id);

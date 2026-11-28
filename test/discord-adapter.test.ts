@@ -1433,6 +1433,40 @@ describe("owner edits", () => {
 		expect(failures).toBe(0);
 	});
 
+	test("an edit that arrives while the root is still opening its thread waits for the intake instead of dropping", async () => {
+		await editAdapter();
+		const origStartThread = transport.startThread.bind(transport);
+		let releaseThread!: () => void;
+		const threadHeld = new Promise<void>((resolve) => {
+			releaseThread = resolve;
+		});
+		let threadCalled = false;
+		transport.startThread = async (args) => {
+			threadCalled = true;
+			await threadHeld;
+			return origStartThread(args);
+		};
+		const root = message(`<@${BOT}> 시작`);
+		const creating = transport.emitMessage(root);
+		for (let i = 0; i < 200 && !threadCalled; i++) await Promise.resolve();
+		expect(threadCalled).toBe(true);
+		const updating = transport.emitMessageUpdate(edit(root, `<@${BOT}> 시작, 조건 추가`));
+		for (let i = 0; i < 200; i++) await Promise.resolve();
+		releaseThread();
+		await creating;
+		await updating;
+		expect(inbound).toHaveLength(2);
+		expect(inbound[1]).toEqual({
+			platformMessageId: `${CH}:${root.id}#edit:${editedAt(root.id)}`,
+			originKey: inbound[0]?.originKey ?? "",
+			text: `${MARKER}\n시작, 조건 추가`,
+			threadRef: inbound[0]?.threadRef ?? "",
+			ownerVerified: true,
+		});
+		expect(logged("reason=edit_no_original")).toBe(false);
+		expect(failures).toBe(0);
+	});
+
 	test("an edit of a reply inside a thread and of a DM message keep their original's origin and thread ref", async () => {
 		await editAdapter();
 		const THREAD = "744444444444444444";
