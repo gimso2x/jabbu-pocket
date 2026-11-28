@@ -318,6 +318,33 @@ describe("runSkillReview", () => {
 		expect(d.notices.at(-1)).toContain("승인하지 않아 설치 안 함");
 	});
 
+	test("a timed-out review with announceEmpty tells the owner, without it stays quiet", async () => {
+		const d = deps("approved");
+		const driver = fakeDriver(PROPOSAL_JSON);
+		driver.prompt = async () => "op1";
+		d.makeDriver = () => driver;
+		const options = { sessionDir: join(dir, "review"), timeoutMs: 10 };
+		expect(await runSkillReview(d, options)).toEqual({ proposals: 0, installed: 0 });
+		expect(d.notices).toEqual([]);
+		expect(await runSkillReview(d, { ...options, announceEmpty: true })).toEqual({ proposals: 0, installed: 0 });
+		expect(d.notices.at(-1)).toContain("시간 안에 끝나지 않았어요");
+	});
+
+	test("a failed review with announceEmpty tells the owner, without it stays quiet", async () => {
+		const failed = deps("approved", "boom");
+		failed.makeDriver = () => fakeDriver("boom", "error");
+		expect(await runSkillReview(failed, { sessionDir: join(dir, "review") })).toEqual({
+			proposals: 0,
+			installed: 0,
+		});
+		expect(failed.notices).toEqual([]);
+		expect(await runSkillReview(failed, { sessionDir: join(dir, "review"), announceEmpty: true })).toEqual({
+			proposals: 0,
+			installed: 0,
+		});
+		expect(failed.notices.at(-1)).toContain("끝내지 못했어요");
+	});
+
 	test("NO_PROPOSAL and failed reviews install nothing", async () => {
 		const none = deps("approved", "NO_PROPOSAL");
 		expect(await runSkillReview(none, { sessionDir: join(dir, "review") })).toEqual({ proposals: 0, installed: 0 });

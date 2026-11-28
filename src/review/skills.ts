@@ -221,6 +221,8 @@ export async function runSkillReview(
 		}
 	} catch (error) {
 		deps.log.warn("skill_review_failed", { error: String(error) });
+		if (options.announceEmpty === true)
+			await deps.notify("📝 스킬 리뷰를 끝내지 못했어요(오류가 났어요). 다시 `!distill`을 보내면 다시 시도합니다.");
 		return { proposals: 0, installed: 0 };
 	} finally {
 		await driver.stop().catch(() => undefined);
@@ -228,6 +230,12 @@ export async function runSkillReview(
 
 	if (final === undefined || final.status !== "completed") {
 		deps.log.info("skill_review_skipped", { status: final?.status ?? "timeout" });
+		if (options.announceEmpty === true)
+			await deps.notify(
+				final === undefined
+					? "📝 스킬 리뷰가 시간 안에 끝나지 않았어요. 다시 `!distill`을 보내면 다시 시도합니다."
+					: "📝 스킬 리뷰를 끝내지 못했어요(오류가 났어요). 다시 `!distill`을 보내면 다시 시도합니다.",
+			);
 		return { proposals: 0, installed: 0 };
 	}
 	const proposals = extractProposals(final.text);
