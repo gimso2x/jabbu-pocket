@@ -30,7 +30,7 @@ import {
  */
 
 export type SpanKind = "agent" | "subagent" | "llm" | "tool" | "compaction";
-export type SpanStatus = "running" | "done" | "failed";
+export type SpanStatus = "running" | "done" | "failed" | "paused" | "blocked";
 
 export interface TraceSpan {
 	id: string;
@@ -243,12 +243,12 @@ function turnStarts(db: Database, originKey: string): number[] {
 		.map((row) => row.at);
 }
 
-/** What a worker's status shows: only `working` runs; `review` waits for a verdict, the worker itself is finished. */
+/** What a worker's status shows: only `working` runs; `review` waits for a verdict, the worker itself is finished; `blocked` waits on the owner and `paused` is the owner's hold — neither is a failure. */
 const TASK_SPAN_STATUS: Record<TaskStatus, SpanStatus> = {
 	working: "running",
 	review: "done",
 	done: "done",
-	blocked: "failed",
+	blocked: "blocked",
 	cancelled: "failed",
 };
 const LANE_SPAN_STATUS: Record<LaneStatus, SpanStatus> = {
@@ -256,7 +256,7 @@ const LANE_SPAN_STATUS: Record<LaneStatus, SpanStatus> = {
 	"done-claimed": "done",
 	closed: "done",
 	"not-done": "failed",
-	paused: "failed",
+	paused: "paused",
 };
 
 /** One worker found for the turn, before its span is built. */

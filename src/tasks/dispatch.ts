@@ -223,26 +223,25 @@ export async function startTask(
 	const forceConfirmed = (reasons: readonly string[]): Promise<boolean> =>
 		input.force === true && deps.confirmForce !== undefined ? deps.confirmForce(reasons) : Promise.resolve(false);
 	const quotaHold = deps.quotaRefusal?.(worker.model ?? undefined);
-	if (quotaHold !== undefined && !(await forceConfirmed([quotaHold]))) {
-		deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
-		return `시작 거부: ${quotaHold}`;
+	// Quota and capacity are refused together: one owner card covers both, instead of asking twice.
+	let capacity: StartCapacity | undefined;
+	let disk: DiskView | undefined;
+	if (host === null) {
+		disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
+		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
+	}
+	const refusals = [...(quotaHold === undefined ? [] : [quotaHold]), ...(capacity?.refusals ?? [])];
+	if (refusals.length > 0 && !(await forceConfirmed(refusals))) {
+		if (quotaHold !== undefined)
+			deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
+		if (capacity !== undefined && capacity.refusals.length > 0 && disk !== undefined) {
+			const fields = { repo: spec.repo, path: disk.path, freeBytes: disk.freeBytes, refusals: [...capacity.refusals] };
+			deps.log.warn("task_start_refused_capacity", fields);
+		}
+		return `시작 거부: ${refusals.join(", ")}`;
 	}
 	if (quotaHold !== undefined) deps.log.info("task_start_forced", { repo: spec.repo, reason: "quota" });
-	let capacity: StartCapacity | undefined;
-	if (host === null) {
-		const disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
-		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
-		if (capacity.refusals.length > 0 && !(await forceConfirmed([...capacity.refusals]))) {
-			deps.log.warn("task_start_refused_capacity", {
-				repo: spec.repo,
-				path: disk.path,
-				freeBytes: disk.freeBytes,
-				refusals: [...capacity.refusals],
-			});
-			return `시작 거부: ${capacity.refusals.join(", ")}`;
-		}
-		if (capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
-	}
+	if (capacity !== undefined && capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
 	const baseRef = resolveTaskBase(hostEntryOf(deps, host)?.branchRules, spec.repo, spec.base); // unsafe: refused before anything is reserved
 	const ops = opsFor(deps, host);
 	const recordsRoot = recordsRootFor(deps.recordsRepo, host, hostEntryOf(deps, host));
@@ -259,12 +258,7 @@ export async function startTask(
 		// Local tasks (agy ones too: the agy print driver) run headless on the daemon's Mailbox; remote ones on herdr.
 		runtime: host === null && deps.headless !== undefined ? "headless" : "herdr",
 		acceptance: acceptanceItems(spec.acceptance),
-		worker: {
-			tier: worker.tier,
-			tierReason: worker.tierReason,
-			model: worker.model,
-			...(spec.tierConfidence === undefined ? {} : { tierConfidence: spec.tierConfidence }),
-		},
+		worker: { ...worker, ...(spec.tierConfidence === undefined ? {} : { tierConfidence: spec.tierConfidence }) },
 	});
 	const git = { repo: row.repo, worktree: row.worktree, branch: row.branch };
 	let worktreeCreated = false,
@@ -390,32 +384,34 @@ export async function resumeTask(
 			timezone: deps.timezone,
 			now: deps.now(),
 		});
-	releaseHold(deps.ledger, row); // lift an owner hold on the task before sending the resume
+	const fail = releaseHold(deps.ledger, row); // lift an owner hold on the task before sending the resume
 	let how: string;
 	let link: string | undefined;
 	let switched: string | undefined;
 	let suffix = "";
 	if (switchTo !== undefined) {
 		const outcome = await resumeOnOtherWorker(deps, { row, ops, runtime, alive: alive.exists, switchTo, promptFor });
-		if (typeof outcome === "string") return outcome;
+		if (typeof outcome === "string") return fail(outcome);
 		({ how, link, switched, suffix } = outcome);
 	} else if (alive.exists) {
 		const prompt = promptFor();
 		const sent = await runtime.prompt(row, prompt);
 		// Unconfirmed: herdr took the text but saw no start; the resume goes on (the sweep watches what follows).
-		if (!sent.ok && sent.unconfirmed !== true) return `재개 실패: ${sent.error ?? "unknown"}`;
+		if (!sent.ok && sent.unconfirmed !== true) return fail(`재개 실패: ${sent.error ?? "unknown"}`);
 		notePrompt(deps, { host: row.host, agent: row.agent, kind: "followup", text: prompt, originKey: deps.originKey });
 		how = `살아 있는 에이전트에 재개 프롬프트를 보냈습니다${sent.ok ? "" : "(시작 확인 안 됨)"}`;
 	} else {
 		// A dead agy worker comes back as agy or not at all: one task never mixes worker kinds.
 		const busy = agyModelOf(row.workerModel) === undefined ? undefined : agyOccupant(deps.ledger, row.taskId);
 		if (busy !== undefined)
-			return `재개 안 함: agy 워커는 동시 1개만 — ${busy}가 점유 중입니다(working·blocked). 그 작업이 끝나거나 닫힌 뒤 다시 재개하세요.`;
+			return fail(
+				`재개 안 함: agy 워커는 동시 1개만 — ${busy}가 점유 중입니다(working·blocked). 그 작업이 끝나거나 닫힌 뒤 다시 재개하세요.`,
+			);
 		const present = await ops.pathExists(row.worktree);
-		if (!present.ok) return `재개 실패: ${present.error}`;
-		if (!present.value) return `재개 실패: 워크트리가 없습니다: ${row.worktree}`;
+		if (!present.ok) return fail(`재개 실패: ${present.error}`);
+		if (!present.value) return fail(`재개 실패: 워크트리가 없습니다: ${row.worktree}`);
 		const started = await startAgent(deps, row, promptFor());
-		if (!started.ok) return `재개 실패: ${started.error}`;
+		if (!started.ok) return fail(`재개 실패: ${started.error}`);
 		how = "같은 워크트리에서 새 에이전트를 시작했습니다";
 		link = await cardLink(deps, row, started.paneId);
 	}
