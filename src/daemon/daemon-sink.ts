@@ -327,12 +327,11 @@ export class DaemonInbound {
 		try {
 			const opRef = `${kind}:${row.platformMessageId}`;
 			startedStore(this.#ctx).markDispatched(row.platformMessageId, { opRef, entryCursor: null });
-			const reply = await answer();
 			startedStore(this.#ctx).recordAnswer({
 				originKey: row.originKey,
 				opRef,
 				threadRef: row.threadRef,
-				parts: [reply],
+				parts: [await answer()],
 			});
 		} catch (error) {
 			this.#settleFailed(failedAs, row, error);
@@ -659,6 +658,7 @@ export function deliverySources(
 	return (platform: ChatPlatform): DeliverySource => ({
 		claimDue: () => store.claimDue(undefined, platform).map(itemOf),
 		takeExpired: () => store.takeExpired(platform).map(itemOf),
+		hasHeld: (threadRef, beforeDeliveryId) => store.hasHeldDelivery(threadRef, beforeDeliveryId),
 		confirm: (deliveryId) => {
 			crash("after_post_before_confirm");
 			store.confirmDelivery(deliveryId);
@@ -666,9 +666,8 @@ export function deliverySources(
 		fail: (deliveryId, error, outcome, sentParts, replyTs) => {
 			if (outcome === "ambiguous") {
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
-				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
-				// One owner notice per held delivery, into the thread the answer was headed for.
-				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
+				// Hold and notice commit together: a notice failure leaves the row inflight for boot recovery to retry.
+				store.markAmbiguousWithNotice(deliveryId, error, sentParts, replyTs, primaryOwnerUserId(config.channels));
 				return true;
 			}
 			return store.failDelivery(deliveryId, error).state === "expired";
