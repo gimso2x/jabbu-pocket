@@ -233,6 +233,10 @@ describe("jabbu-pocket deliveries (CLI)", () => {
 		expect((await cli("ack", "abc")).code).toBe(2);
 		expect((await cli("ack")).code).toBe(2);
 		expect((await cli("nope")).code).toBe(2);
+		// `list` takes no id: one stray argument used to be silently ignored.
+		const listExtra = await cli("list", "12");
+		expect(listExtra.code).toBe(2);
+		expect(listExtra.stderr).toContain("too many arguments");
 	});
 
 	test("no ledger yet: a plain sentence, exit 1 (never an empty database)", async () => {
