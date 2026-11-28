@@ -289,6 +289,21 @@ describe("gate", () => {
 		}
 	}
 
+	test("gate: log mode: one failed #log post does not abort the pass", async () => {
+		const h = harness([...seenDays("a", 3), ...seenDays("b", 3)], { maxOpenCards: 2 });
+		h.deps.postLog = async (text) => {
+			if (text.includes("[개선 후보] b ")) throw new Error("#log down");
+			h.notes.push(text);
+		};
+		expect(await runCandidateProposals(h.deps, OPEN)).toEqual(["a", "b"]);
+		expect(h.notes).toHaveLength(1);
+		expect(h.notes[0]).toContain("[개선 후보] a ");
+		expect(ledger(h).filter((e) => e.event === "proposed")).toHaveLength(1);
+		expect(ledger(h).at(-1)).toMatchObject({ key: "a", event: "proposed", via: "log" });
+		// The failed candidate stays open, so the next pass raises it again.
+		expect(due(ledger(h))).toEqual(["b"]);
+	});
+
 	test("gate: log mode posts one line and records proposed(via=log) without asking for approval", async () => {
 		const h = harness(seenDays("a", 3), {}, () => "approved");
 		expect(h.deps.settings.mode).toBe("log");
