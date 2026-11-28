@@ -96,13 +96,9 @@ function gcCommand(args: string[], homeDir: string): number {
 	const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
 	if (!hasHomeDatabase("gc", homeDir)) return 1;
 	const dryRun = values["dry-run"] === true;
-	const result = gcSessions({
-		homeDir,
-		retentionDays:
-			loadConfigIfPresent(homeDir, { checkTokens: false })?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS,
-		now: Date.now(),
-		dryRun,
-	});
+	const retentionDays =
+		loadConfigIfPresent(homeDir, { checkTokens: false })?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS;
+	const result = gcSessions({ homeDir, retentionDays, now: Date.now(), dryRun });
 	const verb = dryRun ? "would_remove" : "removed";
 	for (const path of result.removed) process.stdout.write(`gc ${verb} path=${path}\n`);
 	for (const key of result.threadOriginsRemoved) process.stdout.write(`gc thread_${verb} origin=${key}\n`);
@@ -481,6 +477,10 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 	const [command, ...rest] = argv;
 	const homeDir = resolve(defaultHomeDir(env));
 	try {
+		// `daemon`, `doctor` and `reload` take no arguments: refuse any stray one here, so
+		// `daemon --help` cannot boot the daemon and `doctor --json` cannot run unchecked.
+		if (["daemon", "doctor", "reload"].includes(command ?? "") && rest.length > 0)
+			parseArgs({ args: rest, options: {} });
 		switch (command) {
 			case "init":
 				return initCommand(rest, env);
@@ -540,7 +540,7 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 			default:
 				if ((command === "version" || command === "--version") && rest.length === 0) return versionCommand();
 				process.stderr.write(USAGE);
-				return command === undefined || command === "--help" || command === "help" ? 0 : 2;
+				return command === undefined || ((command === "--help" || command === "help") && rest.length === 0) ? 0 : 2;
 		}
 	} catch (error) {
 		// node:util parseArgs (unknown option, missing value, `--days -1`): an argument mistake, so a usage error.

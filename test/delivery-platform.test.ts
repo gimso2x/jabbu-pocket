@@ -87,6 +87,36 @@ describe("claimDue by platform", () => {
 	});
 });
 
+describe("expired handoff trim", () => {
+	test("the rows trimmed past 200 are reported to the hook instead of dropped silently", () => {
+		const dropped: Array<{ deliveryId: number; body: string }> = [];
+		store.close();
+		store = openStore({
+			timezone: "Asia/Seoul",
+			path: join(dir, "jabbu.db"),
+			clock: { now: () => now },
+			redact,
+			hooks: { onExpiredDropped: (rows) => dropped.push(...rows) },
+		});
+		store.ensureOrigin(`discord/dm/${DISCORD_CH}`, join(dir, "sessions", "flood"));
+		const parts = Array.from({ length: 201 }, (_, i) => `part ${i}`);
+		const created = store.recordAnswer({
+			originKey: `discord/dm/${DISCORD_CH}`,
+			opRef: "op-flood",
+			threadRef: `${DISCORD_CH}:-`,
+			parts,
+		});
+		now += 25 * 60 * 60_000;
+		expect(store.sweepExpired()).toBe(201);
+		// The oldest row is the one trimmed; the handoff keeps the newest 200 for the adapter.
+		expect(dropped).toHaveLength(1);
+		expect(dropped[0]?.deliveryId).toBe(created[0]?.deliveryId);
+		const handed = store.takeExpired();
+		expect(handed).toHaveLength(200);
+		expect(handed.some((row) => row.deliveryId === dropped[0]?.deliveryId)).toBe(false);
+	});
+});
+
 describe("ledger reads by platform", () => {
 	beforeEach(() => {
 		answer(`discord/dm/${DISCORD_CH}`, `${DISCORD_CH}:333333333333333333`, `${DISCORD_CH}:333`, "discord dm answer");

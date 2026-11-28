@@ -5,6 +5,7 @@ import { realProcessRunner } from "../dispatch/omp";
 import { buildChildEnv, withOmpProfile } from "../omp/env";
 import { readOmpUsage, type UsageResponse } from "../omp/usage-json";
 import type { OpsUsageInput } from "../ops/ops-panel-fields";
+import { usedPercentOfLimit } from "../ops/quota-gate";
 import { redact } from "../redact";
 import type { DaemonContext } from "./daemon-context";
 
@@ -65,15 +66,7 @@ function usageForPanel(collection: UsageCollection): OpsUsageInput {
 	} else if (ompUsage !== undefined) {
 		for (const report of ompUsage.reports) {
 			for (const limit of report.limits) {
-				const { amount } = limit;
-				const used =
-					amount.usedFraction !== undefined
-						? amount.usedFraction * 100
-						: amount.remainingFraction !== undefined
-							? 100 - amount.remainingFraction * 100
-							: amount.used !== undefined && amount.limit !== undefined && amount.limit > 0
-								? (amount.used / amount.limit) * 100
-								: undefined;
+				const used = usedPercentOfLimit(limit);
 				if (used !== undefined)
 					offer(report.provider, limit.window?.label ?? limit.label, used, limit.window?.resetsAt);
 			}

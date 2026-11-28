@@ -308,6 +308,37 @@ describe("finishDeliveryStatus", () => {
 			"200000000000000001:700000000000000003:cancelled:update",
 		]);
 	});
+
+	test("a sent delivery finishes as failed while an earlier delivery of the thread is held (round 14 F4)", async () => {
+		const finished: string[] = [];
+		const finisher = {
+			finishStatus: async (threadRef: string, _originKey: string, outcome: string, action: string) => {
+				finished.push(`${threadRef}:${outcome}:${action}`);
+			},
+			hasHeld: (threadRef: string, beforeId: number) =>
+				threadRef === "200000000000000001:700000000000000001" && beforeId === 9,
+		};
+		await finishDeliveryStatus(item(9), "sent", finisher);
+		expect(finished).toEqual(["200000000000000001:700000000000000001:failed:delete"]);
+	});
+
+	test("the hold is per thread: a held row in another thread leaves this thread done", async () => {
+		const finished: string[] = [];
+		const finisher = {
+			finishStatus: async (threadRef: string, _originKey: string, outcome: string, action: string) => {
+				finished.push(`${threadRef}:${outcome}:${action}`);
+			},
+			hasHeld: (threadRef: string, _beforeId: number) => threadRef.endsWith("0002"),
+		};
+		const delivery = item(9, {
+			finishThreadRefs: ["200000000000000001:700000000000000002"],
+		});
+		await finishDeliveryStatus(delivery, "sent", finisher);
+		expect(finished).toEqual([
+			"200000000000000001:700000000000000001:done:delete",
+			"200000000000000001:700000000000000002:failed:update",
+		]);
+	});
 });
 
 describe("qa50b K-13: a throwing ledger call", () => {

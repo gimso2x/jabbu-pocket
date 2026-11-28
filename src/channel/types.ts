@@ -26,6 +26,7 @@ export interface PeerInboundMessage {
 	peer: { userId: string; name: string };
 }
 
+type InboundResult = { duplicate?: boolean } | undefined;
 /** The adapter's whole view of the core. Owner input arrives through `onInbound`, peer bot input through `onPeerInbound`. */
 export interface CoreSink {
 	/**
@@ -40,9 +41,7 @@ export interface CoreSink {
 	 */
 	onPeerSeen?(seen: { threadRef: string; peerUserId: string; at: number }): void;
 	/** `duplicate: true` (redelivery of a message already recorded) suppresses the 👀 and the status message. */
-	onInbound(
-		message: InboundMessage,
-	): Promise<{ duplicate?: boolean } | undefined> | { duplicate?: boolean } | undefined;
+	onInbound(message: InboundMessage): Promise<InboundResult> | InboundResult;
 	/** Ephemeral reply text; `undefined` sends an empty ack because the answer is posted as its own message. */
 	onCommand(command: {
 		command: CommandKind;
@@ -141,6 +140,7 @@ export interface DeliverySource {
 	 * over once. Absent: expiry finishes nothing.
 	 */
 	takeExpired?(): Promise<DeliveryItem[]> | DeliveryItem[];
+	hasHeld?(threadRef: string, beforeDeliveryId: number): boolean | Promise<boolean>;
 	/** Rate limited (429 or still blocked): nothing more was posted; retry at `retry.at` without counting a failure. */
 	defer(deliveryId: number, error: string, retry: DeliveryRetry): Promise<void> | void;
 }
