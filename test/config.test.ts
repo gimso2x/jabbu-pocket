@@ -1359,6 +1359,12 @@ describe("qa50b lane I", () => {
 		expect(defaultHomeDir({ JABBU_HOME: "/x/home" })).toBe("/x/home");
 	});
 
+	test("a relative JABBU_HOME is refused: the same value would name a different home per cwd", () => {
+		for (const value of ["myhome", "./myhome", "a/b/.jabbu"]) {
+			expect(() => defaultHomeDir({ JABBU_HOME: value })).toThrow("JABBU_HOME must be absolute");
+		}
+	});
+
 	test("I-6: a dispatchHosts name with control characters loads but is flagged", () => {
 		writeConfig(baseConfig({ herdr: {}, dispatchHosts: { "wsl\nfake ok": { ssh: "wsl" }, "oci-2": { ssh: "oci" } } }));
 		const cfg = loadConfig(home);

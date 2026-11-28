@@ -8,6 +8,7 @@ import { TASK_PATH_PATTERN } from "./tasks/docs";
 export type ConfigErrorCode =
 	| "home_missing"
 	| "home_permissions"
+	| "home_relative"
 	| "config_missing"
 	| "config_unreadable"
 	| "config_invalid_json"
