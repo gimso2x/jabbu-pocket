@@ -159,6 +159,7 @@ function rig(
 			| "autoLandReady"
 			| "pollTaskPrLand"
 			| "landsViaPr"
+			| "evaluate"
 		>
 	> = {},
 	task: Partial<Pick<TaskRow, "host" | "risk" | "runtime">> & { workerModel?: string } = {},
@@ -310,6 +311,34 @@ describe("TaskSweeper", () => {
 		expect(r.ledger.require(r.row.taskId).status).toBe("review");
 		expect(posts(r)).toHaveLength(1);
 		expect(textOf(posts(r)[0]).split("\n")[0]).toStartWith("🔍 Outcome 도달");
+	});
+
+	test("a human close during evaluation returns '이미 전환됨' instead of throwing (TOCTOU)", async () => {
+		// The close lands while evaluate() runs, so each post-evaluation transition throws TaskTransitionError.
+		const closing = (judgementValue: TaskJudgement) => {
+			let ledger!: TaskLedger;
+			const r = rig({
+				evaluate: async (row) => {
+					ledger.transition(row.taskId, "done", "human", "owner closed");
+					return { ok: true, judgement: judgementValue };
+				},
+			});
+			ledger = r.ledger;
+			return r;
+		};
+		const reached = closing(reachedJudgement());
+		const review = await reached.sweeper.check(reached.ledger.require(reached.row.taskId));
+		expect(review).toMatchObject({ summary: "이미 전환됨", status: "done", read: true });
+		expect(reached.ledger.require(reached.row.taskId).status).toBe("done");
+
+		const blocked = closing(judgement({ blocked: true, blockedReason: "막힘", needsOwner: true }));
+		const toBlocked = await blocked.sweeper.check(blocked.ledger.require(blocked.row.taskId));
+		expect(toBlocked).toMatchObject({ summary: "이미 전환됨", status: "done", read: true });
+
+		const unblocked = closing(judgement());
+		unblocked.ledger.transition(unblocked.row.taskId, "blocked", "bot", "막힘");
+		const toWorking = await unblocked.sweeper.check(unblocked.ledger.require(unblocked.row.taskId));
+		expect(toWorking).toMatchObject({ summary: "이미 전환됨", status: "done", read: true });
 	});
 
 	test("Outcome card post: header 🔍 머지 대기 · <title>, criteria and branch fields, primary 머지 and danger 취소 buttons with the task id", async () => {
