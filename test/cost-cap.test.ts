@@ -328,6 +328,48 @@ describe("AC-3: sub-agent cost in the turn total", () => {
 		const day = localDay(clock.now(), "Asia/Seoul");
 		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(3, 6);
 	});
+
+	test("a wedged turn still charges in-window sub-agent spend from the cached session file", async () => {
+		costCap = { turnUsd: 10 };
+		clock.t = Date.parse("2026-11-10T12:00:00Z");
+		const turnStart = clock.now();
+		const sessionFile = sessionWithSubAgent("sub-wedged", [usageLine(turnStart + 2_000, 2)]);
+		router = buildRouter({ sessionFile });
+		const driver = await startTurn("하위 지출이 있는 멈춘 턴");
+		clock.advance(5_000);
+		driver.emitTestEvent(usageEvent(0.5));
+		await router.mailbox(ORIGIN).sweepIdle(); // the refresh caches the session file and reads sub-agent $2
+		// The owner's !stop aborts, and the abort throws: the turn settles wedged.
+		driver.abort = async () => {
+			driver.calls.push("abort-rejected");
+			throw new OmpDriverError("rpc_error", "abort timed out");
+		};
+		await router.route(msg("!stop"));
+		await router.mailbox(ORIGIN).sweepIdle();
+		const day = localDay(clock.now(), "Asia/Seoul");
+		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(2.5, 6); // live $0.5 + sub-agent $2
+		expect(store.getCursor(`charged:${ORIGIN}`)).toBeUndefined();
+	});
+
+	test("a state-read failure still charges in-window sub-agent spend from the cached session file", async () => {
+		costCap = { turnUsd: 10 };
+		clock.t = Date.parse("2026-11-10T12:00:00Z");
+		const turnStart = clock.now();
+		const sessionFile = sessionWithSubAgent("sub-state-failed", [usageLine(turnStart + 2_000, 2)]);
+		router = buildRouter({ sessionFile });
+		const driver = await startTurn("상태 조회가 실패하는 턴");
+		clock.advance(5_000);
+		driver.emitTestEvent(usageEvent(0.5));
+		await router.mailbox(ORIGIN).sweepIdle(); // the refresh caches the session file and reads sub-agent $2
+		// The settlement's state() read now fails: the fallback charges the live total plus the sub-agent files.
+		driver.state = async () => {
+			throw new OmpDriverError("rpc_error", "state failed");
+		};
+		await finishTurn(driver);
+		const day = localDay(clock.now(), "Asia/Seoul");
+		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(2.5, 6); // live $0.5 + sub-agent $2
+		expect(store.getCursor(`charged:${ORIGIN}`)).toBeUndefined();
+	});
 });
 
 describe("AC-2: daily ledger", () => {
