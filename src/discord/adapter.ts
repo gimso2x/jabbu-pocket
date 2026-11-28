@@ -242,7 +242,12 @@ export class DiscordAdapter implements ChannelAdapter {
 						ready: async () => (await this.#ready) !== undefined,
 						locate: (channelId) => this.#port.locate(channelId),
 						preparePage: (msgs) =>
-							mergeBackfillPeerParts(msgs, this.#botUserId, new Set(this.#peerBots.map((p) => p.userId))),
+							mergeBackfillPeerParts(
+								msgs,
+								this.#botUserId,
+								new Set(this.#peerBots.map((p) => p.userId)),
+								this.#roleTokensOf(this.#botUserId ?? ""),
+							),
 						ingest: async (event) => {
 							let opened = false;
 							const outcome = await this.#processMessage(
@@ -601,11 +606,8 @@ export class DiscordAdapter implements ChannelAdapter {
 		let threadId: string | undefined;
 		if (dm) this.#port.remember({ id: event.channel_id, type: DM_CHANNEL });
 		else {
-			const info = await this.#port.channelInfo(event.channel_id);
-			if (info === undefined) throw new Error(`unknown channel ${event.channel_id}`);
-			if (info.parentId !== undefined && info.type !== 0) {
-				conversationId = info.parentId;
-				threadId = event.channel_id;
+			({ conversationId, threadId } = await this.#serverPlace(event));
+			if (threadId !== undefined) {
 				// Warm the parent (cached per channel) so the prompt can name it; a failed lookup costs only that line.
 				await this.#port.channelInfo(conversationId).catch((err: unknown) => {
 					this.#log.warn("channel_info_failed", { channel: conversationId, error: errorText(err) });
@@ -822,7 +824,7 @@ export class DiscordAdapter implements ChannelAdapter {
 		const drop = (reason: string): IngestOutcome => this.#drop(event, reason, peer.userId);
 		if (event.guild_id === undefined) return drop("peer_dm");
 		if (this.#guildIds !== undefined && !this.#guildIds.has(event.guild_id)) return drop("guild_not_allowed");
-		const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
+		const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`, ...this.#roleTokensOf(botUserId)];
 		const partKey = `${event.channel_id}:${peer.userId}`;
 		if (!tokens.some((token) => event.content.includes(token))) {
 			if (!fromBackfill && this.#peerParts.join(partKey, event, this.#log)) return "recorded";

@@ -9,6 +9,7 @@ import { parseCommand } from "../src/core/types";
 import { DiscordAdapter, type DiscordAdapterOptions } from "../src/discord/adapter";
 import { snowflakeTime } from "../src/discord/backfill";
 import { DiscordChannel } from "../src/discord/channel";
+import { mergeBackfillPeerParts } from "../src/discord/peer-posts";
 import {
 	DiscordCallError,
 	DiscordGatewayFatalError,
@@ -519,6 +520,29 @@ describe("peer bots", () => {
 	});
 
 	// The wait itself is the behaviour: the later part is emitted while the mentioned post waits, never after a sleep.
+	test("a peer mention by the bot's managed role is taken like a user mention, and the role token is stripped", async () => {
+		await peerAdapter();
+		transport.emitRoles([{ id: "900000000000000001", tags: { bot_id: BOT } }]);
+		const root = peerMessage(`<@&900000000000000001> 스펙 검토 부탁`);
+		await transport.emitMessage(root);
+		expect(peers).toHaveLength(1);
+		const text = peers[0]?.message.text ?? "";
+		expect(text).toContain("스펙 검토 부탁");
+		expect(text).not.toContain("<@&900000000000000001>");
+		expect(logged("reason=peer_not_mentioned")).toBe(false);
+	});
+
+	test("backfill merge: a peer post mentioning the bot by role absorbs its unmentioned continuation", () => {
+		const head = peerMessage(`<@&900000000000000001> 검토 1~4번`, { channel_id: THREAD });
+		const tail = peerMessage("검토 5번", { channel_id: THREAD });
+		const merged = mergeBackfillPeerParts([head, tail], BOT, new Set([PEER]), ["<@&900000000000000001>"]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.event.content).toBe("<@&900000000000000001> 검토 1~4번\n검토 5번");
+		expect(merged[0]?.watermarkId).toBe(tail.id);
+		// Without the role token the head is not a mention, so nothing merges.
+		expect(mergeBackfillPeerParts([head, tail], BOT, new Set([PEER]))).toHaveLength(2);
+	});
+
 	test("a split peer answer: the unmentioned later parts posted during the wait join the mentioned post as one request", async () => {
 		await peerAdapter(undefined, { peerPartWaitMs: 300 });
 		const first = peerMessage(`<@${BOT}> 검토 1~4번`, { channel_id: THREAD });
