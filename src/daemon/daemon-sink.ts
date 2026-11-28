@@ -43,7 +43,7 @@ import type { DaemonCommandPicker } from "./daemon-picker";
 import type { DaemonStore } from "./daemon-store";
 import type { PendingDispatchSweep } from "./daemon-sweeps";
 import type { DaemonTaskLanding } from "./daemon-task-land";
-import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
+import { taskHostConfigured, taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { withControlSource } from "./daemon-task-web";
 import { type LaneTriggerLine, laneInbound, laneTriggerLine } from "./lane-sibling";
 import { isSideOpRef } from "./restart";
@@ -398,9 +398,8 @@ export class DaemonInbound {
 
 	/** A thread's working or blocked [TASK]s: the ones a `멈춰`/`계속` there can act on. */
 	#activeTasksOf(threadRef: string): TaskRow[] {
-		return startedStore(this.#ctx)
-			.tasks.getByThread(threadRef)
-			.filter((task) => task.status === "working" || task.status === "blocked");
+		const tasks = startedStore(this.#ctx).tasks;
+		return tasks.getByThread(threadRef).filter((task) => task.status === "working" || task.status === "blocked");
 	}
 
 	/**
@@ -472,8 +471,10 @@ export class DaemonInbound {
 		this.#ctx.log.info("task_paused", withControlSource({ task: taskId }));
 		let worker: string;
 		let stopped = false;
-		if (row.runtime === "herdr" && this.#ctx.options.config.herdr === undefined) {
-			worker = "herdr가 꺼져 있어 Esc를 보내지 않았습니다";
+		// A removed dispatch host has no Esc to send: the pause stands, only the worker stop is unconfirmed.
+		const hostGone = row.runtime === "herdr" && !taskHostConfigured(this.#ctx, row);
+		if ((row.runtime === "herdr" && this.#ctx.options.config.herdr === undefined) || hostGone) {
+			worker = hostGone ? "호스트를 찾을 수 없어 Esc를 보내지 않았습니다" : "herdr가 꺼져 있어 Esc를 보내지 않았습니다";
 		} else {
 			const interrupted = await taskRuntimeOf(this.#ctx, row).interrupt(row);
 			this.#ctx.log.info(

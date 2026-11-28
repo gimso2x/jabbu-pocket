@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { runCli } from "../src/cli/index";
 import { loadConfig } from "../src/config";
 import { openBotStore, sessionDirFor } from "../src/core/origin";
-import { herdrOptionsOf } from "../src/daemon/daemon-task-resume";
+import { herdrOptionsOf, taskRuntimeOf } from "../src/daemon/daemon-task-resume";
 import { checkOmpRuntimeSync } from "../src/omp/runtime-check";
 import { freezePath, writeFreeze } from "../src/ops/freeze";
 import { gcSessions } from "../src/ops/gc";
@@ -87,6 +87,16 @@ describe("qa-ac config·cli·ops·prompt 수정", () => {
 		} finally {
 			rmSync(home.dir, { recursive: true, force: true });
 		}
+	});
+
+	test("taskRuntimeOf: a removed dispatch host is an error, not a local-herdr fallback", () => {
+		const row = (host: string | null) =>
+			({ taskId: "T-1", host, agent: "t-1", runtime: "herdr" }) as unknown as Parameters<typeof taskRuntimeOf>[1];
+		const ctx = (hosts: Record<string, { ssh: string }>) =>
+			({ options: { config: { dispatchHosts: hosts } } }) as unknown as Parameters<typeof taskRuntimeOf>[0];
+		expect(() => taskRuntimeOf(ctx({}), row("gone-host"))).toThrow("알 수 없는 호스트: gone-host");
+		expect(() => taskRuntimeOf(ctx({}), row(null))).not.toThrow();
+		expect(() => taskRuntimeOf(ctx({ box1: { ssh: "box1" } }), row("box1"))).not.toThrow();
 	});
 
 	test("#2: sessionRetentionDays와 candidates 정수 옵션에 상한(100_000)을 적용한다", () => {

@@ -201,8 +201,16 @@ export function herdrOptionsOf(ctx: DaemonContext, row: TaskRow): HerdrRunnerOpt
 	};
 }
 
+/** Whether a row's host is still in dispatchHosts (a local row always is). */
+export function taskHostConfigured(ctx: DaemonContext, row: TaskRow): boolean {
+	return row.host === null || Object.hasOwn(ctx.options.config.dispatchHosts ?? {}, row.host);
+}
+
 /** The worker of a task by its recorded runtime: herdr (the row host's options) or the daemon's Mailbox. */
 export function taskRuntimeOf(ctx: DaemonContext, row: TaskRow): TaskRuntime {
+	// A removed dispatch host is an error, not a fallback to the local herdr: herdrOptionsOf returns no sshTarget
+	// for it, and the Esc/status/read would then go to the local herdr about a remote agent.
+	if (row.runtime === "herdr" && !taskHostConfigured(ctx, row)) throw new Error(`알 수 없는 호스트: ${row.host}`);
 	return runtimeFor(row, {
 		herdr: (r) => herdrOptionsOf(ctx, r),
 		headless: taskMailboxPort(ctx),
