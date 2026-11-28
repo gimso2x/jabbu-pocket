@@ -33,17 +33,9 @@ export function judgeTurnCost(host: MailboxHost, turn: ActiveTurn): void {
 	}
 	if (turn.costSoftSent || spent < cap) return;
 	turn.costSoftSent = true;
-	host.deps.log.info("cost_cap_turn_soft", {
-		origin: host.deps.originKey,
-		opRef: turn.opRef,
-		cost: spent,
-		cap,
-	});
-	host.deps.onTurnCostCap?.({
-		originKey: host.deps.originKey,
-		threadRef: turn.threadRef,
-		text: turnCapWarnText(cap, spent),
-	});
+	const { log, originKey } = host.deps;
+	log.info("cost_cap_turn_soft", { origin: originKey, opRef: turn.opRef, cost: spent, cap });
+	host.deps.onTurnCostCap?.({ originKey, threadRef: turn.threadRef, text: turnCapWarnText(cap, spent) });
 }
 
 /**
@@ -107,7 +99,7 @@ export async function recordDailyCost(
 ): Promise<void> {
 	if (turn.costRecorded) return;
 	turn.costRecorded = true;
-	const { store, originKey, log } = deps;
+	const { originKey, log } = deps;
 	if (usage !== undefined) {
 		addDailyUsage(deps, turn.opRef, 0, usage.calls);
 		log.info("agy_usage", {
@@ -124,7 +116,7 @@ export async function recordDailyCost(
 	}
 	if (wedged) {
 		log.info("usage_daily_live", { origin: originKey, opRef: turn.opRef, reason: "child_stopped" });
-		if (addDailyUsage(deps, turn.opRef, turn.costUsd, 1)) store.deleteCursor(chargedCursorKey(originKey));
+		addDailyUsage(deps, turn.opRef, turn.costUsd, 1, { key: chargedCursorKey(originKey), value: null });
 		return;
 	}
 	await chargeSessionWindow(deps, {
@@ -138,12 +130,22 @@ export async function recordDailyCost(
 
 /**
  * Writes one `usage_daily` increment and logs `usage_daily_failed` instead of throwing so a ledger failure never
- * blocks an answer or queued work. Returns whether the write succeeded.
+ * blocks an answer or queued work. Returns whether the write succeeded. With `cursor` the increment and the
+ * charged-cursor move land in one transaction (`null` deletes it): a cursor write failing after the increment
+ * landed would leave a stale cursor behind it, so the next charge counts the same window twice.
  */
-export function addDailyUsage(deps: MailboxDeps, opRef: string, cost: number, calls: number): boolean {
+export function addDailyUsage(
+	deps: MailboxDeps,
+	opRef: string,
+	cost: number,
+	calls: number,
+	cursor?: { key: string; value: string | null },
+): boolean {
 	const { store, originKey, log, clock } = deps;
 	try {
-		store.addDailyUsage({ day: ledgerDay(clock.now(), deps.timezone), originKey, cost, calls });
+		const input = { day: ledgerDay(clock.now(), deps.timezone), originKey, cost, calls };
+		if (cursor === undefined) store.addDailyUsage(input);
+		else store.chargeDailyUsage(input, cursor.key, cursor.value);
 		return true;
 	} catch (error) {
 		log.warn("usage_daily_failed", { origin: originKey, opRef, cost, calls, error: String(error) });
@@ -171,11 +173,13 @@ export async function chargeSessionWindow(
 	const { store, originKey, log, clock } = deps;
 	const key = chargedCursorKey(originKey);
 	const chargeFallback = (): void => {
-		if (input.fallbackCost === undefined) {
-			store.deleteCursor(key);
-			return;
+		try {
+			if (input.fallbackCost === undefined) store.deleteCursor(key);
+			else addDailyUsage(deps, input.opRef, input.fallbackCost, 1, { key, value: null });
+		} catch (error) {
+			// Nothing was charged, so a stale cursor only re-reads the window next time; never abort the settlement.
+			log.warn("usage_daily_failed", { origin: originKey, opRef: input.opRef, error: String(error) });
 		}
-		if (addDailyUsage(deps, input.opRef, input.fallbackCost, 1)) store.deleteCursor(key);
 	};
 	let file: string | undefined;
 	try {
@@ -193,27 +197,21 @@ export async function chargeSessionWindow(
 		sessionWindowCost({ sessionFile: file, afterEntryId, from: input.from, to });
 	let window: WindowCost;
 	try {
-		if (preferred !== undefined) {
-			try {
-				window = await readWindow(preferred);
-			} catch (error) {
-				if (error instanceof EntryNotFoundError && preferred !== input.fallbackAfterEntryId) {
-					window = await readWindow(input.fallbackAfterEntryId);
-				} else {
-					throw error;
-				}
-			}
-		} else {
-			window = await readWindow(input.fallbackAfterEntryId);
-		}
+		window =
+			preferred === undefined
+				? await readWindow(input.fallbackAfterEntryId)
+				: await readWindow(preferred).catch((error: unknown) =>
+						error instanceof EntryNotFoundError && preferred !== input.fallbackAfterEntryId
+							? readWindow(input.fallbackAfterEntryId)
+							: Promise.reject(error),
+					);
 	} catch (error) {
 		log.warn("usage_daily_failed", { origin: originKey, opRef: input.opRef, file, error: String(error) });
 		chargeFallback();
 		return;
 	}
-	if (addDailyUsage(deps, input.opRef, window.cost, window.calls) && window.lastEntryId !== undefined) {
-		store.setCursor(key, `${file}\t${window.lastEntryId}`);
-	}
+	const cursor = window.lastEntryId === undefined ? undefined : { key, value: `${file}\t${window.lastEntryId}` };
+	addDailyUsage(deps, input.opRef, window.cost, window.calls, cursor);
 }
 
 /**
@@ -228,11 +226,11 @@ export async function abortCostCap(host: MailboxHost, turn: ActiveTurn, cap: num
 	const spent = turn.costUsd + turn.subAgentUsd;
 	const reason = turn.costStopReason ?? turnCapStopReason(cap, spent);
 	log.warn("cost_cap_turn_stop", { origin: originKey, opRef: turn.opRef, cost: spent, cap });
-	try {
-		await driver.abort();
-	} catch (error) {
-		log.warn("cost_cap_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) });
-	}
+	await driver
+		.abort()
+		.catch((error) =>
+			log.warn("cost_cap_abort_failed", { origin: originKey, opRef: turn.opRef, error: String(error) }),
+		);
 	if (host.turn() !== turn || host.driver() !== driver) return;
 	await host.onFinal(driver, { opRef: turn.opRef, status: "aborted", text: "", error: reason });
 }

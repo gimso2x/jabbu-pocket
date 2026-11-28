@@ -280,9 +280,10 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		const name = typeof params.name === "string" && params.name.trim() !== "" ? params.name.trim() : undefined;
 		const givenCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd.trim() : undefined;
 		if (host !== undefined && !herdrOn) throw new Error(HERDR_OFF_MESSAGE);
-		// A name or cwd is a worker argument: dropping it on the simple path would run `omp -p` and forget the agent name.
-		if (params.mode === "simple" && (name !== undefined || givenCwd !== undefined))
-			throw new Error("simple 모드는 name·cwd를 받지 않습니다. 워커는 mode=worker로 부르세요");
+		// A name, cwd, or taskSpec is a worker argument: dropping it on the simple path would run `omp -p` and
+		// forget the agent name, or (taskSpec) start/resume a worker while claiming a one-shot print.
+		if (params.mode === "simple" && (name !== undefined || givenCwd !== undefined || params.taskSpec !== undefined))
+			throw new Error("simple 모드는 name·cwd·taskSpec을 받지 않습니다. 워커는 mode=worker로 부르세요");
 		const mode = params.mode === "worker" || name !== undefined || givenCwd !== undefined ? "worker" : "simple";
 		// The brief's risk scan never sees the cwd: a worker opened in a secrets directory is refused here, before any process.
 		const cwdProblem =
@@ -330,8 +331,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 					};
 		if (params.taskSpec !== undefined) {
 			if (taskDeps === undefined) throw new Error("이 세션에서는 taskSpec을 쓸 수 없습니다");
-			if (name !== undefined)
-				throw new Error("taskSpec에는 name을 줄 수 없습니다(에이전트 이름은 TASKID에서 만듭니다)");
+			if (name !== undefined || givenCwd !== undefined)
+				throw new Error("taskSpec에는 name·cwd를 줄 수 없습니다(이름은 TASKID에서, 저장소는 taskSpec.repo로 정합니다)");
 			const { worker: workerKind, rest } = takeWorkerKind(params.taskSpec);
 			const input = parseTaskSpecInput(rest);
 			// The repo is the worker's working tree: it is refused inside a secrets directory like a `cwd` (qa-z #7).
@@ -460,8 +461,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				throw new Error(`name은 소문자·숫자·-·_ 32자 이내여야 합니다: ${name}`);
 			if (givenCwd !== undefined)
 				throw new Error("cwd는 원격(host) 시작에서만 씁니다. 로컬 워커의 저장소는 taskSpec.repo로 주세요");
+			const agent = TASK_AGENT_NAME.test(name) ? name.toLowerCase() : name; // TASKID names are stored lowercase
 			// A local worker is a registered [TASK] (no ad hoc local start): its row says what runs it, herdr or headless.
-			const row = taskDeps?.ledger.getByAgent(name, null);
+			const row = taskDeps?.ledger.getByAgent(agent, null);
 			if (taskDeps === undefined || row === undefined)
 				throw new Error(
 					`등록된 로컬 작업이 아닙니다: ${name}. 로컬 워커는 taskSpec으로 등록하세요(자유 형식 시작은 없습니다)`,
@@ -474,8 +476,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			if (task === undefined || task === "") {
 				const read = await runtime.read(row);
 				if (!read.ok) return `읽기 실패: ${read.error ?? "unknown"}`;
-				const summary = await taskSummaryLine(taskDeps, name, null);
-				return `▸ ${name} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
+				const summary = await taskSummaryLine(taskDeps, agent, null);
+				return `▸ ${agent} 최근 출력:\n${redact(read.output ?? "")}${summary === undefined ? "" : `\n${summary}`}`;
 			}
 			const followDeps = {
 				ledger: taskDeps.ledger,
@@ -485,8 +487,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
 				log: deps.log,
 			};
-			const follow = await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" });
-			return follow.text;
+			return (await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" })).text;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");
@@ -505,9 +506,9 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 			signal,
 		});
 		deps.log.info("dispatch_simple_done", { ok: result.ok, code: result.code });
-		// A timeout already carries its own suffix; any other non-zero end must not read as a finished run.
-		const failed =
-			result.ok || result.timedOut ? "" : `\n\n[실패: omp -p exit ${result.code ?? "없음"} — 위 출력은 일부일 수 있음]`;
-		return redact(result.output) + failed + gate.suffix;
+		const code = result.code ?? "없음"; // a timeout carries its own suffix; any other non-zero end is a failure
+		const reason = result.timedOut ? "" : (result.failure?.slice(`종료 코드 ${code}: `.length) ?? "");
+		const failed = result.ok || result.timedOut ? "" : `\n\n[실패: omp -p exit ${code} — 위 출력은 일부일 수 있음]`;
+		return redact(result.output) + failed + (reason === "" ? "" : `\n사유: ${reason}`) + gate.suffix;
 	}
 }
