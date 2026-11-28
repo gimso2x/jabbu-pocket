@@ -199,16 +199,19 @@ async function verifyAccessJwt(jwt: string, state: WebAuthState): Promise<AuthOu
 /** Authenticates a web chat request via local 0600 bearer token or Cloudflare Access JWT (no loopback bypass). */
 export async function authenticateWebRequest(request: Request, state: WebAuthState): Promise<AuthOutcome> {
 	const auth = request.headers.get("authorization");
+	let bearerInvalid = false;
 	if (auth !== null) {
 		const bearer = /^Bearer\s+(\S+)$/i.exec(auth.trim());
 		if (bearer?.[1] !== undefined) {
-			return verifyLocalToken(state.config.localTokenPath, bearer[1])
-				? { ok: true, kind: "local" }
-				: { ok: false, status: 401, error: "invalid_token" };
+			if (verifyLocalToken(state.config.localTokenPath, bearer[1])) {
+				return { ok: true, kind: "local" };
+			}
+			// A stale local token must not mask a valid Access JWT: fall through to the JWT check below.
+			bearerInvalid = true;
 		}
 	}
 	const jwt = request.headers.get("cf-access-jwt-assertion")?.trim();
-	if (!jwt) return { ok: false, status: 401, error: "auth_required" };
+	if (!jwt) return { ok: false, status: 401, error: bearerInvalid ? "invalid_token" : "auth_required" };
 	return verifyAccessJwt(jwt, state);
 }
 

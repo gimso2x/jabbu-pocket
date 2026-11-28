@@ -282,6 +282,43 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 		).toBe(401);
 	});
 
+	test("a stale Bearer token falls through to the Access JWT instead of short-circuiting with 401", async () => {
+		const rsa = await generateSigningKey("RS256", "kid-rsa-1");
+		const rsaOther = await generateSigningKey("RS256", "kid-rsa-1");
+		const { baseUrl } = startAuthServer({ keys: [rsa.publicJwk] });
+		const claims = {
+			aud: AUD,
+			iss: `https://${TEAM_DOMAIN}`,
+			exp: Math.floor(Date.now() / 1000) + 300,
+			email: OWNER_EMAIL,
+		};
+		const validJwt = await signJwt(rsa.privateKey, "RS256", "kid-rsa-1", claims);
+		const badJwt = await signJwt(rsaOther.privateKey, "RS256", "kid-rsa-1", claims);
+
+		// Stale local token + valid JWT: the JWT authenticates.
+		expect(
+			(
+				await fetch(`${baseUrl}/api/web/conversations`, {
+					headers: { authorization: "Bearer stale-token", "cf-access-jwt-assertion": validJwt },
+				})
+			).status,
+		).toBe(200);
+
+		// Stale local token + invalid JWT: the JWT's own error is reported, not invalid_token.
+		const badRes = await fetch(`${baseUrl}/api/web/conversations`, {
+			headers: { authorization: "Bearer stale-token", "cf-access-jwt-assertion": badJwt },
+		});
+		expect(badRes.status).toBe(401);
+		expect(await badRes.json()).toEqual({ error: "invalid_jwt_signature" });
+
+		// Stale local token alone: still 401 invalid_token, not auth_required.
+		const aloneRes = await fetch(`${baseUrl}/api/web/conversations`, {
+			headers: { authorization: "Bearer stale-token" },
+		});
+		expect(aloneRes.status).toBe(401);
+		expect(await aloneRes.json()).toEqual({ error: "invalid_token" });
+	});
+
 	test("POST requires Sec-Fetch-Site: same-origin and signed CSRF cookie matching X-Jabbu-Csrf", async () => {
 		const rsa = await generateSigningKey("RS256", "kid-rsa-1");
 		const daemonCalls: unknown[] = [];
