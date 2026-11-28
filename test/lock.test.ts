@@ -114,9 +114,13 @@ describe("staged lock files", () => {
 				await new Promise((resolve) => setTimeout(resolve, 0));
 			}
 			let thrown: { name: string; message: string } | null = null;
-			for (let round = 0; round < 5 && thrown === null; round++) {
+			const deadline = Date.now() + 10_000;
+			// Keep trying until one attempt loses: a loaded runner can let the niced acquirer win a round or two.
+			while (thrown === null) {
 				try { acquireLock(${JSON.stringify(path)}).release(); }
 				catch (error) { thrown = { name: (error as Error).name, message: (error as Error).message }; }
+				if (thrown !== null) break;
+				if (Date.now() > deadline) throw new Error("every attempt won the race against the spoiler");
 				await new Promise((resolve) => setTimeout(resolve, 0));
 			}
 			console.log(JSON.stringify({ thrown }));
