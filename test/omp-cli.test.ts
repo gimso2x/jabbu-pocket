@@ -25,7 +25,7 @@ import {
 	type TrialResult,
 } from "../src/cli/omp";
 import { loadConfig } from "../src/config";
-import { countOmpModels } from "../src/daemon/doctor";
+import { countOmpModels } from "../src/daemon/doctor-omp";
 import type { RunProcessOptions, RunProcessResult } from "../src/dispatch/omp";
 import { defaultDiskPaths } from "../src/ops/gates";
 
@@ -235,7 +235,7 @@ describe("AC-6b: login check and profile-aware doctor/gates", () => {
 		const script = join(root, "omp-models");
 		writeFileSync(
 			script,
-			'#!/bin/sh\nif [ "$OMP_PROFILE" = jabbu ] && [ -z "$PI_CODING_AGENT_DIR" ]; then echo \'{"models":[1,2]}\'; else echo \'{"models":[]}\'; fi\n',
+			'#!/bin/sh\nif [ "$OMP_PROFILE" = jabbu ] && [ -z "$PI_CODING_AGENT_DIR" ]; then echo \'{"models":[{"id":"a"},{"id":"b"}]}\'; else echo \'{"models":[]}\'; fi\n',
 		);
 		chmodSync(script, 0o755);
 		const base = { PATH: "/usr/bin:/bin", PI_CODING_AGENT_DIR: "/inherited/agent" };

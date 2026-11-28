@@ -3408,6 +3408,28 @@ describe("mailbox: lane todos and turn-end report", () => {
 			await mailbox.close();
 		}
 	});
+
+	test("pauseTurn on a child whose abort throws stops the child instead of reusing it", async () => {
+		const mailbox = laneMailbox();
+		try {
+			const first = msg("첫 턴", { originKey: LANE });
+			await mailbox.enqueue(first);
+			const driver = opened[0] as FakeOmpDriver;
+			driver.abort = async () => {
+				driver.calls.push("abort-rejected");
+				throw new OmpDriverError("rpc_error", "abort timed out");
+			};
+			await mailbox.pauseTurn();
+			expect(settled[0]).toEqual({ originKey: LANE, text: "", openDialogs: 0, error: "lane_paused" });
+			expect(mailbox.state.driverRunning).toBe(false);
+			// The next message opens a fresh driver instead of prompting the wedged one.
+			await mailbox.enqueue(msg("다음 턴", { originKey: LANE, threadRef: first.threadRef }));
+			expect(opened).toHaveLength(2);
+			expect(opened[1]?.calls.some((call) => call.startsWith("prompt:다음 턴"))).toBe(true);
+		} finally {
+			await mailbox.close();
+		}
+	});
 });
 
 describe("mailbox: !restart runs without a driver or a turn", () => {

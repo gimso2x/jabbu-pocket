@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import type { ChannelAdapter, ChannelPolicy, OwnerIngest } from "../channel/adapter";
+import { sniffImageMime } from "../channel/attachments";
 import { renderMentions } from "../channel/port";
 import {
 	answerFooter,
@@ -44,7 +45,26 @@ function isWebDefinitiveError(err: unknown): boolean {
 	return typeof code !== "string" || !WEB_TRANSIENT_SQLITE_CODES.has(code);
 }
 
+/** The sniffed image mime of a file's first bytes, or undefined when it is not a known image. */
+function sniffedImageMime(filePath: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		const head = Buffer.alloc(12);
+		const read = readSync(fd, head, 0, 12, 0);
+		return read === 0 ? undefined : sniffImageMime(head.subarray(0, read));
+	} catch {
+		return undefined;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
+}
+
 function webAttachmentNote(filePath: string): string {
+	// An image note carries its mimetype, like the Discord adapter's: `promptImageBlocks` only turns
+	// `[첨부: <path> (image/…)]` lines into image blocks, so a bare path would never reach the model as bytes.
+	const imageMime = sniffedImageMime(filePath);
+	if (imageMime !== undefined) return `[첨부: ${filePath} (${imageMime})]`;
 	const base = `[첨부: ${filePath}]`;
 	if (!TEXT_ATTACHMENT_EXT.test(filePath)) return base;
 	try {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { toneColorInt } from "../src/channel/card";
 import { DENIED_TEXT } from "../src/channel/text";
@@ -917,6 +917,66 @@ describe("Daemon #ops panel monitors, usage collection and pin retry", () => {
 		now = BASE_NOW + 130 * MIN;
 		await refresh(transport);
 		expect(transport.count("pinMessage")).toBe(2);
+	});
+});
+
+describe("OpsUsageCache limits-branch multi-account agy", () => {
+	const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+	const agyOut = (fivePct: number, weekPct: number): string =>
+		[
+			`Gemini Models\tWeekly Limit Remaining\t${weekPct}%\t2026-11-20T23:00:32Z`,
+			`Gemini Models\tFive Hour Limit Remaining\t${fivePct}%\t2026-11-16T04:00:00Z`,
+			"Claude and GPT models\tWeekly Limit Remaining\t100%\t1970-01-01T00:00:00Z",
+			"Claude and GPT models\tFive Hour Limit Remaining\t100%\t1970-01-01T00:00:00Z",
+		].join("\n");
+
+	test("an exhausted primary account does not make the provider look dead while a secondary has headroom", async () => {
+		const accountsDir = join(home.dir, "agy-accounts");
+		mkdirSync(accountsDir, { recursive: true, mode: 0o700 });
+		writeFileSync(join(accountsDir, "order"), "acct1\nacct2\n");
+		writeFileSync(join(accountsDir, "current"), "acct1\n");
+		for (const [name, email] of [
+			["acct1", "one@example.test"],
+			["acct2", "two@example.test"],
+		] as const) {
+			const tokPath = join(accountsDir, `${name}.token`);
+			writeFileSync(tokPath, JSON.stringify({ id_token_email: email, refresh_token: `TEST-tok-${name}` }));
+			chmodSync(tokPath, 0o600);
+		}
+		const run: ProcessRunner = async (_cmd, opts) => {
+			const tok = JSON.parse(
+				readFileSync(join(opts.env?.HOME ?? "", ".gemini", "antigravity-cli", "antigravity-oauth-token"), "utf8"),
+			) as { id_token_email: string };
+			if (tok.id_token_email.startsWith("one")) return { code: 0, stdout: agyOut(0, 0), timedOut: false };
+			return { code: 0, stdout: agyOut(80, 90), timedOut: false };
+		};
+		const ctx = {
+			options: {
+				config: {
+					agent: "omp",
+					ompExecutable: "omp",
+					homeDir: home.dir,
+					timezone: "Asia/Seoul",
+					dashboard: { usageLimits: { agy: ["agy", "-p", "/usage"], agyAccountsDir: accountsDir } },
+				},
+				usageLimitsRun: run,
+			},
+		} as unknown as DaemonContext;
+		const cache = new OpsUsageCache(ctx);
+		expect(cache.read(BASE_NOW)).toBeUndefined();
+		for (let i = 0; i < 5; i++) await settle();
+		expect(cache.read(BASE_NOW)).toEqual({
+			state: "ok",
+			rows: [
+				{
+					provider: "Antigravity",
+					label: "Five Hour Limit Remaining",
+					usedPct: 20,
+					resetsAt: Date.parse("2026-11-16T04:00:00Z"),
+				},
+			],
+		});
 	});
 });
 

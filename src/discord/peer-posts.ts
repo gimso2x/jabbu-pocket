@@ -77,11 +77,12 @@ export function mergeBackfillPeerParts(
 	messages: readonly DiscordMessageEvent[],
 	botUserId: string | undefined,
 	peerUserIds: ReadonlySet<string>,
+	roleTokens: readonly string[] = [],
 ): BackfillPeerBatch[] {
 	if (botUserId === undefined || peerUserIds.size === 0) {
 		return messages.map((event) => ({ event, watermarkId: event.id }));
 	}
-	const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`];
+	const tokens = [`<@${botUserId}>`, `<@!${botUserId}>`, ...roleTokens];
 	const out: BackfillPeerBatch[] = [];
 	for (let i = 0; i < messages.length; i += 1) {
 		const head = messages[i] as DiscordMessageEvent;
