@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { openBotStore } from "../core/origin";
 import { newerSchemaMessage, readSchemaVersion, SCHEMA_VERSION } from "../store/schema-version";
+import { errorCode } from "./apply-lock";
 
 export type RestoreErrorCode =
 	| "bad_source"
@@ -11,6 +11,7 @@ export type RestoreErrorCode =
 	| "newer_schema"
 	| "integrity_check_failed"
 	| "migration_failed"
+	| "disk_full"
 	| "restore_failed";
 
 export class RestoreError extends Error {
@@ -65,17 +66,25 @@ export function verifyRestoreCopy(path: string, timezone: string): void {
 		);
 	}
 	// Same shape as apply's checkBackupMigrates: a throwaway copy opened with this checkout's code, discarded after.
-	const dir = mkdtempSync(join(tmpdir(), "jabbu-restore-migrate-"));
+	// The scratch lives next to the copy being checked (same filesystem, the home's headroom), never in os.tmpdir():
+	// on this VM /tmp is a 512 MB tmpfs, and a ledger bigger than its free space failed the check as a migration
+	// failure when it was only out of disk.
+	const dir = mkdtempSync(join(dirname(path), "jabbu-restore-migrate-"));
 	try {
 		const scratch = join(dir, "jabbu.db");
 		copyFileSync(path, scratch);
 		openBotStore(scratch, { now: () => Date.now() }, timezone).close();
 	} catch (error) {
-		throw new RestoreError(
-			"migration_failed",
-			`this code cannot open the backup: ${error instanceof Error ? error.message : String(error)}`,
-		);
+		throw migrationCheckError(error);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+}
+
+/** Maps a migration-check failure to the error it reports: disk exhaustion is not a broken backup. */
+export function migrationCheckError(error: unknown): RestoreError {
+	const detail = error instanceof Error ? error.message : String(error);
+	if (errorCode(error) === "ENOSPC")
+		return new RestoreError("disk_full", `not enough disk space to verify the backup: ${detail}`);
+	return new RestoreError("migration_failed", `this code cannot open the backup: ${detail}`);
 }
