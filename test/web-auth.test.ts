@@ -323,6 +323,7 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 			aud: AUD,
 			iss: `https://${TEAM_DOMAIN}`,
 			exp: Math.floor(Date.now() / 1000) + 300,
+			iat: Math.floor(Date.now() / 1000) - 10,
 			email: OWNER_EMAIL,
 		};
 		const validJwt = await signJwt(rsa.privateKey, "RS256", "kid-rsa-1", claims);
