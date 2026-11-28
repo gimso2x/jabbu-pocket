@@ -115,10 +115,11 @@ function textAnswer(question: OmpAskQuestion, text: string): AskAnswer {
 	if (question.multi === true) {
 		const parts = multiParts(trimmed, labels);
 		const picked = parts.map((part) => optionOf(labels, part));
-		if (parts.length > 0 && picked.every((index) => index !== undefined)) {
-			return { selectedOptions: [...new Set(picked.map((index) => labels[index as number] as string))] };
-		}
-		return { selectedOptions: [], customInput: trimmed };
+		const matched = picked.flatMap((index) => (index === undefined ? [] : [labels[index] as string]));
+		if (matched.length === 0) return { selectedOptions: [], customInput: trimmed };
+		const rest = parts.filter((_part, i) => picked[i] === undefined).join(", ");
+		const selectedOptions = [...new Set(matched)];
+		return rest === "" ? { selectedOptions } : { selectedOptions, customInput: rest };
 	}
 	const index = optionOf(labels, trimmed);
 	return index === undefined
