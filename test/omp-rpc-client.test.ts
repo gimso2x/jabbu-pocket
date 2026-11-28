@@ -606,3 +606,45 @@ describe("process group", () => {
 		}, 20_000);
 	}
 });
+
+describe("stop() kill waves", () => {
+	/** The peer's child with a pid no process group can ever have (above the kernel's pid_max). */
+	const goneGroupSpawn =
+		(peer: FakeOmpPeer) => (argv: string[], options: { cwd: string; env: Record<string, string> }) => ({
+			...peer.spawn(argv, options),
+			pid: 4_194_305,
+		});
+
+	test("stop() skips the post-exit SIGKILL when the process group is already gone", async () => {
+		const peer = new FakeOmpPeer();
+		const client = new OmpRpcClient({
+			executable: "omp",
+			args: ["--mode", "rpc"],
+			cwd: root,
+			env: {},
+			spawn: goneGroupSpawn(peer),
+		});
+		await client.start();
+		await client.stop();
+		expect(peer.signals).toEqual(["SIGTERM"]);
+	});
+
+	test("stop() clears the SIGKILL timer #onExit armed when the child died on its own", async () => {
+		const peer = new FakeOmpPeer();
+		const client = new OmpRpcClient({
+			executable: "omp",
+			args: ["--mode", "rpc"],
+			cwd: root,
+			env: {},
+			terminationGraceMs: 20,
+			spawn: goneGroupSpawn(peer),
+		});
+		await client.start();
+		peer.exit(3);
+		await Promise.resolve(); // let #onExit run and arm its SIGKILL timer
+		await client.stop();
+		// sleep-ok: proving a cleared timer never fires requires waiting past its 20ms deadline
+		await Bun.sleep(100);
+		expect(peer.signals).toEqual(["SIGTERM", "SIGTERM"]);
+	});
+});
