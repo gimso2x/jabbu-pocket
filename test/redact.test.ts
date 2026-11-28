@@ -183,6 +183,18 @@ describe("byte budget", () => {
 		])
 			expect(redact(text)).toBe(text);
 	});
+
+	test("Authorization header values are masked, the header name stays", () => {
+		const basic = "dXNlcjpodW50ZXIyLXBhc3N3b3JkMTIzNDU2";
+		expect(redact(`fetch failed: 401 Authorization: Basic ${basic}`)).toBe(
+			`fetch failed: 401 Authorization: ${REDACTED}`,
+		);
+		expect(redact(`{"Authorization": "Basic ${basic}"}`)).toBe(`{"Authorization": "${REDACTED}"}`);
+		expect(redact(`Proxy-Authorization: Basic ${basic}`)).toBe(`Proxy-Authorization: ${REDACTED}`);
+		expect(redact("Authorization: Bearer abcdef0123456789abcdef0123456789")).toBe(`Authorization: ${REDACTED}`);
+		// A Basic value under the 16-char floor is the documented residual (same floor as every other field).
+		expect(redact("Authorization: Basic dXNlcjpwYXNz")).toBe("Authorization: Basic dXNlcjpwYXNz");
+	});
 });
 
 describe("HTML entity and URL-encoded secret index masking (AC-3)", () => {
