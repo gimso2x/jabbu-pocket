@@ -62,6 +62,44 @@ describe("runBackup", () => {
 		expect(leftovers).toEqual([]);
 	});
 
+	test("a failed VACUUM INTO leaves no -journal behind (F7)", () => {
+		seedDb(home);
+		// Grow the ledger past the file-size limit below, so VACUUM INTO fails mid-write. One transaction:
+		// 20000 autocommit inserts would fsync each row on this VM's slow disk.
+		const db = new Database(join(home, "jabbu.db"));
+		db.run("CREATE TABLE bulk (id INTEGER PRIMARY KEY, v TEXT)");
+		const ins = db.query("INSERT INTO bulk VALUES (?, ?)");
+		db.run("BEGIN");
+		for (let i = 0; i < 20000; i++) ins.run(i, "x".repeat(200));
+		db.run("COMMIT");
+		db.close();
+		const backupSrc = JSON.stringify(join(import.meta.dir, "..", "src", "ops", "backup.ts"));
+		const script = join(home, "run-backup.ts");
+		writeFileSync(
+			script,
+			`import { runBackup } from ${backupSrc};\n` +
+				`try {\n` +
+				`	const result = runBackup({ homeDir: process.argv[2] as string, now: new Date(process.argv[3] as string) });\n` +
+				`	console.log("ok " + result.file);\n` +
+				`} catch (error) {\n` +
+				`	console.log("err " + (error instanceof Error ? error.message : String(error)));\n` +
+				`	process.exit(1);\n` +
+				`}\n`,
+		);
+		const run = Bun.spawnSync([
+			"prlimit",
+			"--fsize=1048576",
+			"bun",
+			script,
+			home,
+			new Date(2026, 9, 23, 4, 30, 0).toISOString(),
+		]);
+		expect(run.stdout.toString()).toContain("vacuum_failed");
+		expect(run.exitCode).not.toBe(0);
+		const leftovers = readdirSync(join(home, "backups")).filter((name) => name.includes(".tmp-"));
+		expect(leftovers).toEqual([]);
+	});
+
 	test("fails without a stamp when the database is missing", () => {
 		expect(() => runBackup({ homeDir: home })).toThrow(/db_missing/);
 		expect(existsSync(join(home, "backups", STAMP_FILE))).toBe(false);
