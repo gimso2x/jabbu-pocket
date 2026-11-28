@@ -1509,14 +1509,14 @@ export class OriginMailbox {
 		this.#driver = undefined;
 	}
 
-	/** `stopFirst`: the wedged child is stopped before the drain, so a queued next row starts on a fresh child. A ledger write that throws still runs the tail: the error surfaces as `final_failed`, but queued rows drain. */
+	/** `stopFirst`: the wedged child is stopped before the drain, so a queued next row starts on a fresh child. A ledger write that throws still runs the tail: the error surfaces as `final_failed`, but queued rows drain. A `completed` final that arrives after a 3x crossing was found settles as that `cost_cap` reason instead (the abort lost the FIFO race to it). */
 	async #onFinal(driver: OmpSessionDriver, final: OmpFinal, stopFirst = false): Promise<void> {
 		const { store, originKey, log } = this.#deps;
 		const turn = this.#turn;
-		if (driver !== this.#driver || !turn || turn.opRef !== final.opRef) {
-			log.info("final_ignored", { origin: originKey, opRef: final.opRef });
-			return;
-		}
+		if (driver !== this.#driver || !turn || turn.opRef !== final.opRef)
+			return log.info("final_ignored", { origin: originKey, opRef: final.opRef });
+		if (final.status === "completed" && turn.costStopReason !== undefined)
+			final = { ...final, status: "aborted", text: "", error: turn.costStopReason };
 		this.#turn = undefined;
 		this.#wakeTurnEndWaiters();
 		this.#lastActivityAt = this.#deps.clock.now();
