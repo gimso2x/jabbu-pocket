@@ -136,7 +136,11 @@ export function parseResetAtMs(resetAt: string | undefined, now: number, timezon
 		const parsed = Date.parse(trimmed.includes(" ") ? trimmed.replace(" ", "T") : trimmed);
 		if (Number.isFinite(parsed)) target = parsed;
 	} else {
-		const dtMatch = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
+		// The hour/minute/second (and month/day) ranges are part of the patterns: Date.UTC would silently
+		// normalize an out-of-range wall time ("25:00" → next-day 01:00) instead of rejecting it.
+		const dtMatch = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])[ T]([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(
+			trimmed,
+		);
 		if (dtMatch !== null) {
 			target = zonedWallTimeToUtcMs(
 				{
@@ -150,7 +154,7 @@ export function parseResetAtMs(resetAt: string | undefined, now: number, timezon
 				timezone,
 			);
 		} else {
-			const hmMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(trimmed);
+			const hmMatch = /^([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(trimmed);
 			const nowWall = hmMatch === null ? undefined : wallPartsInZone(now, timezone);
 			if (hmMatch !== null && nowWall !== undefined) {
 				const hour = Number(hmMatch[1]);

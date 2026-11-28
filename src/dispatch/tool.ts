@@ -280,9 +280,10 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		const name = typeof params.name === "string" && params.name.trim() !== "" ? params.name.trim() : undefined;
 		const givenCwd = typeof params.cwd === "string" && params.cwd.trim() !== "" ? params.cwd.trim() : undefined;
 		if (host !== undefined && !herdrOn) throw new Error(HERDR_OFF_MESSAGE);
-		// A name or cwd is a worker argument: dropping it on the simple path would run `omp -p` and forget the agent name.
-		if (params.mode === "simple" && (name !== undefined || givenCwd !== undefined))
-			throw new Error("simple 모드는 name·cwd를 받지 않습니다. 워커는 mode=worker로 부르세요");
+		// A name, cwd, or taskSpec is a worker argument: dropping it on the simple path would run `omp -p` and
+		// forget the agent name, or (taskSpec) start/resume a worker while claiming a one-shot print.
+		if (params.mode === "simple" && (name !== undefined || givenCwd !== undefined || params.taskSpec !== undefined))
+			throw new Error("simple 모드는 name·cwd·taskSpec을 받지 않습니다. 워커는 mode=worker로 부르세요");
 		const mode = params.mode === "worker" || name !== undefined || givenCwd !== undefined ? "worker" : "simple";
 		// The brief's risk scan never sees the cwd: a worker opened in a secrets directory is refused here, before any process.
 		const cwdProblem =
