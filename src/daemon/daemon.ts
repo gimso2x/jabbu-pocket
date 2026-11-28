@@ -403,6 +403,9 @@ export class Daemon {
 				log.info("inbound_discarded", { reason: "platform_removed", id: row.platformMessageId, origin: row.originKey });
 			}
 		}
+		for (const row of store.closeRemovedPlatformDeliveries(REMOVED_PLATFORM_PREFIXES)) {
+			log.info("delivery_discarded", { reason: "platform_removed", id: row.deliveryId, origin: row.originKey });
+		}
 
 		// Rule (2): settle dispatched rows of the dead process before any new child is started.
 		const recovered = await recoverDispatched({
@@ -898,8 +901,7 @@ export class Daemon {
 	 * dashboard CLI's snapshot, except the daemon answers its own `status` op and no herdr board is started here.
 	 */
 	async #brief(originKey: string, threadRef: string): Promise<void> {
-		const store = this.#store;
-		if (store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
+		if (this.#store === undefined) throw new Error("장부가 아직 열리지 않았습니다");
 		const config = this.#options.config;
 		const route = this.#channels.forThreadRef(threadRef);
 		if (route === undefined) throw new Error("이 대화의 채널을 찾지 못했습니다");
@@ -1064,10 +1066,9 @@ export class Daemon {
 	async drainCut(
 		applyStamp: string,
 	): Promise<{ ok: true; opRefs: number; approvals: number } | { ok: false; error: string }> {
-		const router = this.#router;
 		const store = this.#store;
 		const broker = this.#broker;
-		if (router?.draining !== true || store === undefined || broker === undefined)
+		if (this.#router?.draining !== true || store === undefined || broker === undefined)
 			return { ok: false, error: "not draining" };
 		const approvals = new Map<string, string>();
 		for (const request of broker.pendingRequests()) {
@@ -1223,10 +1224,9 @@ export class Daemon {
 	}
 
 	/**
-	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
-	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
-	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
-	 * the owner message a reply of it.
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and feeds the owner
+	 * message through that platform adapter's own path (same normalizeInbound, same fencing of `quoted`), threaded under
+	 * that root (with `thread`: a reply in that existing thread, and the owner message a reply of it).
 	 */
 	async inject(request: InjectRequest): Promise<InjectResult> {
 		if (this.#adapters.size === 0) throw new Error("daemon not started");
