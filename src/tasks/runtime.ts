@@ -205,7 +205,14 @@ export function releaseHold(
 	ledger.unpauseTask(row.taskId);
 	return (text) => {
 		const fresh = ledger.get(row.taskId);
-		if (fresh !== undefined && (fresh.status === "working" || fresh.status !== "blocked")) ledger.pauseTask(row.taskId);
+		if (fresh !== undefined && (fresh.status === "working" || fresh.status === "blocked")) {
+			try {
+				ledger.pauseTask(row.taskId);
+			} catch {
+				// The task left working/blocked while the send was in flight (e.g. it reached review): the hold
+				// has nothing to go back onto, and the failed resume still reports its failure instead of throwing.
+			}
+		}
 		return text;
 	};
 }
