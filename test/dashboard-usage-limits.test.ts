@@ -122,6 +122,23 @@ describe("AC-1: omp parser", () => {
 		expect(typeof parseOmp({ reports: [] })).toBe("string");
 		expect(typeof parseOmp([])).toBe("string");
 	});
+
+	test("a limit without usedFraction still parses from used/limit, remaining, or percent shapes", () => {
+		const doc = (amount: Record<string, unknown>) => ({
+			reports: [{ provider: "anthropic", limits: [{ label: "x", window: { id: "5h", label: "5h" }, amount }] }],
+		});
+		const remaining = (amount: Record<string, unknown>): number => {
+			const rows = parseOmp(doc(amount));
+			if (typeof rows === "string") throw new Error(rows);
+			return rows[0]?.remainingPct ?? -1;
+		};
+		expect(remaining({ unit: "tokens", used: 950, limit: 1000 })).toBe(5);
+		expect(remaining({ unit: "tokens", remaining: 50, limit: 1000 })).toBe(5);
+		expect(remaining({ unit: "percent", remainingFraction: 0.05 })).toBe(5);
+		expect(remaining({ unit: "percent", used: 95 })).toBe(5);
+		expect(remaining({ unit: "percent", remaining: 5 })).toBe(5);
+		expect(typeof parseOmp(doc({ unit: "tokens" }))).toBe("string");
+	});
 });
 
 describe("AC-1: agy parser", () => {
