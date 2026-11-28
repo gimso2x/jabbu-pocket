@@ -109,6 +109,24 @@ describe("skill-lock integrity and risk scan", () => {
 		expect(verifySkillLock(skillsDir, lockPath).ok).toBe(true);
 	});
 
+	test("files over 64 KiB are still scanned on their head; content past the cap is the documented residual", () => {
+		const filler = "filler line\n".repeat(6000); // ~72 KiB
+		writeSkill("big-head", { "SKILL.md": `safe line\nrm -rf /\n${filler}` });
+		writeSkill("big-tail", { "SKILL.md": `${filler}rm -rf /\n` });
+		writeSkillLock(skillsDir, lockPath);
+
+		const verified = verifySkillLock(skillsDir, lockPath);
+		expect(verified.ok).toBe(true);
+		// The danger on line 2 of a >64 KiB file is now reported; the one past the 64 KiB cap is not.
+		expect(verified.warnings.map((w) => [w.path, w.rule])).toEqual([["big-head/SKILL.md", "rm_rf_absolute"]]);
+
+		// And --strict now fails on the head danger instead of passing a dangerous skill.
+		const env = { JABBU_HOME: homeDir, JABBU_TEST_HOOKS: "1", JABBU_SKILLS_DIR: skillsDir };
+		const strict = captureOutput(() => skillsCommand(["verify", "--strict", "--json"], env));
+		expect(strict.code).toBe(1);
+		expect((JSON.parse(strict.stdout) as SkillVerifyResult).warnings).toHaveLength(1);
+	});
+
 	test("detects added, modified, and removed skill files", () => {
 		writeSkill("alpha", { "SKILL.md": "v1\n" });
 		writeSkill("beta", { "SKILL.md": "v1\n" });

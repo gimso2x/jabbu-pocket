@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
-import { HANDOFF_SCAN_BYTES, scanHandoffBrief } from "../safety/handoff-risk";
+import { scanHandoffBrief } from "../safety/handoff-risk";
 import { assertSafeSkillPath, writeAtomicNoFollow } from "./skill-io";
 import { SKILL_REVISIONS_DIR } from "./skills";
 
@@ -98,7 +98,9 @@ function scanSkillTree(rootDir: string, action: string, excludeFile?: string): S
 				sha256: createHash("sha256").update(buf).digest("hex"),
 				bytes: buf.byteLength,
 			};
-			if (TEXT_EXTS.has(extname(name).toLowerCase()) && buf.byteLength <= HANDOFF_SCAN_BYTES) {
+			// scanHandoffBrief truncates to the first 64 KiB itself, so the head of every text file is scanned whatever
+			// its total size; content past that cap stays unscanned (residual, not a silent skip of the whole file).
+			if (TEXT_EXTS.has(extname(name).toLowerCase())) {
 				const scan = scanHandoffBrief(buf.toString("utf8"));
 				for (const finding of scan.findings) {
 					if (finding.severity === "high_risk") {

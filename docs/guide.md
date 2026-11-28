@@ -959,7 +959,7 @@ git checkout --detach <이전 릴리스 커밋> && bun src/main.ts apply --allow
 - 제안은 `~/.jabbu/skills-pending/`에 0600으로 저장되고, 승인 버튼을 눌러야만 `~/.omp/agent/managed-skills/<이름>/SKILL.md`로 설치됩니다(거부·무응답이면 설치 안 함). omp가 `learn`·`manage_skill`로 만드는 스킬과 같은 폴더라 판 보관·주간 보고·90일 미사용 보관(omp-skill-curator)이 함께 적용됩니다.
 - 채택 게이트: 모든 제안은 `evidence`(이 대화에서 그 절차가 실제로 통했는지의 근거)와 `checks`(발동해야 할 상황·발동하면 안 되는 상황 짝 2~4개)를 갖춰야 하고, 없는 제안은 승인 카드까지 못 갑니다(폐기). 승인 카드에 근거와 검증 짝 수가 같이 보이고, 설치되는 SKILL.md에는 `## 채택 검증` 절로 짝과 롤백 안내·다른 모델 경로(GLM 크론 모니터 등) 이식 전 재검증 규칙이 기록됩니다.
 - 덮어쓰기 설치는 먼저 직전 내용을 `<스킬>/revisions/<타임스탬프>.md`로 보존하고, `jabbu-pocket skills rollback <이름>` 한 번으로 되돌립니다(현재 내용은 개정 슬롯에 남아 다시 되돌릴 수도 있습니다).
-- **스킬 락파일 검증**: `jabbu-pocket skills lock`으로 설치된 스킬 디렉터리(`revisions/`·`_archived/`·`.git/` 제외)의 파일 SHA-256을 `~/.jabbu/skills.lock.json`(0600)에 고정하고, `jabbu-pocket skills verify [--strict]`로 추가·수정·삭제·심볼릭 링크 여부와 텍스트 파일 속 고위험 패턴(`handoff-risk`)을 점검합니다(`--strict`는 고위험 경고가 하나라도 있으면 종료 코드 1).
+- **스킬 락파일 검증**: `jabbu-pocket skills lock`으로 설치된 스킬 디렉터리(`revisions/`·`_archived/`·`.git/` 제외)의 파일 SHA-256을 `~/.jabbu/skills.lock.json`(0600)에 고정하고, `jabbu-pocket skills verify [--strict]`로 추가·수정·삭제·심볼릭 링크 여부와 텍스트 파일 속 고위험 패턴(`handoff-risk`)을 점검합니다(64KiB를 넘는 텍스트 파일은 앞 64KiB만 스캔합니다. `--strict`는 고위험 경고가 하나라도 있으면 종료 코드 1).
 - 리뷰 1회는 모델 토큰을 소모합니다.
 
 ### 개선 후보 장부
