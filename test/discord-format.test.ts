@@ -396,24 +396,30 @@ describe("renderDiscordMessages copy blocks", () => {
 	const contents = (body: string, redelivered = false, footer?: string): string[] =>
 		renderDiscordMessages(body, redelivered, footer).map((part) => part.content);
 
-	test("a copy fence is a message of its own with the bare text; text around it stays apart", () => {
+	test("a copy fence stays inline as a code block in the same message with surrounding text", () => {
 		const id = "/resolve discord:1234567890123456789/9876543210987654321";
-		expect(contents(`앞 글\n${copy(`\n${id}\n\n`)}\n뒷 글`)).toEqual(["앞 글", id, "뒷 글"]);
+		const body = `앞 글\n${copy(id)}\n뒷 글`;
+		expect(contents(body)).toEqual([body]);
 	});
 
-	test("several copy fences go out one by one, in order, with cards between", () => {
+	test("several copy fences stay in one text message; only cards become separate embeds", () => {
 		const card = '```card\n{"root":"c","elements":{"c":{"type":"Card","props":{"title":"T"},"children":[]}}}\n```';
 		const parts = renderDiscordMessages(`${copy("a")}\n${card}\n${copy("b c")}\n${copy("d")}`, false);
-		expect(parts.map((p) => (p.embeds ? "embed" : p.content))).toEqual(["a", "embed", "b c", "d"]);
+		expect(parts.map((p) => (p.embeds ? "embed" : p.content))).toEqual([
+			copy("a"),
+			"embed",
+			`${copy("b c")}\n${copy("d")}`,
+		]);
 	});
 
-	test("a blank or over-long copy fence stays an ordinary code block in the text", () => {
+	test("blank and over-long copy fences stay inline and chunk within MESSAGE_CONTENT_LIMIT", () => {
 		const long = "x".repeat(MESSAGE_CONTENT_LIMIT + 1);
 		expect(contents(`가\n${copy("")}\n나`)).toEqual([`가\n${copy("")}\n나`]);
 		const out = contents(copy(long));
 		expect(out.length).toBeGreaterThan(1);
 		expect(out.every((part) => part.length <= MESSAGE_CONTENT_LIMIT)).toBe(true);
-		expect(contents(copy("x".repeat(MESSAGE_CONTENT_LIMIT)))).toEqual(["x".repeat(MESSAGE_CONTENT_LIMIT)]);
+		const fit = copy("x".repeat(1900));
+		expect(contents(fit)).toEqual([fit]);
 	});
 
 	test("a plain code block stays inside its text message", () => {
@@ -425,9 +431,9 @@ describe("renderDiscordMessages copy blocks", () => {
 		expect(contents(body)).toEqual([body]);
 	});
 
-	test("redelivered line and footer never join a copy message", () => {
-		expect(contents(copy("cmd"), true, "3s")).toEqual([REDELIVERED_PREFIX, "cmd", "_3s_"]);
-		expect(contents(`${copy("cmd")}\n끝`, false, "3s")).toEqual(["cmd", "끝\n_3s_"]);
-		expect(contents(`시작\n${copy("cmd")}`, true)).toEqual([`${REDELIVERED_PREFIX}\n시작`, "cmd"]);
+	test("redelivered line and footer attach directly to the message containing a copy fence", () => {
+		expect(contents(copy("cmd"), true, "3s")).toEqual([`${REDELIVERED_PREFIX}\n${copy("cmd")}\n_3s_`]);
+		expect(contents(`${copy("cmd")}\n끝`, false, "3s")).toEqual([`${copy("cmd")}\n끝\n_3s_`]);
+		expect(contents(`시작\n${copy("cmd")}`, true)).toEqual([`${REDELIVERED_PREFIX}\n시작\n${copy("cmd")}`]);
 	});
 });
