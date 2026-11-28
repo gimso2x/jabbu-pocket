@@ -769,6 +769,29 @@ describe("osa-session-settled: a prompt whose session is not settled keeps its t
 		}
 	});
 
+	test("a steer in the finalize window throws and sends nothing: the turn already ended at omp", async () => {
+		const peer = tailPeer({ settled: true });
+		peer.replies.set("get_last_assistant_text", () => "hold");
+		const { driver, finals, untilFinals } = await startPeerDriver(peer);
+		try {
+			const opRef = await driver.prompt("go");
+			peer.push(promptResult(opRef, "completed"));
+			// The final is being read: the window is open and no final has arrived yet.
+			const read = await peer.command((c) => c.type === "get_last_assistant_text");
+			expect(finals).toEqual([]);
+			await expect(driver.steer("follow up")).rejects.toMatchObject({
+				code: "rpc_error",
+				message: expect.stringContaining("final pending"),
+			});
+			expect(peer.commands.filter((c) => c.type === "steer")).toEqual([]);
+			peer.respond(read, { data: { text: "late answer" } });
+			await untilFinals(1);
+			expect(finals).toEqual([{ opRef, status: "completed", text: "late answer" }]);
+		} finally {
+			await driver.stop();
+		}
+	});
+
 	test("AC-1 ②: the wait is capped: no event for tailWaitMs ends the turn normally with tail_wait_timeout", async () => {
 		const peer = tailPeer({ settled: false });
 		const { driver, finals, untilFinals, warns } = await startPeerDriver(peer, { tailWaitMs: 20 });
