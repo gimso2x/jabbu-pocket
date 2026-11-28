@@ -58,7 +58,7 @@ describe("staged lock files", () => {
 		rmSync(liveStaged, { force: true });
 	});
 
-	test.skipIf(process.platform === "win32" || Bun.which("sh") === null)(
+	test.skipIf(process.platform === "win32" || Bun.which("sh") === null /* #310: posix shell */)(
 		"a failed staged write leaves no .tmp file behind",
 		async () => {
 			// `ulimit -f 0` makes the staged write fail with EFBIG (SIGXFSZ ignored): the bug left the file.
@@ -88,7 +88,7 @@ describe("staged lock files", () => {
 		},
 	);
 
-	test.skipIf(process.platform === "win32" || Bun.which("nice") === null)(
+	test.skipIf(process.platform === "win32" || Bun.which("nice") === null /* #310: nice(1) */)(
 		"three lost races throw LockHeldError, not a bare lock_unavailable",
 		async () => {
 			const path = join(dir, "jabbu.lock");
