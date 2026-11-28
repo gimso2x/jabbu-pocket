@@ -164,6 +164,8 @@ function harness(
 		approval?: ApprovalResult;
 		/** Free space the start sees under the repo's parent; absent → the real filesystem (`/r` does not exist). */
 		disk?: { freeBytes: number; totalBytes: number; asked: string[] };
+		/** A provider quota hold every new [TASK] start sees; absent → no quota gate. */
+		quota?: string;
 		/** The start-capacity memory readers a local [TASK] start sees; absent → an idle host (never this machine's). */
 		hostLoad?: Partial<HostLoadReader>;
 		/** Config `workerOmpArgs`. */
@@ -285,6 +287,7 @@ function harness(
 										disk.asked.push(path);
 										return { path, freeBytes: disk.freeBytes, totalBytes: disk.totalBytes };
 									},
+						...(options.quota === undefined ? {} : { quotaRefusal: () => options.quota }),
 					},
 				}),
 	});
@@ -1747,6 +1750,23 @@ describe("force:true capacity override asks the owner on a card", () => {
 		expect(out).toStartWith("시작 거부: 디스크 여유 부족");
 		expect(h.approvals).toHaveLength(1);
 		expect(h.ledger.list()).toEqual([]);
+	});
+
+	// round 16 (dispatch F6): a quota hold plus a disk refusal asked the owner twice (one card each); both
+	// reasons go on one card now.
+	test("force:true with a quota hold and a disk refusal asks the owner once, with both reasons", async () => {
+		const h = harness({
+			approval: "approved",
+			disk: tightDisk(),
+			quota: "프로바이더 쿼터 보류(anthropic: 5시간 96% 사용)",
+		});
+		const out = await call(h, { taskSpec: GOOD_SPEC, task: "go", force: true });
+		expect(out).toContain("등록·시작했습니다");
+		expect(h.approvals).toHaveLength(1);
+		expect(h.approvals[0]?.detail.action).toContain("프로바이더 쿼터 보류");
+		expect(h.approvals[0]?.detail.action).toContain("디스크 여유 부족");
+		expect(forcedEvent(h, "task_start_forced")).toBe(true);
+		expect(h.ledger.list()).toHaveLength(1);
 	});
 });
 
