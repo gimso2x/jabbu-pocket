@@ -8,10 +8,7 @@ import { answerForm } from "./form-choice";
 
 const REPLY_HINT = "버튼을 누르거나 이 스레드에 답장해 주세요";
 const OPTION_ONLY_HINT = "↪ 번호나 선택지 이름으로 답해 주세요";
-/**
- * omp's free-text row of a select (`askChoice`), fixed wording; picking it makes omp open an `input` next. Only this
- * exact last row counts: a model-made label that merely ends the same way must not make the card take free text.
- */
+/** omp's free-text row of a select (`askChoice`), fixed wording; picking it makes omp open an `input` next. Only this exact last row counts: a lookalike model label must not make the card take free text. */
 const OTHER_ROW = "Other (type your own)";
 /** Splits a select row `label — description`: the button shows the label, the card text lists the whole row. */
 const DESCRIPTION_SEP = " — ";
@@ -220,9 +217,9 @@ async function answerAsk(
 }
 
 /**
- * Puts one omp dialog to the owner as a choice card in `origin`'s conversation and returns the omp response.
- * select/confirm get buttons (a numbered list past `MAX_CHOICE_BUTTONS`), input/editor take a reply, ask gets one
- * block per question, a form (omp 19.1 ask) gets `answerForm`'s own card; a secret input is cancelled at once, since a secret must never be typed into chat.
+ * Puts one omp dialog to the owner as a choice card in `origin`'s conversation and returns the omp response: buttons
+ * for select/confirm (numbered past `MAX_CHOICE_BUTTONS`), a reply for input/editor, one block per ask question,
+ * `answerForm`'s card for a form; a secret is cancelled at once.
  */
 export function answerDialog(
 	broker: ApprovalBroker,
