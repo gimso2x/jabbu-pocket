@@ -15,6 +15,7 @@ import {
 	LaneInputError,
 	PROGRESS_INTERVAL_MS,
 } from "../src/lanes/manager-constants";
+import type { LaneManagerDeps } from "../src/lanes/manager-types";
 import { buildLaneTools, buildWorkStartTool } from "../src/lanes/tools";
 import { buildLanePrompt, buildLaneTodos, isReopenCommand, parseLaneTrigger } from "../src/lanes/trigger";
 import { laneTriggerRefusal, spacedPathRefusal } from "../src/lanes/trigger-format";
@@ -101,6 +102,8 @@ function harness(
 		channels?: ChannelRegistry;
 		laneModels?: LaneModelTiers;
 		idStart?: () => number | undefined;
+		/** Owner-card answers for the lane brief's handoff gate (and forced starts); absent: no approver. */
+		requestApproval?: LaneManagerDeps["requestApproval"];
 	} = {},
 ): Harness {
 	let now = START;
@@ -165,6 +168,7 @@ function harness(
 		...(options.verify === undefined ? {} : { verify: options.verify as never }),
 		...(options.laneModels === undefined ? {} : { laneModels: () => options.laneModels }),
 		...(options.idStart === undefined ? {} : { idStart: options.idStart }),
+		...(options.requestApproval === undefined ? {} : { requestApproval: options.requestApproval }),
 	});
 	return {
 		manager,
@@ -656,6 +660,83 @@ describe("lane start and registry", () => {
 		expect(kept).toContain("[브리프 16003자 중 앞 16000자만 남김");
 		expect(reply).toContain("브리프 16003자 중 앞 16000자만 독립 리뷰에 남겼습니다.");
 		expect(h.logs.some((line) => line.includes("lane_brief_cut"))).toBe(true);
+		h.close();
+	});
+
+	test("brief gate: a high-risk brief asks the owner on a card and starts once approved", async () => {
+		const asked: Array<{ summary: string; action: string | undefined }> = [];
+		const h = harness({
+			requestApproval: async (request) => {
+				asked.push({ summary: request.summary, action: request.detail.action });
+				return "approved";
+			},
+		});
+		const start = buildWorkStartTool(h.manager, CHANNEL, DM_ORIGIN);
+		const reply = await start.execute(
+			{ title: "reset lane", cwd: makeRepo(repos), brief: "git reset --hard HEAD~1 을 실행해" },
+			{ signal: new AbortController().signal },
+		);
+		await h.settle();
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.summary).toContain("고위험 명령");
+		expect(asked[0]?.action ?? "").toContain("git_reset_hard");
+		expect(h.store.listLanes()).toHaveLength(1);
+		expect(reply).toContain("위험 검사: high_risk 승인됨 (git_reset_hard)");
+		h.close();
+	});
+
+	test("brief gate: a high-risk brief without an approver is refused and creates nothing", async () => {
+		const h = harness();
+		const start = buildWorkStartTool(h.manager, CHANNEL, DM_ORIGIN);
+		await expect(
+			start.execute(
+				{ title: "reset lane", cwd: makeRepo(repos), brief: "git reset --hard HEAD~1 을 실행해" },
+				{ signal: new AbortController().signal },
+			),
+		).rejects.toThrow("위험 검사에서 막혔습니다(no_approver)");
+		await h.settle();
+		expect(h.store.listLanes()).toHaveLength(0);
+		h.close();
+	});
+
+	test("brief gate: a denied card refuses the start and creates nothing", async () => {
+		const h = harness({ requestApproval: async () => "denied" });
+		const start = buildWorkStartTool(h.manager, CHANNEL, DM_ORIGIN);
+		await expect(
+			start.execute(
+				{ title: "reset lane", cwd: makeRepo(repos), brief: "git reset --hard HEAD~1 을 실행해" },
+				{ signal: new AbortController().signal },
+			),
+		).rejects.toThrow("위험 검사에서 막혔습니다(denied)");
+		await h.settle();
+		expect(h.store.listLanes()).toHaveLength(0);
+		h.close();
+	});
+
+	test("brief gate: a clear brief starts without asking, an advisory one notes the scan", async () => {
+		const asked: string[] = [];
+		const h = harness({
+			requestApproval: async (request) => {
+				asked.push(request.summary);
+				return "approved";
+			},
+		});
+		const start = buildWorkStartTool(h.manager, CHANNEL, DM_ORIGIN);
+		const clear = await start.execute(
+			{ title: "readme lane", cwd: makeRepo(repos), brief: "README를 정리해" },
+			{ signal: new AbortController().signal },
+		);
+		await h.settle();
+		expect(asked).toHaveLength(0);
+		expect(clear).not.toContain("위험 검사");
+		const advisory = await start.execute(
+			{ title: "deps lane", cwd: makeRepo(repos), brief: "npm install lodash를 실행해" },
+			{ signal: new AbortController().signal },
+		);
+		await h.settle();
+		expect(asked).toHaveLength(0);
+		expect(advisory).toContain("위험 검사: advisory (package_install)");
+		expect(h.store.listLanes()).toHaveLength(2);
 		h.close();
 	});
 
