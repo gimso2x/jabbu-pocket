@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { ConfigError, defaultHomeDir, type JabbuConfig, loadConfig, timezoneOfHome } from "../config";
@@ -8,6 +8,7 @@ import { runDaemon } from "../daemon/run";
 import { frozenField, readStatusFromDb, renderStatusText, type StatusReport } from "../daemon/status";
 import { readVersion } from "../daemon/tools";
 import { dispatchEnv, herdrSshArgv, type ProcessRunner, realProcessRunner } from "../dispatch/omp";
+import { isRecord } from "../omp/type-guards";
 import { readConfigText } from "../ops/apply";
 import { type BackupResult, DEFAULT_KEEP, runBackup } from "../ops/backup";
 import { BackupError } from "../ops/backup-error";
@@ -41,7 +42,10 @@ const DISPATCH_HOST_CHECK_MS = 10_000;
 /** How long `inject` keeps trying while no daemon listens (a restart takes up to about two minutes). */
 const INJECT_WAIT_MS = 180_000;
 
-const USAGE = `usage: jabbu-pocket <command>
+/** This checkout (src/cli/index.ts → repo root): the daemon's code and any code rollback journal. */
+const REPO_DIR = resolve(import.meta.dir, "..", "..");
+
+const USAGE = `usage: jabbu-pocket <command> [--version]
 ${INIT_USAGE}${UNITS_USAGE}  daemon                         run the bot (single instance)
   status [--json]                ledger counts, origins, omp version
   doctor                         check home, secrets, omp, omp runtime, bun, Discord auth, backup bundle; then herdr --version and the herdr omp
@@ -92,13 +96,9 @@ function gcCommand(args: string[], homeDir: string): number {
 	const { values } = parseArgs({ args, options: { "dry-run": { type: "boolean" } } });
 	if (!hasHomeDatabase("gc", homeDir)) return 1;
 	const dryRun = values["dry-run"] === true;
-	const result = gcSessions({
-		homeDir,
-		retentionDays:
-			loadConfigIfPresent(homeDir, { checkTokens: false })?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS,
-		now: Date.now(),
-		dryRun,
-	});
+	const retentionDays =
+		loadConfigIfPresent(homeDir, { checkTokens: false })?.sessionRetentionDays ?? DEFAULT_SESSION_RETENTION_DAYS;
+	const result = gcSessions({ homeDir, retentionDays, now: Date.now(), dryRun });
 	const verb = dryRun ? "would_remove" : "removed";
 	for (const path of result.removed) process.stdout.write(`gc ${verb} path=${path}\n`);
 	for (const key of result.threadOriginsRemoved) process.stdout.write(`gc thread_${verb} origin=${key}\n`);
@@ -182,8 +182,7 @@ export async function doctorCommand(
 	write: (line: string) => void,
 	deps: { doctor?: typeof runDoctor; run?: ProcessRunner } = {},
 ): Promise<number> {
-	// This checkout (src/cli/index.ts → repo root) holds the daemon's code and any code rollback journal.
-	const code = await (deps.doctor ?? runDoctor)(homeDir, write, resolve(import.meta.dir, "..", ".."));
+	const code = await (deps.doctor ?? runDoctor)(homeDir, write, REPO_DIR);
 	let config: JabbuConfig | undefined;
 	try {
 		// runDoctor already reports a broken token file; reading it again here would end the herdr and dispatch checks.
@@ -284,8 +283,7 @@ async function backupCommand(args: string[], homeDir: string): Promise<number> {
 
 /** The `JABBU_TEST_HOOKS=1` host readers as gates and status deps; none in production. */
 function hostLoadDeps(env: Record<string, string | undefined>): GatesCommandDeps {
-	const hostLoad = testHostLoad(env);
-	const statfs = testStatfs(env);
+	const [hostLoad, statfs] = [testHostLoad(env), testStatfs(env)];
 	return { ...(hostLoad === undefined ? {} : { hostLoad }), ...(statfs === undefined ? {} : { statfs }) };
 }
 
@@ -296,13 +294,9 @@ async function statusCommand(
 ): Promise<number> {
 	const { values } = parseArgs({ args, options: { json: { type: "boolean" } } });
 	const socketPath = join(homeDir, "jabbu.sock");
-	let report: StatusReport | undefined;
-	try {
-		const response = await callDaemon(socketPath, { op: "status" }, 10_000);
-		if (isStatusResponse(response)) report = response.status;
-	} catch {
-		report = undefined; // no daemon answering: fall back to the database file
-	}
+	// No daemon answering: fall back to the database file.
+	const response = await callDaemon(socketPath, { op: "status" }, 10_000).catch(() => undefined);
+	let report = isStatusResponse(response) ? response.status : undefined;
 	if (!report) {
 		const dbPath = join(homeDir, "jabbu.db");
 		if (!existsSync(dbPath)) {
@@ -425,14 +419,7 @@ async function injectCommand(args: string[], homeDir: string): Promise<number> {
 		} else process.stderr.write(`inject: daemon not reachable (${message})\n`);
 		return 1;
 	}
-	if (
-		typeof response === "object" &&
-		response !== null &&
-		"ok" in response &&
-		response.ok === true &&
-		"nonce" in response &&
-		"threadRef" in response
-	) {
+	if (isRecord(response) && response.ok === true && "nonce" in response && "threadRef" in response) {
 		process.stdout.write(`${JSON.stringify({ nonce: response.nonce, threadRef: response.threadRef })}\n`);
 		return 0;
 	}
@@ -478,11 +465,22 @@ async function reloadCommand(homeDir: string): Promise<number> {
 	return 0;
 }
 
+/** `jabbu-pocket --version`: the package.json version of this checkout. */
+function versionCommand(): number {
+	const pkg = JSON.parse(readFileSync(join(REPO_DIR, "package.json"), "utf8")) as { version?: unknown };
+	process.stdout.write(`jabbu-pocket ${typeof pkg.version === "string" ? pkg.version : "unknown"}\n`);
+	return 0;
+}
+
 /** Entry point of `jabbu`; resolves with the process exit code. */
 export async function runCli(argv: string[], env: Record<string, string | undefined> = process.env): Promise<number> {
 	const [command, ...rest] = argv;
 	const homeDir = resolve(defaultHomeDir(env));
 	try {
+		// `daemon`, `doctor` and `reload` take no arguments: refuse any stray one here, so
+		// `daemon --help` cannot boot the daemon and `doctor --json` cannot run unchecked.
+		if (["daemon", "doctor", "reload"].includes(command ?? "") && rest.length > 0)
+			parseArgs({ args: rest, options: {} });
 		switch (command) {
 			case "init":
 				return initCommand(rest, env);
@@ -540,8 +538,9 @@ export async function runCli(argv: string[], env: Record<string, string | undefi
 			case "trace-inputs":
 				return traceInputsCommand(rest, homeDir, env);
 			default:
+				if ((command === "version" || command === "--version") && rest.length === 0) return versionCommand();
 				process.stderr.write(USAGE);
-				return command === undefined || command === "--help" || command === "help" ? 0 : 2;
+				return command === undefined || ((command === "--help" || command === "help") && rest.length === 0) ? 0 : 2;
 		}
 	} catch (error) {
 		// node:util parseArgs (unknown option, missing value, `--days -1`): an argument mistake, so a usage error.
