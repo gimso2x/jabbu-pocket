@@ -112,12 +112,7 @@ function parseLine(line: string): LedgerEvent | undefined {
 
 /** The ledger text to events in file order; blank, broken and other-version lines are skipped, never thrown. */
 export function parseLedger(text: string): LedgerEvent[] {
-	const events: LedgerEvent[] = [];
-	for (const line of text.split("\n")) {
-		const event = line.trim() === "" ? undefined : parseLine(line);
-		if (event !== undefined) events.push(event);
-	}
-	return events;
+	return text.split("\n").flatMap((line) => parseLine(line) ?? []);
 }
 
 /**
@@ -313,9 +308,13 @@ export async function runCandidateProposals(deps: CandidateRunDeps, gate: Candid
 
 	if (settings.mode === "log") {
 		for (const cand of due) {
-			await deps.postLog(buildCandidateNote(cand));
-			appendEvent(deps.ledgerPath, { v: 1, ts: ts(), key: cand.key, event: "proposed", via: "log" });
-			log.info("candidate_proposed", { key: cand.key, via: "log", days: cand.distinctDays });
+			try {
+				await deps.postLog(buildCandidateNote(cand));
+				appendEvent(deps.ledgerPath, { v: 1, ts: ts(), key: cand.key, event: "proposed", via: "log" });
+				log.info("candidate_proposed", { key: cand.key, via: "log", days: cand.distinctDays });
+			} catch (error) {
+				log.warn("candidate_post_failed", { key: cand.key, error: String(error) });
+			}
 		}
 		return due.map((cand) => cand.key);
 	}
