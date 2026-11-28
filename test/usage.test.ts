@@ -305,6 +305,25 @@ describe("formatLimits / limitLine", () => {
 	test("no account at all says so instead of printing an empty block", () => {
 		expect(formatLimits(response())).toBe("OMP 사용량\n\n설정된 OMP 프로필에서 보고된 계정 한도가 없습니다.");
 	});
+
+	test("an out-of-range remaining fraction clamps to 0-100%, never 150% 남음", () => {
+		const text = formatLimits(
+			response({
+				reports: [
+					{
+						provider: "zai",
+						limits: [
+							{ label: "Over", amount: { unit: "percent", remainingFraction: 1.5 } },
+							{ label: "Under", amount: { unit: "percent", remainingFraction: -0.5 } },
+						],
+					},
+				],
+			}),
+		);
+		expect(text).toContain("• Over  100% 남음");
+		expect(text).toContain("• Under  0% 남음");
+		expect(text).not.toContain("150%");
+	});
 });
 
 describe("parseUsageResponse", () => {
