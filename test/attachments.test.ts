@@ -80,9 +80,9 @@ describe("retryAfterDelayMs", () => {
 		const now = Date.now();
 		const future = new Date(now + 120_000).toUTCString();
 		expect(retryAfterDelayMs(res(future), now)).toBe(60_000);
+		// toUTCString() keeps whole seconds, so compare against the parsed date, not the pre-truncation `now`.
 		const near = new Date(now + 2_000).toUTCString();
-		expect(retryAfterDelayMs(res(near), now)).toBeGreaterThanOrEqual(1_500);
-		expect(retryAfterDelayMs(res(near), now)).toBeLessThanOrEqual(2_000);
+		expect(retryAfterDelayMs(res(near), now)).toBe(Date.parse(near) - now);
 		const past = new Date(now - 60_000).toUTCString();
 		expect(retryAfterDelayMs(res(past), now)).toBe(0);
 	});
