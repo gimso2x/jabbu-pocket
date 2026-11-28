@@ -757,6 +757,11 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	expect(existsSync(join(harness.sessionDir, "agy-conversation.json"))).toBe(false);
 	expect(lines.some((line) => line.includes("event=agy_conversation_rotated"))).toBe(true);
 
+	// Between rotation and respawn the dropped session's context must not linger in state().
+	const between = await driver.state();
+	expect(between.sessionId).toBe("");
+	expect(between.context).toBeUndefined();
+
 	const next = nextFinal(driver);
 	await driver.prompt("fresh");
 	expect(await next).toMatchObject({ status: "completed", text: "REPLY1:fresh" });

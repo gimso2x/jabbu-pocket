@@ -323,7 +323,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async state(): Promise<OmpState> {
 		const model = this.#option("model")?.currentValue ?? this.#userModel ?? this.#account?.model ?? this.#defaultModel;
 		const thinking = this.#option("thought_level")?.currentValue;
-		const c = this.#context;
+		const c = this.#sessionId === undefined ? undefined : this.#context;
 		return {
 			sessionId: this.#sessionId ?? "",
 			idle: this.#turn === undefined,
