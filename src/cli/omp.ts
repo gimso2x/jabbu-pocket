@@ -21,7 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { type JabbuConfig, loadConfig } from "../config";
-import { countOmpModels } from "../daemon/doctor";
+import { countOmpModels } from "../daemon/doctor-omp";
 import { botRpcEnv, splitModel } from "../daemon/run";
 import { dispatchEnv, type ProcessRunner, realProcessRunner } from "../dispatch/omp";
 import type { OmpFinal } from "../omp/driver";
