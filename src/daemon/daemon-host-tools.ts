@@ -17,7 +17,7 @@ import { approvalOf, type DaemonContext } from "./daemon-context";
 import { onboardingSurface, withOnboarding } from "./daemon-onboarding";
 import { taskMailboxPort, taskOfOrigin } from "./daemon-task-resume";
 import { runHostTool } from "./host-tool-run";
-import { laneChannelOf, uploadThreadTs } from "./thread-target";
+import { inlineBorrowThreadRef, laneChannelOf, uploadThreadTs } from "./thread-target";
 
 /** Longest wait for the recorded deliveries before a dialog card goes out anyway. */
 const DIALOG_FLUSH_MS = 10_000;
@@ -175,18 +175,18 @@ function hostToolSet(ctx: DaemonContext, originKey: string, peerTouched: boolean
 	const otherPlatform = chatOrigin !== undefined && chatOrigin.platform !== "discord";
 	const laneChannel = laneChannelOf(ctx, originKey, channel);
 	const boardTools = store && (lane || chatOrigin) ? buildBoardTools(store, originKey) : [];
-	const tools =
-		peerTouched || otherPlatform
-			? base
-			: !lanes
-				? [...base, ...monitorTools, ...boardTools]
-				: lane
-					? [...base, ...buildLaneTools(lanes, originKey), ...boardTools]
-					: channel === undefined
-						? base
-						: laneChannel === undefined
-							? [...base, ...monitorTools, ...boardTools]
-							: [...base, buildWorkStartTool(lanes, laneChannel, originKey), ...monitorTools, ...boardTools];
+	const startTool =
+		lanes && !lane && channel !== undefined && laneChannel !== undefined
+			? [buildWorkStartTool(lanes, laneChannel, originKey, () => inlineBorrowThreadRef(ctx, originKey))]
+			: [];
+	const extra = !lanes
+		? [...monitorTools, ...boardTools]
+		: lane
+			? [...buildLaneTools(lanes, originKey), ...boardTools]
+			: channel === undefined
+				? []
+				: [...startTool, ...monitorTools, ...boardTools];
+	const tools = peerTouched || otherPlatform ? base : [...base, ...extra];
 	return withOnboarding(ctx, originKey, peerTouched, tools);
 }
 

@@ -1,7 +1,7 @@
 import { LANE_MODEL_TIERS } from "../model-tiers";
 import type { HostToolDef } from "../safety/host-tools";
 import { TASK_RISKS } from "../tasks/docs";
-import { borrowThreadOf, startToolReply } from "./borrow-thread";
+import { borrowThreadOf, isBorrowedInPlace, startToolReply } from "./borrow-thread";
 import type { LaneManager } from "./manager";
 import { LaneInputError } from "./manager-constants";
 import { RESERVATION_AFTER_MAX } from "./reservations";
@@ -9,7 +9,12 @@ import { SILENCE_PROPERTIES, silenceParams, stringParam } from "./tool-params";
 import { WORKFLOW_NAMES } from "./workflow-names";
 
 /** Offered to chat sessions: starts a work lane in `channel` (like the `작업: <제목> @<경로>` message); on Discord a thread. */
-export function buildWorkStartTool(manager: LaneManager, channel: string, originKey: string): HostToolDef {
+export function buildWorkStartTool(
+	manager: LaneManager,
+	channel: string,
+	originKey: string,
+	inlineThreadRef?: () => string | undefined,
+): HostToolDef {
 	return {
 		name: "jabbu_work_start",
 		label: "Start work lane",
@@ -109,20 +114,13 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 			additionalProperties: false,
 		},
 		async execute(params) {
-			const brief = typeof params.brief === "string" ? params.brief : undefined;
+			const { acceptance, risk, scope, model, tierReason, tierConfidence, externalPr, workflow } = params;
 			const args = {
 				title: stringParam(params, "title"),
 				cwd: stringParam(params, "cwd"),
-				brief,
+				brief: typeof params.brief === "string" ? params.brief : undefined,
 				channel,
-				acceptance: params.acceptance,
-				risk: params.risk,
-				scope: params.scope,
-				model: params.model,
-				tierReason: params.tierReason,
-				tierConfidence: params.tierConfidence,
-				externalPr: params.externalPr,
-				workflow: params.workflow,
+				...{ acceptance, risk, scope, model, tierReason, tierConfidence, externalPr, workflow },
 			};
 			if (params.after !== undefined) {
 				const reservation = await manager.reserve({
@@ -134,7 +132,7 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 				return `예약됨 #${reservation.id}: ${reservation.after.join(", ")} 착지 뒤 시작 가능 카드를 올립니다 (24시간 안에 시작하지 않으면 만료). tell the owner the reservation is waiting; no lane was started.`;
 			}
 			// The first lane of a conversation thread runs in that thread; a reservation (above) always opens its own.
-			const borrow = borrowThreadOf(originKey);
+			const borrow = borrowThreadOf(originKey, inlineThreadRef?.());
 			const lane = await manager
 				.start({ ...args, ...borrow, parentOrigin: originKey, force: params.force === true, reuseOpen: true })
 				.catch((error: unknown) => {
@@ -143,7 +141,8 @@ export function buildWorkStartTool(manager: LaneManager, channel: string, origin
 						throw new LaneInputError(`${error.message} — 오너가 강행한다고 명시하면 force: true로 다시 시작하세요`);
 					throw error;
 				});
-			return startToolReply(lane, lane.meta.borrowedThread === true ? undefined : await manager.threadLink(lane));
+			const inPlace = isBorrowedInPlace(lane, borrow.borrowThread, channel);
+			return startToolReply(lane, inPlace ? undefined : await manager.threadLink(lane), inPlace);
 		},
 	};
 }
