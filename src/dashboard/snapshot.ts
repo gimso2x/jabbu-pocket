@@ -945,10 +945,8 @@ function sayOf(found: AssistantTail, status: PaneSay["status"]): PaneSay {
 			const more = asks.length > 1 ? ` 외 ${asks.length - 1}개` : "";
 			return { status, question: `${first.question}${more}`, options: first.options, asks };
 		}
-		if (pending.name !== "ask") {
-			return { status, blocked: `도구 실행 승인 대기: ${sayText(str(pending.name) || "?", SAY_TEXT_CHARS)}` };
-		}
-		return { status };
+		// An ask with no readable question still waits on the tool call.
+		return { status, blocked: `도구 실행 승인 대기: ${sayText(str(pending.name) || "?", SAY_TEXT_CHARS)}` };
 	}
 	const error = typeof found.message.errorMessage === "string" ? found.message.errorMessage : "";
 	if (found.message.stopReason === "error" || error !== "") {
