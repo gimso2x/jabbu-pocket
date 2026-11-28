@@ -282,12 +282,9 @@ export function runBackup(options: BackupOptions): BackupResult {
 
 	const backupsDir = join(homeDir, "backups");
 	// A file or dangling link in the directory's place would die in mkdir with a raw EEXIST.
-	if (
-		!statSync(backupsDir, { throwIfNoEntry: false })?.isDirectory() &&
-		lstatSync(backupsDir, { throwIfNoEntry: false })
-	) {
+	const backupsStat = statSync(backupsDir, { throwIfNoEntry: false });
+	if (!backupsStat?.isDirectory() && lstatSync(backupsDir, { throwIfNoEntry: false }) !== undefined)
 		throw new BackupError("backups_not_a_directory", backupsDir);
-	}
 	mkdirSync(backupsDir, { recursive: true, mode: 0o700 });
 
 	const now = options.now ?? new Date();
@@ -312,7 +309,7 @@ export function runBackup(options: BackupOptions): BackupResult {
 		chmodSync(tmp, 0o600);
 		fsyncFile(tmp);
 
-		const sidecar = ["-wal", "-shm"].map((suffix) => `${tmp}${suffix}`).find((path) => existsSync(path));
+		const sidecar = ["-wal", "-shm", "-journal"].map((suffix) => `${tmp}${suffix}`).find((path) => existsSync(path));
 		if (sidecar !== undefined) throw new BackupError("not_self_contained", sidecar);
 
 		const copy = new Database(tmp, { readonly: true, strict: true });
@@ -342,6 +339,7 @@ export function runBackup(options: BackupOptions): BackupResult {
 		rmSync(tmp, { force: true });
 		rmSync(`${tmp}-wal`, { force: true });
 		rmSync(`${tmp}-shm`, { force: true });
+		rmSync(`${tmp}-journal`, { force: true });
 		if (bundle !== undefined) rmSync(bundle.tmp, { force: true });
 		// The db rename may already have landed when a later step (the bundle rename) failed: a newest-mtime file
 		// behind would fake a good backup for the freshness check, so it goes too. Both targets were checked absent
