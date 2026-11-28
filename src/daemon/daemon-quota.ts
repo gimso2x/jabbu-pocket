@@ -221,7 +221,12 @@ export class DaemonQuotaGate {
 		this.#ensureLoaded();
 		const now = this.#ctx.clock.now();
 		const provider = providerOfModel(info.model) ?? this.#effectiveProvider(info.originKey) ?? "*";
-		const resetAt = parseResetAtMs(classifyFailure(info.reason).resetAt, now, config.timezone);
+		const classification = classifyFailure(info.reason);
+		if (classification.kind === "provider_limit" && classification.limitScope === "rate_limited") {
+			this.#ctx.log.info("quota_error_hold_skipped", { provider, origin: info.originKey, reason: "rate_limited" });
+			return;
+		}
+		const resetAt = parseResetAtMs(classification.resetAt, now, config.timezone);
 		const recorded = this.#recovery.recordQuotaError({
 			provider,
 			originKey: info.originKey,

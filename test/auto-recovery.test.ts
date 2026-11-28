@@ -727,4 +727,69 @@ describe("Daemon quota error hold, isolation, model switch, lift, and restart au
 		await drv1After.releasePrompt("수동 해제로 실행");
 		await transport.waitForPosts((text) => text.includes("ECHO 수동 해제로 실행"));
 	}, 30_000);
+
+	test("skips quota hold on short-window rate_limited errors while holding billing exhaustion", async () => {
+		writeHomeConfig({ model: "anthropic/claude-opus-5-5" });
+		const config = loadConfig(home.dir, { checkTokens: false });
+		const transport = new WaitingDiscordTransport();
+		transport.setChannel({ id: CHANNEL, type: 0, guildId: GUILD });
+		const sessions = new FakeSessionStore();
+		const clock = { now: () => now };
+		const drivers = new Map<string, ControllableDriver>();
+		const waiters = new Map<string, Array<(drv: ControllableDriver) => void>>();
+		const daemon = new Daemon({
+			...daemonTestOptions(),
+			config,
+			channels: [discordBinding(transport)],
+			driverFactory: (originKey, sessionDir) => {
+				const drv = new ControllableDriver({
+					sessionDir,
+					store: sessions,
+					holdTurns: true,
+					models: ["anthropic/claude-opus-5-5"],
+				});
+				drivers.set(originKey, drv);
+				for (const waiter of waiters.get(originKey) ?? []) waiter(drv);
+				waiters.delete(originKey);
+				return drv;
+			},
+			log: createLogger({ sink: (line) => logs.push(line), clock, redact }),
+			ompVersion: "0.0.0-test",
+			bootId: "boot-rl",
+			clock,
+			sweepMs: 3_600_000,
+			gateSweepMs: 0,
+			taskSweepMs: 0,
+			pendingRetryMs: 1,
+		});
+		daemons.push(daemon);
+		await daemon.start();
+		const waitDriver = (originKey: string): Promise<ControllableDriver> => {
+			const existing = drivers.get(originKey);
+			if (existing !== undefined) return Promise.resolve(existing);
+			return new Promise((resolve) => {
+				const list = waiters.get(originKey) ?? [];
+				list.push(resolve);
+				waiters.set(originKey, list);
+			});
+		};
+
+		const ORIGIN_1 = `discord/dm/${OWNER_DM}`;
+		await daemon.inject({ origin: ORIGIN_1, asOwner: true, text: "속도 제한 요청" });
+		await daemon.inject({ origin: ORIGIN_1, asOwner: true, text: "!followup 바로 이어질 작업" });
+		const drv = await waitDriver(ORIGIN_1);
+		await drv.failPrompt("속도 제한 요청", "429 Rate limit reached for requests per min (RPM): retry in 20s");
+		await drv.releasePrompt("바로 이어질 작업");
+		await transport.waitForPosts((text) => text.includes("ECHO 바로 이어질 작업"));
+		expect(logs.some((line) => line.includes("event=quota_error_hold_skipped"))).toBe(true);
+		expect(daemon.store.getCursor(QUOTA_RECOVERY_CURSOR)).toBeUndefined();
+		expect(transport.posts((text) => text.includes("대기열을 보류했습니다"))).toHaveLength(0);
+
+		await daemon.inject({ origin: ORIGIN_1, asOwner: true, text: "크레딧 소진 요청" });
+		await daemon.inject({ origin: ORIGIN_1, asOwner: true, text: "!followup 보류될 요청" });
+		await drv.failPrompt("크레딧 소진 요청", "402 Payment Required: insufficient credits");
+		await transport.waitForPosts((text) => text.includes("대기열을 보류했습니다"), 1);
+		expect(daemon.store.getCursor(QUOTA_RECOVERY_CURSOR)).toContain("anthropic");
+		expect(daemon.store.listInbound({ originKey: ORIGIN_1, state: "pending" })).toHaveLength(1);
+	}, 20_000);
 });

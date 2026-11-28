@@ -94,6 +94,7 @@ describe("extractProposals adversarial", () => {
 			".hidden",
 			"a/b",
 			"a\\b",
+			"revisions",
 			"한글-스킬",
 			"Release",
 			"release checklist",

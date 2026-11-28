@@ -341,6 +341,15 @@ describe("loadConfig", () => {
 		expect(loadConfig(home).costCap).toEqual({ turnUsd: 20, dailyUsd: 300 });
 	});
 
+	test("candidates.minDays larger than windowDays is rejected; equal or smaller loads", () => {
+		writeConfig(baseConfig({ candidates: { minDays: 3, windowDays: 14 } }));
+		expect(loadConfig(home).candidates).toEqual({ minDays: 3, windowDays: 14 });
+		writeConfig(baseConfig({ candidates: { minDays: 14, windowDays: 14 } }));
+		expect(loadConfig(home).candidates).toEqual({ minDays: 14, windowDays: 14 });
+		writeConfig(baseConfig({ candidates: { minDays: 14, windowDays: 3 } }));
+		expect(catchError(() => loadConfig(home)).message).toContain("field=candidates.minDays");
+	});
+
 	test("lanes.completionNudges was removed: any value loads with one config_key_ignored warning and is dropped", () => {
 		for (const value of [0, 3, "2", -1]) {
 			writeConfig(baseConfig({ lanes: { completionNudges: value } }));
@@ -372,6 +381,15 @@ describe("loadConfig", () => {
 				"/work/b": { mode: "ff" },
 				"/work/c": { mode: "ff" },
 			},
+		});
+	});
+
+	test("two lanes.land keys that collide after the trailing-slash strip are rejected", () => {
+		writeConfig(baseConfig({ lanes: { land: { "/work/a": { mode: "ff" }, "/work/a/": { mode: "pr" } } } }));
+		expect(catchError(() => loadConfig(home)).message).toContain("field=lanes.land./work/a/");
+		writeConfig(baseConfig({ lanes: { land: { "/work/a": { mode: "ff" }, "/work/b/": { mode: "pr" } } } }));
+		expect(loadConfig(home).lanes).toEqual({
+			land: { "/work/a": { mode: "ff" }, "/work/b": { mode: "pr" } },
 		});
 	});
 
