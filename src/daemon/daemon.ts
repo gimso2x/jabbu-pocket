@@ -1350,13 +1350,12 @@ export class Daemon {
 
 	/** The bounded wait between intake stop and child stop; a no-op when nothing runs or the bound is 0. */
 	async #drainRunningTurns(): Promise<void> {
-		const router = this.#router;
 		const boundMs = this.#options.stopDrainMs ?? STOP_DRAIN_MS;
-		if (router === undefined || boundMs <= 0) return;
-		const busy = router.busyOrigins();
+		if (this.#router === undefined || boundMs <= 0) return;
+		const busy = this.#router.busyOrigins();
 		if (busy.length === 0) return;
 		const startedAt = this.#clock.now();
-		const stillBusy = await router.drainRunning(boundMs);
+		const stillBusy = await this.#router.drainRunning(boundMs);
 		if (stillBusy.length > 0) this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
 		else this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 	}
