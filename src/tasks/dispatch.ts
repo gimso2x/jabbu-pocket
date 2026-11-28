@@ -223,26 +223,25 @@ export async function startTask(
 	const forceConfirmed = (reasons: readonly string[]): Promise<boolean> =>
 		input.force === true && deps.confirmForce !== undefined ? deps.confirmForce(reasons) : Promise.resolve(false);
 	const quotaHold = deps.quotaRefusal?.(worker.model ?? undefined);
-	if (quotaHold !== undefined && !(await forceConfirmed([quotaHold]))) {
-		deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
-		return `시작 거부: ${quotaHold}`;
+	// Quota and capacity are refused together: one owner card covers both, instead of asking twice.
+	let capacity: StartCapacity | undefined;
+	let disk: DiskView | undefined;
+	if (host === null) {
+		disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
+		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
+	}
+	const refusals = [...(quotaHold === undefined ? [] : [quotaHold]), ...(capacity?.refusals ?? [])];
+	if (refusals.length > 0 && !(await forceConfirmed(refusals))) {
+		if (quotaHold !== undefined)
+			deps.log.warn("task_start_refused_quota", { repo: spec.repo, model: worker.model, refusal: quotaHold });
+		if (capacity !== undefined && capacity.refusals.length > 0 && disk !== undefined) {
+			const fields = { repo: spec.repo, path: disk.path, freeBytes: disk.freeBytes, refusals: [...capacity.refusals] };
+			deps.log.warn("task_start_refused_capacity", fields);
+		}
+		return `시작 거부: ${refusals.join(", ")}`;
 	}
 	if (quotaHold !== undefined) deps.log.info("task_start_forced", { repo: spec.repo, reason: "quota" });
-	let capacity: StartCapacity | undefined;
-	if (host === null) {
-		const disk = (deps.diskHeadroom ?? diskHeadroom)(dirname(spec.repo));
-		capacity = startCapacity(deps.hostLoad, [disk], deps.hostSessions);
-		if (capacity.refusals.length > 0 && !(await forceConfirmed([...capacity.refusals]))) {
-			deps.log.warn("task_start_refused_capacity", {
-				repo: spec.repo,
-				path: disk.path,
-				freeBytes: disk.freeBytes,
-				refusals: [...capacity.refusals],
-			});
-			return `시작 거부: ${capacity.refusals.join(", ")}`;
-		}
-		if (capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
-	}
+	if (capacity !== undefined && capacity.refusals.length > 0) deps.log.info("task_start_forced", { repo: spec.repo });
 	const baseRef = resolveTaskBase(hostEntryOf(deps, host)?.branchRules, spec.repo, spec.base); // unsafe: refused before anything is reserved
 	const ops = opsFor(deps, host);
 	const recordsRoot = recordsRootFor(deps.recordsRepo, host, hostEntryOf(deps, host));
