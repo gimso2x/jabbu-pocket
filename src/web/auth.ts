@@ -28,6 +28,8 @@ export type AuthOutcome =
 const JWKS_TTL_MS = 10 * 60_000;
 const JWKS_FORCE_COOLDOWN_MS = 10_000;
 const CLOCK_SKEW_SEC = 60;
+/** An Access JWT must not live longer than this: a stolen token stays usable until its `exp` otherwise. */
+const MAX_JWT_LIFETIME_SEC = 24 * 60 * 60;
 const CSRF_COOKIE_NAME = "jabbu_csrf";
 const CSRF_TOKEN_PATTERN = /^([0-9a-f]{32})\.([0-9a-f]{64})$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
@@ -142,7 +144,7 @@ async function verifyAccessJwt(jwt: string, state: WebAuthState): Promise<AuthOu
 	}
 
 	let header: { alg?: unknown; kid?: unknown };
-	let payload: { exp?: unknown; nbf?: unknown; aud?: unknown; iss?: unknown; email?: unknown };
+	let payload: { exp?: unknown; iat?: unknown; nbf?: unknown; aud?: unknown; iss?: unknown; email?: unknown };
 	try {
 		header = JSON.parse(headerBuf.toString("utf8")) as { alg?: unknown; kid?: unknown };
 		payload = JSON.parse(payloadBuf.toString("utf8")) as typeof payload;
@@ -170,6 +172,15 @@ async function verifyAccessJwt(jwt: string, state: WebAuthState): Promise<AuthOu
 	const nowSec = Math.floor((state.config.now ?? Date.now)() / 1000);
 	if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= nowSec) {
 		return { ok: false, status: 401, error: "jwt_expired" };
+	}
+	if (typeof payload.iat !== "number" || !Number.isFinite(payload.iat)) {
+		return { ok: false, status: 401, error: "jwt_invalid_iat" };
+	}
+	if (payload.iat > nowSec + CLOCK_SKEW_SEC) {
+		return { ok: false, status: 401, error: "jwt_not_yet_valid" };
+	}
+	if (payload.exp - payload.iat > MAX_JWT_LIFETIME_SEC) {
+		return { ok: false, status: 401, error: "jwt_lifetime_too_long" };
 	}
 	if (
 		payload.nbf !== undefined &&
