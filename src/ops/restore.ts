@@ -58,27 +58,21 @@ export function resolveRestoreSource(homeDir: string, source: string): string {
 		}
 		path = join(backupsDir, name);
 	}
-	let stat: ReturnType<typeof statSync>;
-	try {
-		stat = statSync(path);
-	} catch {
-		throw new RestoreError("bad_source", `${path} does not exist`);
-	}
+	// `throwIfNoEntry: false`: a missing source reports `bad_source`, while any other stat failure still throws.
+	const stat = statSync(path, { throwIfNoEntry: false });
+	if (stat === undefined) throw new RestoreError("bad_source", `${path} does not exist`);
 	if (!stat.isFile()) throw new RestoreError("bad_source", `${path} is not a regular file`);
 	// A hard link hides where its other names live, and a live ledger's -wal sits beside one of those: refuse it.
-	if (stat.nlink > 1) {
+	if (stat.nlink > 1)
 		throw new RestoreError("bad_source", `${path} is a hard link (${stat.nlink} names): copy the backup file first`);
-	}
 	// A -wal or -journal next to the source means a live or crashed ledger, not a self-contained backup: copying only
 	// the main file would silently drop (or half-apply) its newest pages. A symlink is checked at its real path too.
-	for (const sidecar of new Set([path, realpathSync(path)].flatMap((p) => [`${p}-wal`, `${p}-journal`]))) {
-		if (existsSync(sidecar)) {
+	for (const sidecar of new Set([path, realpathSync(path)].flatMap((p) => [`${p}-wal`, `${p}-journal`])))
+		if (existsSync(sidecar))
 			throw new RestoreError(
 				"bad_source",
 				`${sidecar} exists: the source is not a self-contained backup (checkpoint it or use a backup file)`,
 			);
-		}
-	}
 	return path;
 }
 
@@ -96,13 +90,11 @@ export async function runRestore(options: RestoreOptions): Promise<RestoreResult
 	const stamp = backupStamp(options.now ?? new Date());
 	const preRestoreDir = freshPreRestoreDir(homeDir, stamp);
 
-	let answered = false;
-	try {
-		await options.probeDaemon();
-		answered = true;
-	} catch {
-		// nothing listening: fine
-	}
+	// Nothing listening is fine; an answer means a daemon runs.
+	const answered = await options.probeDaemon().then(
+		() => true,
+		() => false,
+	);
 	if (answered)
 		throw new RestoreError(
 			"daemon_running",
@@ -157,12 +149,20 @@ function install(plan: RestorePlan, rename: (from: string, to: string) => void, 
 		rmSync(tmp, { force: true });
 		// The read-only check opens a WAL-mode copy, which leaves -wal/-shm beside it even when nothing is written.
 		for (const ext of SIDECARS.slice(1)) rmSync(`${tmp}${ext}`, { force: true });
-		if (placed || moved.length > 0) {
-			// The replaced ledger must be exactly what it was: drop the half-installed copy, move the old files back.
-			rmSync(target, { force: true });
-			for (const { from, to } of moved.reverse()) renameSync(to, from);
-		}
-		if (error instanceof RestoreError) throw error;
-		throw new RestoreError("restore_failed", error instanceof Error ? error.message : String(error));
+		// Move the old files back first (rename overwrites): the ledger is never absent; a failed move-back is collected.
+		const rollbackErrors: string[] = [];
+		let targetRestored = false;
+		for (const { from, to } of moved.reverse())
+			try {
+				rename(to, from);
+				if (from === target) targetRestored = true;
+			} catch (e) {
+				rollbackErrors.push(`${basename(to)}: ${e instanceof Error ? e.message : String(e)}`);
+			}
+		if (placed && !targetRestored) rmSync(target, { force: true });
+		const detail = error instanceof Error ? error.message : String(error);
+		const rollback = rollbackErrors.length > 0 ? `; rollback also failed: ${rollbackErrors.join("; ")}` : "";
+		if (error instanceof RestoreError && rollback === "") throw error;
+		throw new RestoreError(error instanceof RestoreError ? error.code : "restore_failed", `${detail}${rollback}`);
 	}
 }

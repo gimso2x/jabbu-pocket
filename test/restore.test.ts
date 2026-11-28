@@ -7,6 +7,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
@@ -187,6 +188,31 @@ describe("runRestore", () => {
 		expect(error.code).toBe("restore_failed");
 		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
 		expect(existsSync(join(home, "jabbu.db-wal"))).toBe(true);
+		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
+	});
+
+	test("a failure during the move-back still restores the rest and keeps the original error (F4)", async () => {
+		const file = goodBackupThenDrift();
+		let renames = 0;
+		const error = await runRestore({
+			homeDir: home,
+			source: file,
+			yes: true,
+			probeDaemon: noDaemon,
+			rename: (from, to) => {
+				renames += 1;
+				if (renames === 3 || renames === 4) throw new Error("EXDEV simulated"); // install, then the -wal move-back
+				renameSync(from, to);
+			},
+		}).catch((e) => e);
+		expect(error.code).toBe("restore_failed");
+		expect(error.message).toContain("EXDEV simulated");
+		expect(error.message).toContain("rollback also failed: jabbu.db-wal");
+		expect(markerOf(join(home, "jabbu.db"))).toBe("drifted");
+		// The -wal move-back failed, so it stays parked; the empty -wal beside the db is the markerOf read itself.
+		const preRestore = readdirSync(join(home, "backups")).filter((n) => n.startsWith("pre-restore-"));
+		expect(preRestore).toHaveLength(1);
+		expect(readFileSync(join(home, "backups", preRestore[0] as string, "jabbu.db-wal"), "utf8")).toBe("stale-wal");
 		expect(readdirSync(home).filter((n) => n.includes(".tmp"))).toEqual([]);
 	});
 
