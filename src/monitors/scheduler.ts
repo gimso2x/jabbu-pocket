@@ -56,10 +56,8 @@ export interface TickSummary {
 const FROZEN_SKIP = "frozen";
 
 /**
- * The procedure files of one fire, read from disk now (an edit between fires applies to the next one): one block per
- * file, a `읽기 실패` line for a file that cannot be read (the fire goes on), and a truncation marker once the files
- * together pass `MAX_PROCEDURE_BYTES`. A path that left workspaceDir / the scripts root since the monitor was saved
- * counts as unreadable.
+ * The procedure files of one fire, read now: one block per file, a `읽기 실패` line for an unreadable one (the fire
+ * goes on), and a truncation marker past `MAX_PROCEDURE_BYTES`; a path that left its root counts as unreadable.
  */
 export function buildProcedureBlocks(
 	files: readonly string[],
@@ -103,9 +101,7 @@ export function buildProcedureBlocks(
 	return blocks.join("\n\n");
 }
 
-/**
- * The turn text of one fire: instruction, procedure files, the payload as fenced data, and the NO_REPORT rule.
- */
+/** The turn text of one fire: instruction, procedure files, fenced payload, the NO_REPORT rule. */
 export function buildMonitorPrompt(
 	monitor: Pick<MonitorRow, "name" | "instruction">,
 	event: MonitorEventRow,
@@ -128,10 +124,7 @@ export function buildMonitorPrompt(
 		.replace(/\n{3,}/g, "\n\n");
 }
 
-/**
- * The owner-facing reason of a failed cron command: `timed out after <n>s` first for a timeout, then the first stdout
- * line, else the last stderr line, else the spawn/path error or the exit code.
- */
+/** The owner-facing reason of a failed cron command: timeout, then first stdout line, last stderr line, else error. */
 function commandFailure(result: ScriptResult, timeoutMs: number): string {
 	const lines = (text: string) =>
 		text
@@ -144,9 +137,8 @@ function commandFailure(result: ScriptResult, timeoutMs: number): string {
 }
 
 /**
- * Drives monitors from the daemon sweep: claims due slots exactly once, runs script checks, dispatches each admitted
- * event to the monitor's own origin (`monitor/<id>`) through the origin router, and reconciles deliveries. A fire that
- * finds its origin idle starts a fresh session (epoch bump): the per-fire context cost stays the size of the fire.
+ * Drives monitors from the daemon sweep: claims due slots once, runs script checks, dispatches each admitted event to
+ * `monitor/<id>` through the router, and reconciles deliveries; an idle origin starts a fresh session per fire.
  */
 export class MonitorScheduler {
 	readonly #deps: MonitorSchedulerDeps;
@@ -244,15 +236,8 @@ export class MonitorScheduler {
 
 	/** Claims one slot and counts it in the summary. */
 	#claim(monitor: MonitorRow, slotAt: number, summary: TickSummary, skip: string | undefined): void {
-		this.#count(
-			this.#deps.store.monitors.claimSlot({
-				monitorId: monitor.id,
-				slotAt,
-				...(skip === undefined ? {} : { forceSkipReason: skip }),
-			}),
-			summary,
-			skip,
-		);
+		const slot = { monitorId: monitor.id, slotAt, ...(skip === undefined ? {} : { forceSkipReason: skip }) };
+		this.#count(this.#deps.store.monitors.claimSlot(slot), summary, skip);
 	}
 
 	#claimCron(
@@ -294,10 +279,9 @@ export class MonitorScheduler {
 		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOldCount + overLimit.length;
 		if (unroutable) summary.skippedCatchUp += skipped + run.length;
-		else if (skipped > 0) {
-			summary.skippedCatchUp += skipped;
+		else if (skipped > 0) summary.skippedCatchUp += skipped;
+		if (!unroutable && skipped > 0)
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: skipped, replayed: run.length });
-		}
 		if (unroutable && run.length > 0 && !this.#unroutableSkippedWarned.has(monitor.id)) {
 			this.#unroutableSkippedWarned.add(monitor.id);
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: run.length, replayed: 0, reason: "unroutable" });
@@ -324,8 +308,7 @@ export class MonitorScheduler {
 		// from there — but only for a day after the lift, after which the fire is stale like any other.
 		const stale = now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id);
 		const unfrozenAt = stale ? readUnfrozenAt(this.#deps.homeDir) : undefined;
-		const heldByFreeze = unfrozenAt !== undefined && slotAt <= unfrozenAt && now - unfrozenAt <= CATCHUP_MAX_AGE_MS;
-		if (stale && !heldByFreeze) {
+		if (stale && (unfrozenAt === undefined || slotAt > unfrozenAt || now - unfrozenAt > CATCHUP_MAX_AGE_MS)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -404,10 +387,8 @@ export class MonitorScheduler {
 	}
 
 	/**
-	 * Marks and routes the next event of every monitor that is free. Marking is synchronous, so ticks never
-	 * double-dispatch. A `verbatim` monitor's event settles right here without a turn, which frees its next event, so the
-	 * pass repeats until no verbatim event settled. A failure of one event is logged with its monitor and event and
-	 * does not hold back the other events.
+	 * Marks and routes the next free event of every monitor (synchronous marking, so ticks never double-dispatch);
+	 * a verbatim event settles here and frees the next, so the pass repeats; one failure does not hold back the rest.
 	 */
 	#dispatchReady(): number {
 		let dispatched = 0;
@@ -451,10 +432,9 @@ export class MonitorScheduler {
 					continue;
 				}
 				if (monitor.deliver === "verbatim") {
-					if (this.#deliverVerbatim(monitor, event)) {
-						dispatched += 1;
-						settledVerbatim = true;
-					}
+					const delivered = this.#deliverVerbatim(monitor, event);
+					if (delivered) dispatched += 1;
+					if (delivered) settledVerbatim = true;
 					continue;
 				}
 				const inboundId = `monitor:${monitor.id}:${event.eventId}:${event.attempts + 1}`;
