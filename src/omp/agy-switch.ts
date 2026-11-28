@@ -153,6 +153,7 @@ export async function applyAgyConfig(params: {
 	originKey?: string;
 }): Promise<void> {
 	const target = resolveAgyConfigTarget(params);
+	const previousModel = params.option("model")?.currentValue;
 	if (target.modelId !== undefined) await params.setOption("model", target.modelId);
 	if (target.thinking === undefined) return;
 	if (params.option("thought_level") === undefined) {
@@ -163,7 +164,11 @@ export async function applyAgyConfig(params: {
 		});
 		return;
 	}
-	await params.setOption("thought_level", target.thinking);
+	await params.setOption("thought_level", target.thinking).catch(async (error: unknown) => {
+		if (previousModel !== undefined && previousModel !== target.modelId)
+			await params.setOption("model", previousModel).catch(() => {});
+		throw error;
+	});
 }
 
 /** Selects the account for a new ACP launch (`undefined` = pool off; throws when every account is blocked). */

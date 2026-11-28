@@ -738,6 +738,41 @@ test("setModel and setThinking change the live session without a restart", async
 	await driver.stop();
 });
 
+test("setModel to a model without the persisted thinking level fails without half-applying", async () => {
+	const harness = makeHarness();
+	const driver = harness.make({
+		model: "gemini-4-neon",
+		thinking: "low",
+		env: { FAKE_AGY_FLASH_LEVELS: "low,medium" },
+	});
+	await driver.start();
+	expect(await driver.thinkingLevels()).toEqual(["low", "medium", "high", "xhigh"]);
+	await driver.setThinking("xhigh");
+	expect(await driver.state()).toMatchObject({ model: "agy/gemini-4-neon", thinking: "xhigh" });
+
+	// gemini-3.8-flash offers only low/medium here: the switch must fail and leave the old model live.
+	const err = await driver.setModel("agy/gemini-3.8-flash").catch((e: unknown) => e);
+	expect(err).toBeInstanceOf(OmpDriverError);
+	expect(String((err as Error).message)).toContain("is not offered");
+	expect(await driver.state()).toMatchObject({ model: "agy/gemini-4-neon", thinking: "xhigh" });
+	expect(configCalls(harness).at(-1)).toBe("model=gemini-4-neon");
+
+	// The failed switch left no divergence behind: a rotation respawn still re-applies neon/xhigh.
+	const full = nextFinal(driver);
+	await driver.prompt("@full");
+	expect((await full).usage?.rotated).toBe(true);
+	const afterRotate = nextFinal(driver);
+	await driver.prompt("after rotate");
+	expect(await afterRotate).toMatchObject({ status: "completed" });
+	expect(await driver.state()).toMatchObject({ model: "agy/gemini-4-neon", thinking: "xhigh" });
+
+	// A level the new model offers still switches fine.
+	await driver.setThinking("low");
+	expect(await driver.setModel("agy/gemini-3.8-flash")).toBe("agy/gemini-3.8-flash");
+	expect(await driver.state()).toMatchObject({ model: "agy/gemini-3.8-flash", thinking: "low" });
+	await driver.stop();
+});
+
 test("a turn that ends at 70% of usage_update size rotates the session before the next turn", async () => {
 	const harness = makeHarness();
 	const { log, lines } = captureLog();
