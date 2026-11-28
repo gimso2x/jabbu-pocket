@@ -755,7 +755,7 @@ test("a turn that ends at 70% of usage_update size rotates the session before th
 	await driver.prompt("@full");
 	expect((await full).usage).toMatchObject({ contextTokens: 800, rotated: true });
 	expect(existsSync(join(harness.sessionDir, "agy-conversation.json"))).toBe(false);
-	expect(lines.some((line) => line.includes("event=agy_conversation_rotated"))).toBe(true);
+	expect(lines.some((line) => line.includes("event=agy_conversation_rotated") && line.includes(first))).toBe(true);
 
 	const next = nextFinal(driver);
 	await driver.prompt("fresh");
