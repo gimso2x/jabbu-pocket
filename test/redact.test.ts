@@ -193,6 +193,38 @@ describe("byte budget", () => {
 		])
 			expect(redact(text)).toBe(text);
 	});
+
+	test("credential-named field values are masked, short values and other fields stay", () => {
+		const value = "correct-horse-battery-staple-99";
+		for (const [field, input] of [
+			["password", `{"user":"a","password":"${value}"}`],
+			["passwd", `{"passwd": "${value}"}`],
+			["client_secret", `{"client_secret": "${value}"}`],
+			["api_key", `{"api_key": "${value}"}`],
+			["apiKey", `{"apiKey": "${value}"}`],
+			["secret", `{"secret": "${value}"}`],
+			["form", `client_secret=${value}&grant_type=client_credentials`],
+		] as const) {
+			const out = redact(input);
+			expect(out).not.toContain(value);
+			expect(out).toContain(REDACTED);
+			expect(out).toContain(field === "form" ? "grant_type" : field);
+		}
+		expect(redact(`{"password": "short"}`)).toBe(`{"password": "short"}`);
+		expect(redact(`{"username": "${value}"}`)).toBe(`{"username": "${value}"}`);
+	});
+
+	test("credential query params are masked, the rest of the link stays", () => {
+		const value = "abcdef0123456789abcdef0123456789";
+		expect(redact(`https://api.example.com/v1/x?api_key=${value}&other=1`)).toBe(
+			`https://api.example.com/v1/x?api_key=${REDACTED}&other=1`,
+		);
+		expect(redact(`https://example.com/cb?client_secret=${value}`)).toBe(
+			`https://example.com/cb?client_secret=${REDACTED}`,
+		);
+		expect(redact(`https://example.com/x?password=${value}`)).toBe(`https://example.com/x?password=${REDACTED}`);
+		expect(redact(`https://example.com/?mytoken=${value}`)).toBe(`https://example.com/?mytoken=${value}`);
+	});
 });
 
 describe("HTML entity and URL-encoded secret index masking (AC-3)", () => {

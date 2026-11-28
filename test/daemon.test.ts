@@ -298,8 +298,8 @@ describe("sweep heartbeat", () => {
 		daemon.store.close(); // every ledger step outside the per-step guards now throws
 		await expect(daemon.sweep()).resolves.toBeUndefined();
 		expect(lines.filter((line) => line.includes("level=error") && line.includes("event=sweep_failed"))).toHaveLength(1);
-		// The failure names its step: with the ledger closed the first unguarded ledger touch is the pending sweep.
-		expect(lines.find((line) => line.includes("event=sweep_failed"))).toContain("step=pending_sweep");
+		// The failure names its step: with the ledger closed the first unguarded ledger touch is the delivery sweep.
+		expect(lines.find((line) => line.includes("event=sweep_failed"))).toContain("step=delivery_sweep");
 		// A failed sweep is not a finished one: the stamp keeps aging, so a sweep that keeps failing opens sweep_stalled.
 		expect(readSweepHeartbeat(home.dir)).toEqual(before);
 	});
@@ -396,6 +396,54 @@ describe("sweep heartbeat", () => {
 		} finally {
 			release.resolve();
 		}
+	});
+});
+
+describe("delivery sweep", () => {
+	test("the daemon's own sweep expires stale pending rows and re-queues inflight rows with no adapter running", async () => {
+		const clock = new FakeClock();
+		clock.t = Date.now();
+		const lines: string[] = [];
+		const daemon = new Daemon({
+			...daemonTestOptions(),
+			config: home.config,
+			channels: [], // no adapter at all: expiry and recovery must not depend on one
+			clock,
+			log: createLogger({ sink: (line) => lines.push(line), clock, redact }),
+			ompVersion: "omp-test 0",
+			bootId: BOOT_ID,
+			sweepMs: 3_600_000, // sweeps are driven by the test
+			gateSweepMs: 0,
+			taskSweepMs: 0,
+			driverFactory: (_origin, sessionDir) => new FakeOmpDriver({ sessionDir, store: sessions }),
+		});
+		daemons.push(daemon);
+		await daemon.start();
+		daemon.store.ensureOrigin(ORIGIN, "sess/e1");
+		// The inflight row is claimed first (lowest id), so the later stale row stays pending for the sweep.
+		const [held] = daemon.store.recordAnswer({
+			originKey: ORIGIN,
+			opRef: "op-held",
+			threadRef: `${OWNER_DM}:-`,
+			parts: ["보내는 중"],
+		});
+		const [stale] = daemon.store.recordAnswer({
+			originKey: ORIGIN,
+			opRef: "op-stale",
+			threadRef: `${OWNER_DM}:-`,
+			parts: ["오래된 답"],
+		});
+		if (held === undefined || stale === undefined) throw new Error("no rows");
+		expect(daemon.store.claimDue(1).map((row) => row.deliveryId)).toEqual([held.deliveryId]);
+		expect(daemon.store.getDelivery(held.deliveryId)?.state).toBe("inflight");
+		clock.advance(25 * 60 * 60_000);
+		await daemon.sweep();
+		expect(daemon.store.getDelivery(stale.deliveryId)?.state).toBe("expired");
+		expect(daemon.store.getDelivery(held.deliveryId)).toMatchObject({ state: "pending", redelivered: true });
+		const swept = lines.filter((line) => line.includes("event=delivery_sweep"));
+		expect(swept).toHaveLength(1);
+		expect(swept[0]).toContain("expired=1");
+		expect(swept[0]).toContain("recovered=1");
 	});
 });
 

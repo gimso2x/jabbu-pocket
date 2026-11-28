@@ -221,7 +221,7 @@ export function clearQuotaLift(homeDir: string, provider?: string): number {
 	const { exists, lifts } = readAllLifts(homeDir);
 	if (!exists) return 0;
 	if (provider === undefined) {
-		const count = Math.max(1, lifts.size);
+		const count = lifts.size;
 		rmSync(path, { force: true });
 		return count;
 	}
