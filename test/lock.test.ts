@@ -149,10 +149,13 @@ describe("holderAlive with a recorded start time", () => {
 	/** Off Linux `/proc/<pid>/stat` is unreadable and liveness falls back to the pid alone. */
 	const procStartAvailable = processStartedAt(process.pid) !== undefined;
 
-	test.skipIf(!procStartAvailable)("a live pid that started after the lock was written is not the holder", () => {
-		expect(holderAlive(process.pid, currentBootId(), () => true, currentBootId(), 1)).toBe(false);
-		expect(holderAlive(process.pid, currentBootId(), () => true, currentBootId(), Date.now())).toBe(true);
-	});
+	test.skipIf(!procStartAvailable /* #307 */)(
+		"a live pid that started after the lock was written is not the holder",
+		() => {
+			expect(holderAlive(process.pid, currentBootId(), () => true, currentBootId(), 1)).toBe(false);
+			expect(holderAlive(process.pid, currentBootId(), () => true, currentBootId(), Date.now())).toBe(true);
+		},
+	);
 
 	test("without a recorded start time the pid alone still decides", () => {
 		expect(holderAlive(process.pid, currentBootId(), () => true, currentBootId())).toBe(true);
@@ -164,27 +167,30 @@ describe("holderAlive with a recorded start time", () => {
 describe("stale lock with a reused pid", () => {
 	const procStartAvailable = processStartedAt(process.pid) !== undefined;
 
-	test.skipIf(!procStartAvailable)("a lock naming a live pid that started after the lock is stale", async () => {
-		const path = join(dir, "jabbu.lock");
-		const sleeper = Bun.spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
-		try {
-			expect(processStartedAt(sleeper.pid)).not.toBeUndefined();
-			// The pid was reused after the lock was written: the holder died uncleanly, another process took its pid.
-			writeFileSync(
-				path,
-				JSON.stringify({ pid: sleeper.pid, bootId: currentBootId(), startedAt: Date.now() - 3_600_000 }),
-			);
-			const lock = acquireLock(path);
-			expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ pid: process.pid });
-			lock.release();
-			// Control: the same live pid with a lock written after it started is still the holder.
-			writeFileSync(path, JSON.stringify({ pid: sleeper.pid, bootId: currentBootId(), startedAt: Date.now() }));
-			expect(() => acquireLock(path)).toThrow(LockHeldError);
-		} finally {
-			sleeper.kill();
-			await sleeper.exited;
-		}
-	});
+	test.skipIf(!procStartAvailable /* #307 */)(
+		"a lock naming a live pid that started after the lock is stale",
+		async () => {
+			const path = join(dir, "jabbu.lock");
+			const sleeper = Bun.spawn(["sleep", "60"], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+			try {
+				expect(processStartedAt(sleeper.pid)).not.toBeUndefined();
+				// The pid was reused after the lock was written: the holder died uncleanly, another process took its pid.
+				writeFileSync(
+					path,
+					JSON.stringify({ pid: sleeper.pid, bootId: currentBootId(), startedAt: Date.now() - 3_600_000 }),
+				);
+				const lock = acquireLock(path);
+				expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ pid: process.pid });
+				lock.release();
+				// Control: the same live pid with a lock written after it started is still the holder.
+				writeFileSync(path, JSON.stringify({ pid: sleeper.pid, bootId: currentBootId(), startedAt: Date.now() }));
+				expect(() => acquireLock(path)).toThrow(LockHeldError);
+			} finally {
+				sleeper.kill();
+				await sleeper.exited;
+			}
+		},
+	);
 });
 
 describe("stale lock reclaim", () => {
