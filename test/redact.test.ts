@@ -308,3 +308,17 @@ describe("redactThenClip", () => {
 		expect(redactThenClip("", 10)).toBe("");
 	});
 });
+
+describe("redact on a long unbroken run", () => {
+	test("a long run of scheme-like characters is masked in linear time and a real URL password still is", () => {
+		// Before the scheme was length-bounded, every word boundary in the run rescanned the rest of it: ~21 s at 400 KB.
+		const run = "a-".repeat(200_000);
+		const start = performance.now();
+		expect(redact(run)).toBe(run);
+		expect(performance.now() - start).toBeLessThan(2_000);
+		const password = "hunter2-correct-horse-9";
+		expect(redact(`${run} https://deploy:${password}@git.example.com/o/r.git`)).toBe(
+			`${run} https://deploy:${REDACTED}@git.example.com/o/r.git`,
+		);
+	});
+});
