@@ -169,8 +169,14 @@ describe("drain counts a turn whose child is still starting (qa-z #16)", () => {
 		await within(entered.promise, 2000, "driver start");
 		expect(router.mailbox(origin).state.busy).toBe(false);
 		expect(router.busyTurns()).toBe(1);
+		// The shutdown drain waits on the same set: a spawning turn counts as busy, so `drainRunning`
+		// sees it and the bound applies instead of `close()` killing the just-spawned child.
+		expect(router.busyOrigins()).toEqual([origin]);
+		expect(await router.drainRunning(0)).toEqual([origin]);
 		gate.resolve();
 		await routed;
+		await router.mailbox(origin).whenTurnEnds();
+		expect(router.busyOrigins()).toEqual([]);
 	});
 });
 
