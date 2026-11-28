@@ -79,8 +79,7 @@ function contextOf(usage: unknown): Pick<OmpState, "context"> {
 	const window = countOf(usage.contextWindow, 1);
 	if (window === undefined) return {};
 	const tokens = countOf(usage.tokens, 0) ?? null;
-	const percent = tokens === null ? null : (countOf(usage.percent, 0) ?? null);
-	return { context: { tokens, window, percent } };
+	return { context: { tokens, window, percent: tokens === null ? null : (countOf(usage.percent, 0) ?? null) } };
 }
 
 export interface RpcOmpDriverOptions {
@@ -120,10 +119,8 @@ export interface RpcOmpDriverOptions {
 
 function toDriverError(error: unknown): unknown {
 	if (!(error instanceof RpcCommandError)) return error;
-	return new OmpDriverError(error.code === "unknown_since" ? "unknown_since" : "rpc_error", error.message, {
-		rpcCode: error.code,
-		cause: error,
-	});
+	const code = error.code === "unknown_since" ? "unknown_since" : "rpc_error";
+	return new OmpDriverError(code, error.message, { rpcCode: error.code, cause: error });
 }
 
 /**
@@ -176,6 +173,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	readonly #options: RpcOmpDriverOptions;
 	/** The started client: commands go here. */
 	#client: OmpRpcClient | undefined;
+	/** A start() in flight: stop() awaits it, and a second start() refuses while it runs. */
+	#starting: Promise<void> | undefined;
 	/** The client whose child is (or was last) running: its exit and stream reports count until `stop()` ends. */
 	#active: OmpRpcClient | undefined;
 	#stopping = false;
@@ -207,7 +206,16 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	async start(): Promise<void> {
-		if (this.#client) throw new OmpDriverError("already_started", "driver already started");
+		if (this.#client || this.#starting) throw new OmpDriverError("already_started", "driver already started");
+		this.#stopping = false;
+		const starting = this.#startInner();
+		this.#starting = starting;
+		await starting.finally(() => {
+			this.#starting = undefined;
+		});
+	}
+
+	async #startInner(): Promise<void> {
 		const options = this.#options;
 		const env = buildChildEnv(options.env, options.baseEnv);
 		const problem = await checkOmpRuntime(options.ompExecutable, env);
@@ -224,7 +232,6 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		if (options.thinking) args.push("--thinking", options.thinking);
 		args.push(...(options.extraArgs ?? []));
 
-		this.#stopping = false;
 		const client: OmpRpcClient = new OmpRpcClient({
 			executable: options.ompExecutable,
 			args,
@@ -273,6 +280,14 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			this.#unsubscribers = [];
 			if (this.#active === client) this.#active = undefined;
 			throw toDriverError(error);
+		}
+		if (this.#stopping) {
+			// stop() was called during start: tear the child down instead of publishing it.
+			for (const off of this.#unsubscribers) off();
+			this.#unsubscribers = [];
+			if (this.#active === client) this.#active = undefined;
+			await client.stop();
+			return;
 		}
 		this.#client = client;
 		// `ask` arrives as one dialog only when someone answers it; otherwise explicit false, so a default change cannot
@@ -368,8 +383,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			if (this.#tail !== tail) return;
 			if (this.#tap?.open === true) {
 				this.#options.log?.info("tail_wait_dialog_open", { opRef: tail.opRef });
-				this.#armTailSilence(tail);
-				return;
+				return this.#armTailSilence(tail);
 			}
 			this.#options.log?.warn("tail_wait_timeout", { opRef: tail.opRef, silentMs: waitMs });
 			this.#endTail({ status: "completed" });
@@ -385,8 +399,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 				if (this.#tail !== tail) return;
 				if (state.isSettled && state.queuedMessageCount === 0) {
 					this.#options.log?.info("tail_wait_settled", { opRef: tail.opRef, by: "get_state" });
-					this.#endTail({ status: "completed" });
-					return;
+					return this.#endTail({ status: "completed" });
 				}
 			} catch (error) {
 				// Still waiting: `session_settled`, a later poll or the silence cap ends it.
@@ -492,10 +505,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		const opRef = await this.#call((client) => client.prompt(text));
 		this.#admitted.add(opRef);
 		const early = this.#early.get(opRef);
-		if (early) {
-			this.#early.delete(opRef);
-			early();
-		}
+		this.#early.delete(opRef);
+		early?.();
 		return opRef;
 	}
 
@@ -524,6 +535,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 
 	async state(): Promise<OmpState> {
 		const raw = await this.#call((client) => client.getState());
+		const configured = raw.configuredThinkingLevel;
 		return {
 			sessionId: raw.sessionId,
 			sessionFile: raw.sessionFile,
@@ -533,9 +545,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			messageCount: raw.messageCount,
 			model: raw.model?.id === undefined ? undefined : `${raw.model.provider ?? "?"}/${raw.model.id}`,
 			...(raw.thinkingLevel === undefined ? {} : { thinking: raw.thinkingLevel }),
-			...(typeof raw.configuredThinkingLevel === "string" && raw.configuredThinkingLevel !== raw.thinkingLevel
-				? { configuredThinking: raw.configuredThinkingLevel }
-				: {}),
+			...(typeof configured === "string" && configured !== raw.thinkingLevel ? { configuredThinking: configured } : {}),
 			...contextOf(raw.contextUsage),
 			...(typeof raw.fastModeEnabled === "boolean" ? { fastModeEnabled: raw.fastModeEnabled } : {}),
 			...(typeof raw.fastModeActive === "boolean" ? { fastModeActive: raw.fastModeActive } : {}),
@@ -551,9 +561,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 
 	async setModel(model: string): Promise<string> {
 		const slash = model.indexOf("/");
-		if (slash <= 0 || slash === model.length - 1) {
+		if (slash <= 0 || slash === model.length - 1)
 			throw new OmpDriverError("rpc_error", `model must be provider/id: ${model}`);
-		}
 		const set = await this.#call((client) => client.setModel(model.slice(0, slash), model.slice(slash + 1)));
 		return `${set.provider}/${set.id}`;
 	}
@@ -641,9 +650,10 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	onExit = (fn: (info: OmpExitInfo) => void): (() => void) => listen(this.#exitListeners, fn);
 
 	async stop(): Promise<void> {
+		this.#stopping = true;
+		await this.#starting?.catch(() => undefined);
 		const client = this.#client;
 		if (!client) return;
-		this.#stopping = true;
 		this.#client = undefined;
 		this.#clearTail();
 		for (const off of this.#unsubscribers) off();

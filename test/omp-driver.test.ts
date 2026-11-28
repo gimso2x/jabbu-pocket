@@ -41,6 +41,12 @@ function nextFinal(driver: FakeOmpDriver): Promise<OmpFinal> {
 	return promise;
 }
 
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+	const deadline = Promise.withResolvers<never>();
+	const timer = setTimeout(() => deadline.reject(new Error(`timeout after ${ms}ms waiting for ${what}`)), ms);
+	return Promise.race([promise, deadline.promise]).finally(() => clearTimeout(timer));
+}
+
 test("buildChildEnv strips SLACK_/JABBU_ and adds extras", () => {
 	const env = buildChildEnv(
 		{ OMP_WIKI_NOTE_DISABLE: "1" },
@@ -433,6 +439,56 @@ test("RpcOmpDriver buffers a final that arrives before prompt() resolves, then d
 		await untilFinals(2);
 		expect(finals[1]).toEqual({ opRef: command2.id ?? "", status: "error", text: "", error: "boom" });
 	} finally {
+		await driver.stop();
+	}
+});
+
+test("stop() during start() tears the child down instead of publishing it", async () => {
+	const peer = new FakeOmpPeer();
+	// Hold the first negotiation only: a second start that slips past the guard answers at once instead of hanging.
+	let negotiationHeld = false;
+	peer.replies.set("negotiate_protocol", () => {
+		if (negotiationHeld) return { data: { protocolVersion: 2 } };
+		negotiationHeld = true;
+		return "hold";
+	});
+	const dir = tempDir("jabbu-peer-");
+	// The peer's exit promise is single-use, so the restart below swaps in a fresh peer.
+	let currentPeer = peer;
+	const driver = new RpcOmpDriver({
+		ompExecutable: fakeOmpExecutable(dir),
+		cwd: join(dir, "ws"),
+		sessionDir: join(dir, "s"),
+		spawn: (argv, options) => currentPeer.spawn(argv, options),
+		log: createLogger({ sink: () => undefined, clock: { now: () => 0 }, redact }),
+	});
+	let release: () => void = () => undefined;
+	try {
+		const starting = driver.start();
+		const negotiation = await peer.command((c) => c.type === "negotiate_protocol");
+		release = () => peer.respond(negotiation, { data: { protocolVersion: 2 } });
+		// A second start() while one is in flight refuses.
+		await within(
+			Promise.resolve(expect(driver.start()).rejects.toMatchObject({ code: "already_started" })),
+			4000,
+			"second start refused",
+		);
+		// stop() waits for the start to settle, then the start tears the child down instead of publishing it.
+		const stopping = within(driver.stop(), 4000, "stop() during start()");
+		release();
+		release = () => undefined;
+		await stopping;
+		await starting;
+		expect(driver.pid).toBeUndefined();
+		expect(peer.signals).toContain("SIGTERM");
+		await expect(driver.prompt("x")).rejects.toMatchObject({ code: "not_started" });
+		// A fresh start() still works after the torn-down one.
+		currentPeer = new FakeOmpPeer();
+		await driver.start();
+		expect(driver.pid).toBe(4242);
+		await expect(driver.prompt("go")).resolves.toBeDefined();
+	} finally {
+		release();
 		await driver.stop();
 	}
 });
