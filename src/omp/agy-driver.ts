@@ -697,8 +697,8 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	// ---- prompts ----
 
 	/** Records the user entry (text only), then sends `session/prompt` with the attached images the child takes. */
-	#sendPrompt(client: AgyAcpClient, turn: PendingTurn, text: string): void {
-		this.#entries.push({ id: `ag-${++this.#entrySeq}`, type: "message", message: { role: "user", content: text } });
+	#sendPrompt(client: AgyAcpClient, turn: PendingTurn, text: string, entry: string = text): void {
+		this.#entries.push({ id: `ag-${++this.#entrySeq}`, type: "message", message: { role: "user", content: entry } });
 		const prompt: Array<Record<string, unknown>> = [{ type: "text", text }];
 		const { inboundRoot, log, originKey } = this.#options;
 		if (!this.#imageInput || inboundRoot === undefined) this.#request(client, turn, prompt);
@@ -801,7 +801,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 				retireChild: () => this.#retireChild(),
 				endClient: (old) => this.#dropClient(old),
 				launch: (executable, env) => this.#launch(executable, env, undefined),
-				sendPrompt: (nextClient, activeTurn, text) => this.#sendPrompt(nextClient, activeTurn, text),
+				sendPrompt: (client, turn, text, entry) => this.#sendPrompt(client, turn, text, entry),
 				finish: (activeTurn, final) => this.#finish(activeTurn, final),
 				withRespawnLock: (fn) => this.#withRespawnLock(fn),
 			},

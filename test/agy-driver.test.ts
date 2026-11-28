@@ -1286,6 +1286,10 @@ test("account pool: pre-tool 429 switches account seamlessly on same opRef, prep
 	expect(prompts[1]).toContain("[회전 맥락");
 	expect(prompts[1]).toEndWith("first question");
 	expect(prompts[2]).toBe("follow up");
+	// The retry re-sends the same turn: no second user entry for "first question" (the steer stays its own entry).
+	const users = (await driver.entriesSince()).entries.filter((entry) => entry.message?.role === "user");
+	expect(users).toHaveLength(2);
+	expect(users.map((entry) => entry.message?.content)).toEqual(["first question", "follow up"]);
 	expect(lines.some((line) => line.includes("event=agy.account.switched") && line.includes("retry=true"))).toBe(true);
 	await driver.stop();
 });
