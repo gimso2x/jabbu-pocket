@@ -47,11 +47,9 @@ const GLOBAL_EXEMPT = /^\/(interactions|webhooks)\//;
 function routeKey(method: string, path: string): string {
 	const parts = (path.split("?")[0] ?? "").split("/");
 	const normalized = parts.map((segment, i) => {
-		const parent = parts[i - 1] ?? "";
-		const grandparent = parts[i - 2] ?? "";
-		if (MAJOR_PARENTS[parent] === true) return segment;
-		if (grandparent === "webhooks" || grandparent === "interactions") return segment;
-		if (parent === "reactions") return ":emoji";
+		if (MAJOR_PARENTS[parts[i - 1] ?? ""] === true) return segment;
+		if (parts[i - 2] === "webhooks" || parts[i - 2] === "interactions") return segment;
+		if (parts[i - 1] === "reactions") return ":emoji";
 		return /^[0-9]+$/.test(segment) ? ":id" : segment;
 	});
 	return `${method} ${normalized.join("/")}`;
@@ -114,9 +112,15 @@ export class DiscordRest {
 		return until;
 	}
 
+	blockedCount(): number {
+		return this.#blocked.size;
+	}
+
 	async #request(method: string, path: string, body?: RequestBody): Promise<unknown> {
 		const key = routeKey(method, path);
 		const now = this.#now();
+		// Per-interaction keys never repeat: drop entries whose reset has passed, or they pile up.
+		for (const [blockedKey, reset] of this.#blocked) if (reset <= now) this.#blocked.delete(blockedKey);
 		const globalUntil = GLOBAL_EXEMPT.test(path) ? 0 : this.#globalUntil;
 		const until = Math.max(globalUntil, this.#blocked.get(key) ?? 0);
 		if (until > now) throw new DiscordRateLimitedError(until - now, globalUntil > now);
@@ -126,9 +130,7 @@ export class DiscordRest {
 		if (body !== undefined && "json" in body) {
 			headers["content-type"] = "application/json";
 			payload = JSON.stringify(body.json);
-		} else if (body !== undefined) {
-			payload = body.form;
-		}
+		} else if (body !== undefined) payload = body.form;
 		let res: Response;
 		try {
 			res = await this.#fetch(`${this.#baseUrl}${path}`, {
@@ -172,8 +174,6 @@ export class DiscordRest {
 
 		const resetAfter = secondsToMs(res.headers.get("x-ratelimit-reset-after"));
 		if (res.headers.get("x-ratelimit-remaining") === "0" && resetAfter !== undefined) {
-			// Per-interaction keys never repeat: drop expired entries so they do not pile up.
-			for (const [other, reset] of this.#blocked) if (reset <= now) this.#blocked.delete(other);
 			this.#blocked.set(key, this.#now() + resetAfter);
 		} else if ((this.#blocked.get(key) ?? 0) <= now) {
 			// Only an expired block goes: a response that was in flight when a 429 set one must not lift it.

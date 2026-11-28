@@ -236,6 +236,28 @@ describe("DiscordRest", () => {
 		expect(server.seen).toHaveLength(2);
 	});
 
+	test("expired route blocks are pruned on the next request instead of piling up", async () => {
+		let clock = 1_000;
+		let calls = 0;
+		const fetchImpl = (async () => {
+			calls += 1;
+			return calls === 1
+				? Response.json({ message: "You are being rate limited.", retry_after: 10, global: false }, { status: 429 })
+				: Response.json({ id: "900" });
+		}) as unknown as typeof fetch;
+		const client = new DiscordRest({ token: TOKEN, baseUrl: "http://discord.invalid", fetchImpl, now: () => clock });
+		// An interaction ACK has a unique route key (id + token stay whole), so its block is the pile-up case.
+		const limited = await caught(
+			client.respondInteraction({ interactionId: "77", token: "itok", response: { type: 6 } }),
+		);
+		expect(limited).toBeInstanceOf(DiscordRateLimitedError);
+		expect(client.blockedCount()).toBe(1);
+		clock = 11_000;
+		await client.createMessage({ channelId: "222222222222222222", content: "other" });
+		expect(calls).toBe(2);
+		expect(client.blockedCount()).toBe(0);
+	});
+
 	test("a 429 with no retry_after anywhere doubles the route's last wait, capped at 60 s", async () => {
 		let clock = 0;
 		const fetchImpl = (async () => new Response("slow down", { status: 429 })) as unknown as typeof fetch;
