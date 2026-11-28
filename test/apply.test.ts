@@ -185,7 +185,18 @@ function makeDeps(world: World, over: Partial<ApplyDeps> = {}): ApplyDeps {
 			if (sub[0] === "rev-parse" && sub.at(-1) === "main") return ok(`${world.mainSha}\n`);
 			if (sub[0] === "rev-parse" && sub.at(-1) === "--absolute-git-dir") return ok(`${join(root, "gitdir")}\n`);
 			if (sub[0] === "rev-parse") return ok(`${PREV}\n`);
-			if (sub[0] === "status") return ok(world.srcStatus);
+			if (sub[0] === "status") {
+				// The pathspecs after `--` scope the output, as real git does.
+				const sep = sub.indexOf("--");
+				if (sep === -1) return ok(world.srcStatus);
+				const specs = sub.slice(sep + 1);
+				const lines = world.srcStatus.split("\n").filter((line) => {
+					if (line.trim() === "") return false;
+					const path = line.slice(3).split(" -> ").at(-1) ?? "";
+					return specs.some((spec) => path === spec || path.startsWith(`${spec}/`));
+				});
+				return ok(lines.length > 0 ? `${lines.join("\n")}\n` : "");
+			}
 		}
 		if (cmd[0] === "systemctl" && cmd[2] === "is-active") return { code: world.activeRc, stdout: "", stderr: "" };
 		if (cmd[0] === "systemctl" && cmd[2] === "list-units") return ok(world.listUnits);
@@ -324,6 +335,17 @@ describe("runApply precheck", () => {
 		const outcome = await runApply(base, makeDeps(world, { isExecutable: () => false }));
 		expect(outcome.exitCode).toBe(3);
 		expect(outcome.receipt.steps[0]?.detail).toContain("bun not found");
+	});
+
+	test("a dirty package.json + bun.lock pair is refused at preflight (F5)", async () => {
+		const world = makeWorld();
+		world.srcStatus = " M package.json\n M bun.lock\n";
+		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		expect(exitCode).toBe(3);
+		expect(receipt.status).toBe("skipped");
+		expect(receipt.steps[0]?.detail).toContain("uncommitted changes to package.json, bun.lock");
+		expect(world.backups).toBe(0);
+		expect(restartCommands(world)).toHaveLength(0);
 	});
 
 	test("children run with ~/.local/bin and ~/.bun/bin first on PATH", async () => {

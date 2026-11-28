@@ -567,10 +567,17 @@ export async function checkCheckout(
 		result.checkout = `detached@${current} (--allow-detached)`;
 	} else if (branch !== "main") skipReasons.push(`checkout is on branch "${branch || "(detached)"}", not main`);
 	else if (!onMain) skipReasons.push("HEAD differs from main");
-	const dirty = await git("status", "--porcelain", "--", "src");
+	// The deps hash covers package.json + bun.lock too; split without trimming (it eats the first line's `XY ` prefix).
+	const dirty = await git("status", "--porcelain", "--", "src", "package.json", "bun.lock");
 	if (dirty.code !== 0) skipReasons.push(`git status failed: ${dirty.stderr.trim()}`);
-	else if (dirty.stdout.trim() !== "")
-		skipReasons.push(`uncommitted changes under src: ${dirty.stdout.trim().split("\n").length} file(s)`);
+	else if (dirty.stdout.trim() !== "") {
+		const lines = dirty.stdout.split("\n").filter((line) => line.trim() !== "");
+		const srcFiles = lines.filter((line) => line.slice(3).startsWith("src/"));
+		const depFiles = lines.filter((line) => !line.slice(3).startsWith("src/"));
+		if (srcFiles.length > 0) skipReasons.push(`uncommitted changes under src: ${srcFiles.length} file(s)`);
+		if (depFiles.length > 0)
+			skipReasons.push(`uncommitted changes to ${depFiles.map((line) => line.slice(3)).join(", ")}`);
+	}
 	return result;
 }
 
