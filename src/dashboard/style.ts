@@ -440,10 +440,7 @@ a.flow-box:hover { background: var(--c-hover); }
 .detail { position: fixed; inset: 0; z-index: 10; overflow-y: auto; overscroll-behavior: contain; background: var(--c-surface); padding: 0 var(--page-x) var(--stack-l); display: flex; flex-direction: column; gap: var(--stack-s); transition: transform var(--dur-panel) ease, opacity var(--dur-panel) ease; }
 .detail[hidden] { display: none; }
 .detail.is-open { animation: detail-in var(--dur-panel) ease-out; }
-@keyframes detail-in {
-  from { opacity: 0.6; transform: translateX(10px); }
-  to { opacity: 1; transform: translateX(0); }
-}
+@keyframes detail-in { from { opacity: 0.6; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
 .detail-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: var(--stack-s); min-height: 46px; padding: var(--sp-2) 0; border-bottom: 1px solid var(--c-line); background: var(--c-surface); }
 .detail-bar-title { flex: 1; min-width: 0; font-size: var(--fs-sub); font-weight: 600; color: var(--c-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .detail-bar-title[hidden] { display: none; }
@@ -644,6 +641,7 @@ body:has(.modal-backdrop:not([hidden])) .event-stack { display: none; }
 .tw-row.is-tool, .tw-pop.is-tool { --c-tw-kind: var(--c-tw-tool); }
 .tw-row.is-compaction, .tw-pop.is-compaction { --c-tw-kind: var(--c-warning-tint-text); }
 .tw-row.is-failed, .tw-pop.is-failed { --c-tw-kind: var(--c-danger); }
+.tw-row.is-paused, .tw-pop.is-paused, .tw-row.is-blocked, .tw-pop.is-blocked { --c-tw-kind: var(--c-warning-tint-text); }
 .tw-row:hover { background: var(--c-hover); }
 .tw-row[aria-selected="true"] { background: var(--c-info-tint); }
 .tw-row:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -2px; border-radius: var(--r-s); }
@@ -695,6 +693,7 @@ button.fl-card:hover { background: var(--c-hover); }
 button.fl-card:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 .fl-card.is-running { border-color: var(--c-info-tint-text); }
 .fl-card.is-failed { border-color: var(--c-danger); }
+.fl-card.is-paused, .fl-card.is-blocked { border-color: var(--c-warning-tint-text); }
 .fl-card.is-approvals.is-pending { border-color: var(--c-warning-tint-text); background: var(--c-warning-tint); }
 .fl-kicker { font-size: var(--fs-caption); font-weight: 600; color: var(--c-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-title { font-size: var(--fs-sub); font-weight: 700; color: var(--c-text-1); overflow-wrap: anywhere; }

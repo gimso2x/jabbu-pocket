@@ -59,7 +59,7 @@ export async function tasksCommand(
 	const { values, positionals } = parseArgs({
 		args: rest,
 		allowPositionals: true,
-		options: { json: { type: "boolean" }, as: { type: "string" } },
+		options: sub === "close" ? { as: { type: "string" } } : sub === "list" ? { json: { type: "boolean" } } : {},
 	});
 	if (positionals.length > (sub === "list" ? 0 : 1)) {
 		process.stderr.write(`tasks ${sub}: too many arguments\n`);

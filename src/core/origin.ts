@@ -228,9 +228,9 @@ export class OriginRouter {
 		for (const m of this.#mailboxes.values()) m.stopDispatching();
 	}
 
-	/** Origins whose mailbox currently has a turn running. */
+	/** Origins with a running turn, or one whose child is still starting (spawn and prompt not yet through). */
 	busyOrigins(): string[] {
-		return [...this.#mailboxes.entries()].filter(([, m]) => m.state.busy).map(([k]) => k);
+		return [...this.#mailboxes.entries()].filter(([, m]) => m.turnPending).map(([k]) => k);
 	}
 
 	/** Shutdown drain: wait bounded for running turns to settle; returns origins still busy at timeout. */
