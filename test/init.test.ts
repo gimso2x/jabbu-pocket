@@ -80,6 +80,7 @@ describe("jabbu-pocket init", () => {
 		expect(mode(home)).toBe(0o700);
 		expect(mode(join(home, "secrets"))).toBe(0o700);
 		expect(statSync(join(home, "workspace")).isDirectory()).toBe(true);
+		expect(mode(join(home, "workspace"))).toBe(0o700);
 		expect(mode(join(home, "config.json"))).toBe(0o600);
 		expect(run.out).toContain(join(home, "secrets", "discord-bot-token"));
 		expect(run.out).toContain("doctor");
@@ -142,6 +143,7 @@ describe("jabbu-pocket init", () => {
 		expect(raw.ompExecutable).toBe(omp);
 		expect(raw.workspaceDir).toBe(workspace);
 		expect(statSync(workspace).isDirectory()).toBe(true);
+		expect(mode(workspace)).toBe(0o700);
 	});
 
 	test("AC-2: an existing config.json is left byte-identical and init exits 2", () => {
