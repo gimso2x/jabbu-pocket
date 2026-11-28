@@ -91,6 +91,11 @@ describe("retryAfterDelayMs", () => {
 		expect(retryAfterDelayMs(res(null))).toBe(1_000);
 		expect(retryAfterDelayMs(res("tomorrow-ish"))).toBe(1_000);
 	});
+
+	test('an empty Retry-After is unparseable too, not a 0 s wait (Number("") is 0)', () => {
+		expect(retryAfterDelayMs(res(""))).toBe(1_000);
+		expect(retryAfterDelayMs(res("0"))).toBe(0);
+	});
 });
 
 describe("downloadDiscordAttachment", () => {
