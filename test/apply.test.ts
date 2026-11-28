@@ -51,6 +51,20 @@ const HEAD = "a".repeat(40);
 const PREV = "b".repeat(40);
 const T0 = Date.UTC(2026, 9, 30, 5, 0, 0);
 
+/** A minimal config that loads: last-good fixtures must be restorable now that rollback validates them. */
+const GOOD_CONFIG = JSON.stringify({
+	schemaVersion: 1,
+	channels: {
+		discord: {
+			ownerUserId: "100000000000000001",
+			botTokenFile: "secrets/discord-bot-token",
+			applicationId: "600000000000000000",
+		},
+	},
+	ompExecutable: "/usr/local/bin/omp",
+	workspaceDir: "workspace",
+});
+
 let root: string;
 let home: string;
 let repo: string;
@@ -439,9 +453,23 @@ describe("runApply execution", () => {
 		expect(statSync(configCopy).mode & 0o777).toBe(0o600);
 	});
 
+	test("last_good records the config the restarted daemon loaded, not an edit made during apply", async () => {
+		const world = makeWorld();
+		const deps = makeDeps(world, {
+			doctor: async () => {
+				writeFileSync(join(home, "config.json"), '{"v":"edited-during-apply"}');
+				return { code: 1, lines: ["ok home: x", "fail omp: missing"] };
+			},
+		});
+		const { exitCode, receipt } = await runApply(base, deps);
+		expect(exitCode).toBe(0);
+		expect(receipt.steps.find((s) => s.name === "last_good")?.ok).toBe(true);
+		expect(readFileSync(join(home, "config.json.last-good"), "utf8")).toBe('{"v":"before"}');
+	});
+
 	test("transports: a stamp from before the restart never counts; a fresh one with a transport down rolls back", async () => {
 		const world = makeWorld();
-		writeFileSync(join(home, "config.json.last-good"), '{"v":"good"}', { mode: 0o600 });
+		writeFileSync(join(home, "config.json.last-good"), GOOD_CONFIG, { mode: 0o600 });
 		const oldStamp = new Date(T0 - 1_000); // the old daemon's last beat: transports up, but before the restart
 		// The rollback restart's daemon beats with every transport up: only then is the config rollback a success.
 		world.heartbeat = (w) => {
@@ -472,13 +500,13 @@ describe("runApply execution", () => {
 		expect(stale.receipt.steps.find((s) => s.name === "transports")?.detail).toContain("from before the restart");
 		expect(stale.receipt.steps.at(-1)?.detail).toContain("transports ok: discord=up");
 		expect(restartCommands(world)).toHaveLength(2);
-		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"good"}');
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe(GOOD_CONFIG);
 
 		// The rollback restart answers IPC but no fresh heartbeat ever shows the transports: not a recovery, the
 		// config rollback fails and the code rollback branch decides (no head.last-good here, so it is skipped).
 		rmSync(join(home, "logs"), { recursive: true, force: true });
 		const dead = makeWorld();
-		writeFileSync(join(home, "config.json.last-good"), '{"v":"good"}', { mode: 0o600 });
+		writeFileSync(join(home, "config.json.last-good"), GOOD_CONFIG, { mode: 0o600 });
 		dead.heartbeat = (w) =>
 			restartCommands(w).length === 1
 				? {
@@ -628,7 +656,7 @@ describe("runApply execution", () => {
 	test("an old daemon still answering is not ready: waits, then rolls back config with one more restart", async () => {
 		const world = makeWorld();
 		world.restartMakesFreshDaemon = false; // restart returns 0 but no new process ever takes the lock
-		writeFileSync(join(home, "config.json.last-good"), '{"v":"good"}', { mode: 0o600 });
+		writeFileSync(join(home, "config.json.last-good"), GOOD_CONFIG, { mode: 0o600 });
 		world.onRestart = (n) => {
 			if (n === 1) writeFileSync(join(home, "config.json"), '{"v":"after-bad-edit"}');
 		};
@@ -644,7 +672,7 @@ describe("runApply execution", () => {
 			["rollback", false],
 		]);
 		expect(restartCommands(world)).toHaveLength(2);
-		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"good"}');
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe(GOOD_CONFIG);
 		expect(world.drainCancels).toBe(1); // no fresh daemon ever came up: the old one must leave drain
 		const rollback = receipt.steps.at(-1);
 		expect(rollback?.detail).toContain("config restored");
@@ -754,6 +782,18 @@ describe("runApply rollback and drain safety", () => {
 		const { receipt } = await runApply(base, makeDeps(world));
 		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"bad"}');
 		expect(receipt.steps.at(-1)?.detail).toContain("복원할 정상 config 없음");
+	});
+
+	test("rollback does not restore a last-good config that no longer loads", async () => {
+		const world = makeWorld();
+		world.restartMakesFreshDaemon = false;
+		writeFileSync(join(home, "config.json.last-good"), '{"v":"corrupt"}', { mode: 0o600 });
+		const { exitCode, receipt } = await runApply(base, makeDeps(world));
+		expect(exitCode).toBe(1);
+		expect(readFileSync(join(home, "config.json"), "utf8")).toBe('{"v":"before"}');
+		expect(receipt.steps.find((s) => s.name === "rollback")?.detail).toContain(
+			"last-good config invalid, not restored",
+		);
 	});
 
 	test("a failed apply never records the failing config as last-good", async () => {
