@@ -609,7 +609,8 @@ export class Daemon {
 					: platform === "web"
 						? WEB_OWNER_USER_ID
 						: undefined,
-			laneBusy: (originKey) => this.#router?.mailbox(originKey).state.busy ?? false,
+			// A turn still starting counts as busy: `state.busy` is set only once the prompt resolves.
+			laneBusy: (originKey) => this.#router?.mailbox(originKey).turnPending ?? false,
 			laneModels: () => this.#options.config.lanes?.models,
 			ownerSilenceConfig: () => this.#options.config,
 			// A merged lane's non-blocking leftovers (`leftovers`) go to followups.jsonl; a closing lane's file evidence to lanes/.
@@ -1021,10 +1022,9 @@ export class Daemon {
 
 	/** The cheap counts the hourly `service_alive` log line carries. */
 	aliveFields(): Record<string, number> {
-		const store = this.#store;
-		const inbound = store?.countInboundByState();
+		const inbound = this.#store?.countInboundByState();
 		return {
-			origins: store?.distinctInboundOrigins().length ?? 0,
+			origins: this.#store?.distinctInboundOrigins().length ?? 0,
 			busy: this.#router?.busyOrigins().length ?? 0,
 			pending: inbound?.pending ?? 0,
 			dispatched: inbound?.dispatched ?? 0,
