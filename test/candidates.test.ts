@@ -243,6 +243,16 @@ describe("approval flow", () => {
 		expect(events[1]).toMatchObject({ event: "approved", experiment: "E-20261112-02" });
 	});
 
+	test("approval flow: an experiment append failure still records the approval and never rejects the pass", async () => {
+		const h = harness([...seenDays("a", 3), ...seenDays("b", 3)], { mode: "card", maxOpenCards: 2 }, () => "approved");
+		mkdirSync(h.deps.experimentsPath);
+		expect(await runCandidateProposals(h.deps, OPEN)).toEqual(["a", "b"]);
+		const approved = ledger(h).filter((e) => e.event === "approved");
+		expect(approved).toHaveLength(2);
+		expect(approved.map((e) => (e.event === "approved" ? e.experiment : ""))).toEqual(["unrecorded", "unrecorded"]);
+		expect(fold(ledger(h)).map((c) => c.status)).toEqual(["approved", "approved"]);
+	});
+
 	test("approval flow: denied writes rejected only", async () => {
 		const h = harness(seenDays("a", 3), { mode: "card" }, () => "denied");
 		writeFileSync(h.deps.experimentsPath, PRIOR);
