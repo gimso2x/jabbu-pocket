@@ -209,21 +209,21 @@ function maskWrappedShapes(text: string): string {
 }
 
 /**
- * OAuth bearer credentials: a JWT (Entra access tokens, so also any
- * `Authorization: Bearer eyJ…` header), and the value of an `access_token` / `refresh_token` / `id_token` field in JSON
- * or a form body. Chat masking only: the upload check keeps `secretShapes`.
+ * OAuth bearer credentials: a JWT (Entra access tokens, so also any `Authorization: Bearer eyJ…` header),
+ * and the value of a credential-named field in JSON or a form body. Chat masking only: the upload check keeps `secretShapes`.
  */
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
-const TOKEN_FIELD_PATTERN = /(["']?\b(?:access|refresh|id)_token["']?\s*[:=]\s*["']?)[^"'&\s,}]{16,}/gi;
+const TOKEN_FIELD_PATTERN =
+	/(["']?\b(?:(?:access|refresh|id)_token|client[_-]?secret|api[_-]?key|password|passwd|secret)["']?\s*[:=]\s*["']?)[^"'&\s,}]{16,}/gi;
 
 /**
  * A password in a URL's userinfo (`https://user:pass@host`: only the password is masked, up to the last `@` of the
- * authority) and the value of a signing or token query parameter (`X-Amz-Signature=`, `sig=`, `token=` ...): the rest of
- * the link stays readable. Chat masking only: the upload check keeps `secretShapes`.
+ * authority) and the value of a signing/credential query parameter (`X-Amz-Signature=`, `sig=`, `token=`, `api_key=`, …):
+ * the rest of the link stays readable. Chat masking only: the upload check keeps `secretShapes`.
  */
 const URL_USERINFO_PATTERN = /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/:@?#]+:)[^\s/?#]+(?=@)/g;
 const URL_SIGNED_QUERY_PATTERN =
-	/([?&](?:X-Amz-Signature|X-Amz-Security-Token|X-Goog-Signature|Signature|sig|token|access_token)=)[^&\s#"'<>)]+/gi;
+	/([?&](?:X-Amz-Signature|X-Amz-Security-Token|X-Goog-Signature|Signature|sig|token|access_token|api[_-]?key|client[_-]?secret|password|passwd|secret)=)[^&\s#"'<>)]+/gi;
 
 export const redact: Redactor = (text) =>
 	maskKnownFragments(

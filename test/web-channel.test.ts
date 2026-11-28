@@ -547,6 +547,37 @@ describe("AC-4, AC-5, AC-7, AC-9: web channel end-to-end delivery, approvals, re
 });
 
 describe("AC-8: schema migrations (10, 11 -> current) and web_messages GC", () => {
+	test("openStore adds delivery_key and its unique index to a web_messages table created before it", () => {
+		const dir = mkdtempSync(join(tmpdir(), "jabbu-web-mig-dkey-"));
+		dirs.push(dir);
+		const dbPath = join(dir, "jabbu.db");
+		openStore({ path: dbPath, timezone: "Asia/Seoul", clock: { now: () => 1_000 }, redact }).close();
+
+		// The live ledgers of 2026-11-28: web_messages exists, but without delivery_key (apply 20261128-130003).
+		const raw = new Database(dbPath);
+		raw.exec("DROP INDEX web_messages_delivery_key; ALTER TABLE web_messages DROP COLUMN delivery_key;");
+		raw
+			.query("INSERT INTO web_messages (conversation, role, text, created_at) VALUES ('w_old', 'owner', 'old', 1)")
+			.run();
+		raw.close();
+
+		const migrated = openStore({ path: dbPath, timezone: "Asia/Seoul", clock: { now: () => 2_000 }, redact });
+		migrated.close();
+
+		const verify = new Database(dbPath, { readonly: true });
+		const columns = (verify.query("PRAGMA table_info(web_messages)").all() as Array<{ name: string }>).map(
+			(c) => c.name,
+		);
+		const index = verify
+			.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'web_messages_delivery_key'")
+			.get() as { sql: string } | null;
+		const rows = (verify.query("SELECT count(*) AS n FROM web_messages").get() as { n: number }).n;
+		verify.close();
+		expect(columns).toContain("delivery_key");
+		expect(index?.sql).toContain("UNIQUE");
+		expect(rows).toBe(1);
+	});
+
 	test("openStore migrates v10 and v11 databases to SCHEMA_VERSION with web_messages and its indexes", () => {
 		for (const fromVersion of [10, 11] as const) {
 			const dir = mkdtempSync(join(tmpdir(), `jabbu-web-mig-${fromVersion}-`));
@@ -599,7 +630,12 @@ describe("AC-8: schema migrations (10, 11 -> current) and web_messages GC", () =
 			)
 				.map((r) => r.name)
 				.sort();
-			expect(indexes).toEqual(["web_messages_conv_id", "web_messages_conv_thread_id", "web_messages_created"]);
+			expect(indexes).toEqual([
+				"web_messages_conv_id",
+				"web_messages_conv_thread_id",
+				"web_messages_created",
+				"web_messages_delivery_key",
+			]);
 			verify.close();
 		}
 	});

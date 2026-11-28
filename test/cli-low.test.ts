@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctorCommand } from "../src/cli/index";
 import { openBotStore } from "../src/core/origin";
@@ -101,6 +102,32 @@ describe("CLI commands without a daemon", () => {
 		expect(run.code).toBe(1);
 		expect(run.stderr).toContain("set JABBU_HOME");
 		expect(run.stderr).not.toContain("daemon not reachable");
+	});
+
+	test("daemon, doctor, reload and --help refuse stray arguments (exit 2, one line)", async () => {
+		// A home with no config.json: without the guard `daemon` would fail on the config (exit 1).
+		const bare = mkdtempSync(join(tmpdir(), "jabbu-cli-bare-"));
+		try {
+			const runs = [
+				await runMain(bare, ["daemon", "--help"]),
+				await runCliCapture(home.dir, ["doctor", "extra"]),
+				await runCliCapture(home.dir, ["reload", "--force"]),
+			];
+			const commands = ["daemon", "doctor", "reload"];
+			for (const [i, run] of runs.entries()) expectUsageLine(run, commands[i] ?? "");
+			// `--help`/`help` with extras print the usage (exit 2), not a one-line error.
+			for (const args of [
+				["--help", "extra"],
+				["help", "extra"],
+			] as const) {
+				const run = await runCliCapture(home.dir, [...args]);
+				expect(run.code).toBe(2);
+				expect(run.stdout).toBe("");
+				expect(run.stderr.startsWith("usage: jabbu-pocket <command>")).toBe(true);
+			}
+		} finally {
+			rmSync(bare, { recursive: true, force: true });
+		}
 	});
 
 	test("reload says the daemon is not reachable, exit 1", async () => {

@@ -32,3 +32,20 @@ export function uploadThreadTs(
 	const parsed = ref === undefined ? undefined : parseThreadRef(ref);
 	return parsed !== undefined && parsed.threadTs !== TOP_LEVEL_TS ? parsed.threadTs : undefined;
 }
+
+/**
+ * Owner message thread ref (`<channel>:<messageId>`) an inline-reply channel lane start may open a thread on and
+ * borrow; `undefined` outside `channels.discord.inlineReplyChannels` or without a message id.
+ */
+export function inlineBorrowThreadRef(
+	ctx: DaemonContext,
+	originKey: string,
+	explicitThreadRef?: string,
+): string | undefined {
+	const origin = parseChatOrigin(originKey);
+	if (origin?.platform !== "discord" || origin.kind !== "ch" || origin.threadId !== undefined) return undefined;
+	if (!ctx.options.config.channels.discord?.inlineReplyChannels?.includes(origin.conversationId)) return undefined;
+	return (
+		explicitThreadRef ?? ctx.router?.mailbox(originKey).state.threadRef ?? ctx.store?.latestInboundThread(originKey)
+	);
+}

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { referencedWebFileNames } from "./web-files";
 
-/** DDL for web chat messages (`SCHEMA_VERSION` 12). */
+/** DDL for web chat messages (`SCHEMA_VERSION` 14). */
 export const WEB_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS web_messages (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	conversation TEXT NOT NULL,
@@ -14,11 +14,16 @@ export const WEB_MESSAGES_DDL = `CREATE TABLE IF NOT EXISTS web_messages (
 	buttons_json TEXT,
 	files_json TEXT,
 	created_at INTEGER NOT NULL,
-	edited_at INTEGER
+	edited_at INTEGER,
+	delivery_key TEXT
 );
 CREATE INDEX IF NOT EXISTS web_messages_conv_id ON web_messages(conversation, id);
 CREATE INDEX IF NOT EXISTS web_messages_conv_thread_id ON web_messages(conversation, thread, id);
 CREATE INDEX IF NOT EXISTS web_messages_created ON web_messages(created_at);`;
+
+/** Created by `migrate`, not `SCHEMA`: a pre-`delivery_key` ledger has no such column when `SCHEMA` runs. */
+export const WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL =
+	"CREATE UNIQUE INDEX IF NOT EXISTS web_messages_delivery_key ON web_messages(delivery_key)";
 
 export type WebMessageRole = "owner" | "assistant" | "status" | "approval" | "choice" | "system";
 
@@ -97,10 +102,6 @@ const toRow = (sql: WebMessageSql): WebMessageRow => ({
 	editedAt: sql.edited_at,
 });
 
-function hasWebMessagesTable(db: Database): boolean {
-	return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'web_messages'").get() !== null;
-}
-
 function titleOfConversation(rows: WebMessageRow[]): string {
 	for (const row of rows) {
 		if (row.role === "system" && row.cardJson !== null) {
@@ -136,12 +137,16 @@ export class WebMessageStore {
 		cardJson?: string | undefined;
 		buttonsJson?: string | undefined;
 		filesJson?: string | undefined;
+		/** Idempotency key of a delivery post (`delivery:<id>:<part>`): a repost returns the first row. */
+		deliveryKey?: string | undefined;
 	}): WebMessageRow {
+		const existing = input.deliveryKey === undefined ? undefined : this.#byDeliveryKey(input.deliveryKey);
+		if (existing !== undefined) return existing;
 		const now = this.#clock.now();
 		const res = this.#db
 			.query(
-				`INSERT INTO web_messages (conversation, thread, role, text, card_json, buttons_json, files_json, created_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO web_messages (conversation, thread, role, text, card_json, buttons_json, files_json, created_at, delivery_key)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				input.conversation,
@@ -152,8 +157,15 @@ export class WebMessageStore {
 				input.buttonsJson === undefined ? null : this.#redact(input.buttonsJson),
 				input.filesJson === undefined ? null : this.#redact(input.filesJson),
 				now,
+				input.deliveryKey ?? null,
 			);
 		return this.get(Number(res.lastInsertRowid)) as WebMessageRow;
+	}
+
+	/** The row a delivery key names (`undefined`: this delivery never posted). Not part of the UI row. */
+	#byDeliveryKey(key: string): WebMessageRow | undefined {
+		const row = this.#db.query("SELECT * FROM web_messages WHERE delivery_key = ?").get(key) as WebMessageSql | null;
+		return row === null ? undefined : toRow(row);
 	}
 
 	edit(
@@ -175,20 +187,11 @@ export class WebMessageStore {
 			}
 		).max_edited;
 		const editedAt = now > prev ? now : prev + 1;
-		const nextCard =
-			patch.cardJson === undefined ? current.cardJson : patch.cardJson === null ? null : this.#redact(patch.cardJson);
-		const nextButtons =
-			patch.buttonsJson === undefined
-				? current.buttonsJson
-				: patch.buttonsJson === null
-					? null
-					: this.#redact(patch.buttonsJson);
-		const nextFiles =
-			patch.filesJson === undefined
-				? current.filesJson
-				: patch.filesJson === null
-					? null
-					: this.#redact(patch.filesJson);
+		const next = (patch: string | null | undefined, current: string | null): string | null =>
+			patch === undefined ? current : patch === null ? null : this.#redact(patch);
+		const nextCard = next(patch.cardJson, current.cardJson);
+		const nextButtons = next(patch.buttonsJson, current.buttonsJson);
+		const nextFiles = next(patch.filesJson, current.filesJson);
 		this.#db
 			.query(
 				"UPDATE web_messages SET text = ?, card_json = ?, buttons_json = ?, files_json = ?, edited_at = ? WHERE id = ?",
@@ -223,17 +226,12 @@ function listWebMessagesDb(
 ): WebMessageRow[] {
 	const limit = Math.max(1, Math.min(opts.limit ?? 200, 500));
 	const after = opts.after ?? 0;
-	const rows = (
+	const sql =
 		opts.thread !== undefined
-			? db
-					.query("SELECT * FROM web_messages WHERE conversation = ? AND thread = ? AND id > ? ORDER BY id ASC LIMIT ?")
-					.all(conversation, opts.thread, after, limit)
-			: db
-					.query(
-						"SELECT * FROM web_messages WHERE conversation = ? AND thread IS NULL AND id > ? ORDER BY id ASC LIMIT ?",
-					)
-					.all(conversation, after, limit)
-	) as WebMessageSql[];
+			? "SELECT * FROM web_messages WHERE conversation = ? AND thread = ? AND id > ? ORDER BY id ASC LIMIT ?"
+			: "SELECT * FROM web_messages WHERE conversation = ? AND thread IS NULL AND id > ? ORDER BY id ASC LIMIT ?";
+	const args = opts.thread !== undefined ? [conversation, opts.thread, after, limit] : [conversation, after, limit];
+	const rows = db.query(sql).all(...args) as WebMessageSql[];
 	return rows.map(toRow);
 }
 
@@ -341,7 +339,9 @@ function withReadonlyDb<T>(homeDir: string, fallback: T, read: (db: Database) =>
 	let db: Database | undefined;
 	try {
 		db = new Database(join(homeDir, "jabbu.db"), { readonly: true, strict: true });
-		return hasWebMessagesTable(db) ? read(db) : fallback;
+		return db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'web_messages'").get() !== null
+			? read(db)
+			: fallback;
 	} catch {
 		return fallback;
 	} finally {

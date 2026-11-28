@@ -1,24 +1,51 @@
 import type { ChannelPort, MessageRef } from "../channel/port";
-import { threadRefOf } from "../core/normalize";
-import { parseChatOrigin } from "../core/origin-key";
+import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
+import { GRAMMAR, parseChatOrigin } from "../core/origin-key";
 import type { Logger } from "../log";
 import type { Store } from "../store/db";
 import type { LaneRow } from "./status";
 import { type ClosedLaneMessage, classifyClosedLaneMessage } from "./trigger";
 
-/** The `borrowThread` start argument for a lane started from `originKey`: its own conversation thread, if any. */
-export function borrowThreadOf(originKey: string): { borrowThread?: { threadId: string } } {
-	const threadId = parseChatOrigin(originKey)?.threadId;
-	return threadId === undefined ? {} : { borrowThread: { threadId } };
+export interface BorrowThreadRequest {
+	threadId: string;
+	/** True for a channel-body root message (e.g. `inlineReplyChannels`) that has no Discord thread yet. */
+	openThread?: true;
+}
+
+/** The `borrowThread` start argument for a lane started from `originKey`: its thread, or an inline message ref. */
+export function borrowThreadOf(originKey: string, inlineThreadRef?: string): { borrowThread?: BorrowThreadRequest } {
+	const origin = parseChatOrigin(originKey);
+	if (origin?.threadId !== undefined) return { borrowThread: { threadId: origin.threadId } };
+	if (origin?.platform !== "discord" || origin.kind !== "ch" || inlineThreadRef === undefined) return {};
+	const parsed = parseThreadRef(inlineThreadRef);
+	if (parsed === undefined || parsed.channel !== origin.conversationId) return {};
+	if (parsed.threadTs === TOP_LEVEL_TS || !GRAMMAR.discord.thread.test(parsed.threadTs)) return {};
+	return { borrowThread: { threadId: parsed.threadTs, openThread: true } };
 }
 
 type StartedLane = LaneRow & { reused?: boolean; startNote?: string };
 
+/** True when `lane` borrowed `borrow`'s own thread in `channel` (a reuse from another inline message gets the link). */
+export function isBorrowedInPlace(
+	lane: Pick<LaneRow, "threadRef" | "meta">,
+	borrow: BorrowThreadRequest | undefined,
+	channel: string,
+): boolean {
+	return (
+		lane.meta.borrowedThread === true &&
+		borrow !== undefined &&
+		lane.threadRef === threadRefOf(channel, borrow.threadId)
+	);
+}
+
 /** `jabbu_work_start`'s answer for a started (or reused) lane; `link`: its own thread's link, if any. */
-export function startToolReply(lane: StartedLane, link: string | undefined): string {
+export function startToolReply(
+	lane: StartedLane,
+	link: string | undefined,
+	inPlace = lane.meta.borrowedThread === true,
+): string {
 	const where = `(thread ${lane.threadRef}, origin ${lane.originKey})`;
-	if (lane.meta.borrowedThread === true)
-		return borrowedStartReply(lane, "", ` ${where}; tell the owner exactly this, without a link`);
+	if (inPlace) return borrowedStartReply(lane, "", ` ${where}; tell the owner exactly this, without a link`);
 	const state = lane.reused === true ? "already open for this request" : "started";
 	const started = `lane ${lane.name} ${state} ${where}`;
 	const reply = link === undefined ? started : `${started}; tell the owner the lane thread link: ${link}`;
@@ -26,7 +53,7 @@ export function startToolReply(lane: StartedLane, link: string | undefined): str
 }
 
 /** What a start that borrowed its conversation's thread says there (no link: the lane is in this very thread). */
-export function borrowedStartReply(lane: StartedLane, prefix = "", detail = ""): string {
+function borrowedStartReply(lane: StartedLane, prefix = "", detail = ""): string {
 	const said =
 		lane.reused === true
 			? `이 스레드의 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다`
@@ -35,7 +62,7 @@ export function borrowedStartReply(lane: StartedLane, prefix = "", detail = ""):
 }
 
 /** The answer to a `작업:` line whose lane has a thread of its own (`link`: that thread's link, if the adapter has one). */
-export function chatStartReply(lane: StartedLane, link: string | undefined): string {
+function chatStartReply(lane: StartedLane, link: string | undefined): string {
 	if (lane.reused === true) {
 		return `↪ 같은 작업 레인 \`${lane.name}\`이 이미 열려 있어 새로 만들지 않았습니다${link === undefined ? "" : `: ${link}`}`;
 	}
@@ -44,6 +71,18 @@ export function chatStartReply(lane: StartedLane, link: string | undefined): str
 			? `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 새 스레드에서 진행 상황을 확인하세요.`
 			: `🔄 작업 레인 \`${lane.name}\`을 시작했습니다. 레인 스레드에서 진행 상황을 확인하세요: ${link}`;
 	return lane.startNote === undefined ? reply : `${reply}\n${lane.startNote}`;
+}
+
+/** The `작업:` answer for `rowThreadRef`: in-place text when the lane borrowed this message's thread, else with link. */
+export async function chatStartReplyFor(
+	lane: StartedLane,
+	rowThreadRef: string,
+	linkOf: () => Promise<string | undefined>,
+): Promise<string> {
+	if (lane.meta.borrowedThread === true && lane.threadRef === rowThreadRef) {
+		return borrowedStartReply(lane, lane.reused === true ? "↪ " : "🔄 ");
+	}
+	return chatStartReply(lane, await linkOf());
 }
 
 /**
@@ -65,25 +104,59 @@ export function inboundLane(
 }
 
 /**
- * The conversation thread a lane start may borrow instead of opening a sibling (`borrowThread`): `parentOrigin`'s own
- * thread in `input.channel`, never used by any lane row (the thread ref is unique) and not `inFlight` (borrowed by
- * another start). Claimed into `inFlight` here, synchronously: of two starts borrowing one thread, the second opens a
- * sibling. The caller releases it when its start ends.
+ * The conversation thread (or inline root message) a lane start may borrow instead of opening a sibling: `parentOrigin`'s
+ * thread or Discord channel-body message in `input.channel`, free in `inFlight` and `lanes`. Claimed synchronously into
+ * `inFlight`; the caller releases it when the start ends.
  */
 export function claimBorrowedThread(
-	input: { channel: string; parentOrigin?: string; borrowThread?: { threadId: string } },
+	input: { channel: string; parentOrigin?: string; borrowThread?: BorrowThreadRequest },
 	inFlight: Set<string>,
 	store: Pick<Store, "getLaneByThread">,
-): { threadId: string; threadRef: string } | undefined {
+): { threadId: string; threadRef: string; openThread: boolean } | undefined {
 	const threadId = input.borrowThread?.threadId;
+	const openThread = input.borrowThread?.openThread === true;
 	if (threadId === undefined || input.parentOrigin === undefined) return undefined;
 	const origin = parseChatOrigin(input.parentOrigin);
-	if (origin?.kind !== "ch" || origin.conversationId !== input.channel || origin.threadId !== threadId)
+	if (origin?.kind !== "ch" || origin.conversationId !== input.channel) return undefined;
+	if (origin.threadId !== undefined) {
+		if (origin.threadId !== threadId || openThread) return undefined;
+	} else if (origin.platform !== "discord" || !openThread || !GRAMMAR.discord.thread.test(threadId)) {
 		return undefined;
+	}
 	const threadRef = threadRefOf(input.channel, threadId);
 	if (inFlight.has(threadRef) || store.getLaneByThread(threadRef) !== undefined) return undefined;
 	inFlight.add(threadRef);
-	return { threadId, threadRef };
+	return { threadId, threadRef, openThread };
+}
+
+/**
+ * Opens (or reuses) the lane's thread in `input.channel`: borrows an existing thread or opens one on the owner's inline
+ * root message when `borrowed` is set, otherwise posts a `🔄` root message and opens a thread from it.
+ */
+export async function openLaneThread(
+	port: Pick<ChannelPort, "platform" | "post" | "openThread">,
+	input: { channel: string; title: string; shown: string },
+	borrowed: { threadId: string; openThread: boolean } | undefined,
+	onRoot: (ref: MessageRef) => void,
+	onThreadOpened: () => void,
+): Promise<string> {
+	if (borrowed !== undefined) {
+		if (borrowed.openThread && port.openThread !== undefined) {
+			await port.openThread(
+				{ platform: port.platform, conversationId: input.channel, messageId: borrowed.threadId },
+				input.title,
+			);
+		}
+		return borrowed.threadId;
+	}
+	const root = await port.post({ conversationId: input.channel }, { text: `🔄 ${input.shown}` });
+	const rootRef: MessageRef = { platform: port.platform, conversationId: input.channel, messageId: root.messageId };
+	onRoot(rootRef);
+	if (port.openThread !== undefined) {
+		await port.openThread(rootRef, input.title);
+		onThreadOpened();
+	}
+	return root.messageId;
 }
 
 /** A borrowed start failed after its status was posted: the status becomes ❌ (no button); a new ❌ only if that fails. */

@@ -5,9 +5,12 @@ import { toneColorInt } from "../src/channel/card";
 import { DENIED_TEXT } from "../src/channel/text";
 import { ConfigError, loadConfig } from "../src/config";
 import { Daemon } from "../src/daemon/daemon";
+import type { DaemonContext } from "../src/daemon/daemon-context";
 import { OPS_PANEL_CURSOR } from "../src/daemon/daemon-ops-panel";
+import { OpsUsageCache } from "../src/daemon/daemon-ops-panel-usage";
 import { LIVE_FIELDS, planReload } from "../src/daemon/reload";
 import { clearUsageLimitsCache } from "../src/dashboard/usage-limits";
+import { snowflakeAt } from "../src/discord/backfill";
 import { DiscordChannel } from "../src/discord/channel";
 import { DiscordRest } from "../src/discord/rest";
 import { DiscordCallError, type DiscordInteraction } from "../src/discord/transport";
@@ -25,6 +28,7 @@ import {
 	parseOpsPanelActionId,
 	renderOpsPanel,
 } from "../src/ops/ops-panel";
+import type { OpsUsageInput } from "../src/ops/ops-panel-fields";
 import { quotaGatePath, writeQuotaLift } from "../src/ops/quota-gate";
 import { redact } from "../src/redact";
 import {
@@ -107,8 +111,9 @@ function makeHostLoad(initial: { load15?: number; cpus?: number; memAvailPct?: n
 
 function clickButton(customId: string, messageId: string, userId = OWNER): DiscordInteraction {
 	seq += 1n;
+	// Interaction ids are snowflakes minted at the test clock, so the follow-up token reads as fresh.
 	return {
-		id: String(810_000_000_000_000_000n + seq),
+		id: String(BigInt(snowflakeAt(now)) + seq),
 		application_id: APP,
 		type: 3,
 		token: `tok-${seq}`,
@@ -912,5 +917,67 @@ describe("Daemon #ops panel monitors, usage collection and pin retry", () => {
 		now = BASE_NOW + 130 * MIN;
 		await refresh(transport);
 		expect(transport.count("pinMessage")).toBe(2);
+	});
+});
+
+describe("OpsUsageCache ompUsage percent shapes", () => {
+	const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+	async function panelUsage(reports: unknown[]): Promise<OpsUsageInput | undefined> {
+		const run: ProcessRunner = async () => ({
+			code: 0,
+			signal: null,
+			timedOut: false,
+			stdout: JSON.stringify({ reports }),
+			stderr: "",
+		});
+		const ctx = {
+			options: {
+				config: { agent: "omp", ompExecutable: "omp", homeDir: home.dir, timezone: "Asia/Seoul" },
+				usageLimitsRun: run,
+			},
+		} as unknown as DaemonContext;
+		const cache = new OpsUsageCache(ctx);
+		expect(cache.read(BASE_NOW)).toBeUndefined();
+		for (let i = 0; i < 5; i++) await settle();
+		return cache.read(BASE_NOW);
+	}
+
+	test("remaining-only, percent-unit, and exhausted limits reach the panel", async () => {
+		const usage = await panelUsage([
+			{
+				provider: "anthropic",
+				limits: [
+					{
+						label: "5h",
+						amount: { unit: "tokens", remaining: 50, limit: 1000 },
+						window: { id: "5h", label: "5h" },
+					},
+				],
+			},
+			{
+				provider: "zai",
+				limits: [{ label: "5h", amount: { unit: "percent", used: 95 }, window: { id: "5h", label: "5h" } }],
+			},
+			{
+				provider: "openai-codex",
+				limits: [
+					{
+						label: "5h",
+						status: "exhausted",
+						amount: { unit: "percent", usedFraction: 0.5 },
+						window: { id: "5h", label: "5h" },
+					},
+				],
+			},
+		]);
+		expect(usage).toEqual({
+			state: "ok",
+			rows: [
+				{ provider: "anthropic", label: "5h", usedPct: 95 },
+				{ provider: "openai-codex", label: "5h", usedPct: 100 },
+				{ provider: "zai", label: "5h", usedPct: 95 },
+			],
+		});
 	});
 });

@@ -236,15 +236,8 @@ export class MonitorScheduler {
 
 	/** Claims one slot and counts it in the summary. */
 	#claim(monitor: MonitorRow, slotAt: number, summary: TickSummary, skip: string | undefined): void {
-		this.#count(
-			this.#deps.store.monitors.claimSlot({
-				monitorId: monitor.id,
-				slotAt,
-				...(skip === undefined ? {} : { forceSkipReason: skip }),
-			}),
-			summary,
-			skip,
-		);
+		const slot = { monitorId: monitor.id, slotAt, ...(skip === undefined ? {} : { forceSkipReason: skip }) };
+		this.#count(this.#deps.store.monitors.claimSlot(slot), summary, skip);
 	}
 
 	#claimCron(
@@ -286,10 +279,9 @@ export class MonitorScheduler {
 		if (tooOld.length + recent.length > 0) store.monitors.setCursor(monitor.id, now, monitor.cursorAt);
 		const skipped = tooOldCount + overLimit.length;
 		if (unroutable) summary.skippedCatchUp += skipped + run.length;
-		else if (skipped > 0) {
-			summary.skippedCatchUp += skipped;
+		else if (skipped > 0) summary.skippedCatchUp += skipped;
+		if (!unroutable && skipped > 0)
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: skipped, replayed: run.length });
-		}
 		if (unroutable && run.length > 0 && !this.#unroutableSkippedWarned.has(monitor.id)) {
 			this.#unroutableSkippedWarned.add(monitor.id);
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: run.length, replayed: 0, reason: "unroutable" });
@@ -316,8 +308,7 @@ export class MonitorScheduler {
 		// from there — but only for a day after the lift, after which the fire is stale like any other.
 		const stale = now - slotAt > CATCHUP_MAX_AGE_MS && !this.#heldAt.has(monitor.id);
 		const unfrozenAt = stale ? readUnfrozenAt(this.#deps.homeDir) : undefined;
-		const heldByFreeze = unfrozenAt !== undefined && slotAt <= unfrozenAt && now - unfrozenAt <= CATCHUP_MAX_AGE_MS;
-		if (stale && !heldByFreeze) {
+		if (stale && (unfrozenAt === undefined || slotAt > unfrozenAt || now - unfrozenAt > CATCHUP_MAX_AGE_MS)) {
 			store.monitors.recordSkippedSlot(monitor.id, slotAt, "catchup_age");
 			summary.skippedCatchUp += 1;
 			log.warn("monitor_slots_skipped", { monitor: monitor.id, count: 1, replayed: 0 });
@@ -353,22 +344,6 @@ export class MonitorScheduler {
 					let outcome: "met" | "unmet" | "error" = "error";
 					if (result.fired) outcome = "met";
 					else if (result.exitCode !== null && !result.timedOut && result.error === undefined) outcome = "unmet";
-					// An unchanged, quiet unmet check is the steady state; logging it every interval only adds noise.
-					const logIt =
-						result.fired ||
-						outcome !== (store.monitors.getMonitor(monitor.id)?.lastScriptState ?? null) ||
-						result.timedOut ||
-						result.error !== undefined ||
-						result.stderr !== "";
-					if (logIt)
-						log.info("monitor_script", {
-							monitor: monitor.id,
-							fired: result.fired,
-							exit: result.exitCode,
-							timed_out: result.timedOut,
-							...(result.error === undefined ? {} : { error: result.error }),
-							...(result.stderr === "" ? {} : { tail: result.stderr }),
-						});
 					const suppressReason = result.fired && result.wakeOff ? "wake_gate" : undefined;
 					const claim = store.monitors.recordScriptCheck({
 						monitorId: monitor.id,
@@ -382,6 +357,26 @@ export class MonitorScheduler {
 						...(result.fired ? { hash: result.outputHash } : {}),
 						...(suppressReason === undefined ? {} : { suppressReason }),
 					});
+					// An unchanged, quiet check is the steady state; logging it every interval only adds noise. A met
+					// check only counts as fired when it actually claimed an event, so a steady edge-met check stays
+					// quiet while a `fire: "every"` met check — which claims every time — still logs.
+					// `lastScriptState` here is the tick-time snapshot, i.e. the state before this check, because the
+					// claim above already moved it.
+					const logIt =
+						(result.fired && claim !== undefined) ||
+						outcome !== monitor.lastScriptState ||
+						result.timedOut ||
+						result.error !== undefined ||
+						result.stderr !== "";
+					if (logIt)
+						log.info("monitor_script", {
+							monitor: monitor.id,
+							fired: result.fired,
+							exit: result.exitCode,
+							timed_out: result.timedOut,
+							...(result.error === undefined ? {} : { error: result.error }),
+							...(result.stderr === "" ? {} : { tail: result.stderr }),
+						});
 					if (suppressReason !== undefined && claim !== undefined)
 						log.info("monitor_suppressed", { monitor: monitor.id, reason: suppressReason });
 					if (claim) this.#dispatchReady();
@@ -441,10 +436,9 @@ export class MonitorScheduler {
 					continue;
 				}
 				if (monitor.deliver === "verbatim") {
-					if (this.#deliverVerbatim(monitor, event)) {
-						dispatched += 1;
-						settledVerbatim = true;
-					}
+					const delivered = this.#deliverVerbatim(monitor, event);
+					if (delivered) dispatched += 1;
+					if (delivered) settledVerbatim = true;
 					continue;
 				}
 				const inboundId = `monitor:${monitor.id}:${event.eventId}:${event.attempts + 1}`;

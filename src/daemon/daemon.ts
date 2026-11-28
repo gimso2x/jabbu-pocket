@@ -38,7 +38,7 @@ import {
 	reportThreadPattern,
 	spawnRunner,
 } from "../ops/apply";
-import { readStamp, runBackup } from "../ops/backup";
+import { readStamp } from "../ops/backup";
 import { formatCacheMissNotice, formatColdCacheNotice } from "../ops/cache-monitor";
 import { type DailyBudgetState, dailyBudgetState, ledgerDay, renderBudget } from "../ops/cost-cap";
 import { createFreezeProbe, type FreezeState } from "../ops/freeze";
@@ -64,6 +64,7 @@ import { TASK_SWEEP_MS, type TaskSweeper } from "../tasks/sweeper";
 import { localIso } from "../time";
 import { notifyWebOwnerTurn } from "../web/notify";
 import { turnNoteRepos, WikiNotes } from "../wiki/notes";
+import { type BootBackupHandle, startBootBackup } from "./boot-backup";
 import { readBotUsageSummary } from "./bot-driver";
 import { DIALOG_AMBIGUOUS_NOTICE, MEDIA_SWEEP_INTERVAL_MS, STOP_DRAIN_MS, WIKI_FLUSH_MS } from "./daemon-constants";
 import {
@@ -89,6 +90,7 @@ import { ingestOwnerText } from "./daemon-task-land-entry";
 import { noteAgyTaskLimit, type TaskRpcEnv, taskDriver, taskHeld } from "./daemon-task-resume";
 import { createTaskSweep } from "./daemon-task-sweep";
 import type { DaemonOptions, InjectRequest, InjectResult } from "./daemon-types";
+import { sweepDeliveries } from "./delivery-sweep";
 import { discordPolicyOf } from "./discord-policy";
 import { DEFAULT_SWEEP_MS, EVENT_LOOP_WARN_MS, SweepHeartbeatWriter } from "./heartbeat";
 import { type IpcServer, startIpcServer } from "./ipc";
@@ -147,6 +149,7 @@ export class Daemon {
 	#stopped = false;
 	#stopPromise: Promise<void> | undefined; // the in-flight shutdown; a re-entering stop() awaits it instead of returning
 	#heartbeat: SweepHeartbeatWriter | undefined;
+	#bootBackupWorker: BootBackupHandle | undefined;
 	/** `<home>/FROZEN` re-read within seconds; autonomous paths (dispatch, monitors, lanes, task reminders) consult it. */
 	readonly #frozen: () => FreezeState | undefined;
 	#broker: ApprovalBroker | undefined;
@@ -391,7 +394,7 @@ export class Daemon {
 			recovered_inflight: store.recoveredInflight,
 		});
 		for (const { field, reason } of config.warnings ?? []) log.warn("config_warning", { field, reason });
-		this.#bootBackup();
+		await this.#bootBackup();
 
 		// Rows of a removed platform (`slack/…`, `teams/…`) have no adapter to answer on: close them without running a turn.
 		for (const state of ["pending", "dispatched"] as const) {
@@ -787,6 +790,7 @@ export class Daemon {
 		};
 		try {
 			await run("pump", () => this.pump());
+			await run("delivery_sweep", () => sweepDeliveries(this.#store, this.#log));
 			await run("sweep_stalls", () => this.#router?.sweepStalls());
 			await run("lane_tick", () => this.#startLaneTick());
 			try {
@@ -860,16 +864,13 @@ export class Daemon {
 	}
 
 	/** First install without a backup stamp runs one boot backup before the first gate sweep. */
-	#bootBackup(): void {
-		const { homeDir, maxBundleBytes } = this.#options.config;
-		if (readStamp(join(homeDir, "backups")) !== undefined) return;
+	async #bootBackup(): Promise<void> {
+		if (readStamp(join(this.#options.config.homeDir, "backups")) !== undefined) return;
+		// The daemon's clock keeps the gates fresh; a synchronous backup of a slow, large home would stall the watchdog beat and boot-loop.
+		const worker = startBootBackup(this.#options.config, new Date(this.#clock.now()), this.#options.bootBackup);
+		this.#bootBackupWorker = worker;
 		try {
-			// The daemon's clock, so the gates (judged on the same clock) see a fresh stamp.
-			const result = (this.#options.bootBackup ?? runBackup)({
-				homeDir,
-				now: new Date(this.#clock.now()),
-				...(maxBundleBytes === undefined ? {} : { maxBundleBytes }),
-			});
+			const result = await worker.done;
 			this.#log.info("boot_backup_done", { file: result.file, bundle: result.bundle ?? "none" });
 		} catch (error) {
 			this.#log.warn("boot_backup_failed", { error: String(error) });
@@ -1224,10 +1225,9 @@ export class Daemon {
 	}
 
 	/**
-	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
-	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
-	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
-	 * the owner message a reply of it.
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and feeds the owner
+	 * message through that platform adapter's own path (same normalizeInbound, same fencing of `quoted`), threaded under
+	 * that root (with `thread`: a reply in that existing thread, and the owner message a reply of it).
 	 */
 	async inject(request: InjectRequest): Promise<InjectResult> {
 		if (this.#adapters.size === 0) throw new Error("daemon not started");
@@ -1327,6 +1327,7 @@ export class Daemon {
 	}
 
 	async #shutdown(): Promise<void> {
+		this.#bootBackupWorker?.terminate(); // a stop requested mid-backup ends the worker, so `start()` resumes
 		clearInterval(this.#timer);
 		this.#lanes?.stop();
 		this.#landing.stop();
@@ -1349,13 +1350,12 @@ export class Daemon {
 
 	/** The bounded wait between intake stop and child stop; a no-op when nothing runs or the bound is 0. */
 	async #drainRunningTurns(): Promise<void> {
-		const router = this.#router;
 		const boundMs = this.#options.stopDrainMs ?? STOP_DRAIN_MS;
-		if (router === undefined || boundMs <= 0) return;
-		const busy = router.busyOrigins();
+		if (this.#router === undefined || boundMs <= 0) return;
+		const busy = this.#router.busyOrigins();
 		if (busy.length === 0) return;
 		const startedAt = this.#clock.now();
-		const stillBusy = await router.drainRunning(boundMs);
+		const stillBusy = await this.#router.drainRunning(boundMs);
 		if (stillBusy.length > 0) this.#log.warn("stop_drain_timeout", { origins: stillBusy, boundMs });
 		else this.#log.info("stop_drained", { origins: busy, drainMs: this.#clock.now() - startedAt });
 	}
