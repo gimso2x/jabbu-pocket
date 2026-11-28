@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadConfig, primaryOwnerUserId, WEB_OWNER_USER_ID } from "../src/config";
@@ -14,6 +14,7 @@ import { createLogger } from "../src/log";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { redact } from "../src/redact";
 import { readWebMessages } from "../src/store/web-messages";
+import { makeHome } from "./helpers/bot-home";
 import { daemonTestOptions } from "./helpers/disk";
 
 let home = "";
@@ -149,6 +150,34 @@ describe("AC-1: web channel optionality and standalone daemon boot", () => {
 		expect(ready).toContain("discord=off");
 		expect(ready).toContain("web=on");
 		expect(logs.some((line) => line.includes("secret_missing"))).toBe(false);
+	});
+
+	test("a disabled web block with malformed values loads when discord is configured; re-enabling re-validates", () => {
+		const testHome = makeHome("jabbu-web-disabled-");
+		try {
+			const configPath = join(testHome.dir, "config.json");
+			const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+			const channels = config.channels as Record<string, unknown>;
+			const badWeb = {
+				enabled: false,
+				ownerEmails: ["not-an-email"],
+				accessTeamDomain: "bad domain",
+				accessAud: "aud with space",
+			};
+			channels.web = badWeb;
+			writeFileSync(configPath, JSON.stringify(config));
+			expect(loadConfig(testHome.dir).channels.web).toEqual(badWeb);
+			// Unknown keys are still rejected in a disabled block.
+			channels.web = { ...badWeb, bogusKey: true };
+			writeFileSync(configPath, JSON.stringify(config));
+			expect(() => loadConfig(testHome.dir)).toThrow(ConfigError);
+			// Re-enabling re-validates at the next load.
+			channels.web = { ...badWeb, enabled: true };
+			writeFileSync(configPath, JSON.stringify(config));
+			expect(() => loadConfig(testHome.dir)).toThrow(ConfigError);
+		} finally {
+			testHome.remove();
+		}
 	});
 
 	test("missing or incomplete channels.web without discord raises ConfigError", () => {

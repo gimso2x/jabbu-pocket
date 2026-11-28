@@ -8,6 +8,7 @@ import { TASK_PATH_PATTERN } from "./tasks/docs";
 export type ConfigErrorCode =
 	| "home_missing"
 	| "home_permissions"
+	| "home_relative"
 	| "config_missing"
 	| "config_unreadable"
 	| "config_invalid_json"
@@ -89,7 +90,7 @@ export function optionalInt(
 	return value;
 }
 
-/** An optional argument list: an array of non-empty strings (copied), else `field` is invalid. */
+/** An optional argument list: an array of non-empty strings without a NUL byte (copied), else `field` is invalid. */
 export function optionalArgList(
 	configPath: string,
 	obj: Record<string, unknown>,
@@ -98,7 +99,10 @@ export function optionalArgList(
 ): string[] | undefined {
 	const value = obj[key];
 	if (value === undefined) return undefined;
-	if (!Array.isArray(value) || value.some((arg) => typeof arg !== "string" || arg.trim() === "")) {
+	if (
+		!Array.isArray(value) ||
+		value.some((arg) => typeof arg !== "string" || arg.trim() === "" || arg.includes("\0"))
+	) {
 		invalid(configPath, field);
 	}
 	return [...(value as string[])];
@@ -145,6 +149,7 @@ export function laneLandOf(configPath: string, value: unknown): Record<string, L
 	const record = asRecord(value);
 	if (record === undefined) invalid(configPath, "lanes.land");
 	const land: Record<string, LaneLandRepoConfig> = {};
+	const seen = new Set<string>();
 	for (const [repo, raw] of Object.entries(record)) {
 		const field = `lanes.land.${repo}`;
 		const entry = asRecord(raw);
@@ -176,7 +181,11 @@ export function laneLandOf(configPath: string, value: unknown): Record<string, L
 			if (!isRecordsPath(path)) invalid(configPath, `${field}.remotes.${host}`);
 			return [host, (path as string).replace(/(?<=.)\/+$/, "")] as const;
 		});
-		land[repo.replace(/(?<=.)\/+$/, "")] = {
+		// Two distinct keys that normalise to one ("/repo" and "/repo/") would silently overwrite each other.
+		const key = repo.replace(/(?<=.)\/+$/, "");
+		if (seen.has(key)) invalid(configPath, field);
+		seen.add(key);
+		land[key] = {
 			mode,
 			...(remote === undefined ? {} : { remote }),
 			...(ciGraceMs === undefined ? {} : { ciGraceMs }),

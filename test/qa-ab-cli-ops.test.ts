@@ -50,10 +50,12 @@ function fakeOmp(): string {
 }
 
 describe("qa-ab CLI·홈·ops 수정", () => {
-	test("#3: defaultHomeDir expands ~ and ~/ while keeping ~user literal", () => {
+	test("#3: defaultHomeDir expands ~ and ~/ and refuses a relative JABBU_HOME", () => {
 		expect(defaultHomeDir({ JABBU_HOME: "~" })).toBe(homedir());
 		expect(defaultHomeDir({ JABBU_HOME: "~/my-jabbu" })).toBe(join(homedir(), "my-jabbu"));
-		expect(defaultHomeDir({ JABBU_HOME: "~other/.jabbu" })).toBe("~other/.jabbu");
+		// "~other" is never expanded to another user's home: it is refused like any relative value.
+		expect(() => defaultHomeDir({ JABBU_HOME: "~other/.jabbu" })).toThrow("JABBU_HOME must be absolute");
+		expect(() => defaultHomeDir({ JABBU_HOME: "myhome" })).toThrow("JABBU_HOME must be absolute");
 	});
 
 	test("#1: init refuses a dangling config.json symlink with exit 2 and leaves no trace", () => {

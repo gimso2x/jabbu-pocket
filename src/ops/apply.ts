@@ -28,6 +28,7 @@ import { acquireApplyLock, type LockWaitResult } from "./apply-lock-wait";
 import { type RollbackDbResult, restoreLedgerForRollback } from "./apply-rollback-db";
 import { type EnsureDepsResult, ensureDeps } from "./deps";
 import type { Gate } from "./gates";
+import { restoreLastGoodDetail } from "./last-good";
 import type { Runner, RunOptions, RunResult } from "./run-types";
 import { UnitHomeUnreadableError, unitJabbuHome } from "./unit-home";
 
@@ -1120,6 +1121,8 @@ async function applyUnderLock(
 	if (!ensured.ok) return finish("failed", 1);
 	crash("apply_after_deps");
 
+	// The text the restarted daemon is about to load: only this text may become last-good at the end.
+	const validatedConfigText = readConfigText(homeDir);
 	let restartAt = 0;
 	const restarted = await step("restart", async () => {
 		const r = await restartAndWait();
@@ -1263,10 +1266,8 @@ async function applyUnderLock(
 		const recovered = await step("rollback", async () => {
 			const details: string[] = [];
 			const lastGood = `${configPath}${LAST_GOOD_SUFFIX}`;
-			if (existsSync(lastGood)) {
-				writeAtomic0600(configPath, readFileSync(lastGood));
-				details.push(`config restored from ${lastGood}`);
-			} else details.push("복원할 정상 config 없음 (config untouched)");
+			if (existsSync(lastGood)) details.push(restoreLastGoodDetail(configPath, lastGood));
+			else details.push("복원할 정상 config 없음 (config untouched)");
 			const r = await restartAndWait();
 			let ok = r.ok;
 			if (!r.ok) details.push(r.detail);
@@ -1326,9 +1327,8 @@ async function applyUnderLock(
 	// ends here only on main: a detached apply (a peer or a retry after a code rollback, `--allow-detached`) runs code
 	// that is not main, so it keeps both and records no head.last-good.
 	await step("last_good", () => {
-		const details = [
-			recordLastGoodConfig(homeDir) ? `${configPath}${LAST_GOOD_SUFFIX}` : "no config.json or copy failed",
-		];
+		const recorded = recordLastGoodConfig(homeDir, undefined, validatedConfigText);
+		const details = [recorded ? `${configPath}${LAST_GOOD_SUFFIX}` : "no config.json or copy failed"];
 		if (detached) {
 			details.push(`${HEAD_LAST_GOOD_FILE}, ${AUTOLAND_HOLD_FILE} and journal kept (detached HEAD)`);
 			return { ok: true, detail: details.join("; ") };

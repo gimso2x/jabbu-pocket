@@ -350,10 +350,10 @@ export function startBrief(deps: MailboxDeps, platformMessageId: string, opRef: 
 		return;
 	}
 	const startedAt = Date.now();
-	// Like `askBtw`: a `!new` during the render discards this row — nothing of the old epoch is delivered,
-	// and discarding an already-discarded row would throw only to be logged as a settle failure.
+	// Like `askBtw`: a `!new` during the render discards this row. The provider gets the same check and skips the
+	// upload when it fires, so nothing of the old epoch is delivered; the guard below only settles the row.
 	const discarded = (): boolean => store.getInbound(platformMessageId)?.state === "discarded";
-	provider(originKey, threadRef)
+	provider(originKey, threadRef, discarded)
 		.then(
 			() => {
 				if (discarded()) return;

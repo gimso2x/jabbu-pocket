@@ -22,13 +22,12 @@ import {
 	OmpRpcClient,
 	type PromptResultFrame,
 	type RpcChild,
-	RpcCommandError,
 	type RpcProtocolError,
 	type RpcSpawnOptions,
 } from "./rpc-client";
+import { contextOf, listen, runFailure, type TurnEnd, toDriverError } from "./rpc-helpers";
 import { ExtensionUiTap } from "./rpc-ui-tap";
 import { checkOmpRuntime } from "./runtime-check";
-import { isRecord } from "./type-guards";
 
 /** How long a side question may take, counted from the `btw` command. */
 export const BTW_TIMEOUT_MS = 120_000;
@@ -59,28 +58,6 @@ const FORWARDED_SESSION_EVENTS: ReadonlySet<string> = new Set([
 	"auto_retry_end",
 	"retry_fallback_applied",
 ]);
-
-function listen<T>(s: Set<T>, f: T): () => void {
-	s.add(f);
-	return () => s.delete(f);
-}
-
-/** A finite number of at least `min`, else undefined. */
-function countOf(value: unknown, min: number): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) && value >= min ? value : undefined;
-}
-
-/**
- * `OmpState.context` from omp's `contextUsage`: nothing without a positive window (an unknown model), `tokens`/`percent`
- * null when omp sends no number (right after a compaction it does not know them yet).
- */
-function contextOf(usage: unknown): Pick<OmpState, "context"> {
-	if (!isRecord(usage)) return {};
-	const window = countOf(usage.contextWindow, 1);
-	if (window === undefined) return {};
-	const tokens = countOf(usage.tokens, 0) ?? null;
-	return { context: { tokens, window, percent: tokens === null ? null : (countOf(usage.percent, 0) ?? null) } };
-}
 
 export interface RpcOmpDriverOptions {
 	/** The omp executable (`JABBU_OMP_EXECUTABLE`): the package's `dist/cli.js` or the standalone binary. */
@@ -117,12 +94,6 @@ export interface RpcOmpDriverOptions {
 	spawn?: (argv: string[], options: RpcSpawnOptions) => RpcChild;
 }
 
-function toDriverError(error: unknown): unknown {
-	if (!(error instanceof RpcCommandError)) return error;
-	const code = error.code === "unknown_since" ? "unknown_since" : "rpc_error";
-	return new OmpDriverError(code, error.message, { rpcCode: error.code, cause: error });
-}
-
 /**
  * `leafId()` without moving the whole session through the pipe: reads `get_entries(since=cache.since)` so only the
  * entries after the last-seen cursor are serialized, and remembers the returned `leafId`. An `unknown_since` error
@@ -145,9 +116,6 @@ export async function leafIdViaCursor(
 	}
 }
 
-/** A turn's end as `#finalize` reads it (a `prompt_result`, or the end of the wait for an unsettled session). */
-type TurnEnd = Pick<PromptResultFrame, "status" | "error">;
-
 /** The wait of one prompt for its unsettled session: the silence cap timer and the next `get_state` poll. */
 interface TailWait {
 	opRef: string;
@@ -155,27 +123,17 @@ interface TailWait {
 	poll?: NodeJS.Timeout;
 }
 
-/**
- * The failure of a run that ended with `agent_end`, read from its last assistant message like omp's own prompt
- * outcome (`stopReason` `error` or `aborted`); undefined when it completed.
- */
-function runFailure(messages: unknown): TurnEnd | undefined {
-	if (!Array.isArray(messages)) return undefined;
-	const last = messages.findLast((message) => isRecord(message) && message.role === "assistant");
-	if (!isRecord(last)) return undefined;
-	if (last.stopReason === "aborted") return { status: "aborted" };
-	if (last.stopReason !== "error") return undefined;
-	const message = typeof last.errorMessage === "string" ? last.errorMessage : "omp run failed";
-	return { status: "error", error: { message } };
-}
-
 export class RpcOmpDriver implements OmpSessionDriver {
 	readonly #options: RpcOmpDriverOptions;
 	/** The started client: commands go here. */
 	#client: OmpRpcClient | undefined;
+	/** A start() in flight: stop() awaits it, and a second start() refuses while it runs. */
+	#starting: Promise<void> | undefined;
 	/** The client whose child is (or was last) running: its exit and stream reports count until `stop()` ends. */
 	#active: OmpRpcClient | undefined;
 	#stopping = false;
+	/** The live child exited: a `#finalize` read that fails then is a dead session, not a slow one. */
+	#exited = false;
 	readonly #finalListeners = new Set<(final: OmpFinal) => void>();
 	readonly #eventListeners = new Set<(event: OmpEvent) => void>();
 	readonly #exitListeners = new Set<(info: OmpExitInfo) => void>();
@@ -184,6 +142,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	readonly #early = new Map<string, () => void>();
 	/** Prompts in flight: only while one runs may an end be buffered in #early (a late frame after a rejection is dropped). */
 	#prompting = 0;
+	/** opRefs whose final is being read: a steer in that window would start an orphan omp run. */
+	readonly #finalizing = new Set<string>();
 	/** Last leafId this driver saw from a `leafId()` read; seed for the delta read in `leafIdViaCursor`. */
 	readonly #leafCursor: { since?: string } = {};
 	/**
@@ -204,14 +164,22 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	async start(): Promise<void> {
-		if (this.#client) throw new OmpDriverError("already_started", "driver already started");
+		if (this.#client || this.#starting) throw new OmpDriverError("already_started", "driver already started");
+		this.#stopping = false;
+		const starting = this.#startInner();
+		this.#starting = starting;
+		await starting.finally(() => {
+			this.#starting = undefined;
+		});
+	}
+
+	async #startInner(): Promise<void> {
 		const options = this.#options;
 		const env = buildChildEnv(options.env, options.baseEnv);
 		const problem = await checkOmpRuntime(options.ompExecutable, env);
 		if (problem) throw new OmpDriverError(problem.code, problem.message);
 
-		mkdirSync(resolve(options.cwd), { recursive: true });
-		mkdirSync(resolve(options.sessionDir), { recursive: true });
+		for (const dir of [options.cwd, options.sessionDir]) mkdirSync(resolve(dir), { recursive: true });
 
 		// omp builds the `ask` tool only for a UI session; a child whose dialogs reach the owner runs `rpc-ui`.
 		const args = ["--mode", options.answerDialog === undefined ? "rpc" : "rpc-ui", "--no-title"];
@@ -223,6 +191,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		args.push(...(options.extraArgs ?? []));
 
 		this.#stopping = false;
+		this.#exited = false;
 		const client: OmpRpcClient = new OmpRpcClient({
 			executable: options.ompExecutable,
 			args,
@@ -272,14 +241,21 @@ export class RpcOmpDriver implements OmpSessionDriver {
 			if (this.#active === client) this.#active = undefined;
 			throw toDriverError(error);
 		}
+		if (this.#stopping) {
+			// stop() was called during start: tear the child down instead of publishing it.
+			for (const off of this.#unsubscribers) off();
+			this.#unsubscribers = [];
+			if (this.#active === client) this.#active = undefined;
+			await client.stop();
+			return;
+		}
 		this.#client = client;
 		// `ask` arrives as one dialog only when someone answers it; otherwise explicit false, so a default change cannot
 		// enable a dialog nobody answers.
-		const askDialog = options.answerDialog !== undefined;
 		this.#writeRaw(client, {
 			type: "set_ask_dialog",
-			id: `jabbu-ask-dialog-${askDialog ? "on" : "off"}`,
-			enabled: askDialog,
+			id: `jabbu-ask-dialog-${options.answerDialog !== undefined ? "on" : "off"}`,
+			enabled: options.answerDialog !== undefined,
 		});
 	}
 
@@ -297,8 +273,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	#emitExit(code: number | null, stderr: string): void {
-		const info: OmpExitInfo = { code, expected: this.#stopping, stderr };
-		for (const listener of this.#exitListeners) listener(info);
+		this.#exited = true;
+		for (const listener of this.#exitListeners) listener({ code, expected: this.#stopping, stderr });
 	}
 
 	/** A stdout line that is not one JSON object is skipped by the client; it is only logged. */
@@ -379,10 +355,9 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	/** Asks `get_state` every `tailPollMs` (the next ask only after this one was judged) until the wait ends. */
 	#pollTail(tail: TailWait): void {
 		tail.poll = setTimeout(async () => {
-			const client = this.#client;
-			if (this.#tail !== tail || client === undefined) return;
+			if (this.#tail !== tail || this.#client === undefined) return;
 			try {
-				const state = await client.getState();
+				const state = await this.#client.getState();
 				if (this.#tail !== tail) return;
 				if (state.isSettled && state.queuedMessageCount === 0) {
 					this.#options.log?.info("tail_wait_settled", { opRef: tail.opRef, by: "get_state" });
@@ -449,26 +424,34 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	#onLocalCommand(id: string, output: string): void {
 		const deliver = () => {
 			this.#admitted.delete(id);
-			const final: OmpFinal = { opRef: id, status: "completed", text: output };
-			for (const listener of this.#finalListeners) listener(final);
+			for (const listener of this.#finalListeners) listener({ opRef: id, status: "completed", text: output });
 		};
 		if (this.#admitted.has(id)) deliver();
 		else if (this.#prompting > 0) this.#early.set(id, deliver);
 	}
 
 	async #finalize(opRef: string, frame: TurnEnd): Promise<void> {
-		this.#admitted.delete(opRef);
-		const final: OmpFinal = { opRef, status: frame.status, text: "" };
-		if (frame.error) final.error = frame.error.message;
-		if (frame.status === "completed" && this.#client) {
-			try {
-				final.text = (await this.#client.getLastAssistantText()) ?? "";
-			} catch (error) {
-				final.status = "error";
-				final.error = `get_last_assistant_text failed: ${error instanceof Error ? error.message : String(error)}`;
+		this.#finalizing.add(opRef);
+		try {
+			this.#admitted.delete(opRef);
+			const final: OmpFinal = { opRef, status: frame.status, text: "" };
+			if (frame.error) final.error = frame.error.message;
+			if (frame.status === "completed" && this.#client) {
+				try {
+					final.text = (await this.#client.getLastAssistantText()) ?? "";
+				} catch (error) {
+					// The read is redundant for delivery; only a gone child (its exit fails the turn anyway) demotes.
+					const message = error instanceof Error ? error.message : String(error);
+					if (this.#exited) {
+						final.status = "error";
+						final.error = `get_last_assistant_text failed: ${message}`;
+					} else this.#options.log?.warn("get_last_assistant_text_failed", { opRef, error: message });
+				}
 			}
+			for (const listener of this.#finalListeners) listener(final);
+		} finally {
+			this.#finalizing.delete(opRef);
 		}
-		for (const listener of this.#finalListeners) listener(final);
 	}
 
 	#require(): OmpRpcClient {
@@ -499,7 +482,10 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		}
 	}
 
-	steer = (text: string): Promise<void> => this.#call((c) => c.steer(text));
+	steer = async (text: string): Promise<void> => {
+		if (this.#finalizing.size > 0) throw new OmpDriverError("rpc_error", "steer rejected: final pending");
+		await this.#call((c) => c.steer(text));
+	};
 
 	abort(): Promise<void> {
 		this.#dropTail();
@@ -565,23 +551,17 @@ export class RpcOmpDriver implements OmpSessionDriver {
 
 	setThinking = (level: string): Promise<void> => this.#call((c) => c.setThinkingLevel(level));
 
-	setFastMode(enabled: boolean): Promise<{ enabled: boolean; active: boolean }> {
-		return this.#call((client) => client.setFastMode(enabled));
-	}
+	setFastMode = (enabled: boolean): Promise<{ enabled: boolean; active: boolean }> =>
+		this.#call((client) => client.setFastMode(enabled));
 
 	async setTodos(phases: TodoPhase[]): Promise<void> {
 		await this.#call((c) => c.setTodos(phases));
 	}
 
-	async compact(instructions?: string): Promise<OmpCompactResult> {
-		const result = await this.#call((client) => client.compact(instructions));
-		return { tokensBefore: result.tokensBefore, summary: result.summary };
-	}
+	compact = (instructions?: string): Promise<OmpCompactResult> => this.#call((client) => client.compact(instructions));
 
-	async leafId(): Promise<string | null> {
-		// mailbox.ts reads the cursor per message/per steer; keep it a delta read instead of a whole-session one.
-		return leafIdViaCursor((since) => this.entriesSince(since), this.#leafCursor);
-	}
+	// mailbox.ts reads the cursor per message/per steer; keep it a delta read instead of a whole-session one.
+	leafId = (): Promise<string | null> => leafIdViaCursor((since) => this.entriesSince(since), this.#leafCursor);
 
 	entriesSince = (since?: string): Promise<OmpEntries> => this.#call((c) => c.getEntries(since));
 
@@ -642,9 +622,10 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	onExit = (fn: (info: OmpExitInfo) => void): (() => void) => listen(this.#exitListeners, fn);
 
 	async stop(): Promise<void> {
+		this.#stopping = true;
+		await this.#starting?.catch(() => undefined);
 		const client = this.#client;
 		if (!client) return;
-		this.#stopping = true;
 		this.#client = undefined;
 		this.#clearTail();
 		for (const off of this.#unsubscribers) off();

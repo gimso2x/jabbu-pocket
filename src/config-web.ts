@@ -37,7 +37,8 @@ export function parseWebChannel(configPath: string, value: unknown): WebChannelC
 		ownerEmails = record.ownerEmails.map((entry, index) => {
 			if (typeof entry !== "string") invalid(configPath, `channels.web.ownerEmails.${index}`);
 			const normalized = entry.trim().toLowerCase();
-			if (!EMAIL_PATTERN.test(normalized)) invalid(configPath, `channels.web.ownerEmails.${index}`);
+			// A disabled block keeps its stale values unread: re-enabling re-validates them at the next load.
+			if (enabled && !EMAIL_PATTERN.test(normalized)) invalid(configPath, `channels.web.ownerEmails.${index}`);
 			return normalized;
 		});
 	}
@@ -47,8 +48,10 @@ export function parseWebChannel(configPath: string, value: unknown): WebChannelC
 	if (record.accessTeamDomain !== undefined) {
 		if (typeof record.accessTeamDomain !== "string") invalid(configPath, "channels.web.accessTeamDomain");
 		const domain = record.accessTeamDomain.trim().toLowerCase();
-		if (domain !== "" || enabled) {
+		if (enabled) {
 			if (!DOMAIN_PATTERN.test(domain) || domain.includes("..")) invalid(configPath, "channels.web.accessTeamDomain");
+			accessTeamDomain = domain;
+		} else if (domain !== "") {
 			accessTeamDomain = domain;
 		}
 	} else if (enabled) {
@@ -59,8 +62,10 @@ export function parseWebChannel(configPath: string, value: unknown): WebChannelC
 	if (record.accessAud !== undefined) {
 		if (typeof record.accessAud !== "string") invalid(configPath, "channels.web.accessAud");
 		const aud = record.accessAud.trim();
-		if (aud !== "" || enabled) {
+		if (enabled) {
 			if (aud === "" || /[\s\p{Cc}]/u.test(aud)) invalid(configPath, "channels.web.accessAud");
+			accessAud = aud;
+		} else if (aud !== "") {
 			accessAud = aud;
 		}
 	} else if (enabled) {
