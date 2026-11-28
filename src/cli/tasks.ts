@@ -111,11 +111,11 @@ export async function tasksCommand(
 			out({ closed: closed.taskId, status: closed.status, closedAt: closed.closedAt });
 			const synced = await askDaemon(homeDir, { op: "tasks_sync", id: row.taskId });
 			if (synced === "no_response")
-				process.stderr.write("tasks close: no daemon answer — 응답 지연 — reaction update unknown\n");
+				process.stderr.write("tasks close: no daemon answer — 응답 지연 — reaction update unknown, stop unconfirmed\n");
 			else if (synced === "unreachable")
-				process.stderr.write("tasks close: daemon not reachable — reaction not updated\n");
+				process.stderr.write("tasks close: daemon not reachable — reaction not updated, worker not stopped\n");
 			else if (synced.ok !== true)
-				process.stderr.write(`tasks close: daemon refused: ${String(synced.error)} — reaction not updated\n`);
+				process.stderr.write(`tasks close: daemon refused: ${String(synced.error)} — reaction stale, stop unknown\n`);
 			return 0;
 		}
 		if (sub === "pause" || sub === "resume") {

@@ -78,6 +78,7 @@ describe("inject and tasks against a silent daemon (qa-j n24, n59)", () => {
 		expect(close.code).toBe(0);
 		expect(close.stderr).toContain("no daemon answer");
 		expect(close.stderr).not.toContain("not reachable");
+		expect(close.stderr).toContain("stop unconfirmed");
 		const ledger = openTaskLedger(join(home.dir, "jabbu.db"), "Asia/Seoul");
 		const second = ledger.register({
 			title: "t2",
@@ -98,6 +99,15 @@ describe("inject and tasks against a silent daemon (qa-j n24, n59)", () => {
 		const check = openTaskLedger(join(home.dir, "jabbu.db"), "Asia/Seoul");
 		expect(check.isPaused(check.get(second.taskId) as never)).toBe(false);
 		check.close();
+	});
+
+	// round 16 (dispatch F7): closing with no daemon left the agent running and said nothing about it.
+	test("tasks close with no daemon warns the worker was not stopped", async () => {
+		const id = registerTask(join(home.dir, "jabbu.db"));
+		const close = await runCliCapture(home.dir, ["tasks", "close", id, "--as", "cancelled"]);
+		expect(close.code).toBe(0);
+		expect(close.stderr).toContain("daemon not reachable");
+		expect(close.stderr).toContain("worker not stopped");
 	});
 });
 
