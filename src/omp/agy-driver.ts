@@ -257,7 +257,6 @@ export class AgyOmpDriver implements OmpSessionDriver {
 	async switchSession(sessionFile: string): Promise<{ cancelled: boolean }> {
 		this.#requireStarted();
 		const stem = parseAgySessionStem(sessionFile);
-		writeAgyPointer(this.#options.sessionDir, this.#pointerPath, stem);
 		this.#switchedBeforePrompt = false;
 		await this.#spawn(stem, "session switch");
 		return { cancelled: false };
@@ -537,6 +536,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 			});
 		} catch (error) {
 			await this.#dropClient(client);
+			this.#account = undefined;
 			const stderr = client.stderrTail.trim().slice(-400);
 			throw new OmpDriverError("rpc_error", `agy acp start failed: ${String(error)}${stderr ? ` | ${stderr}` : ""}`, {
 				cause: error,

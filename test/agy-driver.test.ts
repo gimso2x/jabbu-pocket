@@ -910,6 +910,73 @@ test("newSession during a turn ends it aborted and starts a new session; switchS
 	await driver.stop();
 });
 
+test("switchSession keeps the old pointer when the spawn fails; the next prompt resumes the old session", async () => {
+	const clock = { t: 1_795_500_000_000 };
+	const { harness, pool, log } = makePoolHarness(
+		"acct1 agy/gemini-pro-orchestrator-neon\nacct2 agy/gemini-pro-orchestrator-neon\n",
+		["acct1", "acct2"],
+		clock,
+	);
+	const sock = join(harness.root, "init-switch.sock");
+	const initHeld = Promise.withResolvers<void>();
+	const server = Bun.listen({
+		unix: sock,
+		socket: {
+			open() {
+				initHeld.resolve();
+			},
+			data() {},
+		},
+	});
+	const driver = harness.make({
+		accounts: pool,
+		timezone: "Asia/Seoul",
+		now: () => clock.t,
+		log,
+		env: {
+			FAKE_AGY_ECHO_DIR: "1",
+			FAKE_AGY_HOLD_INIT_DIR: "antigravity-cli-acct-acct2",
+			FAKE_AGY_HOLD_INIT_SOCK: sock,
+		},
+	});
+	try {
+		await driver.start();
+		const first = nextFinal(driver);
+		await driver.prompt("hello");
+		expect(await first).toMatchObject({ status: "completed", text: "REPLY1:[antigravity-cli-acct-acct1] hello" });
+		const old = (await driver.state()).sessionId;
+		expect(old).not.toBe("");
+		expect(pointerOf(harness)).toBe(old);
+
+		// Blocking acct1 steers the switch respawn onto acct2, whose initialize hangs; killing the held
+		// child fails the spawn.
+		pool.markExhausted("acct1", clock.t + 3_600_000);
+		const switching = driver.switchSession("fake-target-1234");
+		await initHeld.promise;
+		process.kill(childPid(driver), "SIGKILL");
+		const err = await switching.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(OmpDriverError);
+		expect(String((err as Error).message)).toContain("agy acp start failed");
+		// The failed switch did not clobber the pointer: it still names the old session. (The pointer is
+		// only rewritten by #openConversation on success, and a failed launch clears #account so the
+		// next start's account check compares the pointer's account, not the never-started one.)
+		expect(pointerOf(harness)).toBe(old);
+
+		// After the reset the next prompt respawns on acct1 and resumes the old session (acct2 stays
+		// blocked so the pool's current-account stickiness does not steer the respawn onto it).
+		pool.markExhausted("acct2", clock.t + 3_600_000);
+		pool.clearBlocked("acct1", clock.t);
+		const next = nextFinal(driver);
+		await driver.prompt("after");
+		expect(await next).toMatchObject({ status: "completed", text: "REPLY1:[antigravity-cli-acct-acct1] after" });
+		expect((await driver.state()).sessionId).toBe(old);
+		expect(sent(harness, "session/load").map((params) => params.sessionId)).toEqual([old]);
+		await driver.stop();
+	} finally {
+		server.stop();
+	}
+});
+
 test("a child that dies on its own is reported through onExit", async () => {
 	const harness = makeHarness();
 	const driver = harness.make();
