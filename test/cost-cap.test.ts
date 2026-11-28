@@ -329,6 +329,30 @@ describe("AC-3: sub-agent cost in the turn total", () => {
 		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(3, 6);
 	});
 
+	test("a 3x crossing found after the final was queued still settles as cost_cap", async () => {
+		costCap = { turnUsd: 1 };
+		clock.t = Date.parse("2026-11-10T12:00:00Z");
+		const turnStart = clock.now();
+		router = buildRouter({ sessionFile: sessionWithSubAgent("sub-race", [usageLine(turnStart + 2_000, 3)]) });
+		const driver = await startTurn("마지막에 끝나는 하위 턴");
+		const settled = Promise.withResolvers<void>();
+		const off = driver.onFinal(() => {
+			off();
+			settled.resolve();
+		});
+		clock.advance(5_000);
+		driver.emitTestEvent(usageEvent(0.2));
+		// The child finishes while the sub-agent re-read is still in flight: the final queues behind the refresh.
+		driver.release();
+		await settled.promise;
+		await router.mailbox(ORIGIN).sweepIdle();
+		// The abort lost the race (the settlement already happened) — but the settlement carries the reason.
+		expect(driver.calls).not.toContain("abort");
+		expect(bodies()).toHaveLength(1);
+		expect(bodies()[0]).toContain("비용 상한 $1.00의 3배를 넘어 턴을 멈췄습니다");
+		expect(bodies()[0]).toContain("이번 턴 $3.20");
+	});
+
 	test("a wedged turn still charges in-window sub-agent spend from the cached session file", async () => {
 		costCap = { turnUsd: 10 };
 		clock.t = Date.parse("2026-11-10T12:00:00Z");
