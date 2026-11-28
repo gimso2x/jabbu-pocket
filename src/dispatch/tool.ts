@@ -487,8 +487,7 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 				...(deps.recordPrompt === undefined ? {} : { recordPrompt: deps.recordPrompt }),
 				log: deps.log,
 			};
-			const follow = await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" });
-			return follow.text;
+			return (await followupTask(followDeps, { id: row.taskId, text: task, source: "tool" })).text;
 		}
 
 		if (task === undefined || task === "") throw new Error("task is required");
@@ -508,7 +507,8 @@ export function buildDispatchTool(deps: DispatchToolDeps): HostToolDef {
 		});
 		deps.log.info("dispatch_simple_done", { ok: result.ok, code: result.code });
 		const code = result.code ?? "없음"; // a timeout carries its own suffix; any other non-zero end is a failure
+		const reason = result.timedOut ? "" : (result.failure?.slice(`종료 코드 ${code}: `.length) ?? "");
 		const failed = result.ok || result.timedOut ? "" : `\n\n[실패: omp -p exit ${code} — 위 출력은 일부일 수 있음]`;
-		return redact(result.output) + failed + gate.suffix;
+		return redact(result.output) + failed + (reason === "" ? "" : `\n사유: ${reason}`) + gate.suffix;
 	}
 }
