@@ -374,8 +374,7 @@ export class AgyOmpDriver implements OmpSessionDriver {
 		noteDroppedSteers(this.#options, "agy.acp.stop_steers_dropped", turn, this.#queued);
 		this.#turn = undefined;
 		this.#queued = [];
-		// A launch in flight holds #respawning until its timeouts run out: end the launching child first.
-		if (this.#launching !== undefined) await this.#endClient(this.#launching, STOP_GRACE_MS);
+		if (this.#launching !== undefined) await this.#endClient(this.#launching, STOP_GRACE_MS); // else #respawning waits out its timeouts
 		await this.#respawning;
 		const client = this.#client;
 		this.#stopping = true;
