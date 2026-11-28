@@ -7,7 +7,7 @@ import type { TurnFailureEscalation } from "../src/core/mailbox";
 import { OriginRouter } from "../src/core/origin";
 import type { InboundRecord } from "../src/core/types";
 import { createLogger } from "../src/log";
-import type { OmpEvent, OmpTurnUsage } from "../src/omp/driver";
+import { OmpDriverError, type OmpEvent, type OmpTurnUsage } from "../src/omp/driver";
 import { FakeOmpDriver, FakeSessionStore } from "../src/omp/fake-driver";
 import { EntryNotFoundError, sessionWindowCost } from "../src/ops/cost-cap";
 import { redact } from "../src/redact";
@@ -164,6 +164,24 @@ describe("AC-1: per-turn cost cap", () => {
 		expect(bodies()[0]).toContain("이번 턴 $3.20");
 		expect(escalations).toHaveLength(0);
 		expect(logLines.some((line) => line.includes("event=turn_failures_escalated"))).toBe(false);
+	});
+
+	test("a 3x abort whose abort throws still settles as cost_cap and stops the child", async () => {
+		costCap = { turnUsd: 1 };
+		const driver = await startTurn("폭주하는 작업");
+		driver.abort = async () => {
+			driver.calls.push("abort-rejected");
+			throw new OmpDriverError("rpc_error", "abort timed out");
+		};
+		driver.emitTestEvent(usageEvent(3.2));
+		await router.mailbox(ORIGIN).sweepIdle();
+		expect(driver.calls).toContain("abort-rejected");
+		expect(router.mailbox(ORIGIN).state.driverRunning).toBe(false);
+		expect(bodies()).toHaveLength(1);
+		expect(bodies()[0]).toContain("비용 상한 $1.00의 3배를 넘어 턴을 멈췄습니다");
+		// The next message opens a fresh driver instead of prompting the wedged one.
+		await router.route(msg("다음 작업"));
+		expect(drivers).toHaveLength(2);
 	});
 
 	test("without `costCap` a turn never warns nor aborts", async () => {
