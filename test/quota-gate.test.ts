@@ -785,10 +785,14 @@ describe("DaemonQuotaGate and CLI quota command", () => {
 			now: liveNow - 6 * 3_600_000,
 		});
 		const db = new Database(join(tmp, "jabbu.db"));
-		db.exec("CREATE TABLE slack_cursors (cursor_key TEXT PRIMARY KEY, last_ts TEXT NOT NULL, updated_at INTEGER NOT NULL)");
-		db
-			.query("INSERT INTO slack_cursors (cursor_key, last_ts, updated_at) VALUES (?, ?, ?)")
-			.run(QUOTA_RECOVERY_CURSOR, tracker.serialize(), liveNow);
+		db.exec(
+			"CREATE TABLE slack_cursors (cursor_key TEXT PRIMARY KEY, last_ts TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+		);
+		db.query("INSERT INTO slack_cursors (cursor_key, last_ts, updated_at) VALUES (?, ?, ?)").run(
+			QUOTA_RECOVERY_CURSOR,
+			tracker.serialize(),
+			liveNow,
+		);
 		db.close();
 
 		const statusJson = await runCliCapture(tmp, ["quota", "status", "--json"]);

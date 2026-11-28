@@ -3,13 +3,14 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { clearQuotaLift, readQuotaGateSnapshot, readQuotaLifts, writeQuotaLift } from "../ops/quota-gate";
 import {
-	QUOTA_RECOVERY_CURSOR,
+	clearQuotaLift,
 	type QuotaLiftEntry,
-	QuotaRecoveryTracker,
-	type RuntimeQuotaHold,
-} from "../ops/quota-recovery";
+	readQuotaGateSnapshot,
+	readQuotaLifts,
+	writeQuotaLift,
+} from "../ops/quota-gate";
+import { QUOTA_RECOVERY_CURSOR, QuotaRecoveryTracker, type RuntimeQuotaHold } from "../ops/quota-recovery";
 
 export const QUOTA_USAGE = `  quota status [--json]          show active per-provider quota holds and manual lifts
   quota lift [provider] [--minutes N]    temporarily lift quota holds (default 60m; omit provider for all)
@@ -38,9 +39,9 @@ function readRuntimeQuotaHolds(
 		try {
 			const table = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'slack_cursors'").get();
 			if (table === null) return [];
-			const row = db
-				.query("SELECT last_ts FROM slack_cursors WHERE cursor_key = ?")
-				.get(QUOTA_RECOVERY_CURSOR) as { last_ts: string } | null;
+			const row = db.query("SELECT last_ts FROM slack_cursors WHERE cursor_key = ?").get(QUOTA_RECOVERY_CURSOR) as {
+				last_ts: string;
+			} | null;
 			raw = row?.last_ts;
 		} finally {
 			db.close();
