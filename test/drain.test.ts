@@ -195,6 +195,21 @@ describe("jabbu-pocket drain", () => {
 		expect(inboundState("1700000000000000001")).toBe("answered");
 	});
 
+	test("--timeout without --wait, and --cancel combined with --wait/--timeout, are usage errors", async () => {
+		daemon = await boot(false);
+		const stray = await runCliCapture(home.dir, ["drain", "--timeout", "5"]);
+		expect(stray.code).toBe(2);
+		expect(stray.stderr).toContain("used with --wait");
+		const cancelWait = await runCliCapture(home.dir, ["drain", "--cancel", "--wait"]);
+		expect(cancelWait.code).toBe(2);
+		expect(cancelWait.stderr).toContain("--cancel cannot be combined");
+		const cancelTimeout = await runCliCapture(home.dir, ["drain", "--cancel", "--timeout", "5"]);
+		expect(cancelTimeout.code).toBe(2);
+		expect(cancelTimeout.stderr).toContain("--cancel cannot be combined");
+		// Nothing was drained or cancelled by the refused runs.
+		expect(daemon.status().drain).toBeUndefined();
+	});
+
 	describe("restart notices", () => {
 		const notices = (text: string) =>
 			transport.posts((t) => t === text).map((p) => p.messageReference?.messageId ?? p.channelId);

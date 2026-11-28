@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { quotaCommand } from "../src/cli/quota";
@@ -254,6 +254,21 @@ describe("ProviderQuotaGate isolation, auto-release, and manual lifts", () => {
 		expect(clearQuotaLift(home.dir, "*")).toBe(1);
 		lifts = readQuotaLifts(home.dir, BASE_NOW + 10_000);
 		expect(gate.checkModel("zai/glm-5.4", BASE_NOW + 10_000, lifts)).toBeDefined();
+	});
+
+	test("clearing all lifts counts only the lifts in the file, never a phantom one", () => {
+		// No file at all: nothing cleared.
+		expect(clearQuotaLift(home.dir)).toBe(0);
+		// A file that exists but holds no lifts (empty or torn): still 0, and the file goes away.
+		writeFileSync(join(home.dir, "quota-lift.json"), JSON.stringify({ lifts: {} }));
+		expect(clearQuotaLift(home.dir)).toBe(0);
+		expect(existsSync(join(home.dir, "quota-lift.json"))).toBe(false);
+		writeFileSync(join(home.dir, "quota-lift.json"), "not json{");
+		expect(clearQuotaLift(home.dir)).toBe(0);
+		// Two real lifts: both counted.
+		writeQuotaLift(home.dir, { provider: "anthropic", untilMs: BASE_NOW + 60_000, now: BASE_NOW });
+		writeQuotaLift(home.dir, { provider: "zai", untilMs: BASE_NOW + 60_000, now: BASE_NOW });
+		expect(clearQuotaLift(home.dir)).toBe(2);
 	});
 
 	test("keeps multi-account providers open while any account remains below holdPct", () => {
