@@ -388,7 +388,11 @@ export function defaultHomeDir(env: Record<string, string | undefined> = process
 	// An empty value is "unset", never "" (which `resolve` would turn into the current directory).
 	const raw = env.JABBU_HOME;
 	if (!raw) return join(homedir(), ".jabbu");
-	return raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw;
+	if (raw === "~") return homedir();
+	if (raw.startsWith("~/")) return join(homedir(), raw.slice(2));
+	// A relative value would resolve against the process cwd (and "~other/…" is never expanded): refuse it.
+	if (!isAbsolute(raw)) throw new ConfigError("home_relative", "JABBU_HOME", "JABBU_HOME must be absolute");
+	return raw;
 }
 
 function modeString(mode: number): string {
@@ -781,10 +785,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	if (peerHopLimit !== undefined) {
 		const record = asRecord(peerHopLimit);
 		if (record === undefined) invalid(configPath, "peerHopLimit");
-		for (const key of ["turns", "windowMinutes"]) {
-			const value = record[key];
-			if (!Number.isSafeInteger(value) || (value as number) < 1) invalid(configPath, `peerHopLimit.${key}`);
-		}
+		for (const key of ["turns", "windowMinutes"])
+			if (!Number.isSafeInteger(record[key]) || (record[key] as number) < 1) invalid(configPath, `peerHopLimit.${key}`);
 		for (const key of Object.keys(record)) {
 			if (key !== "turns" && key !== "windowMinutes") invalid(configPath, `peerHopLimit.${key}`);
 		}
@@ -797,14 +799,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			if (key !== "minutes") invalid(configPath, `peerSilenceAlert.${key}`);
 		}
 		const minutes = record.minutes;
-		if (
-			typeof minutes !== "number" ||
-			!Number.isInteger(minutes) ||
-			minutes < 0 ||
-			minutes > PEER_SILENCE_MAX_MINUTES
-		) {
+		if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < 0 || minutes > PEER_SILENCE_MAX_MINUTES)
 			invalid(configPath, "peerSilenceAlert.minutes");
-		}
 		peerSilenceAlert = { minutes };
 	}
 
@@ -826,9 +822,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			typeof record?.remoteDir !== "string" ||
 			!OFFSITE_DIR.test(record.remoteDir) ||
 			record.remoteDir.split("/").some((part) => part === "..")
-		) {
+		)
 			invalid(configPath, "offsite.remoteDir");
-		}
 		// `~//x` would make scp's path absolute and `//` leave no directory: repeated slashes collapse here, and a
 		// value that is only slashes still loads (it always did) but is flagged, and the off-site run refuses it.
 		const remoteDir = (record.remoteDir as string).replace(/\/{2,}/g, "/");
@@ -849,12 +844,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 	const herdrBoard = root.herdrBoard;
 	if (herdrBoard !== undefined) {
 		const record = asRecord(herdrBoard);
-		if (record === undefined || typeof record.url !== "string" || !/^https?:\/\/\S+$/.test(record.url)) {
+		if (record === undefined || typeof record.url !== "string" || !/^https?:\/\/\S+$/.test(record.url))
 			invalid(configPath, "herdrBoard.url");
-		}
-		if (record?.api !== undefined && (typeof record.api !== "string" || !/^https?:\/\/\S+$/.test(record.api))) {
+		if (record?.api !== undefined && (typeof record.api !== "string" || !/^https?:\/\/\S+$/.test(record.api)))
 			invalid(configPath, "herdrBoard.api");
-		}
 		for (const key of Object.keys(record ?? {})) {
 			if (key !== "url" && key !== "api") invalid(configPath, `herdrBoard.${key}`);
 		}
@@ -1117,6 +1110,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 				invalid(configPath, `candidates.${key}`);
 			}
 		}
+		// A `minDays` larger than the window can never be due (at most `windowDays` distinct days are counted).
+		const { minDays, windowDays } = candidates;
+		if (minDays !== undefined && windowDays !== undefined && minDays > windowDays)
+			invalid(configPath, "candidates.minDays");
 	}
 
 	const config: JabbuConfig = {

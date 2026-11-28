@@ -740,6 +740,22 @@ describe("lane start and registry", () => {
 		h.close();
 	});
 
+	test("risk floor: a keyword past the 16k cut still raises the floor (the floor reads the full brief)", async () => {
+		const h = harness();
+		const start = buildWorkStartTool(h.manager, CHANNEL, DM_ORIGIN);
+		const brief = `${"가".repeat(16_000)} 결제 시스템을 마이그레이션합니다`;
+		const reply = await start.execute(
+			{ title: "long spec", cwd: makeRepo(repos), brief, risk: "L1" },
+			{ signal: new AbortController().signal },
+		);
+		await h.settle();
+		expect(h.store.listLanes()[0]?.meta.risk).toBe("L3");
+		expect(reply).toContain("위험등급을 L1→L3으로 올렸습니다(키워드: 결제, 마이그레이션).");
+		// The review copy is still the cut one: only the floor reads the full brief.
+		expect(h.store.listLanes()[0]?.meta.brief ?? "").not.toContain("결제");
+		h.close();
+	});
+
 	test("bad input is refused with a message and creates nothing", async () => {
 		const h = harness();
 		await expect(h.manager.start({ title: "  ", cwd: cwdOf(), channel: CHANNEL })).rejects.toBeInstanceOf(

@@ -397,7 +397,7 @@ export class LaneManager {
 			? `${cutCodePointSafe(fullBrief, MAX_BRIEF_CHARS)}\n[브리프 ${fullBrief.length}자 중 앞 ${MAX_BRIEF_CHARS}자만 남김: 뒷부분은 이 리뷰에 없다]`
 			: fullBrief;
 		// Topic keywords put a floor under the class (raise only); `startNote` tells the starter.
-		const floored = applyRiskFloor(risk, [title, brief]);
+		const floored = applyRiskFloor(risk, [title, fullBrief]);
 		// The tier follows the final risk (floor applied; a lane nobody rated counts as DEFAULT_LANE_RISK).
 		const worker = resolveWorkerTier(
 			floored.risk,

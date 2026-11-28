@@ -8,7 +8,8 @@ import { isRecord } from "../omp/type-guards";
 import { redact } from "../redact";
 import type { Store } from "../store/db";
 import type { InboundRow } from "../store/db-rows";
-import { classifyFailure, type FailureKind, formatResetHint } from "./failure-kind";
+import { classifyFailure, type FailureKind } from "./failure-kind";
+import { toolFreeFailureTail } from "./failure-notice";
 import { isTurnPromptFor, promptTextOf } from "./types";
 
 export const TOOL_FREE_OP_PREFIX = "failed:toolfree:";
@@ -165,13 +166,7 @@ function collapseMasked(text: string, maxChars: number): string {
 export function toolFreeClosureNotice(row: InboundRow, proof: ToolFreeFailureProof): string {
 	const preview = collapseMasked(row.textRef, 80);
 	const shortReason = collapseMasked(proof.reason, 160);
-	let tail = " 다시 실행하려면 새로 보내 주세요.";
-	if (proof.failureKind === "provider_limit") {
-		const resetAt = classifyFailure(proof.reason).resetAt;
-		const reset = resetAt === undefined ? "" : `${formatResetHint(resetAt)} `;
-		tail = ` 공급자 한도입니다. ${reset}여유가 회복된 뒤 다시 보내거나 \`/model-jabbu\`로 모델을 바꾸세요.`;
-	}
-	return `⚠️ 도구 실행 전 실패로 안전 종료(${shortReason}) — "${preview}"은(는) 도구 호출 없이 실패한 것을 세션 저널로 확인해 재전송 없이 닫았습니다.${tail}`;
+	return `⚠️ 도구 실행 전 실패로 안전 종료(${shortReason}) — "${preview}"은(는) 도구 호출 없이 실패한 것을 세션 저널로 확인해 재전송 없이 닫았습니다.${toolFreeFailureTail(proof.reason)}`;
 }
 
 /**
