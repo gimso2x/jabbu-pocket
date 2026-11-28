@@ -25,10 +25,12 @@ import {
 	TRIAL_PROMPT,
 	type TrialResult,
 } from "../src/cli/omp";
+import { syncProfile } from "../src/cli/omp-sync";
 import { loadConfig } from "../src/config";
 import { countOmpModels } from "../src/daemon/doctor-omp";
 import type { RunProcessOptions, RunProcessResult } from "../src/dispatch/omp";
 import { defaultDiskPaths } from "../src/ops/gates";
+import { withSkillLock } from "../src/review/skill-io";
 
 let root: string;
 let home: string;
@@ -413,6 +415,19 @@ describe("AC-5: jabbu-pocket omp sync", () => {
 		expect(readFileSync(join(target, "managed-skills", "m2", "SKILL.md"), "utf8")).toBe("m2 by bot\n");
 		expect(sync(true).code).toBe(1);
 		expect(readFileSync(join(target, "managed-skills", "m2", "SKILL.md"), "utf8")).toBe("m2 v1\n");
+	});
+
+	test("a sync mirror refuses while another writer holds the skill lock; a dry run takes no lock", () => {
+		sync(true);
+		const m1 = join(target, "managed-skills", "m1");
+		put(join(source, "managed-skills", "m1", "SKILL.md"), "m1 v2\n");
+		const later = new Date(Date.now() + 60_000);
+		utimesSync(join(source, "managed-skills", "m1", "SKILL.md"), later, later);
+		expect(() => withSkillLock(m1, () => sync())).toThrow("already_running");
+		expect(readFileSync(join(target, "managed-skills", "m1", "SKILL.md"), "utf8")).toBe("m1 v1\n");
+		// A dry run only lists changes, so it takes no lock and succeeds under the same hold.
+		const listed = withSkillLock(m1, () => syncProfile({ source, target, userHome, dryRun: true }));
+		expect(listed.changed).toContain("copied managed-skills/m1/SKILL.md");
 	});
 
 	test("an overwriting sync snapshots the profile SKILL.md into revisions/ first", () => {

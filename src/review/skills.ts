@@ -5,7 +5,14 @@ import { join } from "node:path";
 import type { Logger } from "../log";
 import type { OmpFinal, OmpSessionDriver } from "../omp/driver";
 import { redact } from "../redact";
-import { assertSafeSkillPath, stageTempPath, writeAtomicNoFollow, writeExclusiveNoFollow } from "./skill-io";
+import {
+	assertSafeSkillPath,
+	stageTempPath,
+	withSkillLock,
+	writeAtomicNoFollow,
+	writeExclusiveNoFollow,
+} from "./skill-io";
+import { jsonListCandidates } from "./skill-json";
 
 export interface SkillCheck {
 	/** A case where the skill should — or should not — fire, stated so a later session can replay it. */
@@ -89,58 +96,6 @@ export function buildSkillReviewPrompt(digest: string): string {
 }
 
 /** Upper bound on JSON start candidates tried per text, so adversarial bracket spam stays linear-ish. */
-const MAX_START_ATTEMPTS = 64;
-
-/** End index (inclusive) of the bracket group opening at `start`, string-literal aware; -1 when unbalanced. */
-function balancedEnd(text: string, start: number): number {
-	let depth = 0;
-	let inString = false;
-	for (let i = start; i < text.length; i++) {
-		const ch = text[i];
-		if (inString) {
-			if (ch === "\\") i += 1;
-			else if (ch === '"') inString = false;
-		} else if (ch === '"') inString = true;
-		else if (ch === "[" || ch === "{") depth += 1;
-		else if (ch === "]" || ch === "}") {
-			depth -= 1;
-			if (depth <= 0) return depth === 0 ? i : -1;
-		}
-	}
-	return -1;
-}
-
-/**
- * Each JSON array of objects / object in `text` that parses, in order. Each "[" or "{" is tried as a start (the
- * attempt budget is shared across candidates), its balanced end is parsed; prose brackets like "[결과]" or "[1]"
- * simply fail or carry no objects and are skipped. A yielded candidate is skipped past, so a `{"proposals":[...]}`
- * wrapper never leaks its inner array as a second candidate.
- */
-function* jsonListCandidates(text: string): Generator<unknown[]> {
-	let attempts = 0;
-	for (let i = 0; i < text.length && attempts < MAX_START_ATTEMPTS; i++) {
-		if (text[i] !== "[" && text[i] !== "{") continue;
-		attempts += 1;
-		const end = balancedEnd(text, i);
-		if (end < 0) continue;
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(text.slice(i, end + 1));
-		} catch {
-			continue;
-		}
-		if (!Array.isArray(parsed)) {
-			yield [parsed];
-			i = end;
-			continue;
-		}
-		if (parsed.length === 0 || parsed.some((entry) => typeof entry === "object" && entry !== null)) {
-			yield parsed;
-			i = end;
-		}
-	}
-}
-
 function validProposals(list: unknown[]): SkillProposal[] {
 	const proposals: SkillProposal[] = [];
 	const seen = new Set<string>();
@@ -482,17 +437,20 @@ export function backupSkillRevision(dir: string, now: number): string | undefine
  * path (`undefined` on a first install); throws when the action does not match what is on disk.
  */
 export function installSkill(dir: string, proposal: SkillProposal, now: number): string | undefined {
-	const current = join(dir, "SKILL.md");
-	for (const path of [dir, join(dir, SKILL_REVISIONS_DIR)]) assertSafeSkillPath(path, "install", { requireDir: true });
-	const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
-	if (proposal.name === SKILL_REVISIONS_DIR) throw new Error("install refused: revisions is a reserved name");
-	if (proposal.action === "create" && exists)
-		throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
-	if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);
-	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const revision = backupSkillRevision(dir, now);
-	writeAtomicNoFollow(current, renderSkillFile(proposal), 0o600);
-	return revision;
+	return withSkillLock(dir, () => {
+		const current = join(dir, "SKILL.md");
+		for (const path of [dir, join(dir, SKILL_REVISIONS_DIR)])
+			assertSafeSkillPath(path, "install", { requireDir: true });
+		const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
+		if (proposal.name === SKILL_REVISIONS_DIR) throw new Error("install refused: revisions is a reserved name");
+		if (proposal.action === "create" && exists)
+			throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
+		if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);
+		mkdirSync(dir, { recursive: true, mode: 0o700 });
+		const revision = backupSkillRevision(dir, now);
+		writeAtomicNoFollow(current, renderSkillFile(proposal), 0o600);
+		return revision;
+	});
 }
 
 /** `<stamp>.md` or `<stamp>-<n>.md` (a second revision in the same millisecond) as `[stamp, n]`. */
@@ -522,38 +480,40 @@ export function listSkillRevisions(dir: string): string[] {
  * revision slot, so running it again restores it — an approved patch is always reversible in both directions.
  */
 export function rollbackSkill(dir: string): string {
-	const current = join(dir, "SKILL.md");
-	const revisions = join(dir, SKILL_REVISIONS_DIR);
-	assertSafeSkillPath(dir, "rollback", { requireDir: true });
-	if (!assertSafeSkillPath(current, "rollback", { requireFile: true, checkHardLink: true }))
-		throw new Error(`skill not installed: ${dir}`);
-	assertSafeSkillPath(revisions, "rollback", { requireDir: true });
-	const newest = listSkillRevisions(dir)[0];
-	if (newest === undefined) throw new Error(`no saved revision for ${dir}`);
-	assertSafeSkillPath(newest, "rollback", { requireFile: true, checkHardLink: true });
-	const outgoing = readFileSync(current);
-	const previous = readFileSync(newest);
-	const currentMode = lstatSync(current).mode & 0o777;
-	const slotMode = lstatSync(newest).mode & 0o777;
-	// Random exclusive temp files prevent pre-planted symlinks or concurrent writes from redirecting I/O outside `dir`.
-	const stagedSlot = stageTempPath(newest, "rollback-tmp");
-	const stagedCurrent = stageTempPath(current, "rollback-tmp");
-	try {
-		writeExclusiveNoFollow(stagedSlot, outgoing, slotMode);
-		writeExclusiveNoFollow(stagedCurrent, previous, currentMode);
-		renameSync(stagedSlot, newest);
-	} catch (error) {
-		rmSync(stagedSlot, { force: true });
-		rmSync(stagedCurrent, { force: true });
-		throw error;
-	}
-	try {
-		renameSync(stagedCurrent, current);
-	} catch (error) {
-		// The slot already holds today's content: put the old revision back atomically so nothing is lost.
-		writeAtomicNoFollow(newest, previous, slotMode);
-		rmSync(stagedCurrent, { force: true });
-		throw error;
-	}
-	return newest;
+	return withSkillLock(dir, () => {
+		const current = join(dir, "SKILL.md");
+		const revisions = join(dir, SKILL_REVISIONS_DIR);
+		assertSafeSkillPath(dir, "rollback", { requireDir: true });
+		if (!assertSafeSkillPath(current, "rollback", { requireFile: true, checkHardLink: true }))
+			throw new Error(`skill not installed: ${dir}`);
+		assertSafeSkillPath(revisions, "rollback", { requireDir: true });
+		const newest = listSkillRevisions(dir)[0];
+		if (newest === undefined) throw new Error(`no saved revision for ${dir}`);
+		assertSafeSkillPath(newest, "rollback", { requireFile: true, checkHardLink: true });
+		const outgoing = readFileSync(current);
+		const previous = readFileSync(newest);
+		const currentMode = lstatSync(current).mode & 0o777;
+		const slotMode = lstatSync(newest).mode & 0o777;
+		// Random exclusive temp files prevent pre-planted symlinks or concurrent writes from redirecting I/O outside `dir`.
+		const stagedSlot = stageTempPath(newest, "rollback-tmp");
+		const stagedCurrent = stageTempPath(current, "rollback-tmp");
+		try {
+			writeExclusiveNoFollow(stagedSlot, outgoing, slotMode);
+			writeExclusiveNoFollow(stagedCurrent, previous, currentMode);
+			renameSync(stagedSlot, newest);
+		} catch (error) {
+			rmSync(stagedSlot, { force: true });
+			rmSync(stagedCurrent, { force: true });
+			throw error;
+		}
+		try {
+			renameSync(stagedCurrent, current);
+		} catch (error) {
+			// The slot already holds today's content: put the old revision back atomically so nothing is lost.
+			writeAtomicNoFollow(newest, previous, slotMode);
+			rmSync(stagedCurrent, { force: true });
+			throw error;
+		}
+		return newest;
+	});
 }
