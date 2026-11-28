@@ -1224,10 +1224,9 @@ export class Daemon {
 	}
 
 	/**
-	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and an owner message is fed
-	 * through that platform adapter's own message path (same normalizeInbound, same fencing of `quoted`), threaded under
-	 * that root. With `thread` the marker is a reply in that existing thread (a Discord DM: a reply to that message) and
-	 * the owner message a reply of it.
+	 * `jabbu-pocket inject`: the bot posts a `🧪 inject <nonce>` root message in the conversation and feeds the owner
+	 * message through that platform adapter's own path (same normalizeInbound, same fencing of `quoted`), threaded under
+	 * that root (with `thread`: a reply in that existing thread, and the owner message a reply of it).
 	 */
 	async inject(request: InjectRequest): Promise<InjectResult> {
 		if (this.#adapters.size === 0) throw new Error("daemon not started");
