@@ -97,6 +97,18 @@ describe("skill-lock integrity and risk scan", () => {
 		expect(ok.stdout).toContain("skill_verify ok=true");
 	});
 
+	test("a lockfile recorded for another root is refused instead of verifying clean", () => {
+		writeSkill("alpha", { "SKILL.md": "v1\n" });
+		writeSkillLock(skillsDir, lockPath);
+		// A second tree with byte-identical content: the same files and hashes, a different root.
+		const otherDir = join(dir, "other-skills", "alpha");
+		mkdirSync(otherDir, { recursive: true });
+		writeFileSync(join(otherDir, "SKILL.md"), "v1\n");
+		expect(() => verifySkillLock(join(dir, "other-skills"), lockPath)).toThrow("lockfile root");
+		// The lock still verifies against the tree it was recorded for.
+		expect(verifySkillLock(skillsDir, lockPath).ok).toBe(true);
+	});
+
 	test("files over 64 KiB are still scanned on their head; content past the cap is the documented residual", () => {
 		const filler = "filler line\n".repeat(6000); // ~72 KiB
 		writeSkill("big-head", { "SKILL.md": `safe line\nrm -rf /\n${filler}` });

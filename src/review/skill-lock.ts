@@ -186,6 +186,12 @@ export function verifySkillLock(rootDir: string, lockPath: string): SkillVerifyR
 	const resolvedRoot = resolve(rootDir);
 	const resolvedLock = resolve(lockPath);
 	const lock = readSkillLock(resolvedLock);
+	// The lockfile binds one tree: a lock recorded for another root must never verify clean against this one, even
+	// when the relative files and hashes happen to match (stale lock, moved home, --dir mix-up). Re-lock to recover.
+	if (resolve(lock.root) !== resolvedRoot)
+		throw new Error(
+			`skills verify failed: lockfile root ${lock.root} does not match skills directory ${resolvedRoot} (re-lock with skills lock)`,
+		);
 	const scan = scanSkillTree(resolvedRoot, "skills verify", resolvedLock);
 	const lockedKeys = Object.keys(lock.files).sort();
 	const currentKeys = Object.keys(scan.files).sort();
