@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DiscordChannel } from "../src/discord/channel";
 import type { ProcessRunner } from "../src/dispatch/omp";
+import type { GitResult, GitRunner } from "../src/lanes/verify";
 import { IDLE_HOST_LOAD } from "../src/ops/host-resources";
 import { startTask, type TaskDispatchDeps } from "../src/tasks/dispatch";
 import { acceptanceItems, docsDirUnder, renderProgress, renderSpec, taskDocsCommitTitle } from "../src/tasks/docs";
 import { evaluateTask, memoryTaskChecks } from "../src/tasks/evaluate";
 import { createTaskHostOps, type HostResult, type TaskHostOps, type TaskResumeOps } from "../src/tasks/host";
 import { TaskLedger, type TaskRow } from "../src/tasks/ledger";
-import { mirrorRecords, TASK_DOC_NAMES } from "../src/tasks/records";
+import { mirrorRecords, recordsTicker, TASK_DOC_NAMES } from "../src/tasks/records";
 import type { WorkerTier } from "../src/tasks/worker-tier";
 import { OWNER } from "./helpers/bot-home";
 import { registryOf } from "./helpers/channels";
@@ -458,5 +459,59 @@ describe("TASK 기록 분리: base_sha 기준 증거 commit 판정 (AC-2)", () =
 		const held = await evaluateTask(noBase, t.ops, memoryTaskChecks());
 		expect(held.ok && held.judgement.reached).toBe(false);
 		expect(held.ok && held.judgement.problems).toEqual([expect.stringContaining(`commit ${t.feat.slice(0, 9)}`)]);
+	});
+});
+
+describe("TASK 기록 분리: recordsTicker 실패 재시도", () => {
+	test("a failed commit is retried on the next sweep; a committed one waits out the interval", async () => {
+		const clock = { ms: NOW };
+		const warnings: string[] = [];
+		const calls: string[][] = [];
+		const statusFails = { value: true };
+		const git: GitRunner = async (args) => {
+			calls.push(args);
+			const result = (code: number, stdout = "", stderr = ""): GitResult => ({ code, stdout, stderr });
+			const sub = args[2] as string;
+			if (sub === "symbolic-ref") return result(0, "main\n");
+			if (sub === "status")
+				return statusFails.value ? result(1, "", "boom") : result(0, ` M docs/tasks/${TASK_ID}/PROGRESS.md\n`);
+			if (sub === "add" || sub === "-c") return result(0);
+			if (sub === "rev-parse") return result(0, `${"a".repeat(40)}\n`);
+			return result(1, "", "unexpected");
+		};
+		const tick = recordsTicker(
+			{
+				options: { config: { recordsRepo } },
+				clock: { now: () => clock.ms },
+				log: { warn: (event) => warnings.push(event) },
+			},
+			() => ({ readFile: async () => ({ ok: true as const, value: "" }) }),
+			git,
+		);
+		const row = {
+			taskId: TASK_ID,
+			status: "working",
+			host: null,
+			worktree: join(root, "wt"),
+			docsDir: join(recordsRepo, "docs", "tasks", TASK_ID),
+		} as TaskRow;
+
+		await tick(row);
+		expect(warnings).toEqual(["records_commit_failed"]);
+		const afterFirstFail = calls.length;
+		expect(afterFirstFail).toBeGreaterThan(0);
+
+		// Same status, same clock: a failed commit is tried again, not throttled for 30 minutes.
+		await tick(row);
+		expect(calls.length).toBeGreaterThan(afterFirstFail);
+		expect(warnings).toEqual(["records_commit_failed", "records_commit_failed"]);
+
+		// The commit succeeds now; the next sweep inside the interval does not try again.
+		statusFails.value = false;
+		await tick(row);
+		const afterCommit = calls.length;
+		expect(warnings).toHaveLength(2);
+		await tick(row);
+		expect(calls.length).toBe(afterCommit);
 	});
 });
