@@ -41,6 +41,8 @@ export interface SkillReviewDeps {
 	savePending(proposals: SkillProposal[]): string[];
 	/** Installs one approved skill into the agent skills directory. */
 	install(proposal: SkillProposal): Promise<void>;
+	/** Whether a skill is installed (`<skills>/<name>/SKILL.md` exists); defaults to the real skills root. */
+	skillInstalled?: (name: string) => boolean;
 	/** Set when the bot runs under an omp profile: installs land in the source tree and reach live sessions at the next apply. */
 	profileSyncPending?: boolean;
 	requestApproval(summary: string): Promise<"approved" | "denied" | "timeout">;
@@ -230,12 +232,30 @@ export async function runSkillReview(
 		deps.log.info("skill_review_skipped", { status: final?.status ?? "timeout" });
 		return { proposals: 0, installed: 0 };
 	}
-	const proposals = extractProposals(final.text);
+	let proposals = extractProposals(final.text);
 	if (proposals.length === 0) {
 		deps.log.info("skill_review_no_proposal");
 		// An explicit `!distill` ends in silence otherwise: the owner waits for a card that never comes.
 		if (options.announceEmpty === true)
 			await deps.notify("📝 스킬 리뷰를 끝냈습니다. 이 대화에서 제안할 만한 절차가 없었어요(승인 카드 없음).");
+		return { proposals: 0, installed: 0 };
+	}
+	// Ask approval only for installs that can happen: a create for an installed skill and a patch for a missing
+	// one are dropped here (with a log line) instead of after the owner approves.
+	const isInstalled = deps.skillInstalled ?? isSkillInstalled;
+	proposals = proposals.filter((proposal) => {
+		const installed = isInstalled(proposal.name);
+		const impossible = (proposal.action === "create" && installed) || (proposal.action === "patch" && !installed);
+		if (impossible)
+			deps.log.warn("skill_proposal_inapplicable", { name: proposal.name, action: proposal.action, installed });
+		return !impossible;
+	});
+	if (proposals.length === 0) {
+		deps.log.info("skill_review_no_applicable_proposal");
+		if (options.announceEmpty === true)
+			await deps.notify(
+				"📝 스킬 리뷰를 끝냈습니다. 제안은 있었지만 지금 설치할 수 있는 것이 없었어요(만들려는 스킬이 이미 있거나, 고치려는 스킬이 없어서).",
+			);
 		return { proposals: 0, installed: 0 };
 	}
 
@@ -404,6 +424,21 @@ export function agentSkillsRoot(userHome: string = homedir()): string {
 /** Directory of one installed skill (`<skills>/<name>/SKILL.md` and `revisions/` live here). */
 export function skillDirOf(name: string, userHome: string = homedir()): string {
 	return join(agentSkillsRoot(userHome), name);
+}
+
+/**
+ * Whether `<skills>/<name>/SKILL.md` is installed — the same safe-path check `installSkill` enforces, so the
+ * pre-check and the install agree (a symlink or hard-linked file counts as not installed).
+ */
+export function isSkillInstalled(name: string, userHome: string = homedir()): boolean {
+	try {
+		return assertSafeSkillPath(join(skillDirOf(name, userHome), "SKILL.md"), "review", {
+			requireFile: true,
+			checkHardLink: true,
+		});
+	} catch {
+		return false;
+	}
 }
 
 /**
