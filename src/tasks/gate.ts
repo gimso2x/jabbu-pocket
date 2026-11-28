@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MessageRef } from "../channel/port";
+import { errorFields } from "../channel/text";
 import {
 	laneQaRisk,
 	QA_INCONCLUSIVE,
@@ -58,9 +59,8 @@ export function taskGateStep(
 	const { qa: _qa, ...reviewOnly } = policy;
 	const reviewed = receiptBlockers(receipts, sha, risk, reviewOnly, now);
 	if (reviewed.length > 0) return { blockers: reviewed };
-	if (laneQaRisk(risk, policy) && (qa?.sha !== sha || receiptStaleOf("qa", qa, now) !== undefined)) {
+	if (laneQaRisk(risk, policy) && (qa?.sha !== sha || receiptStaleOf("qa", qa, now) !== undefined))
 		return { run: "qa" };
-	}
 	return { blockers: receiptBlockers(receipts, sha, risk, policy, now) };
 }
 
@@ -182,7 +182,7 @@ export class TaskGateRunner {
 		const card = hooks.gating();
 		const subject = taskSubject(row, hooks.judgement, tip);
 		void this.#run(row, subject, policy, step.run, { abort, end: ended.resolve, card, hooks }).catch((error: unknown) =>
-			this.#deps.log.error("task_gate_failed", { task: row.taskId, error: String(error) }),
+			this.#deps.log.error("task_gate_failed", { task: row.taskId, ...errorFields(error) }),
 		);
 		await card;
 		return { state: "gating" };

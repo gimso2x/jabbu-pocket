@@ -238,6 +238,54 @@ describe("AC-1: source isolation and the 15-minute cache", () => {
 		expect(assembled().usageLimits).toBeUndefined();
 		expect(assembled(true).usageLimits).toBe(true);
 	});
+
+	test("empty reports with disabledCredentials or accountsWithoutUsage yields auth reason instead of shape error", async () => {
+		const cases: Array<{ payload: unknown; expected: string; reject?: RegExp }> = [
+			{
+				payload: {
+					reports: [],
+					disabledCredentials: [
+						{
+							provider: "anthropic",
+							email: "user@example.test",
+							accountId: "acc-1234",
+							orgId: "org-99",
+							orgName: "SecretOrg",
+							cause: 'OAuthError: 400 {"error": "invalid_grant", "error_description": "Refresh token expired"}',
+						},
+					],
+				},
+				expected: "인증 만료 (재로그인 필요)",
+				reject: /example\.test|acc-1234|org-99|SecretOrg/,
+			},
+			{
+				payload: { reports: [], disabledCredentials: [{ cause: "revoked xoxb-TEST-0" }] },
+				expected: "인증 비활성: revoked [REDACTED]",
+				reject: /xoxb-TEST-0/,
+			},
+			{
+				payload: { reports: [], disabledCredentials: [{ provider: "anthropic" }] },
+				expected: "인증 비활성 (재로그인 필요)",
+			},
+			{
+				payload: { reports: [], accountsWithoutUsage: [{ provider: "anthropic" }] },
+				expected: "한도 정보 없음",
+			},
+			{
+				payload: { reports: [] },
+				expected: "모양이 다름: reports",
+			},
+		];
+		for (const c of cases) {
+			clearUsageLimitsCache();
+			const fake = fakeRun({ ...healthy, anthropic: { stdout: JSON.stringify(c.payload) } });
+			const section = await readUsageLimits(CONFIG, fake.run, () => NOW);
+			if (!section.ok) throw new Error(section.error);
+			const src = section.sources[0];
+			expect(src).toEqual({ name: "Claude", ok: false, error: c.expected });
+			if (c.reject !== undefined && !src?.ok) expect(src?.error).not.toMatch(c.reject);
+		}
+	});
 });
 
 describe("AC-1: config validation", () => {

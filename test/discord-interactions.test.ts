@@ -8,14 +8,15 @@ import { join } from "node:path";
 import { DENIED_TEXT } from "../src/channel/text";
 import type { CoreSink, DeliverySource } from "../src/channel/types";
 import { DiscordAdapter } from "../src/discord/adapter";
+import { snowflakeAt } from "../src/discord/backfill";
 import { DiscordChannel } from "../src/discord/channel";
-import { DiscordCallError, type DiscordInteraction } from "../src/discord/transport";
+import { DiscordCallError, type DiscordInteraction, DiscordRateLimitedError } from "../src/discord/transport";
 import { lanePauseActionId } from "../src/lanes/card";
 import { createLogger } from "../src/log";
 import { redact } from "../src/redact";
 import { openStore, type Store } from "../src/store/db";
 import { taskRecommendActionId } from "../src/tasks/notify";
-import { FakeDiscordTransport } from "./helpers/discord-fake-transport";
+import { type FakeDiscordCall, FakeDiscordTransport } from "./helpers/discord-fake-transport";
 
 const OWNER = "100000000000000001";
 const STRANGER = "100000000000000002";
@@ -27,6 +28,8 @@ const THREAD = "222222222222222222";
 const DM = "123456789012345678";
 const RECOMMEND = "A안: 캐시를 끄고 다시 측정";
 const RECOMMEND_ID = taskRecommendActionId("T-20261110-08");
+
+const NOW = 1_800_000_000_000;
 
 type Action = Parameters<CoreSink["onAction"]>[0];
 
@@ -60,7 +63,7 @@ async function boot(): Promise<{ port: DiscordChannel; adapter: DiscordAdapter }
 		core: core(),
 		deliveries: noDeliveries,
 		ownerUserId: OWNER,
-		clock: { now: () => 1_800_000_000_000 },
+		clock: { now: () => NOW },
 		log: createLogger({ sink: (line) => logs.push(line), clock: { now: () => 0 }, redact }),
 	});
 	await adapter.start();
@@ -75,8 +78,10 @@ function click(
 	seq += 1n;
 	const user = { id: options.user ?? OWNER };
 	const guild = options.guild ?? true;
+	// Interaction ids are snowflakes minted at the test clock, so the follow-up token reads as fresh; an id minted
+	// 15 minutes ago stands in for a click whose action ran past the token's life.
 	return {
-		id: options.id ?? String(800_000_000_000_000_000n + seq),
+		id: options.id ?? String(BigInt(snowflakeAt(NOW)) + seq),
 		application_id: APP,
 		type: 3,
 		token: `token-${seq}`,
@@ -88,6 +93,13 @@ function click(
 }
 
 const responses = () => transport.calls.filter((c) => c.method === "respondInteraction");
+
+/** Posted replies with this exact content. */
+const replies = (content: string): Array<Extract<FakeDiscordCall, { method: "createMessage" }>> =>
+	transport.calls.filter(
+		(c): c is Extract<FakeDiscordCall, { method: "createMessage" }> =>
+			c.method === "createMessage" && c.content === content,
+	);
 
 /** The card in the server thread with one `추천대로` button carrying the recommendation. */
 async function threadCard(port: DiscordChannel): Promise<string> {
@@ -256,6 +268,97 @@ describe("owner clicks", () => {
 		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
 		expect(logs.some((line) => line.includes("event=action_failure_notice_failed"))).toBe(true);
 		expect(transport.count("followupInteraction")).toBe(1);
+	});
+});
+
+describe("follow-up token expiry", () => {
+	test("a fresh interaction still confirms via the webhook follow-up", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		onAction = (action) => action.replyEphemeral?.("완료");
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(transport.calls.filter((c) => c.method === "followupInteraction")).toHaveLength(1);
+		expect(transport.calls.filter((c) => c.method === "followupInteraction")).toMatchObject([
+			{ applicationId: APP, content: "완료", flags: 64 },
+		]);
+		expect(replies("완료")).toHaveLength(0);
+	});
+
+	test("an interaction past the token's near-expiry: the confirmation goes as a normal reply under the card", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		onAction = (action) => action.replyEphemeral?.("완료");
+		const oldId = snowflakeAt(NOW - 15 * 60_000);
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }, { id: oldId }));
+		expect(transport.calls.filter((c) => c.method === "followupInteraction")).toHaveLength(0);
+		expect(replies("완료")).toHaveLength(1);
+		expect(replies("완료").map((r) => [r.channelId, r.messageReference])).toEqual([[THREAD, { messageId: card }]]);
+	});
+
+	test("an onAction failure past the token's near-expiry: the failure notice goes as a normal reply", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		onAction = () => {
+			throw new Error("boom");
+		};
+		const oldId = snowflakeAt(NOW - 15 * 60_000);
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }, { id: oldId }));
+		expect(transport.calls.filter((c) => c.method === "followupInteraction")).toHaveLength(0);
+		expect(replies("버튼을 처리하지 못했습니다 — 다시 눌러 주세요")).toHaveLength(1);
+		expect(
+			replies("버튼을 처리하지 못했습니다 — 다시 눌러 주세요").map((r) => [r.channelId, r.messageReference]),
+		).toEqual([[THREAD, { messageId: card }]]);
+	});
+});
+
+describe("ACK retries", () => {
+	test("a rate-limited ACK retries after retry_after and the action still runs once", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordRateLimitedError(1)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses().map((c) => c.response)).toEqual([{ type: 6 }, { type: 6 }]);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("a rate-limited ACK with retry_after past the window skips the action", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordRateLimitedError(60_000)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(1);
+		expect(actions).toHaveLength(0);
+		expect(logs.some((line) => line.includes("interaction_ack_failed"))).toBe(true);
+	});
+
+	test("an ambiguous ACK failure retries once at once and the action runs", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordCallError("ambiguous", "discord_http_500", 500)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(2);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("an ambiguous ACK failure that still fails runs the action (it may have landed)", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [
+			new DiscordCallError("ambiguous", "discord_http_500", 500),
+			new DiscordCallError("ambiguous", "discord_http_500", 500),
+		];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(2);
+		expect(actions).toHaveLength(1);
+	});
+
+	test("a definitive ACK failure skips the action", async () => {
+		const { port } = await boot();
+		const card = await threadCard(port);
+		transport.failNext.respondInteraction = [new DiscordCallError("definitive", "discord_http_404:10062", 404, 10062)];
+		await transport.emitInteraction(click(RECOMMEND_ID, { id: card, channelId: THREAD }));
+		expect(responses()).toHaveLength(1);
+		expect(actions).toHaveLength(0);
 	});
 });
 

@@ -96,6 +96,36 @@ describe("renderDiscordParts", () => {
 		expect(single).toEqual(["짧은 답\n_✅ 00:01_"]);
 	});
 
+	test("a resume re-renders the same body chunks whatever the footer became (round 14 F1)", () => {
+		// A long paragraph with no line break: the cut is a hard cut at the chunk limit, so any limit change moves
+		// every boundary. The first send carried a footer; after a restart the status is gone, so the resume has no
+		// footer but the redelivered mark — with a per-render limit the two renders chunk differently and `sentParts`
+		// then skips the wrong text (a slice is lost or posted twice).
+		const body = "가".repeat(4000);
+		const chunksOf = (parts: string[], redelivered: boolean, footer: string | undefined): string[] =>
+			parts.map((part, i) => {
+				const head = i === 0 && redelivered ? `${REDELIVERED_PREFIX}\n` : "";
+				const tail = i === parts.length - 1 && footer !== undefined ? `\n_${footer}_` : "";
+				expect(part.startsWith(head)).toBe(true);
+				expect(part.endsWith(tail)).toBe(true);
+				return part.slice(head.length, part.length - tail.length);
+			});
+		const footer = "✅ 00:42 · 도구 6회";
+		const first = chunksOf(renderDiscordParts(body, false, footer), false, footer);
+		const resumed = chunksOf(renderDiscordParts(body, true), true, undefined);
+		expect(resumed).toEqual(first);
+		for (const part of [...renderDiscordParts(body, false, footer), ...renderDiscordParts(body, true)]) {
+			expect(part.length).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+		}
+	});
+
+	test("even the longest footer the reserve covers keeps every part within 2000", () => {
+		const body = "가".repeat(4000);
+		for (const part of renderDiscordParts(body, false, "x".repeat(61))) {
+			expect(part.length).toBeLessThanOrEqual(MESSAGE_CONTENT_LIMIT);
+		}
+	});
+
 	/** No part carries a cut fence mark or a language tag torn from its fence. */
 	const expectFencesWhole = (parts: string[], label: string) => {
 		for (const [i, part] of parts.entries()) {

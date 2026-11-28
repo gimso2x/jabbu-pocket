@@ -109,6 +109,32 @@ describe("conversation turn notes", () => {
 		expect(wiki.sweeps).toHaveLength(1);
 	});
 
+	test("AC-3: a turn recorded after its group's note was written goes out as a follow-up note", async () => {
+		const repo = makeRepo(repos);
+		const first = commitTurn(repo, "feat: 첫 번째");
+		await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op1", threadRef: THREAD_REF, rows: [first] });
+		now += DAY_MS;
+		await wiki.notes.flushTurns();
+		const ids = wiki.outbox();
+		expect(ids).toHaveLength(1);
+		expect(ids[0]).toMatch(/^jabbu-turns-[0-9a-f]{10}-20270115$/);
+
+		// A turn that ended on the same day but is only recorded now (its git
+		// awaits pushed the insert past the flush) must not be dropped.
+		now = NOON;
+		const late = commitTurn(repo, "feat: 늦은 두 번째");
+		now += DAY_MS;
+		await wiki.notes.recordTurn({ originKey: THREAD_ORIGIN, opRef: "op2", threadRef: THREAD_REF, rows: [late] });
+		await wiki.notes.flushTurns();
+		const after = wiki.outbox();
+		expect(after).toHaveLength(2);
+		const followUp = after.find((id) => id.endsWith("-2"));
+		expect(followUp).toMatch(/^jabbu-turns-[0-9a-f]{10}-20270115-2$/);
+		expect(wiki.read(followUp as string).summary).toContain("feat: 늦은 두 번째");
+		expect(wiki.read(ids[0] as string).summary).not.toContain("feat: 늦은 두 번째");
+		expect(store.listUnsentWikiTurns()).toEqual([]);
+	});
+
 	test("AC-3: a DM turn is its own note at the next flush, even on the same day", async () => {
 		const repo = makeRepo(repos);
 		const one = commitTurn(repo, "fix: 하나");

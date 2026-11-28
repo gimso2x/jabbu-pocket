@@ -512,6 +512,19 @@ describe("원격 fetch: 임시 ref로 가져와 재판정하고 그 sha로 PR을
 		expect(w.judgeCalls).toHaveLength(0);
 	});
 
+	test("원격 fetch: fetch 뒤에 멈추면(HEAD 어긋남) 임시 ref도 지워진다", async () => {
+		const w = await start();
+		const { row } = w.seed({
+			commits: (wt) => {
+				w.commit(wt, ["a.txt"]);
+				w.commit(wt, ["b.txt"]);
+			},
+		});
+		git(row.worktree, "checkout", "-q", "--detach", "HEAD~1");
+		await expectStopped(w, row, "브랜치 끝이 아님");
+		expect(git(w.repo, "for-each-ref", "refs/jabbu")).toBe("");
+	});
+
 	test("원격 fetch: 재판정 중 원격 HEAD가 움직이면 push·gh 0회로 blocked", async () => {
 		const w = await start();
 		const { row } = w.seed();
@@ -521,6 +534,14 @@ describe("원격 fetch: 임시 ref로 가져와 재판정하고 그 sha로 PR을
 		};
 		await expectStopped(w, row, "검증 뒤 브랜치가 움직임");
 		expect(w.judgeCalls).toHaveLength(1);
+	});
+
+	test("원격 fetch: 게이트가 반송으로 끝나면 임시 ref도 지워진다", async () => {
+		const w = await start();
+		const { row } = w.seed();
+		w.moveBaseAhead(["elsewhere.txt"]);
+		expect(await w.daemon.autoLand(row)).toMatchObject({ state: "rework" });
+		expect(git(w.repo, "for-each-ref", "refs/jabbu")).toBe("");
 	});
 
 	test("원격 fetch: 원격 worktree가 dirty면 fetch 전에 blocked", async () => {
@@ -723,6 +744,13 @@ describe("원격 merge-base: 워커가 base를 merge한 뒤 무결성 diff의 �
 		const orphan = git(w.repo, "commit-tree", "-m", "unrelated", "HEAD^{tree}");
 		w.daemon.store.tasks.setBaseSha(merged.row.taskId, orphan);
 		expect(await remoteIntegrityBase(env(w), w.row(merged.row.taskId))).toBeUndefined();
+	});
+
+	test("원격 merge-base: integrityBase 탐침은 임시 ref를 남기지 않는다", async () => {
+		const w = await start();
+		const merged = mergedTask(w);
+		expect(await remoteIntegrityBase(env(w), merged.row)).toBe(merged.baseSide);
+		expect(git(w.repo, "for-each-ref", "refs/jabbu")).toBe("");
 	});
 
 	test("원격 merge-base: problems가 남은 판정에서는 지연 함수를 부르지 않아 fetch가 0회이고, 없으면 한 번 부른다", async () => {
