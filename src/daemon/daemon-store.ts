@@ -10,13 +10,12 @@ import type { CrashPoint } from "./crash";
 /** The peer call policy of a config: Discord peer bots with `peerSilenceAlert` on; `undefined` (off) otherwise. */
 export function peerCallPolicyOf(config: JabbuConfig): PeerCallPolicy | undefined {
 	const discord = config.channels.discord;
-	const minutes = peerSilenceMinutes(config);
-	if (discord?.peerBots === undefined || discord.peerBots.length === 0 || minutes === 0) return undefined;
+	if (!discord?.peerBots?.length || peerSilenceMinutes(config) === 0) return undefined;
 	return {
 		peers: discord.peerBots,
 		skipConversations: [discord.logChannelId].filter((id) => id !== undefined),
 		ownerUserId: discord.ownerUserId,
-		silenceMs: minutes * 60_000,
+		silenceMs: peerSilenceMinutes(config) * 60_000,
 	};
 }
 
@@ -51,6 +50,7 @@ export class DaemonStore extends Store {
 					}),
 				onOwnerNoticeUnroutable: ({ originKey, opRef }) =>
 					log.warn("owner_notice_unroutable", { origin: originKey, op: opRef }),
+				onExpiredDropped: (dropped) => log.warn("expired_dropped", { ids: dropped.map((r) => r.deliveryId) }),
 			},
 		});
 	}
