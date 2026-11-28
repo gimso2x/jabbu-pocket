@@ -155,6 +155,12 @@ function seedCallOf(entry: OmpEntry | undefined): CacheCall | undefined {
  * the bound, so callers do not slice further. Classification still uses the full text (`classifyReason`). */
 const REASON_HEAD_CHARS = 1000;
 const REASON_TAIL_CHARS = 1000;
+/**
+ * Ledger cursor holding the epoch whose driver rotation is still owed its context: the durable half of
+ * `#rotatedSession`, so a daemon restart between the rotation and the next turn keeps the flag.
+ */
+const ROTATION_CURSOR_PREFIX = "rotation:";
+const rotationCursorKey = (originKey: string): string => `${ROTATION_CURSOR_PREFIX}${originKey}`;
 
 function headTailReason(text: string): string {
 	const chars = [...text];
@@ -1222,6 +1228,7 @@ export class OriginMailbox {
 		this.#freshSession = false;
 		const rotated = this.#rotatedSession;
 		this.#rotatedSession = false;
+		if (rotated) store.deleteCursor(rotationCursorKey(originKey));
 		const coldResume = this.#coldResume;
 		this.#coldResume = undefined;
 		const blocks: string[] = peerNotice ? [peerTouchedTurnNotice(originKey)] : [];
@@ -1369,6 +1376,12 @@ export class OriginMailbox {
 		if (!origin) throw new OmpDriverError("not_started", `unknown origin ${originKey}`);
 		// Freshness must be read before the child exists: an empty epoch dir means this session is brand-new.
 		this.#freshSession = epochDirIsFresh(origin.sessionDir);
+		// The marker the rotation wrote is the only durable record of it: the session dir alone cannot tell a first
+		// session from a post-rotation restart, and an epoch bump (`/new`, cold-resume) leaves the marker stale.
+		if (store.getCursor(rotationCursorKey(originKey)) === String(origin.epoch)) {
+			this.#freshSession = false;
+			this.#rotatedSession = true;
+		}
 		const expected = sessionToResume(origin);
 		this.#spawn = spawnSnapshot(origin.sessionDir, expected);
 		const peerTouched = store.originHasPeerInbound(originKey);
@@ -1502,7 +1515,12 @@ export class OriginMailbox {
 		this.#turn = undefined;
 		this.#wakeTurnEndWaiters();
 		this.#lastActivityAt = this.#deps.clock.now();
-		if (final.usage?.rotated === true) this.#rotatedSession = true;
+		if (final.usage?.rotated === true) {
+			// Persist the epoch so a restart before the next turn still re-feeds the rotation context.
+			this.#rotatedSession = true;
+			const epoch = store.getOrigin(originKey)?.epoch;
+			if (epoch !== undefined) store.setCursor(rotationCursorKey(originKey), String(epoch));
+		}
 		await recordDailyCost(this.#deps, driver, turn, stopFirst, final.usage);
 		const base = { originKey, opRef: turn.opRef, threadRef: turn.threadRef };
 		if (final.status === "completed") {
@@ -1527,14 +1545,6 @@ export class OriginMailbox {
 				...base,
 				parts: ["⏸ 이 턴은 오너 멈춤 요청으로 중단됐습니다(레인 일시정지). 재개는 오너만 합니다."],
 			});
-		} else if ((final.error ?? "").startsWith(COST_CAP_STOP_PREFIX)) {
-			// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
-			const rawReason = final.error ?? final.status;
-			this.#logTurnFailed(rawReason);
-			store.recordTurnFailure({
-				...base,
-				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
-			});
 		} else {
 			const rawReason = final.error ?? final.status;
 			this.#logTurnFailed(rawReason);
@@ -1542,8 +1552,11 @@ export class OriginMailbox {
 				...base,
 				notice: failedNotice(rawReason, turn.peer, this.#threadSource()),
 			});
-			this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
-			await this.#noteTurnFailure(turn.threadRef, rawReason);
+			// A spend brake, not a breakage: the notice carries the reason, the failure run stays as it was.
+			if (!rawReason.startsWith(COST_CAP_STOP_PREFIX)) {
+				this.#noteQuotaErrorIfLimit(turn.threadRef, rawReason, turn.model);
+				await this.#noteTurnFailure(turn.threadRef, rawReason);
+			}
 		}
 		const error = final.error ?? (final.status === "completed" ? undefined : final.status);
 		this.#deps.onTurnSettled?.({
@@ -1631,14 +1644,8 @@ export class OriginMailbox {
 		const { store, originKey, log } = this.#deps;
 		const threadRef = row.threadRef;
 		const opRef = `${command.kind}:${row.platformMessageId}`;
-		if (command.kind === "new") {
-			await this.#newEpoch(opRef, threadRef);
-			return;
-		}
-		if (command.kind === "stop") {
-			await this.#stopTurn(row, opRef);
-			return;
-		}
+		if (command.kind === "new") return this.#newEpoch(opRef, threadRef);
+		if (command.kind === "stop") return this.#stopTurn(row, opRef);
 		// Mark first so a failing command can never leave its text pending for a later prompt.
 		store.markDispatched(row.platformMessageId, { opRef, entryCursor: null });
 		if (command.arg === "" && this.#deps.commandPicker !== undefined && isPickerCommand(command.kind)) {
