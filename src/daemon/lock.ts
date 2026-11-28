@@ -1,5 +1,6 @@
 import { closeSync, linkSync, lstatSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { sweepStaleStaged } from "./lock-staged";
+import { startedAtMatches } from "./proc-start";
 
 export interface LockInfo {
 	pid: number;
@@ -49,17 +50,19 @@ export function pidAlive(pid: number): boolean {
 }
 
 /**
- * Whether the process a lock names still holds it: alive on this boot. A recorded boot id from another boot is gone
- * whatever `isAlive` says (the pid may have been reused since the reboot); a lock without one is judged by pid alone.
+ * Whether the process a lock names still holds it: alive on this boot, and — when the lock records its holder's
+ * start — actually started by then. A boot id from another boot is gone whatever `isAlive` says; within one boot
+ * a reused pid reports a start later than the lock write plus tolerance, so it no longer counts as the holder.
  */
 export function holderAlive(
 	pid: number,
 	bootId: string | undefined,
 	isAlive: (pid: number) => boolean = pidAlive,
 	thisBoot: string = currentBootId(),
+	recordedStartedAt?: number,
 ): boolean {
 	if (bootId !== undefined && bootId !== thisBoot) return false;
-	return isAlive(pid);
+	return isAlive(pid) && (recordedStartedAt === undefined || startedAtMatches(pid, recordedStartedAt));
 }
 
 function readLock(path: string): LockInfo | undefined {
@@ -80,15 +83,6 @@ function readLock(path: string): LockInfo | undefined {
 		return undefined;
 	} catch {
 		return undefined;
-	}
-}
-
-/** Age of the lock file by mtime; a file that vanished meanwhile counts as old (the retry recreates it). */
-function lockAgeMs(path: string, now: number): number {
-	try {
-		return now - statSync(path).mtimeMs;
-	} catch {
-		return Number.POSITIVE_INFINITY;
 	}
 }
 
@@ -154,9 +148,16 @@ function stalePresent(path: string, bootId: string, now: number): boolean {
 	// A directory (or any other non-file) at the lock path is never ours to remove: the owner has to fix it.
 	if (pathIsNotFile(path)) throw new LockHeldError(path, undefined, undefined, true);
 	const holder = readLock(path);
-	if (holder && holderAlive(holder.pid, holder.bootId, pidAlive, bootId)) throw new LockHeldError(path, holder);
+	if (holder && holderAlive(holder.pid, holder.bootId, pidAlive, bootId, holder.startedAt))
+		throw new LockHeldError(path, holder);
 	if (holder !== undefined) return true;
-	const age = lockAgeMs(path, now);
+	let age: number;
+	try {
+		age = now - statSync(path).mtimeMs;
+	} catch {
+		// A file that vanished meanwhile counts as old (the retry recreates it).
+		age = Number.POSITIVE_INFINITY;
+	}
 	if (age < UNREADABLE_LOCK_GRACE_MS) throw new LockHeldError(path, undefined);
 	return age !== Number.POSITIVE_INFINITY;
 }
@@ -170,15 +171,13 @@ function stalePresent(path: string, bootId: string, now: number): boolean {
 function reclaimStale(path: string, bootId: string, now: number): void {
 	if (!stalePresent(path, bootId, now)) return;
 	const reclaim = `${path}.reclaim`;
-	let fd: number;
 	try {
-		fd = openSync(reclaim, "wx", 0o600);
+		closeSync(openSync(reclaim, "wx", 0o600));
 	} catch (error) {
 		if (error instanceof Error && "code" in error && error.code === "EEXIST")
 			throw new LockHeldError(path, undefined, reclaim);
 		throw error;
 	}
-	closeSync(fd);
 	try {
 		if (stalePresent(path, bootId, now)) unlinkSync(path);
 	} finally {

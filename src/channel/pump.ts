@@ -53,6 +53,8 @@ export interface StatusFinisher {
 	finishStatus(threadRef: string, originKey: string, outcome: FinalOutcome, action: "delete" | "update"): Promise<void>;
 	/** Absent: every thread of the delivery is finished, tracked or not. */
 	tracks?(threadRef: string, originKey: string): boolean;
+	/** Whether an earlier delivery for this thread is held (`failed_ambiguous`). Absent: the finish never downgrades. */
+	hasHeld?(threadRef: string, beforeDeliveryId: number): boolean | Promise<boolean>;
 }
 
 /**
@@ -75,7 +77,9 @@ export async function finishDeliveryStatus(
 	let firstError: unknown;
 	for (const threadRef of new Set([delivery.threadRef, ...(delivery.finishThreadRefs ?? [])])) {
 		if (delivery.finishUntracked === false && finisher.tracks?.(threadRef, delivery.originKey) === false) continue;
-		const final = cancelled.has(threadRef) ? "cancelled" : outcome;
+		// A sent answer must not stamp ✅ on a thread whose earlier delivery is still held: the turn is not whole.
+		const held = outcome === "done" && (await finisher.hasHeld?.(threadRef, delivery.deliveryId)) === true;
+		const final = cancelled.has(threadRef) ? "cancelled" : held ? "failed" : outcome;
 		const action = threadRef === delivery.threadRef && (final === "done" || final === "failed") ? "delete" : "update";
 		await finisher.finishStatus(threadRef, delivery.originKey, final, action).catch((error) => {
 			firstError ??= error;
@@ -154,15 +158,9 @@ export class DeliveryPump {
 				await this.#defer(delivery, sender.blockedReason(), retry);
 				continue;
 			}
-			let result: DeliverySendResult;
-			try {
-				result = await sender.send(delivery);
-			} catch (err) {
-				// The claim already holds it in flight. A send that throws instead of answering may have posted any number
-				// of parts, so it is ambiguous (never resent blindly); the rest of the batch still goes out.
-				await this.#fail(delivery, failedDelivery(err, delivery.sentParts ?? 0));
-				continue;
-			}
+			// The claim already holds it in flight. A send that throws instead of answering may have posted any number
+			// of parts, so it is ambiguous (never resent blindly); the rest of the batch still goes out.
+			const result = await sender.send(delivery).catch((err: unknown) => failedDelivery(err, delivery.sentParts ?? 0));
 			if (result.kind === "deferred") await this.#defer(delivery, errorText(result.error), result.retry);
 			if (result.kind === "failed") await this.#fail(delivery, result);
 			if (result.kind !== "sent") continue;

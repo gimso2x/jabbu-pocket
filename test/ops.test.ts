@@ -1,6 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import {
+	appendFileSync,
 	chmodSync,
 	existsSync,
 	lutimesSync,
@@ -1009,7 +1011,13 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 	 * gate they open and close. The boot backup itself is tested with `runBackup`.
 	 */
 	async function startDaemon(
-		options: { gateSweepMs?: number; failPrompts?: number; bootBackup?: DaemonOptions["bootBackup"] } = {},
+		options: {
+			gateSweepMs?: number;
+			failPrompts?: number;
+			bootBackup?: DaemonOptions["bootBackup"];
+			/** Pass the default backup through: the worker path, not an injected runner. */
+			defaultBootBackup?: boolean;
+		} = {},
 	): Promise<void> {
 		const sessions = new FakeSessionStore();
 		const failPrompts = options.failPrompts ?? 0;
@@ -1022,10 +1030,12 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 			ompVersion: "omp-test 0",
 			bootId: "boot",
 			bootBackup:
-				options.bootBackup ??
-				(() => {
-					throw new BackupError("vacuum_failed", "boot backup off in this test");
-				}),
+				options.defaultBootBackup === true
+					? undefined
+					: (options.bootBackup ??
+						(() => {
+							throw new BackupError("vacuum_failed", "boot backup off in this test");
+						})),
 			...(options.gateSweepMs === undefined ? {} : { gateSweepMs: options.gateSweepMs }),
 			driverFactory: (_origin, sessionDir) => {
 				const driver = new OpsDriver({ sessionDir, store: sessions });
@@ -1069,6 +1079,30 @@ describe("daemon self-diagnosis (무인 신뢰성 루프: 자가 보고)", () =>
 		expect(transport.posts((text) => text.includes("backup_age"))).toHaveLength(0);
 		expect(lines.some((line) => line.includes("event=boot_backup_done"))).toBe(true);
 	});
+
+	test("boot without a stamp: a slow backup runs off the event loop, so the daemon stays live while it runs", async () => {
+		expect(readStamp(join(home.dir, "backups"))).toBeUndefined();
+		// A bundle source big enough that tarring it takes seconds: incompressible, so gzip cannot shortcut it.
+		mkdirSync(join(home.dir, "sessions"), { recursive: true });
+		const chunk = randomBytes(1024 * 1024);
+		const big = join(home.dir, "sessions", "big.bin");
+		writeFileSync(big, chunk);
+		for (let i = 1; i < 120; i++) appendFileSync(big, chunk);
+		let beats = 0;
+		// sleep-ok: a liveness probe, not a wait — it only fires while the event loop is free during the backup.
+		const timer = setInterval(() => {
+			beats += 1;
+		}, 50);
+		try {
+			await startDaemon({ gateSweepMs: 5_000, defaultBootBackup: true });
+		} finally {
+			clearInterval(timer);
+		}
+		expect(readStamp(join(home.dir, "backups"))).toBeDefined();
+		expect(lines.some((line) => line.includes("event=boot_backup_done"))).toBe(true);
+		// The backup took seconds; a synchronous backup would have blocked the loop for all of it (0 beats).
+		expect(beats).toBeGreaterThan(10);
+	}, 60_000);
 
 	test("a failed boot backup is logged and backup_age still opens and DMs the owner", async () => {
 		await startDaemon({ gateSweepMs: 5_000 }); // the helper's boot backup fails
@@ -2277,7 +2311,7 @@ describe.each([
 		home.remove();
 	});
 
-	test("its pending and dispatched rows are discarded at start with inbound_discarded reason=platform_removed, and no turn runs", async () => {
+	test("its pending and dispatched rows and pending deliveries are discarded at start with reason=platform_removed, and no turn runs", async () => {
 		const seed = openBotStore(join(home.dir, "jabbu.db"), { now: () => Date.now() }, "Asia/Seoul");
 		seed.ensureOrigin(dm, join(home.dir, "sessions", "removed-dm"));
 		seed.ensureOrigin(thread, join(home.dir, "sessions", "removed-thread"));
@@ -2289,6 +2323,14 @@ describe.each([
 			threadRef: "C1:10.1",
 		});
 		seed.markDispatched("C1:10.1", { opRef: "op-removed-1", entryCursor: null });
+		const deliveries = seed.recordAnswer({
+			originKey: dm,
+			opRef: "op-removed-delivery",
+			threadRef: "D1:1.0",
+			parts: ["보낼 답"],
+		});
+		expect(deliveries).toHaveLength(1);
+		const deliveryId = deliveries[0]?.deliveryId ?? 0;
 		seed.close();
 
 		const lines: string[] = [];
@@ -2323,6 +2365,11 @@ describe.each([
 		for (const line of discarded) expect(line).toContain("reason=platform_removed");
 		expect(discarded.some((line) => line.endsWith(`origin=${dm}`))).toBe(true);
 		expect(discarded.some((line) => line.endsWith(`origin=${thread}`))).toBe(true);
+		expect(daemon.store.getDelivery(deliveryId)?.state).toBe("expired");
+		const deliveryDiscarded = lines.filter((line) => line.includes("event=delivery_discarded"));
+		expect(deliveryDiscarded).toHaveLength(1);
+		expect(deliveryDiscarded[0]).toContain("reason=platform_removed");
+		expect(deliveryDiscarded[0]).toContain(`origin=${dm}`);
 		await daemon.sweep();
 		expect(prompts).toEqual([]);
 		expect(lines.some((line) => line.includes("event=turn_start"))).toBe(false);

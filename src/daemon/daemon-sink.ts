@@ -6,7 +6,7 @@ import { parseThreadRef, TOP_LEVEL_TS, threadRefOf } from "../core/normalize";
 import { sessionDirFor } from "../core/origin";
 import { type ChatPlatform, parseChatOrigin } from "../core/origin-key";
 import { COMMAND_TEXT, parseCommand } from "../core/types";
-import { borrowedStartReply, borrowThreadOf, chatStartReply } from "../lanes/borrow-thread";
+import { borrowThreadOf, chatStartReplyFor } from "../lanes/borrow-thread";
 import { type LaneAction, parseLaneActionId } from "../lanes/card";
 import { classifyLaneControl } from "../lanes/control";
 import type { LaneManager } from "../lanes/manager";
@@ -47,7 +47,7 @@ import { taskMailboxPort, taskRuntimeOf } from "./daemon-task-resume";
 import { withControlSource } from "./daemon-task-web";
 import { type LaneTriggerLine, laneInbound, laneTriggerLine } from "./lane-sibling";
 import { isSideOpRef } from "./restart";
-import { laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
+import { inlineBorrowThreadRef, laneChannelOf, WEB_LANE_REFUSED } from "./thread-target";
 
 /** What the core sink needs beyond the daemon context: the boot's ledger and the state other daemon parts share. */
 export interface CoreSinkDeps {
@@ -280,20 +280,20 @@ export class DaemonInbound {
 				const platform = parseChatOrigin(row.originKey)?.platform;
 				if (platform === "web") throw new LaneInputError(WEB_LANE_REFUSED);
 				if (channel === undefined && platform === "discord") throw new LaneInputError(DISCORD_LANE_CHANNEL_MISSING);
-				if (!this.#lanes || channel === undefined) throw new Error("lanes unavailable");
+				const lanes = this.#lanes;
+				if (!lanes || channel === undefined) throw new Error("lanes unavailable");
 				assertNoSpacedPath(trigger.cwd, trigger.brief);
 				// Only a workflow call at the very start of the brief is a choice; the call is cut from the brief.
 				const called = triggerWorkflow(trigger.brief);
-				const lane = await this.#lanes.start({
+				const lane = await lanes.start({
 					...trigger,
 					...(called === undefined ? {} : { brief: called.brief, workflow: called.choice }),
 					channel,
 					parentOrigin: row.originKey,
 					reuseOpen: true,
-					...borrowThreadOf(row.originKey),
+					...borrowThreadOf(row.originKey, inlineBorrowThreadRef(this.#ctx, row.originKey, row.threadRef)),
 				});
-				if (lane.meta.borrowedThread === true) return borrowedStartReply(lane, lane.reused === true ? "↪ " : "🔄 ");
-				return chatStartReply(lane, await this.#lanes.threadLink(lane));
+				return chatStartReplyFor(lane, row.threadRef, () => lanes.threadLink(lane));
 			} catch (error) {
 				if (error instanceof LaneInputError) return `⚠️ 작업 레인을 시작하지 못했습니다: ${error.message}`;
 				this.#ctx.log.error("lane_start_failed", { id: row.platformMessageId, ...errorFields(error) });
@@ -327,12 +327,11 @@ export class DaemonInbound {
 		try {
 			const opRef = `${kind}:${row.platformMessageId}`;
 			startedStore(this.#ctx).markDispatched(row.platformMessageId, { opRef, entryCursor: null });
-			const reply = await answer();
 			startedStore(this.#ctx).recordAnswer({
 				originKey: row.originKey,
 				opRef,
 				threadRef: row.threadRef,
-				parts: [reply],
+				parts: [await answer()],
 			});
 		} catch (error) {
 			this.#settleFailed(failedAs, row, error);
@@ -659,6 +658,7 @@ export function deliverySources(
 	return (platform: ChatPlatform): DeliverySource => ({
 		claimDue: () => store.claimDue(undefined, platform).map(itemOf),
 		takeExpired: () => store.takeExpired(platform).map(itemOf),
+		hasHeld: (threadRef, beforeDeliveryId) => store.hasHeldDelivery(threadRef, beforeDeliveryId),
 		confirm: (deliveryId) => {
 			crash("after_post_before_confirm");
 			store.confirmDelivery(deliveryId);
@@ -666,9 +666,8 @@ export function deliverySources(
 		fail: (deliveryId, error, outcome, sentParts, replyTs) => {
 			if (outcome === "ambiguous") {
 				// The parts already posted stay on the row: an owner `jabbu-pocket deliveries resend` sends only the rest.
-				store.markAmbiguous(deliveryId, error, sentParts, replyTs);
-				// One owner notice per held delivery, into the thread the answer was headed for.
-				store.noticeAmbiguous(deliveryId, primaryOwnerUserId(config.channels));
+				// Hold and notice commit together: a notice failure leaves the row inflight for boot recovery to retry.
+				store.markAmbiguousWithNotice(deliveryId, error, sentParts, replyTs, primaryOwnerUserId(config.channels));
 				return true;
 			}
 			return store.failDelivery(deliveryId, error).state === "expired";

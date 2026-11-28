@@ -816,6 +816,93 @@ describe("omp dialogs answered on choice cards", () => {
 		await h.close();
 	});
 
+	test("ask multi: a partly-valid reply keeps the valid picks and puts only the rest into customInput", async () => {
+		const questions = [
+			{
+				id: "q1",
+				question: "무엇을 알릴까?",
+				options: [{ label: "discord" }, { label: "mail" }, { label: "sms" }],
+				multi: true,
+			},
+		];
+		const h = harness();
+		h.send({ method: "ask", id: "p1", questions });
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1, 9")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "p1")).toEqual(
+			reply("p1", { answers: [{ id: "q1", selectedOptions: ["discord"], customInput: "9" }] }),
+		);
+		h.send({ method: "ask", id: "p2", questions });
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9, 10")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "p2")).toEqual(
+			reply("p2", { answers: [{ id: "q1", selectedOptions: [], customInput: "9, 10" }] }),
+		);
+		await h.close();
+	});
+
+	test("ask: a blank reply answers nothing and the question stays open", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "b1",
+			questions: [{ id: "q1", question: "어디로?", options: [{ label: "dev" }, { label: "prod" }] }],
+		});
+		await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "   ")).toBe(true);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "b1")).toEqual(
+			reply("b1", { answers: [{ id: "q1", selectedOptions: ["prod"] }] }),
+		);
+		await h.close();
+	});
+
+	test("ask single: a bare out-of-range number is refused and the question stays open", async () => {
+		const h = harness();
+		h.send({
+			method: "ask",
+			id: "n1",
+			questions: [{ id: "q1", question: "어디로?", options: [{ label: "dev" }, { label: "prod" }] }],
+		});
+		await h.card(true);
+		await h.requested(1);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "0")).toBe(false);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "3")).toBe(false);
+		expect(h.replies.items).toHaveLength(0);
+		expect(h.broker.openDialogs(ORIGIN.originKey)).toBe(1);
+		const hint = await h.port.writes.waitFor((w) => w.kind === "edit" && w.msg.text.includes("번호나 선택지 이름으로"));
+		expect(h.port.writes.items.filter((w) => w.msg.text.includes("번호나 선택지 이름으로"))).toHaveLength(1);
+		expect(hint.msg.buttons?.map((b) => b.label)).toEqual(["dev", "prod"]);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "n1")).toEqual(
+			reply("n1", { answers: [{ id: "q1", selectedOptions: ["prod"] }] }),
+		);
+		h.send({
+			method: "ask",
+			id: "n2",
+			questions: [
+				{
+					id: "q1",
+					question: "무엇을 알릴까?",
+					options: [{ label: "discord" }, { label: "mail" }, { label: "sms" }],
+					multi: true,
+				},
+			],
+		});
+		await h.requested(2);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "9")).toBe(false);
+		expect(h.replies.items.filter((r) => r.id === "n2")).toHaveLength(0);
+		expect(await h.broker.answerDialog(ORIGIN.originKey, "1, 2")).toBe(true);
+		expect(await h.replies.waitFor((r) => r.id === "n2")).toEqual(
+			reply("n2", { answers: [{ id: "q1", selectedOptions: ["discord", "mail"] }] }),
+		);
+		await h.close();
+	});
+
 	test("ask: a double click on one button answers only its own question; the other stays open", async () => {
 		const h = harness();
 		h.send({

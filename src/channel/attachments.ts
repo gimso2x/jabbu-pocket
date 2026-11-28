@@ -17,17 +17,7 @@ export const MAX_INBOUND_DOC_BYTES = 20 * 1024 * 1024;
 /** Text attachments up to this size are scanned for instruction-like passages. */
 const MAX_SCANNED_TEXT_BYTES = 1024 * 1024;
 /** Extensions (lowercase, from the file name) scanned as text whatever the mimetype says. */
-const SCANNED_TEXT_EXT: Record<string, true> = {
-	txt: true,
-	md: true,
-	csv: true,
-	json: true,
-	log: true,
-	yaml: true,
-	yml: true,
-	html: true,
-	xml: true,
-};
+const SCANNED_TEXT_EXT = new Set(["txt", "md", "csv", "json", "log", "yaml", "yml", "html", "xml"]);
 
 const KNOWN_MIME_EXT: Record<string, string> = {
 	"image/png": "png",
@@ -73,10 +63,14 @@ const MAGIC_HEAD_BYTES = 12;
 
 /** Sniffs the first bytes; `undefined` when the content is not a supported image (HTML error pages etc.). */
 export function sniffImageMime(head: Uint8Array): string | undefined {
-	const hit = IMAGE_MAGIC.find((magic) =>
+	return IMAGE_MAGIC.find((magic) =>
 		magic.segments.every((segment) => segment.bytes.every((byte, i) => head[segment.offset + i] === byte)),
-	);
-	return hit?.mime;
+	)?.mime;
+}
+
+function retryAfterMs(response: Response): number | undefined {
+	const seconds = Number(response.headers.get("retry-after") ?? Number.NaN);
+	return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : undefined;
 }
 
 export interface DownloadFileArgs {
@@ -145,7 +139,9 @@ export async function downloadFile(args: DownloadFileArgs): Promise<DownloadResu
 			if (response.status === 429 || response.status >= 500) {
 				await response.body?.cancel();
 				if (attempt < retries) {
-					await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+					// A 429 waits out the server's Retry-After (1 s when absent); 5xx keeps the caller's linear backoff.
+					const delay = response.status === 429 ? (retryAfterMs(response) ?? 1_000) : retryDelayMs * (attempt + 1);
+					await new Promise((resolve) => setTimeout(resolve, delay));
 					continue;
 				}
 				return await cleanup(`http_${response.status}`);
@@ -279,7 +275,7 @@ export async function saveInboundAttachment(input: {
 	// A text file on disk (fresh download or an earlier copy) is scanned for instruction-like passages; a hit marks
 	// the note with the kinds only, never the passage. A failed scan leaves the note as it is.
 	const flagged = async (): Promise<string> => {
-		const textLike = (file.mimetype ?? "").startsWith("text/") || SCANNED_TEXT_EXT[ext] === true;
+		const textLike = (file.mimetype ?? "").startsWith("text/") || SCANNED_TEXT_EXT.has(ext);
 		if (isImage || !textLike) return note;
 		try {
 			if ((await stat(dest)).size > MAX_SCANNED_TEXT_BYTES) return note;

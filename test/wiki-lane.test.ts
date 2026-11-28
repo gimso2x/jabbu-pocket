@@ -190,6 +190,9 @@ describe("lane result note", () => {
 		expect(spawning.h.store.getLane(spawned.name)?.meta.land?.state).toBe("landed");
 		expect(spawning.wiki.outbox()).toEqual([`jabbu-lane-${spawned.meta.laneId}`]);
 		expect(spawning.wiki.logs.some((line) => line.includes("wiki_note_failed") && line.includes("sweep"))).toBe(true);
+		// The sweep never started, so the note must not be recorded sent: the
+		// draft stays for a later retry instead of the ledger claiming delivery.
+		expect(spawning.h.store.wikiNoteState(`jabbu-lane-${spawned.meta.laneId}`)?.state).toBe("draft");
 		spawning.h.close();
 	});
 

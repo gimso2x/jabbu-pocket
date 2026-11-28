@@ -599,7 +599,12 @@ describe("AC-8: schema migrations (10, 11 -> current) and web_messages GC", () =
 			)
 				.map((r) => r.name)
 				.sort();
-			expect(indexes).toEqual(["web_messages_conv_id", "web_messages_conv_thread_id", "web_messages_created"]);
+			expect(indexes).toEqual([
+				"web_messages_conv_id",
+				"web_messages_conv_thread_id",
+				"web_messages_created",
+				"web_messages_delivery_key",
+			]);
 			verify.close();
 		}
 	});
