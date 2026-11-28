@@ -212,4 +212,20 @@ describe("runDaemon exit record (real daemon process)", () => {
 		expect(logFile()).toContain("event=daemon_exit code=1");
 		expect(logFile()).not.toContain("event=daemon_stop");
 	}, 30_000);
+
+	test("a SIGTERM while the daemon is still booting exits 0 as an interrupted start, not a start failure", async () => {
+		const daemon = spawnDaemon(home.dir, join(home.dir, "transport.jsonl"), {
+			JABBU_TEST_START_DELAY_MS: "5000",
+		});
+		await daemon.waitLog(/event=runtime_booted/);
+		// No log line marks signal-handler installation, which happens a few ms after runtime_booted.
+		// sleep-ok: the 1 s settle waits for it inside the 5 s start delay, so the SIGTERM is handled, not fatal.
+		await Bun.sleep(1000);
+		daemon.signal("SIGTERM");
+		expect(await daemon.exited).toBe(0);
+		expect(logFile()).toContain("event=daemon_start_interrupted");
+		expect(logFile()).toContain("event=daemon_exit code=0");
+		expect(logFile()).not.toContain("event=daemon_start_failed");
+		expect(logFile()).not.toContain("event=daemon_ready");
+	}, 30_000);
 });

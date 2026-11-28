@@ -138,6 +138,52 @@ describe("downloadDiscordAttachment", () => {
 		expect(always).toBe(3);
 	});
 
+	test("a 429 waits out Retry-After before retrying, and waits 1 s when it is absent", async () => {
+		let calls = 0;
+		const at: number[] = [];
+		const limited = (async () => {
+			at.push(performance.now());
+			calls += 1;
+			return calls < 3
+				? jsonResponse(429, "slow down", { "retry-after": "0.05" })
+				: streamingResponse(200, PNG, { "content-type": "image/png" });
+		}) as unknown as typeof fetch;
+		const ok = await downloadDiscordAttachment({
+			url: "https://cdn.discordapp.com/attachments/1/2/f",
+			destPath: join(dir, "waited.png"),
+			maxBytes: 1024,
+			fetchImpl: limited,
+		});
+		expect(ok).toMatchObject({ ok: true });
+		expect(calls).toBe(3);
+		const [first, second, third] = at;
+		if (first === undefined || second === undefined || third === undefined) throw new Error("missing call timestamps");
+		expect(second - first).toBeGreaterThanOrEqual(40);
+		expect(third - second).toBeGreaterThanOrEqual(40);
+
+		let bareCalls = 0;
+		const bareAt: number[] = [];
+		const bare = (async () => {
+			bareAt.push(performance.now());
+			bareCalls += 1;
+			return bareCalls < 2
+				? jsonResponse(429, "slow down")
+				: streamingResponse(200, PNG, { "content-type": "image/png" });
+		}) as unknown as typeof fetch;
+		const bareOk = await downloadDiscordAttachment({
+			url: "https://cdn.discordapp.com/attachments/1/2/f",
+			destPath: join(dir, "bare.png"),
+			maxBytes: 1024,
+			retries: 1,
+			fetchImpl: bare,
+		});
+		expect(bareOk).toMatchObject({ ok: true });
+		expect(bareCalls).toBe(2);
+		const [bareFirst, bareSecond] = bareAt;
+		if (bareFirst === undefined || bareSecond === undefined) throw new Error("missing call timestamps");
+		expect(bareSecond - bareFirst).toBeGreaterThanOrEqual(900);
+	});
+
 	test("rejects an HTML login page and a non-image body when image magic is required", async () => {
 		const html = fakeFetch(() => jsonResponse(200, "<html>login</html>", { "content-type": "text/html" }));
 		const htmlResult = await downloadDiscordAttachment({
