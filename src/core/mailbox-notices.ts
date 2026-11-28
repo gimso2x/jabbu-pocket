@@ -1,7 +1,7 @@
 import { mentionToken, renderMentions } from "../channel/port";
 import { redact } from "../redact";
 import type { InboundRow } from "../store/db-rows";
-import { classifyFailure, formatResetHint } from "./failure-kind";
+import { ownerFailureTail } from "./failure-notice";
 import type { ThreadSource } from "./mailbox-thread-context";
 import { PEER_FAILURE_MARK } from "./types";
 
@@ -45,23 +45,6 @@ export function turnPeerOf(row: InboundRow): TurnPeer | undefined {
 	if (row.peerUserId === null) return undefined;
 	const marked = row.textRef.includes(PEER_FAILURE_MARK) && row.textRef.includes(PEER_FAILURE_TAIL);
 	return { userId: row.peerUserId, fromFailureNotice: marked };
-}
-
-function ownerFailureTail(reason: string): string {
-	const { kind, resetAt } = classifyFailure(reason);
-	switch (kind) {
-		case "provider_limit": {
-			const reset = resetAt === undefined ? "" : `${formatResetHint(resetAt)} `;
-			return `공급자 한도입니다. ${reset}다시 보내거나 다른 모델로 \`/model-jabbu\``;
-		}
-		case "context_overflow":
-			return "대화가 너무 길어 이어갈 수 없습니다. `/new-jabbu`(또는 `/compact-jabbu`) 뒤 다시 보내 주세요";
-		case "auth":
-			return "봇 계정 인증 문제입니다. 다시 보내도 같습니다 — 오너가 로그인·키를 확인해야 합니다";
-		case "transient":
-		case "unknown":
-			return "다시 보내 주세요";
-	}
 }
 
 /**
