@@ -25,7 +25,7 @@ import {
 	type TrialResult,
 } from "../src/cli/omp";
 import { loadConfig } from "../src/config";
-import { countOmpModels } from "../src/daemon/doctor";
+import { countOmpModels } from "../src/daemon/doctor-omp";
 import type { RunProcessOptions, RunProcessResult } from "../src/dispatch/omp";
 import { defaultDiskPaths } from "../src/ops/gates";
 

@@ -5,7 +5,8 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync 
 import { join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
-import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole, runDoctor } from "../src/daemon/doctor";
+import { checkDiscord, checkInjectedFiles, runDoctor } from "../src/daemon/doctor";
+import { countOmpModels, readJudgeRole } from "../src/daemon/doctor-omp";
 import { readVersion } from "../src/daemon/tools";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
