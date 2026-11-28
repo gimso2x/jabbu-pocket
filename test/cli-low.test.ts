@@ -114,6 +114,13 @@ describe("CLI commands without a daemon", () => {
 		expect((await runCliCapture(home.dir, ["--version", "extra"])).code).toBe(2);
 	});
 
+	test("a relative JABBU_HOME is refused with exit 2 before any command runs", async () => {
+		const run = await runCliCapture(home.dir, ["doctor"], { JABBU_HOME: "relative-home" });
+		expect(run.code).toBe(2);
+		expect(run.stdout).toBe("");
+		expect(run.stderr).toContain("JABBU_HOME must be absolute");
+	});
+
 	test("daemon, doctor, reload and --help refuse stray arguments (exit 2, one line)", async () => {
 		// A home with no config.json: without the guard `daemon` would fail on the config (exit 1).
 		const bare = mkdtempSync(join(tmpdir(), "jabbu-cli-bare-"));

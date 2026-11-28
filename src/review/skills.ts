@@ -51,7 +51,7 @@ export const MAX_EVIDENCE = 2_000;
 export const MIN_CHECKS = 2;
 export const MAX_CHECKS = 4;
 export const MAX_CHECK_TEXT = 500;
-/** Revisions of one skill live at `<skills>/<name>/revisions/<install-time>.md`. */
+/** Revisions of one skill live at `<skills>/<name>/revisions/<install-time>.md` — so no skill may be named `revisions`, or the lock scan (which skips that directory) could never see it. */
 export const SKILL_REVISIONS_DIR = "revisions";
 /** Every line terminator a frontmatter reader may honour (CRLF first so it collapses to one space). */
 const LINE_BREAKS = /\r\n|[\r\n\u2028\u2029\u0085]/g;
@@ -151,7 +151,7 @@ function validProposals(list: unknown[]): SkillProposal[] {
 		const name = typeof item.name === "string" ? item.name.trim() : "";
 		const description = typeof item.description === "string" ? item.description.trim() : "";
 		const content = typeof item.content === "string" ? item.content.trim() : "";
-		if (!NAME_PATTERN.test(name) || seen.has(name)) continue;
+		if (!NAME_PATTERN.test(name) || name === SKILL_REVISIONS_DIR || seen.has(name)) continue;
 		if (description === "" || description.length > MAX_DESCRIPTION) continue;
 		if (content === "" || content.length > MAX_CONTENT) continue;
 		// Adoption gate: a proposal the conversation never actually vindicated, or whose fire/do-not-fire checks are
@@ -481,9 +481,9 @@ export function backupSkillRevision(dir: string, now: number): string | undefine
  */
 export function installSkill(dir: string, proposal: SkillProposal, now: number): string | undefined {
 	const current = join(dir, "SKILL.md");
-	assertSafeSkillPath(dir, "install", { requireDir: true });
-	assertSafeSkillPath(join(dir, SKILL_REVISIONS_DIR), "install", { requireDir: true });
+	for (const path of [dir, join(dir, SKILL_REVISIONS_DIR)]) assertSafeSkillPath(path, "install", { requireDir: true });
 	const exists = assertSafeSkillPath(current, "install", { requireFile: true, checkHardLink: true });
+	if (proposal.name === SKILL_REVISIONS_DIR) throw new Error("install refused: revisions is a reserved name");
 	if (proposal.action === "create" && exists)
 		throw new Error(`create refused: ${proposal.name} already has a SKILL.md (only a patch may replace it)`);
 	if (proposal.action === "patch" && !exists) throw new Error(`patch refused: ${proposal.name} is not installed`);

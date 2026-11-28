@@ -133,6 +133,12 @@ describe("extractProposals", () => {
 		expect(extractProposals(bad)).toEqual([]);
 	});
 
+	test("a skill named revisions is dropped: it would collide with the revisions directory", () => {
+		const item = (JSON.parse(PROPOSAL_JSON) as Array<Record<string, unknown>>)[0] as Record<string, unknown>;
+		item.name = "revisions";
+		expect(extractProposals(JSON.stringify([item]))).toEqual([]);
+	});
+
 	test("adoption gate: a proposal without session evidence or with unpaired checks is dropped", () => {
 		const base = { action: "create", name: "gated", description: "d", content: "c" };
 		const check = { situation: "s", expect: "e" };
@@ -454,6 +460,18 @@ describe("skill revisions (install safety net)", () => {
 				.map((p) => readFileSync(p, "utf8"))
 				.sort(),
 		).toEqual(["v1", "v2"]);
+	});
+
+	test("installing a skill named revisions is refused", () => {
+		const path = skillDirOf("revisions", dir);
+		expect(() =>
+			installSkill(
+				path,
+				{ action: "create", name: "revisions", description: "d", content: "c", evidence: "e", checks: [] },
+				1_700_000_000_000,
+			),
+		).toThrow("reserved");
+		expect(existsSync(join(path, "SKILL.md"))).toBe(false);
 	});
 
 	test("rollback refuses a skill without an install or without revisions", () => {
