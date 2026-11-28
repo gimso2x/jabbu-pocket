@@ -1,4 +1,4 @@
-import { chmodSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, rmSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { IPC_MAX_LINE_BYTES, type Outgoing, overCap, pump } from "./ipc-pump";
 
@@ -25,6 +25,10 @@ export interface IpcServer {
 }
 
 export function startIpcServer(path: string, handler: IpcHandler): IpcServer {
+	// A non-file at the socket path is never ours to remove (like the lock's notFile refusal); a symlink is unlinked as before.
+	const st = lstatSync(path, { throwIfNoEntry: false });
+	if (st !== undefined && !st.isFile() && !st.isSymbolicLink())
+		throw new Error(`ipc socket path ${path} is not a regular file (remove or move it by hand)`);
 	rmSync(path, { force: true }); // the single-instance lock is held, so a leftover socket file is stale
 	// Created under umask 0177 so the socket is never visible with wider permissions, then pinned to 0600.
 	const previousUmask = process.umask(0o177);
@@ -136,12 +140,8 @@ export async function callDaemon(path: string, request: unknown, timeoutMs = 120
 	const socket = await Bun.connect({
 		unix: path,
 		socket: {
-			open(s) {
-				pump(s, out);
-			},
-			drain(s) {
-				pump(s, out);
-			},
+			open: (s) => pump(s, out),
+			drain: (s) => pump(s, out),
 			data(_s, chunk) {
 				buffer += decoder.write(chunk);
 				const newline = buffer.indexOf("\n");
