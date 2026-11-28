@@ -4151,6 +4151,7 @@ describe("mailbox: turn failure kinds and turn_failed logs", () => {
 		const logLine = logLines.find((line) => line.includes("event=turn_failed"));
 		expect(logLine).toContain("kind=provider_limit");
 	});
+
 	test("a token straddling the head/tail cut leaves no fragment in the turn_failures_escalated line", async () => {
 		escalateAfter = 1;
 		threadBot = { id: "500000000000000000" };
