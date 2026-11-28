@@ -1223,12 +1223,9 @@ export class DiscordAdapter implements ChannelAdapter {
 				const part = parts[index];
 				if (part === undefined) continue;
 				const channelId = destination?.channelId ?? target.channel;
-				const messageReference =
-					destination === undefined
-						? replyTo === undefined
-							? undefined
-							: { messageId: replyTo }
-						: destination.messageReference;
+				const topRef = replyTo === undefined ? undefined : { messageId: replyTo };
+				const replyRef = index === 0 ? destination?.messageReference : undefined;
+				const messageReference = destination === undefined ? topRef : replyRef;
 				const posted = await this.#call(`post:${channelId}`, () =>
 					this.#transport.createMessage({
 						channelId,
