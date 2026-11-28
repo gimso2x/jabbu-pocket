@@ -89,7 +89,7 @@ import {
 	transitionDelivery,
 	type UncertainReason,
 } from "./transitions";
-import { WebMessageStore } from "./web-messages";
+import { WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL, WebMessageStore } from "./web-messages";
 
 /** Schema 13: tables of removed features that nothing reads or writes; `dropRemovedTables` drops them on open. */
 const DROPPED_AT_13 = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
@@ -225,6 +225,8 @@ export const HERDR_PROMPT_PREVIEW_CHARS = 120;
 
 /** The registry keeps the newest entries only; a lane that lives for weeks must not grow without bound. */
 const MAX_LANE_HISTORY = 200;
+
+type DailyUsageInput = { day: string; originKey: string; cost: number; calls: number };
 
 export class Store {
 	private readonly db: Database;
@@ -1370,7 +1372,7 @@ export class Store {
 	// ---- daily cost ledger (`costCap`, src/ops/cost-cap.ts) ----
 
 	/** Adds one finished turn's priced cost to the day's row of its origin (`day` keyed in the bot's zone). */
-	addDailyUsage(input: { day: string; originKey: string; cost: number; calls: number }): void {
+	addDailyUsage(input: DailyUsageInput): void {
 		this.db
 			.query(
 				`INSERT INTO usage_daily (day, origin_key, cost, calls) VALUES (?, ?, ?, ?)
@@ -1379,15 +1381,23 @@ export class Store {
 			.run(input.day, input.originKey, input.cost, input.calls);
 	}
 
+	/**
+	 * One transaction: the day's increment plus the charged-cursor move (`null` deletes it). Both roll back
+	 * together, so a failed cursor write cannot leave a stale cursor behind a landed increment.
+	 */
+	chargeDailyUsage(input: DailyUsageInput, cursorKey: string, cursorValue: string | null): void {
+		this.db.transaction(() => {
+			this.addDailyUsage(input);
+			if (cursorValue === null) this.deleteCursor(cursorKey);
+			else this.setCursor(cursorKey, cursorValue);
+		})();
+	}
+
 	/** The day's total cost, or the sum of its rows when `originKey` is given. */
 	dailyCost(day: string, originKey?: string): number {
-		const row = (
-			originKey === undefined
-				? this.db.query("SELECT COALESCE(SUM(cost), 0) AS cost FROM usage_daily WHERE day = ?").get(day)
-				: this.db
-						.query("SELECT COALESCE(SUM(cost), 0) AS cost FROM usage_daily WHERE day = ? AND origin_key = ?")
-						.get(day, originKey)
-		) as { cost: number } | null;
+		const row = this.db
+			.query("SELECT COALESCE(SUM(cost), 0) AS cost FROM usage_daily WHERE day = ? AND (? IS NULL OR origin_key = ?)")
+			.get(day, originKey ?? null, originKey ?? null) as { cost: number } | null;
 		return row?.cost ?? 0;
 	}
 
@@ -2181,6 +2191,7 @@ export class Store {
 		}
 		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
 			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
+		this.db.run(WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL);
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);
