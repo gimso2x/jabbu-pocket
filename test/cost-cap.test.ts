@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TurnFailureEscalation } from "../src/core/mailbox";
@@ -506,6 +506,65 @@ describe("AC-2: daily ledger", () => {
 		const day = localDay(clock.now(), "Asia/Seoul");
 		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(1.25, 6);
 		expect(logLines.some((line) => line.includes("event=usage_daily_failed"))).toBe(true);
+	});
+
+	test("a failing charge transaction drops the charge, still settles the turn, and the next turn charges the window once", async () => {
+		clock.t = Date.parse("2026-11-10T12:00:00Z");
+		const sessionFile = join(dir, "sessions", "session.jsonl");
+		mkdirSync(dirname(sessionFile), { recursive: true });
+		const seed = (records: readonly Record<string, unknown>[]): void => {
+			appendFileSync(sessionFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+		};
+		const at = (ms: number): string => new Date(clock.now() + ms).toISOString();
+		writeFileSync(
+			sessionFile,
+			`${[
+				{ id: "e1", type: "model_change", timestamp: at(0) },
+				{ id: "e2", type: "thinking_level_change", timestamp: at(0) },
+			]
+				.map((record) => JSON.stringify(record))
+				.join("\n")}\n`,
+		);
+		router = buildRouter({ sessionFile });
+		const day = localDay(clock.now(), "Asia/Seoul");
+		// A cursor from an earlier turn: the failed charge must not advance it, so the next turn re-reads the window.
+		store.setCursor(`charged:${ORIGIN}`, `${sessionFile}\te2`);
+		const origCharge = store.chargeDailyUsage.bind(store);
+		store.chargeDailyUsage = () => {
+			throw new Error("SQLITE_BUSY: database is locked");
+		};
+		const driver1 = await startTurn("첫 턴");
+		seed([
+			{ id: "e3", type: "message", timestamp: at(1000), message: { role: "user" } },
+			{
+				id: "e4",
+				type: "message",
+				timestamp: at(2000),
+				message: { role: "assistant", usage: { cost: { total: 1 } } },
+			},
+		]);
+		driver1.emitTestEvent(usageEvent(1));
+		await finishTurn(driver1);
+		expect(logLines.some((line) => line.includes("event=usage_daily_failed"))).toBe(true);
+		expect(store.dailyCost(day, ORIGIN)).toBe(0);
+		expect(store.getCursor(`charged:${ORIGIN}`)).toBe(`${sessionFile}\te2`);
+		expect(bodies()).toHaveLength(1);
+		store.chargeDailyUsage = origCharge;
+		const driver2 = await startTurn("둘째 턴");
+		seed([
+			{ id: "e5", type: "message", timestamp: at(3000), message: { role: "user" } },
+			{
+				id: "e6",
+				type: "message",
+				timestamp: at(4000),
+				message: { role: "assistant", usage: { cost: { total: 0.5 } } },
+			},
+		]);
+		driver2.emitTestEvent(usageEvent(0.5));
+		await finishTurn(driver2);
+		expect(store.dailyCost(day, ORIGIN)).toBeCloseTo(1.5, 6);
+		expect(store.getCursor(`charged:${ORIGIN}`)).toBe(`${sessionFile}\te6`);
+		expect(bodies()).toHaveLength(2);
 	});
 });
 
