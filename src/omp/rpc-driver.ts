@@ -132,6 +132,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	/** The client whose child is (or was last) running: its exit and stream reports count until `stop()` ends. */
 	#active: OmpRpcClient | undefined;
 	#stopping = false;
+	/** The live child exited: a `#finalize` read that fails then is a dead session, not a slow one. */
+	#exited = false;
 	readonly #finalListeners = new Set<(final: OmpFinal) => void>();
 	readonly #eventListeners = new Set<(event: OmpEvent) => void>();
 	readonly #exitListeners = new Set<(info: OmpExitInfo) => void>();
@@ -186,6 +188,8 @@ export class RpcOmpDriver implements OmpSessionDriver {
 		if (options.thinking) args.push("--thinking", options.thinking);
 		args.push(...(options.extraArgs ?? []));
 
+		this.#stopping = false;
+		this.#exited = false;
 		const client: OmpRpcClient = new OmpRpcClient({
 			executable: options.ompExecutable,
 			args,
@@ -267,6 +271,7 @@ export class RpcOmpDriver implements OmpSessionDriver {
 	}
 
 	#emitExit(code: number | null, stderr: string): void {
+		this.#exited = true;
 		for (const listener of this.#exitListeners) listener({ code, expected: this.#stopping, stderr });
 	}
 
@@ -432,8 +437,12 @@ export class RpcOmpDriver implements OmpSessionDriver {
 				try {
 					final.text = (await this.#client.getLastAssistantText()) ?? "";
 				} catch (error) {
-					final.status = "error";
-					final.error = `get_last_assistant_text failed: ${error instanceof Error ? error.message : String(error)}`;
+					// The read is redundant for delivery; only a gone child (its exit fails the turn anyway) demotes.
+					const message = error instanceof Error ? error.message : String(error);
+					if (this.#exited) {
+						final.status = "error";
+						final.error = `get_last_assistant_text failed: ${message}`;
+					} else this.#options.log?.warn("get_last_assistant_text_failed", { opRef, error: message });
 				}
 			}
 			for (const listener of this.#finalListeners) listener(final);
