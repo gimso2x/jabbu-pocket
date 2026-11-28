@@ -89,7 +89,7 @@ import {
 	transitionDelivery,
 	type UncertainReason,
 } from "./transitions";
-import { WebMessageStore } from "./web-messages";
+import { WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL, WebMessageStore } from "./web-messages";
 
 /** Schema 13: tables of removed features that nothing reads or writes; `dropRemovedTables` drops them on open. */
 const DROPPED_AT_13 = ["thread_mutes", "turn_feedback", "discord_board_posts", "delivery_posts", "turn_snapshots"];
@@ -2181,6 +2181,7 @@ export class Store {
 		}
 		if (!columnsOf(this.db, "web_messages").includes("delivery_key"))
 			this.db.run("ALTER TABLE web_messages ADD COLUMN delivery_key TEXT");
+		this.db.run(WEB_MESSAGES_DELIVERY_KEY_INDEX_DDL);
 		dropRemovedTables(this.db, DROPPED_AT_13);
 		this.db.run("UPDATE inbound SET thread_ref = platform_message_id WHERE thread_ref IS NULL");
 		this.db.run(INBOUND_THREAD_INDEX_DDL);

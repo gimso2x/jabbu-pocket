@@ -1565,7 +1565,10 @@ export async function buildSnapshot(deps: SnapshotDeps): Promise<DashboardSnapsh
 			const owners =
 				db === undefined
 					? []
-					: rows<{ task_id: string; agent: string; host: string | null }>(db, "SELECT task_id, agent, host FROM tasks");
+					: rows<{ task_id: string; agent: string; host: string | null }>(
+							db,
+							"SELECT task_id, agent, host FROM tasks WHERE status IN ('working','blocked','review') ORDER BY created_at DESC",
+						);
 			if (targets.length === 0)
 				return { hosts: [{ host: "local", ok: false as const, error: "herdr is not configured" }] };
 			const says: HerdrSay[] = [];
