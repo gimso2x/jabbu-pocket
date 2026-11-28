@@ -650,7 +650,7 @@ export function readDiscordToken(config: JabbuConfig): string {
 }
 
 /** A repository entry must be a git work tree with a commit now: a wrong path would otherwise fail mid-turn, long after startup. */
-function requireGitRepo(configPath: string, repo: string, field: string): void {
+export function requireGitRepo(configPath: string, repo: string, field: string): void {
 	let workTree = false;
 	try {
 		workTree = statSync(join(repo, ".git")).isDirectory() || statSync(join(repo, ".git")).isFile();

@@ -5,11 +5,14 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync 
 import { join } from "node:path";
 import type { JabbuConfig } from "../src/config";
 import { checkCoreDumpLimit } from "../src/daemon/core-dump";
-import { checkDiscord, checkInjectedFiles, countOmpModels, readJudgeRole, runDoctor } from "../src/daemon/doctor";
+import { checkDiscord, checkInjectedFiles, runDoctor } from "../src/daemon/doctor";
+import { countOmpModels, listOmpModels, readJudgeRole } from "../src/daemon/doctor-omp";
+import { checkConfigRepos } from "../src/daemon/doctor-repos";
 import { readVersion } from "../src/daemon/tools";
 import { makeHome, type TestHome } from "./helpers/bot-home";
 import { runBounded } from "./helpers/bounded-child";
 import { OFFLINE_DOCTOR } from "./helpers/doctor-network";
+import { makeRepo } from "./helpers/git-fixtures";
 
 let home: TestHome;
 let lines: string[];
@@ -73,6 +76,19 @@ describe("doctor: omp models", () => {
 	test("counts the models a logged-in omp lists, and 0 when no provider is logged in", async () => {
 		expect(await countOmpModels(fakeOmp(`echo '{"models":[{"id":"a"},{"id":"b"}]}'`))).toBe(2);
 		expect(await countOmpModels(fakeOmp(`echo '{"models":[]}'`))).toBe(0);
+	});
+
+	test("lists the models as provider/id, or the bare id when no provider is named", async () => {
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[{"provider":"anthropic","id":"a"},{"id":"b"}]}'`))).toEqual([
+			"anthropic/a",
+			"b",
+		]);
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[]}'`))).toEqual([]);
+	});
+
+	test("an entry without an id is unparsable, not counted", async () => {
+		expect(await listOmpModels(fakeOmp(`echo '{"models":[{"id":"a"},{}]}'`))).toBe("unparsable output");
+		expect(await listOmpModels(fakeOmp(`echo '{"models":"nope"}'`))).toBe("unparsable output");
 	});
 
 	test("a failing, garbled or hanging omp is a reason, not a count", async () => {
@@ -513,6 +529,75 @@ esac
 	}, 60_000);
 });
 
+describe("doctor: omp model line", () => {
+	const SRC = join(import.meta.dir, "..", "src");
+	/** A stand-in omp for the probes: `--version`, `models --json` and `config list --json`. */
+	function probedOmp(): void {
+		const path = home.config.ompExecutable;
+		writeFileSync(
+			path,
+			`#!/bin/sh
+case "$1" in
+--version) echo 'omp 9.9.9' ;;
+models) echo '{"models":[{"provider":"anthropic","id":"claude-x"},{"id":"local-y"}]}' ;;
+*) echo '{"modelRoles":{"value":{}}}' ;;
+esac
+`,
+		);
+		chmodSync(path, 0o755);
+	}
+
+	/** Writes (or removes, with `undefined`) `model` in the test home's config.json. */
+	function writeModel(model: string | undefined): void {
+		const configPath = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		if (model === undefined) delete config.model;
+		else config.model = model;
+		writeFileSync(configPath, JSON.stringify(config, null, 2));
+	}
+
+	async function modelLine(): Promise<string | undefined> {
+		const proc = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`import { runDoctor } from ${JSON.stringify(join(SRC, "daemon", "doctor"))};
+				import { OFFLINE_DOCTOR } from ${JSON.stringify(join(import.meta.dir, "helpers", "doctor-network"))};
+				const out = [];
+				await runDoctor(${JSON.stringify(home.dir)}, (line) => out.push(line), undefined, OFFLINE_DOCTOR);
+				console.log(JSON.stringify(out.filter((line) => line.includes(" omp model: "))));`,
+			],
+			{ env: process.env, stdout: "pipe", stderr: "pipe" },
+		);
+		const out = JSON.parse((await new Response(proc.stdout).text()).trim() || "[]") as string[];
+		await proc.exited;
+		return out[0];
+	}
+
+	test("a configured model among the listed ones is an ok line", async () => {
+		writeModel("anthropic/claude-x");
+		probedOmp();
+		expect(await modelLine()).toBe("ok omp model: anthropic/claude-x");
+		writeModel("local-y");
+		expect(await modelLine()).toBe("ok omp model: local-y");
+	}, 60_000);
+
+	test("a configured model omp does not list is a fail line naming the model", async () => {
+		writeModel("anthropic/claude-typo");
+		probedOmp();
+		expect(await modelLine()).toBe(
+			'fail omp model: anthropic/claude-typo is not among the 2 models omp lists (check "model" in ' +
+				`${home.dir}/config.json)`,
+		);
+	}, 60_000);
+
+	test("no configured model is no line", async () => {
+		writeModel(undefined);
+		probedOmp();
+		expect(await modelLine()).toBeUndefined();
+	}, 60_000);
+});
+
 describe("doctor: code rollback journal", () => {
 	test("qa-z #62 a host without git skips the journal check instead of dying", () => {
 		// The child gets a PATH that holds no git. Mutating process.env.PATH in this process would not reach the
@@ -541,4 +626,87 @@ describe("doctor: code rollback journal", () => {
 		expect(out).toContain("quiet");
 		expect(out).not.toContain("threw");
 	});
+});
+
+describe("doctor: config repos", () => {
+	const repos: string[] = [];
+	afterEach(() => {
+		for (const dir of repos.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("a readable git repo is ok, a missing path fails naming the key", () => {
+		const repo = makeRepo(repos);
+		const fake = join(home.dir, "no-such-repo");
+		const config = {
+			...home.config,
+			taskAutoLand: { repos: [repo, fake] },
+			lanes: { land: { [fake]: { mode: "pr" as const } } },
+		};
+		checkConfigRepos(config, report, (name, detail) => lines.push(`warn ${name}: ${detail}`));
+		expect(lines).toContain(`ok config repo: ${repo}`);
+		expect(lines).toContain(`fail config repo: ${fake} is not a readable git repository (check taskAutoLand.repos)`);
+		// the fake path is named once: the lanes.land entry for it is the same repo
+		expect(lines.filter((line) => line.includes(" config repo: "))).toHaveLength(2);
+	});
+
+	test("a lanes.land key on its own is checked, and no repos is no line", () => {
+		const repo = makeRepo(repos);
+		const config = { ...home.config, lanes: { land: { [repo]: { mode: "ff" as const } } } };
+		checkConfigRepos(config, report, (name, detail) => lines.push(`warn ${name}: ${detail}`));
+		expect(lines).toContain(`ok config repo: ${repo}`);
+		checkConfigRepos(home.config, report, (name, detail) => lines.push(`warn ${name}: ${detail}`));
+		expect(lines.filter((line) => line.includes(" config repo: "))).toHaveLength(1);
+	});
+
+	test("a repo without a commit is not readable", () => {
+		const empty = join(home.dir, "empty-repo");
+		mkdirSync(empty);
+		Bun.spawnSync(["git", "init", "-q", "-b", "main", empty]);
+		const config = { ...home.config, taskAutoLand: { repos: [empty] } };
+		checkConfigRepos(config, report, (name, detail) => lines.push(`warn ${name}: ${detail}`));
+		expect(lines).toContain(`fail config repo: ${empty} is not a readable git repository (check taskAutoLand.repos)`);
+	});
+});
+
+describe("doctor: config repos in a full run", () => {
+	const SRC = join(import.meta.dir, "..", "src");
+	const repos: string[] = [];
+	afterEach(() => {
+		for (const dir of repos.splice(0)) rmSync(dir, { recursive: true, force: true });
+	});
+
+	function writeTaskAutoLand(paths: string[]): void {
+		const configPath = join(home.dir, "config.json");
+		const config = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+		config.taskAutoLand = { repos: paths };
+		writeFileSync(configPath, JSON.stringify(config, null, 2));
+	}
+
+	async function repoLines(): Promise<string[]> {
+		const proc = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`import { runDoctor } from ${JSON.stringify(join(SRC, "daemon", "doctor"))};
+				import { OFFLINE_DOCTOR } from ${JSON.stringify(join(import.meta.dir, "helpers", "doctor-network"))};
+				const out = [];
+				await runDoctor(${JSON.stringify(home.dir)}, (line) => out.push(line), undefined, OFFLINE_DOCTOR);
+				console.log(JSON.stringify(out.filter((line) => line.includes(" config repo: "))));`,
+			],
+			{ env: process.env, stdout: "pipe", stderr: "pipe" },
+		);
+		const out = JSON.parse((await new Response(proc.stdout).text()).trim() || "[]") as string[];
+		await proc.exited;
+		return out;
+	}
+
+	test("a real repo is ok and a typo'd one fails in the full report", async () => {
+		const repo = makeRepo(repos);
+		const fake = join(home.dir, "no-such-repo");
+		writeTaskAutoLand([repo, fake]);
+		expect(await repoLines()).toEqual([
+			`ok config repo: ${repo}`,
+			`fail config repo: ${fake} is not a readable git repository (check taskAutoLand.repos)`,
+		]);
+	}, 60_000);
 });
