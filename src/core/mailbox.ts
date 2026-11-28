@@ -522,7 +522,7 @@ export class OriginMailbox {
 			return true;
 		turn.providerLimitSeen = true;
 		const attempt = typeof event.attempt === "number" ? event.attempt : 0;
-		log.warn("provider_limit_hit", { origin: originKey, attempt, error: redact(headTailReason(errorMessage)) });
+		log.warn("provider_limit_hit", { origin: originKey, attempt, error: headTailReason(redact(errorMessage)) });
 		this.#deps.onProviderLimit?.({ originKey, threadRef: turn.threadRef, attempt, maxAttempts, errorMessage });
 		return true;
 	}
@@ -1590,7 +1590,7 @@ export class OriginMailbox {
 			origin: originKey,
 			code: info.code,
 			expected: info.expected,
-			...(info.stderr === "" ? {} : { stderr: redact(headTailReason(info.stderr)) }),
+			...(info.stderr === "" ? {} : { stderr: headTailReason(redact(info.stderr)) }),
 		});
 		const turn = this.#turn;
 		this.#turn = undefined;
@@ -1622,7 +1622,7 @@ export class OriginMailbox {
 		this.#deps.log.error("turn_failed", {
 			origin: this.#deps.originKey,
 			kind,
-			reason: redact(headTailReason(rawReason)),
+			reason: headTailReason(redact(rawReason)),
 			...(error === undefined ? {} : errorFields(error)),
 		});
 	}
