@@ -123,7 +123,7 @@ describe("AC-4: written times carry the configured zone's offset (America/New_Yo
 	test("recall dates", () => {
 		const result = buildRecallBlock({
 			text: "지난번에 얘기한 grafana 대시보드 설정 기억나?",
-			candidates: [
+			candidates: () => [
 				{
 					kind: "inbound",
 					originKey: "discord/dm/200000000000000001",

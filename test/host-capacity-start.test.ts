@@ -306,6 +306,8 @@ describe("[TASK] dispatch capacity", () => {
 			hostLoad,
 			...(hostSessions === undefined ? {} : { hostSessions }),
 			run,
+			// The harness models an owner-confirmed force: the force test's start passes its card.
+			confirmForce: async () => true,
 			recordPrompt: () => undefined,
 			log: {
 				info: (event, fields) => logs.push(JSON.stringify({ event, fields })),
