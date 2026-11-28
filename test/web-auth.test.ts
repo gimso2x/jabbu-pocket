@@ -167,6 +167,7 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 			aud: AUD,
 			iss: `https://${TEAM_DOMAIN}`,
 			exp: nowSec() + 300,
+			iat: nowSec() - 10,
 			nbf: nowSec() - 5,
 			email: "Owner@Example.com",
 		});
@@ -206,6 +207,27 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 				"jwt_expired",
 			],
 			[
+				"missing_iat",
+				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), iat: undefined }),
+				401,
+				"jwt_invalid_iat",
+			],
+			[
+				"future_iat",
+				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), iat: nowSec() + 3600 }),
+				401,
+				"jwt_not_yet_valid",
+			],
+			[
+				"lifetime_too_long",
+				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", {
+					...baseClaims(),
+					exp: nowSec() + 24 * 60 * 60 + 600,
+				}),
+				401,
+				"jwt_lifetime_too_long",
+			],
+			[
 				"wrong_aud",
 				signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", { ...baseClaims(), aud: "wrong-aud" }),
 				403,
@@ -243,6 +265,16 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 			expect(res.status).toBe(expectedStatus);
 			expect(await res.json()).toEqual({ error: expectedError });
 		}
+
+		// A token living exactly 24 h is still accepted.
+		const edgeJwt = await signJwt(rsa1.privateKey, "RS256", "kid-rsa-1", {
+			...baseClaims(),
+			exp: nowSec() - 10 + 24 * 60 * 60,
+		});
+		const edgeRes = await fetch(`${baseUrl}/api/web/conversations`, {
+			headers: { "cf-access-jwt-assertion": edgeJwt },
+		});
+		expect(edgeRes.status).toBe(200);
 
 		// Key rotation after cooldown passes using ES256
 		nowMs += 15_000;
@@ -327,6 +359,7 @@ describe("AC-2: web authentication, loopback enforcement, local token, and CSRF"
 			aud: AUD,
 			iss: `https://${TEAM_DOMAIN}`,
 			exp: Math.floor(Date.now() / 1000) + 300,
+			iat: Math.floor(Date.now() / 1000) - 10,
 			email: OWNER_EMAIL,
 		});
 		const localHeaders = { authorization: "Bearer local-secret-token-xyz" };
