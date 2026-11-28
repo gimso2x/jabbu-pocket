@@ -797,14 +797,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			if (key !== "minutes") invalid(configPath, `peerSilenceAlert.${key}`);
 		}
 		const minutes = record.minutes;
-		if (
-			typeof minutes !== "number" ||
-			!Number.isInteger(minutes) ||
-			minutes < 0 ||
-			minutes > PEER_SILENCE_MAX_MINUTES
-		) {
+		if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes < 0 || minutes > PEER_SILENCE_MAX_MINUTES)
 			invalid(configPath, "peerSilenceAlert.minutes");
-		}
 		peerSilenceAlert = { minutes };
 	}
 
@@ -826,9 +820,8 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 			typeof record?.remoteDir !== "string" ||
 			!OFFSITE_DIR.test(record.remoteDir) ||
 			record.remoteDir.split("/").some((part) => part === "..")
-		) {
+		)
 			invalid(configPath, "offsite.remoteDir");
-		}
 		// `~//x` would make scp's path absolute and `//` leave no directory: repeated slashes collapse here, and a
 		// value that is only slashes still loads (it always did) but is flagged, and the off-site run refuses it.
 		const remoteDir = (record.remoteDir as string).replace(/\/{2,}/g, "/");
@@ -1117,6 +1110,10 @@ export function loadConfig(homeDir: string = defaultHomeDir(), options: { checkT
 				invalid(configPath, `candidates.${key}`);
 			}
 		}
+		// A `minDays` larger than the window can never be due (at most `windowDays` distinct days are counted).
+		const { minDays, windowDays } = candidates;
+		if (minDays !== undefined && windowDays !== undefined && minDays > windowDays)
+			invalid(configPath, "candidates.minDays");
 	}
 
 	const config: JabbuConfig = {
